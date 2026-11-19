@@ -1,6 +1,6 @@
 /**
  * The commerce app as a browser sees it, for the façade's browser test:
- *one origin serving the SvelteKit production build — its pages,
+ * one origin serving the SvelteKit production build — its pages,
  * assets, the service worker and the read proxy — in front of the sync
  * server (WebSocket + HTTP carriers and the derived JSON:API), both
  * in-process on ephemeral ports over one temporary SQLite file, exactly

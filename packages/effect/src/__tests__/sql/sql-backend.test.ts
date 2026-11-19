@@ -857,7 +857,7 @@ const observeOrder = (transactional: boolean) =>
     };
   });
 
-describe("SqlBackend ledger order follows the executor's transactions (#342, #359)", () => {
+describe("SqlBackend ledger order follows the executor's transactions", () => {
   it.effect("with transactions the id is claimed before its handler runs", () =>
     observeOrder(true).pipe(
       Effect.map(({ seen, watermark, after }) => {

@@ -471,7 +471,7 @@ describe("JsonApiFacade writes: forwarded, journaling nothing", () => {
           expect(yield* handler.handle(createNoteWithoutId({ prefer: "respond-async" }))).toEqual(
             Option.none()
           );
-          // Offline, strict is refused rather than journaled (the 503 document is to refine).
+          // Offline, strict is refused rather than journaled (the 503 document is provisional).
           online.current = false;
           yield* each(strictWrites(), (request) =>
             Effect.map(answer(handler, request), (response) => expect(response.status).toBe(503))

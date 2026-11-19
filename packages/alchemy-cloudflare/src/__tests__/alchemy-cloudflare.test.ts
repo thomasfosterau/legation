@@ -173,14 +173,12 @@ const makeRawD1 = (rows: ReadonlyArray<Record<string, unknown>>, fail = false) =
 };
 
 describe("D1Executor", () => {
-  it.effect(
-    "declares no transactions, so SqlBackend keeps the handler-then-bump order (#342, #359)",
-    () =>
-      Effect.gen(function* () {
-        // A claim committed on its own would be skipped by a retry after a crash.
-        const executor = yield* inRuntime(D1Executor.make(makeRawD1([]).client));
-        expect(executor.transactional).toBe(false);
-      })
+  it.effect("declares no transactions, so SqlBackend keeps the handler-then-bump order", () =>
+    Effect.gen(function* () {
+      // A claim committed on its own would be skipped by a retry after a crash.
+      const executor = yield* inRuntime(D1Executor.make(makeRawD1([]).client));
+      expect(executor.transactional).toBe(false);
+    })
   );
 
   it.effect("runs queries and statements through the client's prepared statements", () =>

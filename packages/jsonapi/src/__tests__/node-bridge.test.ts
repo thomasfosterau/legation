@@ -295,7 +295,7 @@ describe("a bridged registry over a real engine", () => {
   );
 });
 
-describe("NodeBridge filterable set (#154, #161)", () => {
+describe("NodeBridge filterable set", () => {
   it("reads the resource's own declaration; relationship filters land on the key field", () => {
     const Author = Resource.make("authors", { attributes: { name: Schema.String } });
     const Article = Resource.make("articles", {

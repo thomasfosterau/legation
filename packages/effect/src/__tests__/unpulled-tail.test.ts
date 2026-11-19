@@ -1955,7 +1955,7 @@ describeWrapped("the engine's clears", (it) => {
 
 /**
  * Yields until `condition` holds, and says whether it did. The explicit wait for a background pull:
- *bounded, so a pull that never comes makes the caller's `expect` fail rather than hang the test.
+ * bounded, so a pull that never comes makes the caller's `expect` fail rather than hang the test.
  */
 const settles = <E>(condition: Effect.Effect<boolean, E>): Effect.Effect<boolean, E> =>
   Effect.gen(function* () {

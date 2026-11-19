@@ -1,6 +1,6 @@
 /**
  * The commerce write rules — one statement of each, shared by every write path:
- *the sync mutators' server halves (`handlers.ts`, the app's named
+ * the sync mutators' server halves (`handlers.ts`, the app's named
  * intents and the graph-derived `{type}/{operation}` mutations the façade
  * journals), the per-resource `POST` / `DELETE` handlers and the atomic
  * operations endpoint (`jsonapi.ts`). Each path differs only in where the

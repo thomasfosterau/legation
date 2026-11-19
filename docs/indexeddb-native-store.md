@@ -1,7 +1,7 @@
 # IndexedDB-native `ClientStore` with per-collection indexes
 
-**This is a design note, not an ADR.** It answers: does the durable browser store need to move from a
-`KeyValueStore` layout to IndexedDB object stores with native indexes, and
+**This is a design note, not an ADR.** It answers: does the durable browser
+store need to move from a `KeyValueStore` layout to IndexedDB object stores with native indexes, and
 when? It records measurements, a schema, and a recommendation. If the
 recommendation's trigger fires, the decision would be written up as an ADR
 with the working title "IndexedDB-native `ClientStore`: one object store per
@@ -199,7 +199,8 @@ One IndexedDB database per client store (versioned), with:
   store on write. IndexedDB cannot compute keys, so the writer materialises
   them; the engine's row values stay `Unknown` and untouched (ADR-0014).
 - **Indexed fields** are `Node.indexes` ∪ sortable fields ∪ filterable fields
-  that admit a range (per-attribute `filterable`/`sortable` in effect-jsonapi). Each has one index, `createIndex(field, ["k_<field>", "k_id"])`: a
+  that admit a range (per-attribute `filterable`/`sortable` in effect-jsonapi). Each has one index,
+  `createIndex(field, ["k_<field>", "k_id"])`: a
   compound key of the encoded value and the encoded id, so cursor order is
   `(value, id)` and equals `Subset.comparator`'s id tie-break exactly.
 - **Key encoding**, one function shared by the writer and the planner:

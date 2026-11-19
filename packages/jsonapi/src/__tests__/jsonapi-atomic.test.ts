@@ -537,7 +537,7 @@ describe("JsonApiBackend in atomic mode", () => {
 });
 
 /**
- * Change hints across the mutations of one push (as #344 for
+ * Change hints across the mutations of one push (as for
  * MemoryBackend). A row a later mutation of the push deletes carries no value,
  * on both delivery paths: the atomic request and the per-resource writes.
  */
@@ -1451,7 +1451,7 @@ describe("JsonApiSync.layer atomic detection", () => {
 });
 
 /**
- * Rejection memory (as MemoryBackend's #355): a replayed copy of a push
+ * Rejection memory (as for MemoryBackend): a replayed copy of a push
  * whose mutations were committed as rejected reports those rejections again,
  * with their reasons, and a push that starts past them forgets them. Both
  * delivery paths are covered. The server rejects the update of row 2 and the

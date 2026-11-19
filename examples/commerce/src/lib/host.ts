@@ -5,7 +5,7 @@
  * un-elected on a main thread — that's `@thomasfosterau/legation-browser`'s `ElectedHost`
  * (the shipped no-service-worker fallback, ADR-0010), which wraps this same
  * `ServiceWorkerHost.run` call behind a `navigator.locks` leader election.
- *This app runs the service worker by default (dev included), but
+ * This app runs the service worker by default (dev included), but
  * `bootElected` below wires the same domain (nodes/mutators/transport) onto
  * `ElectedHost.run` instead — a documented dev-mode toggle (`?host=main` in
  * `+layout.svelte`) so the no-service-worker fallback topology actually gets

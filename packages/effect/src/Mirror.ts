@@ -166,7 +166,7 @@ export interface Mirror {
    * interrupts its handler. A host restart (`HostReady`) or this mirror
    * closing fails it with `Unanswered`; it is not replayed, so a caller that
    * wants to keep following re-requests. The host's first reply (its
-   * `Started`, #628) is due within `requestTimeout`, or the stream fails with
+   * `Started`) is due within `requestTimeout`, or the stream fails with
    * `Unanswered`, as against a host that predates the envelope; after it no
    * timeout applies, since a stream may rightly stay quiet.
    */
@@ -332,7 +332,7 @@ export const make = (options: MirrorOptions): Effect.Effect<Mirror, never, Scope
     const seenHostReady = yield* Ref.make(false);
     /** Add one unit of interest; posts Subscribe when it is the first. */
     // The keys whose rows have reached this mirror since it last took an
-    // interest in them (#672). A host broadcasts its pulled summaries to every
+    // interest in them. A host broadcasts its pulled summaries to every
     // mirror, so a mirror can hold a key's mark before the host has sent it
     // that key's rows: a key that has none here is not pulled, whatever its
     // mark says. Cleared when the interest begins or ends, and on a host
@@ -976,7 +976,7 @@ export const make = (options: MirrorOptions): Effect.Effect<Mirror, never, Scope
             closeHostRequest(requestId)
           ).pipe(
             Effect.map(({ replies }) =>
-              // The first reply is due within `requestTimeout` (#628): a host
+              // The first reply is due within `requestTimeout`: a host
               // sends `Started` once it accepts the request, and one that
               // predates `Started` sends its first `Item`, `End` or `Failure`,
               // so any reply acknowledges it. After that the stream waits as
@@ -1083,7 +1083,7 @@ export const make = (options: MirrorOptions): Effect.Effect<Mirror, never, Scope
           return yield* Deferred.await(deferred);
         }),
       queryNamed: (name, args) => readKey(MirrorProtocol.namedKey(name, args)),
-      // A key's mark counts only once its rows are here (#672); see `received`.
+      // A key's mark counts only once its rows are here; see `received`.
       pulled: (key: string) =>
         Effect.all(
           { marks: SubscriptionRef.get(pulledKeys), rowsHere: Ref.get(received) },

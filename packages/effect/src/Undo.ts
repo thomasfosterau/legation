@@ -7,7 +7,7 @@
  * both directions of a change at run time, and undo/redo replay through the
  * supplied handle's ordinary `mutate` pipeline — a `ClientEngine`, a
  * `Client`, or a test double all satisfy {@link MutateHandle} structurally.
- *Because they are just mutations, undo and redo are
+ * Because they are just mutations, undo and redo are
  * optimistic, journaled, rebased, and offline-safe like any other write —
  * the module adds only the in-memory history.
  *

@@ -22,7 +22,7 @@
  *   fetching put rows in the same pull), falling back to `GET /{type}/{id}`.
  *   The cache reflects this instance's own writes only, so a deployment runs
  *   one JsonApiBackend per server and writes the server only through it:
- * another writer's changes go unseen, and `getRows` can serve a
+ *   another writer's changes go unseen, and `getRows` can serve a
  *   superseded row.
  * - `applyMutations` replays the batch as HTTP writes. Each mutation is one
  *   JSON:API write (`Write`: a create, update or delete of one resource —

@@ -1104,7 +1104,7 @@ export interface MakeOptions<
   readonly syncLoop?: ClientEngine.SyncLoopOptions;
   /**
    * Auto-discover indexable fields from registered subsets and index them,
-   *in addition to any `indexes` a Node/Collection declares.
+   * in addition to any `indexes` a Node/Collection declares.
    * Defaults to `false`: zero-config behaviour is identical to no indexing.
    */
   readonly autoIndex?: boolean;

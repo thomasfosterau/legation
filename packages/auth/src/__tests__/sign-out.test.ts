@@ -1,5 +1,5 @@
 /**
- * Sign-out resets the durable replica (#219 §4, over identity
+ * Sign-out resets the durable replica (over the identity
  * boundary). The pending-journal ordering decided here: **quarantine** — on a
  * sign-out or an account switch the superseded user's unpushed writes are
  * neither flushed (they would go out under whatever credentials the transport

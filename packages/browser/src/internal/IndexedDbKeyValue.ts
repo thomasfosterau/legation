@@ -180,7 +180,7 @@ const runRequest = <A>(
 
 /**
  * `KeyValueStore.make`'s options with `keys` spelled out, so this module type-checks at both ends
- * of the `effect ^4.0.0` peer (#691). From effect 4.1 `keys` is a required option (and derives
+ * of the `effect ^4.0.0` peer. From effect 4.1 `keys` is a required option (and derives
  * `clearPrefix`); 4.0's `MakeOptions` doesn't declare it, but its `make` spreads the options onto
  * the store, so the store lists its keys at runtime on 4.0 as well.
  */
@@ -252,7 +252,7 @@ const keyValueOver = (connection: Connection): KeyValueStore.KeyValueStore => {
     ).pipe(Effect.map((keys) => keys.filter(P.isString))),
   };
   // Passed as a variable, not a literal: effect 4.0's `MakeOptions` has no `keys`, and only a
-  // literal is checked for excess properties (#691).
+  // literal is checked for excess properties.
   return KeyValueStore.make(options);
 };
 
@@ -372,7 +372,7 @@ const readEntries = (
 
 /**
  * The atomic batch over the same IndexedDB database as the `KeyValueStore`,
- *with its one-transaction read of the entries. Keys arrive in
+ * with its one-transaction read of the entries. Keys arrive in
  * full, namespace prefix included, as the store holds them, so the batch needs
  * no knowledge of the prefix.
  */

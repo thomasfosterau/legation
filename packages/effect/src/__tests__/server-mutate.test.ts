@@ -1,5 +1,5 @@
 /**
- * `Server.mutate` (ADR-0030, amendment #215 §1–§3): a form action runs one
+ * `Server.mutate` (ADR-0030, amendment §1–§3): a form action runs one
  * named Mutation as one of a client group's mutations, under a **form client**
  * id minted for the rendered form, and answers a receipt with the backend's
  * ruling. It is the push path minus the transport, so identity, middleware,

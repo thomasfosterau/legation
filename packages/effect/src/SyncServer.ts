@@ -223,7 +223,7 @@ const assemblePatch = (
  * batch means no backend call at all — then each is evaluated to its
  * current rows in subset order, the evaluation batched through
  * `Backend.evaluateAll` and the values through one `getRows` per collection.
- *No cookie, no CVR read or write, no
+ * No cookie, no CVR read or write, no
  * `lastMutationIds`. `handleRead` is this behind the protocol's identity
  * resolution; a derived REST handler is this behind an HTTP request's —
  * one read path, two carriers.

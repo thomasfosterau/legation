@@ -359,7 +359,7 @@ const rebuildFor = (collections: ReadonlySet<string> | undefined): ViewChange =>
 
 /**
  * Most acknowledged-but-unpulled mutations the engine keeps in the overlay.
- *A push acknowledges entries that the next pull reports. The tail
+ * A push acknowledges entries that the next pull reports. The tail
  * never grows past this bound: a push sends only as many mutations as the
  * room left, and a full tail waits for a pull. Nothing releases an
  * entry early.
@@ -871,7 +871,7 @@ export interface ClientEngine {
    * Live aggregate over a subset: emits now and after every local change.
    * For an unwindowed subset (no `limit`/`cursor`, the common case), the fold
    * is maintained incrementally from `Patch` row deltas rather than re-scanned;
-   *a windowed subset, or a change too large to diff (`Rebuild`),
+   * a windowed subset, or a change too large to diff (`Rebuild`),
    * refolds the subset from scratch. Deduped — a change that leaves the
    * aggregate value unchanged does not re-emit. Local tier only, as
    * {@link queryAggregate}.
@@ -1623,7 +1623,7 @@ export const make = (
     // (the index tracks confirmed rows only).
     // Scoped per-collection: a pending mutation's touched collections
     // are already computed for the rebase path (`collectionsTouchedByMutations`,
-    // tracked-write machinery), so a mutation pending against
+    // the tracked-write machinery), so a mutation pending against
     // collection A no longer disables index acceleration for a query against
     // untouched collection B. An unscoped result (an unknown mutator,
     // undecodable args — same cases `collectionsTouchedByMutations`'
@@ -1919,8 +1919,8 @@ export const make = (
               if (id > lastId || state.phase !== "pending") continue;
               settledIds.push(id);
             }
-            // Fold every transition first, evict once (`HashMap`
-            // rationale): retention's scan-and-sort is O(size), so evicting
+            // Fold every transition first, evict once (as for the
+            // `HashMap`): retention's scan-and-sort is O(size), so evicting
             // per-id inside a K-mutation ack sweep would cost O(K * size).
             const next = MutationState.acknowledgedMany(
               map,
@@ -2193,7 +2193,7 @@ export const make = (
         );
       });
 
-    // #212: the identity boundary at runtime. The transition rule itself
+    // The identity boundary at runtime. The transition rule itself
     // lives in `Identity`, so this and the store's open-time check are the
     // same decision applied at two moments — a sign-out mid-session and a
     // reload under a new session must not disagree about whether the replica
@@ -3734,7 +3734,7 @@ export const make = (
         Stream.map(toMutationEvent),
         Stream.filter((event): event is MutationEvent => event !== undefined)
       ),
-      // keyed mutation-state map: current value now, then every change.
+      // The keyed mutation-state map: current value now, then every change.
       mutationStates: SubscriptionRef.changes(mutationStates),
     });
   });

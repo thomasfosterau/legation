@@ -437,7 +437,7 @@ export type HostMessage =
     }
   /**
    * A {@link FORM_MUTATION_MUTATOR} begin overlaid under its form client.
-   *The form replies carry the begin's `mirrorId` as well as its
+   * The form replies carry the begin's `mirrorId` as well as its
    * `requestId`: host messages are broadcast to every mirror, and each
    * mirror numbers its requests from zero, so a `requestId` alone could
    * complete another tab's request.
@@ -484,7 +484,7 @@ export type HostFailureReason = "UnknownKind" | "InvalidRequest" | "Failed";
 
 /**
  * What one `HostResponse` carries: a single-reply kind's `Value` (which ends
- * the request), a streaming kind's `Started` (the host accepted it, #628),
+ * the request), a streaming kind's `Started` (the host accepted it),
  * `Item` (more follow) or `End`, or a `Failure` (which ends the request).
  * `value` is in the kind's encoded response form.
  *

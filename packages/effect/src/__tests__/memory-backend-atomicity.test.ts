@@ -573,7 +573,7 @@ const mutationTagsOf = (
  * and applies only after the second, which is rejected and commits first. The
  * client receives the two responses in the given order; either way it must
  * settle the mutation as the server committed it, and emit that outcome once:
- *both responses report the rejection, but the second repeats it.
+ * both responses report the rejection, but the second repeats it.
  */
 const runRace = (order: "rejected-first" | "losing-first") =>
   Effect.gen(function* () {

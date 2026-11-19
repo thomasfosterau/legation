@@ -495,7 +495,7 @@ const restartInSameGroup = (restartWith: (ledger: Ledger.LedgerStore) => Ledger.
     return { acknowledged, rejected, restartedLedger, restartedRejected, outcome };
   });
 
-describe("JsonApiBackend restarted on the same ledger in the same group (#477, #483), per-resource mode", () => {
+describe("JsonApiBackend restarted on the same ledger in the same group, per-resource mode", () => {
   layer(KeyValueStore.layerMemory)((scoped) => {
     scoped.effect(
       "runs the full contract over a backend restarted on the same durable ledger",

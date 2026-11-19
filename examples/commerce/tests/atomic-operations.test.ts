@@ -16,7 +16,7 @@
  *   a mid-batch stock violation is rejected on the wire, resent without the
  *   offending mutation, recorded as `rejected`, and every mutation is
  *   acknowledged — with nothing from the rejected batch persisted before the
- *   resend (contract, end to end against this server);
+ *   resend (the backend contract, end to end against this server);
  * - the per-resource `POST` handlers share those rules (`server/rules.ts`) and
  *   keep a client `data.id` under the same ownership rule, so an
  *   online forward and an offline journal of one create name one row.

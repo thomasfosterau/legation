@@ -413,7 +413,7 @@ interface Batch {
  * effect-jsonapi's typed `add` operation carries `lid` but no `id`, so a
  * client-generated id is dropped by decoding — and `@thomasfosterau/legation-jsonapi`'s
  * atomic push always sends one, so a `JsonApiBackend` push must keep its
- * ids. As in contract server, the id is recovered from the raw request
+ * ids. As in the contract server, the id is recovered from the raw request
  * document (the body is cached, so re-reading it after decoding is free); an
  * `add` without one gets a server id, registered under its `lid` for later
  * operations in the batch.

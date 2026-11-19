@@ -5,7 +5,7 @@
  * `End`; every failure is a reply (`UnknownKind`, `InvalidRequest`, `Failed`);
  * a mirror never waits forever (`Unanswered` on its timeout, on a host
  * restart, and from a host that predates the envelope), while a stream the
- * host has `Started` (#628) may stay quiet past it; a consumer that stops
+ * host has `Started` may stay quiet past it; a consumer that stops
  * cancels the host's stream, as does the mirror's `Disconnect`; and a reply
  * addressed to another mirror is not taken.
  */
@@ -279,7 +279,7 @@ describe("host requests (ADR-0021 amendment)", () => {
     })
   );
 
-  it.live("a quiet stream stays open past the timeout once the host has Started it (#628)", () =>
+  it.live("a quiet stream stays open past the timeout once the host has Started it", () =>
     Effect.gen(function* () {
       const { mirror } = yield* setup("50 millis");
       const followed = yield* Effect.forkChild(Stream.runDrain(mirror.stream(quiet, {})));
@@ -293,7 +293,7 @@ describe("host requests (ADR-0021 amendment)", () => {
     })
   );
 
-  it.live("a stream no host accepts is Unanswered after the mirror's timeout (#628)", () =>
+  it.live("a stream no host accepts is Unanswered after the mirror's timeout", () =>
     Effect.gen(function* () {
       const pair = yield* MirrorChannel.makeLoopbackPair;
       // A host that predates the envelope: it drops every HostRequest.
@@ -308,34 +308,32 @@ describe("host requests (ADR-0021 amendment)", () => {
     })
   );
 
-  it.live(
-    "a host that predates Started has its first Item taken as the acknowledgement (#628)",
-    () =>
-      Effect.gen(function* () {
-        const pair = yield* MirrorChannel.makeLoopbackPair;
-        const reply = (message: HostRequestMessage, outcome: MirrorProtocol.HostResponseOutcome) =>
-          pair.host.post({
-            _tag: "HostResponse",
-            mirrorId: message.mirrorId,
-            requestId: message.requestId,
-            outcome,
-          });
-        // An Item at once, then quiet well past the timeout, then End: no Started.
-        const scope = yield* Effect.scope;
-        yield* scriptedHost(pair.host, (message) =>
-          reply(message, { _tag: "Item", value: 1 }).pipe(
-            Effect.andThen(Effect.sleep("150 millis")),
-            Effect.andThen(reply(message, { _tag: "End" })),
-            Effect.forkIn(scope)
-          )
-        );
-        const mirror = yield* Mirror.make({
-          channel: pair.mirror,
-          mutators,
-          requestTimeout: "50 millis",
+  it.live("a host that predates Started has its first Item taken as the acknowledgement", () =>
+    Effect.gen(function* () {
+      const pair = yield* MirrorChannel.makeLoopbackPair;
+      const reply = (message: HostRequestMessage, outcome: MirrorProtocol.HostResponseOutcome) =>
+        pair.host.post({
+          _tag: "HostResponse",
+          mirrorId: message.mirrorId,
+          requestId: message.requestId,
+          outcome,
         });
-        expect(yield* Stream.runCollect(mirror.stream(count, { to: 1 }))).toEqual([1]);
-      })
+      // An Item at once, then quiet well past the timeout, then End: no Started.
+      const scope = yield* Effect.scope;
+      yield* scriptedHost(pair.host, (message) =>
+        reply(message, { _tag: "Item", value: 1 }).pipe(
+          Effect.andThen(Effect.sleep("150 millis")),
+          Effect.andThen(reply(message, { _tag: "End" })),
+          Effect.forkIn(scope)
+        )
+      );
+      const mirror = yield* Mirror.make({
+        channel: pair.mirror,
+        mutators,
+        requestTimeout: "50 millis",
+      });
+      expect(yield* Stream.runCollect(mirror.stream(count, { to: 1 }))).toEqual([1]);
+    })
   );
 
   it.effect("a host restart fails every request in flight with Unanswered", () =>

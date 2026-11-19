@@ -2,7 +2,7 @@
  * RestHandlers
  *
  * Derived JSON:API `list` / `get` handlers over the sync engine's read path.
- *A JSON:API `GET` is ADR-0025's `read` operation with a
+ * A JSON:API `GET` is ADR-0025's `read` operation with a
  * document body: the URL is parsed into a `Query.Read` by the one grammar
  * (`JsonApiQuery.parseParams`), the request's identity becomes a
  * `SyncContext`, the read runs through `Query.plan` → the filterable check

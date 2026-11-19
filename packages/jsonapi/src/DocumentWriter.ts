@@ -345,7 +345,7 @@ const selfLink = (input: Input): string => linkOf(input, input.read);
 
 /**
  * The read's resolved rows sliced to the page it actually asked for.
- *An offset read's root window was compiled with
+ * An offset read's root window was compiled with
  * `limit = offset + first` (`Query.plan`'s `rootLimit`) so a covering
  * subscription could be judged by the ordinary limit-prefix rule and the
  * window fetched in one shot; `input.rows` therefore holds up to

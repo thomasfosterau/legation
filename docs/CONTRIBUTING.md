@@ -14,17 +14,17 @@ The main branch is `trunk`. Branch off `trunk`, open a pull request into `trunk`
 
 [Vite+](https://viteplus.dev) (`vp`) manages Node and pnpm; use it rather than calling them directly (`vp exec <bin>`, not `npx`). `vp install` installs dependencies, the git hooks and the Effect-patched `tsc` / `oxlint` (`prepare`). The pre-commit hook runs `vp staged` (format with fixes, then lint) and `vp run fallow:audit`.
 
-| Command                                | What it does                                                          |
-| -------------------------------------- | --------------------------------------------------------------------- |
-| `vp check`                             | Format and type-aware lint                                            |
-| `vp run build`                         | Every package's `dist/` (`vp pack`)                                   |
-| `vp run pack:check`                    | Packs each publishable package and lints the tarball (publint, attw)  |
-| `vp run check`                         | The type gate: packages and tests in one Effect-patched `tsc` program |
-| `vp run check:examples`                | Each example app's own `tsc` / `svelte-check`, against `dist/`        |
-| `vp run test` / `vp run test:coverage` | Every Vitest project (builds first); with the coverage map            |
-| `vp test run packages/<name>`          | One package's tests, no build needed                                  |
-| `vp run ci`                            | Everything CI runs, in order                                          |
-| `vp run bench`                         | Benchmarks (not a gate)                                               |
+| Command                                | What it does                                                                                                                         |
+| -------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------ |
+| `vp check`                             | Format and type-aware lint                                                                                                           |
+| `vp run build`                         | Every package's `dist/` (`vp pack`)                                                                                                  |
+| `vp run pack:check`                    | Packs each publishable package and lints the tarball (publint, attw)                                                                 |
+| `vp run check`                         | The type gate: packages and tests in one Effect-patched `tsc` program                                                                |
+| `vp run check:examples`                | Each example app's own `tsc` / `svelte-check`, against `dist/`                                                                       |
+| `vp run test` / `vp run test:coverage` | Every Vitest project (builds first); with the coverage map                                                                           |
+| `vp test run packages/<name>`          | One package's tests, no build needed                                                                                                 |
+| `vp run ci`                            | Everything CI runs, in order                                                                                                         |
+| `vp run bench`                         | Benchmarks (not a gate)                                                                                                              |
 | `vp run github:plan` / `github:deploy` | The repository's GitHub settings (`stacks/github.ts`); owner-run, with an admin `GITHUB_TOKEN` and Alchemy's state-store credentials |
 
 Two suites need more than Node: the commerce façade's browser test needs Chromium (`vp run ci:chromium`; it fails rather than skips without it), and the PostgreSQL overlap test needs `DATABASE_URL` pointing at a throwaway database (it skips locally without one, and fails in CI).
@@ -34,7 +34,8 @@ Two suites need more than Node: the commerce façade's browser test needs Chromi
 ## Coding guidelines
 
 - **Effect.** Use Effect v4 idioms throughout and prefer Effect's own modules (`Option`, `Array`, `Match`, `Schema`, `Stream`, …) to hand-rolled equivalents; convert existing code where practical. Exceptions: Svelte component code, non-Effect third-party APIs (adapt them at the edge), and hot paths where a measurement shows plain code is needed. Read the installed package rather than guessing an API (`node_modules/effect/` ships `AGENTS.md`, `ai-docs/`, typings and source); HTTP is `effect/http/*`, RPC `effect/rpc`. Services are `Context.Service`s with a `layer` and an in-memory implementation; errors are `Data.TaggedError`s. Use the vocabulary in [CONTEXT.md](../CONTEXT.md), and say so when a change contradicts an [ADR](adr/).
-- **Imports.** Effect modules as namespaces from their submodule (`import * as Effect from "effect/Effect"`), with the aliases `Arr`, `P`, `R`, `Str`, `Eq`, `Bool` for `Array`, `Predicate`, `Record`, `String`, `Equal`, `Boolean`. Relative imports carry `.js`. App-facing names go on `@thomasfosterau/legation`, engine seams on `/internal`.
+- **Imports.** Effect modules as namespaces from their submodule (`import * as Effect from "effect/Effect"`), with the aliases `Arr`, `P`, `R`, `Str`, `Eq`, `Bool` for `Array`, `Predicate`, `Record`, `String`, `Equal`, `Boolean`. Relative imports carry `.js`.
+- **Exports** follow Effect's layout: each package's `src/index.ts` re-exports its modules as PascalCase namespaces (`export * as Node from "./Node.js"`), and a module that gets its own entry takes a PascalCase subpath (`./Node`). App-facing names go on `@thomasfosterau/legation`, engine seams on `/internal`.
 - **Lint.** Fix findings in code. A rule is relaxed only in `vite.config.ts`, with its reason; the `warn` allowances there are debt, and a new site is a defect.
 - **Comments.** A file-level comment only for real context, under 50 words. Doc comments where they help someone reading IntelliSense, adding to the signature; every exported item starts with a one-sentence summary. Inline comments only for what the code can't say (workarounds, performance, non-obvious decisions). Don't reference issues, PRs or CI runs; stable links to external docs are fine.
 - **Tests** check logic: edge cases, regressions, behaviour. Don't test what the type system or a lint enforces. Use `@effect/vitest` (`it.effect`, `it.live` for real time or I/O, `it.layer`) or `vite-plus/test`, never `vitest`; assertions go inside the effect.

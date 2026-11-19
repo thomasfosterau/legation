@@ -67,7 +67,7 @@ export interface ServiceWorkerHostOptions {
   readonly registry?: Collection.CollectionRegistry;
   /**
    * The node graph and URL-keyed reads for `SubscribeUrl` registrations:
-   *a page with no `Client` posts `{ _tag: "SubscribeUrl",
+   * a page with no `Client` posts `{ _tag: "SubscribeUrl",
    * mirrorId, url }` on the channel and the host pins the URL's windows
    * under that id — forwarded to {@link EngineHost.run}. Build `urls` with
    * `JsonApiQuery.urlReads(nodes)` from `@thomasfosterau/legation-jsonapi`.

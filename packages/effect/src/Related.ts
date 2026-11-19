@@ -645,7 +645,7 @@ type JoinEvent =
 
 /**
  * Live version of {@link queryWith} as an incrementally-maintained join.
- *A {@link makeJoinEngine} consumes the base page and every
+ * A {@link makeJoinEngine} consumes the base page and every
  * targeted foreign collection's snapshots as they arrive over `view.observe`
  * and re-hydrates only the base rows a delta actually touches — never a full
  * re-group or a full base re-hydrate. A collection is observed for as long as

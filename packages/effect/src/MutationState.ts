@@ -210,7 +210,7 @@ export const rejected = (
 
 /**
  * Fold a paced-compaction drop in for one mutation (`ClientEngine.dropIfPending`,
- * debounce/throttle/coalesce strategies superseding a still-unpushed
+ * the debounce/throttle/coalesce strategies superseding a still-unpushed
  * entry), then apply terminal retention. Unlike {@link acknowledged} /
  * {@link rejected}, this is not a backend verdict — the entry never reached the
  * backend — but it must still leave `"pending"`: left untouched, a compacted

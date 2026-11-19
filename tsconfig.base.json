@@ -37,7 +37,7 @@
           "runEffectInsideEffect": "suggestion",
           // Effect 4 marks much of its HTTP surface `@stability unstable`, so
           // the warning fires on every such import and drowns real signal; as
-          // a suggestion it stays listed without counting as a warning (#279).
+          // a suggestion it stays listed without counting as a warning.
           "unstableApiUsage": "suggestion"
         }
       }

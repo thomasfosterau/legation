@@ -217,7 +217,7 @@ const signals = makeSignals();
  * worker taking control. A safety bound on event-driven waits, not a timing
  * assumption. On a 4-core host these steps took 3.5 s at a load average of
  * ~63, and the whole boot test 8 s with the load climbing from 75 to 97;
- *the old 30 s test budget ran out near 105, so this leaves an order
+ * the old 30 s test budget ran out near 105, so this leaves an order
  * of magnitude over what was measured.
  */
 const BOOT_BUDGET_MS = 60_000;

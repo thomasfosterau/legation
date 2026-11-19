@@ -1,8 +1,8 @@
 /**
- * SqlBackend on a real PostgreSQL server: the overlap that #352 is
- * about, and the lost update across client groups that #353 rules out, run with
+ * SqlBackend on a real PostgreSQL server: two overlapping calls applying one
+ * mutation, and the lost update across client groups, run with
  * two real transactions. Each `applyMutations` transaction runs at SERIALIZABLE,
- *so an overlap that READ COMMITTED would let through is refused with a
+ * so an overlap that READ COMMITTED would let through is refused with a
  * serialization failure instead. SQLite serialises its transactions and PGlite
  * is one connection behind a mutex, so neither can interleave two calls; the
  * mock in `sql-backend.test.ts` models the interleaving but not PostgreSQL's row
@@ -246,7 +246,7 @@ if (databaseUrl === undefined && !Env.inCi) {
 
 const describePostgres = databaseUrl === undefined ? describe.skip : describe;
 
-describePostgres("SqlBackend on PostgreSQL: overlapping calls (#352, #360)", () => {
+describePostgres("SqlBackend on PostgreSQL: overlapping calls", () => {
   const url = databaseUrl ?? "";
 
   // `it.live`, not `it.effect`: the copy's lock wait is observed by polling a

@@ -15,8 +15,8 @@
  *   {@link fromFilterAst} rejects a literal that is not a wire scalar
  *   (`string | number | boolean`) or a `Date` (encoded to its instant text —
  *   see below) with a typed `QueryError`, since a grammar AST is typed by
- *   the attribute's **decoded** schema and that type is open-ended (issue
- *   design note). {@link toFilterAst} returns `None` for `Exists`
+ *   the attribute's **decoded** schema and that type is open-ended.
+ *   {@link toFilterAst} returns `None` for `Exists`
  *   (server-only, no URL form), an empty `In` / `NotIn` list, and a `null`
  *   literal (the grammar's lists are non-empty and `NULL` is never a
  *   literal — `isnull` names it); those callers fail closed.

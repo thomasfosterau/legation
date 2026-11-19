@@ -106,7 +106,7 @@ export const SnapshotRow = Schema.Struct({
  * A serialisable capture of a {@link ClientStore}: confirmed rows (flattened
  * with their collection), the pull cookie, the pending-mutation journal, the
  * acknowledged-but-unpulled tail, and each client's mutation id counter.
- *The tail and the counters are optional so a snapshot taken before
+ * The tail and the counters are optional so a snapshot taken before
  * they existed still loads, as an empty tail and no counters. The schema is
  * the source of truth; {@link Snapshot} is derived from it.
  *
@@ -232,7 +232,7 @@ export const dehydrate = (store: ClientStore): Effect.Effect<Snapshot, StoreErro
  *
  * `hydrate` does not take the overlay lock of an engine built over the store, so it must
  * not run while that engine is pulling. Its first step finishes an outstanding pull release.
- *If that release is a live pull's, the pull's remaining row writes then land over
+ * If that release is a live pull's, the pull's remaining row writes then land over
  * the snapshot's rows. Hydrate before the engine starts, or while it is stopped.
  */
 export const hydrate = (store: ClientStore, snapshot: Snapshot): Effect.Effect<void, StoreError> =>

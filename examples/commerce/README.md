@@ -169,7 +169,7 @@ the workspace runner:
 - `atomic-operations.test.ts` — the atomic operations endpoint:
   all-or-nothing batches, `lid` resolution, identity, remove-as-no-op, order
   placement, and a `JsonApiBackend` pushing through it as one request per
-  batch (contract, end to end against this server).
+  batch (the backend contract, end to end against this server).
 - `no-js-loads.test.ts` — the no-JS baseline: the real SvelteKit `load`
   functions (the server loads and the universal catalog load, as the server
   runs it for the first render) run against the in-process api, page by

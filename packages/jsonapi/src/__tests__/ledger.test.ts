@@ -75,7 +75,7 @@ describe("Ledger.keyValue", () => {
 });
 
 /**
- * The forgetting bound on the backend (as MemoryBackend's #355): a
+ * The forgetting bound on the backend (as for MemoryBackend): a
  * rejection at exactly a push's floor is still reported, because the push does
  * not start past it, and it stops being reported once a push starts past it.
  * The per-resource server refuses every update and delete with a 422.

@@ -271,7 +271,7 @@ export const evaluateAll = (
 
 /**
  * Evaluate `subsets` with their totals where the backend can count them:
- *through {@link Backend.evaluateCounted} when it provides one, every
+ * through {@link Backend.evaluateCounted} when it provides one, every
  * `total` set; else {@link evaluateAll}, every `total` `undefined`. Fails
  * with a `BackendError` when `evaluateCounted` returns a different number of
  * answers than it was given subsets.

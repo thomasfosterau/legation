@@ -143,7 +143,7 @@ const reviewsOfP01 = new Request(
 
 const json = (response: Response) => Effect.promise(() => response.json() as Promise<any>);
 
-describe("the commerce façade's writes (ADR-0030, #510)", () => {
+describe("the commerce façade's writes (ADR-0030)", () => {
   it.effect("journals an offline review, shows it, and the server acknowledges it", () =>
     Effect.scoped(
       Effect.gen(function* () {

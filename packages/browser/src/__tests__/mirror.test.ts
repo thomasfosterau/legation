@@ -911,7 +911,7 @@ const todosUpdates = (
       : []
   );
 
-describe("pulled marks follow their rows over a mirror (#672)", () => {
+describe("pulled marks follow their rows over a mirror", () => {
   it.live("the host posts a registration's pulled rows before the mark that calls it pulled", () =>
     Effect.scoped(
       Effect.gen(function* () {

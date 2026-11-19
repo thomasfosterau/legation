@@ -13,7 +13,7 @@
  *
  * - `Relationship.one` / `Relationship.optional` → `Edge.one`, stored in
  *   the relationship's declared storage key, `Relationship.one(ref, { key })`,
- * else the foreign-key field `` `${name}Id` `` (the `via` option
+ *   else the foreign-key field `` `${name}Id` `` (the `via` option
  *   overrides either, per relationship). JSON:API keeps relationship linkage out of `attributes`, so the
  *   engine-side row gains the key field the edge declares.
  * - `Relationship.many` / `Relationship.paginated` → `Edge.many` /
@@ -24,7 +24,7 @@
  * - `paginated` edges need an `order` (cursor pagination requires a stable
  *   order, and it is part of the edge's identity — ADR-0022). It is read off
  *   the relationship's own declaration, `Relationship.paginated(ref, { order })`,
- * or given in the `order` option.
+ *   or given in the `order` option.
  *
  * **Sync metadata on the resource.** What only the sync engine needs —
  * an inverse name, the literal kind of a field no schema can tell (an

@@ -638,7 +638,7 @@ const expectInvisibleWhileParked = (parked: {
   expect(parked.ledger).toEqual({});
 };
 
-describeWrapped("JsonApiBackend visibility before the bump (guarantee 1, #381)", (it) => {
+describeWrapped("JsonApiBackend visibility before the bump (guarantee 1)", (it) => {
   it.effect("a concurrent read sees neither a parked batch's row nor its bump", () =>
     Effect.gen(function* () {
       const observed = yield* probeBatch(false);
@@ -925,7 +925,7 @@ const restartInSameGroup = (restartWith: (ledger: Ledger.LedgerStore) => Ledger.
     return { acknowledged, rejected, restartedLedger, restartedRejected, outcome };
   });
 
-describe("JsonApiBackend restarted on the same ledger in the same group (#477, #483), atomic mode", () => {
+describe("JsonApiBackend restarted on the same ledger in the same group, atomic mode", () => {
   layer(KeyValueStore.layerMemory)((scoped) => {
     scoped.effect(
       "runs the full contract over a backend restarted on the same durable ledger",

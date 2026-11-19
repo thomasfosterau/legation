@@ -1,9 +1,9 @@
 /**
  * Incremental
  *
- * The pure delta engines behind derived combinators ({@link Derive}).
+ * The pure delta engines behind the derived combinators ({@link Derive}).
  * ADR-0027 (decision 4) blesses the proven per-module seams over extracting a
- * shared #108 operator core, and rules that combinators *are* the
+ * shared operator core, and rules that the combinators *are* the
  * operator layer, landing with their consumer — so these are exactly those
  * combinators' engines, not a separately-consumed core. Each mirrors a proven
  * seam's *technique* (not its coupled code): `join` the keyed-bucket-plus-
@@ -74,7 +74,7 @@ export const emptyDelta: Delta<never> = { added: [], removed: [] };
 // row deltas by diffing consecutive pages here — the page-diffing path
 // ADR-0027 §4 describes, the same internal re-diff `Related` does, and the
 // fallback `Derive.maintain` keeps for a plain page source. When the leaf is
-// a `ClientView` (`Derive.observed`), `observeChanges` enter/update/
+// a `ClientView` (`Derive.observed`), its `observeChanges` enter/update/
 // exit/move feed is consumed directly instead: `deltaFromChanges` below reads
 // the delta `LiveView` already computed rather than recomputing it by diffing
 // two page `Map`s.

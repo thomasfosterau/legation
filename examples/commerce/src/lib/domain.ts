@@ -362,7 +362,7 @@ export const ProfileUpdateArgs = ProfileSchema;
  * `Prefer: respond-async`) as the graph-derived `{type}/{operation}`. Each has
  * a server half of that name in `server/handlers.ts`, under the same rules
  * (`server/rules.ts`) as the per-resource handlers and the atomic endpoint:
- *a name the server lacked would be a transient failure that aborts
+ * a name the server lacked would be a transient failure that aborts
  * every later push. A cart line's quantity has no `PATCH` route, so
  * `cartItems/update` is not journaled.
  */

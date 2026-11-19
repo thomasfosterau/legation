@@ -202,7 +202,7 @@ export const handler = <I, O, E>(
 });
 
 /**
- * Serve a streaming kind: `Started` once the payload has decoded (#628), each
+ * Serve a streaming kind: `Started` once the payload has decoded, each
  * element as an `Item`, then `End`, or a `Failure` when the stream fails or dies.
  */
 export const streamHandler = <I, O, E>(

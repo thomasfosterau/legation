@@ -9,7 +9,7 @@
  * the stale-while-revalidate cache noticing.
  *
  * Two tag granularities share one convention (see CONTEXT.md's "Tag" entry;
- * edge/KV invalidation sink reuses this same spelling):
+ * the edge/KV invalidation sink reuses this same spelling):
  *
  * - Coarse: `collection:{name}` (the default {@link defaultTagFor}) — every
  *   response enumerating (part of) a collection carries it.

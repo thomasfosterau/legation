@@ -182,7 +182,7 @@ interface Active {
    * emission is the replica as it stands when the run starts.
    */
   readonly loop: Effect.Effect<void, unknown>;
-  /** The fiber running {@link loop} now; replaced when the loop is restarted (#672). */
+  /** The fiber running {@link loop} now; replaced when the loop is restarted. */
   readonly fiber: Ref.Ref<Fiber.Fiber<void, never>>;
   /** Engine-side release beyond interrupting the fiber (e.g. unsubscribe). */
   readonly teardown: Effect.Effect<void>;
@@ -301,7 +301,7 @@ export const run = (options: EngineHostOptions): Effect.Effect<Host, never, Scop
       ReadonlyArray<{ readonly key: string; readonly pulled: Coverage.Pulled }> | undefined
     >(undefined);
 
-    // Bring a registration's mirrors up to the replica as it stands (#672):
+    // Bring a registration's mirrors up to the replica as it stands:
     // stop its broadcast loop, post its current rows, and start the loop again
     // from a fresh observation. Every update the registration broadcasts after
     // this reflects at least the rows the replica holds now.
@@ -315,7 +315,7 @@ export const run = (options: EngineHostOptions): Effect.Effect<Host, never, Scop
         );
       });
 
-    // Tell the mirrors which registrations are pulled (#426), rows first (#672).
+    // Tell the mirrors which registrations are pulled, rows first.
     // A pull marks its windows only after its rows are in the replica, but a
     // registration's broadcast loop may still be working through changes from
     // before that pull, and a mirror judges an answer complete by reading its

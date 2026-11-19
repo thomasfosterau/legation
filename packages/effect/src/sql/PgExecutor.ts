@@ -2,7 +2,7 @@
  * PgExecutor
  *
  * A `SqlBackend` executor over a PostgreSQL `SqlClient` from `effect/sql`.
- *Pair it with `dialect: Sql.postgres`:
+ * Pair it with `dialect: Sql.postgres`:
  *
  * ```ts
  * const sql = yield* SqlClient; // from `PgClient.layer(...)` (`@effect/sql-pg`)

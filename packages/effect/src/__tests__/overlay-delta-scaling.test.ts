@@ -1,5 +1,5 @@
 /**
- * CI-checkable proof of acceptance-criteria benchmark claim ("per-
+ * CI-checkable proof of the overlay benchmark claim ("per-
  * mutation cost proportional to rows touched, not collection size × journal
  * length"): a `store.listRows` call is the one operation whose cost scales
  * with collection size (`ClientStore.listRows` reads every row of a

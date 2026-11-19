@@ -975,7 +975,7 @@ const orderTokens = (orderBy: ReadonlyArray<Subset.OrderBy>): ReadonlyArray<stri
 
 // ─── The UrlReads seam ───────────────────────────────────────────────────────
 
-describe("JsonApiQuery.urlReads (Client.subscribe(url), ADR-0029 §2, #159)", () => {
+describe("JsonApiQuery.urlReads (Client.subscribe(url), ADR-0029 §2)", () => {
   const products = "/products?include=category%2Cvariants&filter[name]=Desk";
   const read: Query.Read = {
     collection: "products",

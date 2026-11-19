@@ -99,7 +99,7 @@
     });
 
   // Delete-then-undo: capture the whole pre-delete row now, so its undo
-  // re-creates it exactly (the paired-intents way to satisfy criterion).
+  // re-creates it exactly (the paired-intents way to undo a delete).
   const remove = (todo: Todo): void =>
     run({
       execute: { mutator: "todo/remove", args: { id: todo.id } },
