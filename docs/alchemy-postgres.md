@@ -1,10 +1,8 @@
 # PostgreSQL inside a room
 
 How long a PostgreSQL client lives when `Room.make`'s `backend` is a
-`SqlBackend` over `PgExecutor`, and what is safe to hold across requests
-(#679 item 4). The Hyperdrive questions are #506's; until it records
-Hyperdrive's documented behaviour, the Hyperdrive answer below is the
-conservative one.
+`SqlBackend` over `PgExecutor`, what is safe to hold across requests, and
+what Hyperdrive guarantees about the backend's transactions and reads.
 
 ## What the code does
 
@@ -53,11 +51,12 @@ backend: Effect.gen(function* () {
 - **Keep the pool small.** Every awake room holds its own pool, so the server
   sees up to (awake rooms) × `maxConnections`. One or two per room, behind a
   pooler, is the usual shape.
-- **Set an idle timeout.** It lets an idle room release its connections
-  before the platform evicts it, so the server is not left holding sockets
-  that will never close cleanly. Whether an open idle connection also keeps
-  the room from hibernating is not verified here (#506); the idle timeout
-  releases it either way.
+- **Set an idle timeout.** An open outbound connection keeps a Durable Object
+  from hibernating (Cloudflare's "Durable Object lifecycle": a TCP socket is
+  pending I/O, which prevents eviction for up to 15 minutes per operation), so
+  a room holding an idle pool stays resident and is billed for it. The idle
+  timeout closes the connections, lets the room hibernate, and keeps the
+  server from holding sockets that will never close cleanly.
 - **A dropped connection is not an error to handle.** A statement on a dead
   connection fails as a `BackendError`, the client retries its push or pull,
   and the pool reconnects.
@@ -81,10 +80,13 @@ includes one, so the per-request pattern below needs nothing more.
 `@alchemy.run/cloudflare` documents Hyperdrive's `host` and `password` as
 "valid only within the current Worker invocation" (`Hyperdrive.ConnectClient`).
 A pool built once per room from them opens its later connections with an
-earlier invocation's credentials. Whether a Durable Object's invocation is the
-request or the instance is #506's to verify, so **do not hold a Hyperdrive
-client across requests**: Hyperdrive is a pool itself, and its model is a
-client per request.
+earlier invocation's credentials. **Do not hold a Hyperdrive client across
+requests**: Hyperdrive is a pool itself, and Cloudflare's model is a client per
+invocation ("Connection lifecycle": create the client inside the handler; the
+Worker-to-Hyperdrive connection is cleaned up when the invocation ends, a
+Durable Object's hibernation or eviction included). Cloudflare also warns that
+a client held open in a long-lived Durable Object keeps an origin connection
+allocated from the pool, which many rooms can exhaust.
 
 `Backend.perRequest` gives a room exactly that (#681). Its argument builds the
 backend for one request, in that request's `Scope`; the room's sync server
@@ -138,6 +140,40 @@ return (
   provides it to each acquisition.
 - **A named set over the backend** (`Authorization.namedSet(backend, …)`)
   opens its own acquisition when it resolves, apart from the pull's.
-- What Hyperdrive guarantees about a transaction staying on one origin
-  connection, and about query caching for reads outside one, is still #506's
-  to record.
+
+## What Hyperdrive guarantees
+
+From Cloudflare's Hyperdrive documentation ("Connection pooling", "Query
+caching", "Limits"), checked in November 2026:
+
+- **A transaction stays on one origin connection.** Hyperdrive pools in
+  transaction mode: a client's transaction runs on a single origin connection
+  from `BEGIN` to `COMMIT` or `ROLLBACK`, and the connection returns to the
+  pool afterwards. So `PgExecutor.transaction` (one top-level
+  `withTransaction`) keeps a push's mutation-id claims and its handlers'
+  writes atomic through Hyperdrive, and Backend guarantee 1 holds. Hyperdrive
+  is not a D1-style `transactional: false` topology.
+- **`SET TRANSACTION ISOLATION LEVEL SERIALIZABLE` is honoured.** A `SET`
+  inside an explicit transaction takes effect for that transaction; the
+  connection is `RESET` when it returns to the pool. `Sql.postgres` issues it
+  as the transaction's first statement, so every push transaction is
+  serializable. Outside a transaction a `SET` lasts one query, so nothing the
+  backend relies on persists between statements.
+- **Query caching can serve the sync server stale reads. Turn it off.**
+  Caching is on by default (a 60 second `max_age`). Hyperdrive caches
+  read-only queries that run outside a transaction and does not invalidate a
+  cached result when the database is written. `evaluate`, `evaluateMany` and
+  `getRows` run outside a transaction, so a cached answer would give a CVR an
+  old view, and the pull would ship rows the client already has or miss a
+  write it should see. Bind the room to a Hyperdrive configuration created
+  with `--caching-disabled` (or `wrangler hyperdrive update <id>
+  --caching-disabled`). An app that wants caching for its own reads binds a
+  second, cached configuration beside it, and counts both configurations'
+  origin connections against the database's limit.
+- **Unprepared statements are fine.** `PgExecutor` runs every statement
+  unprepared, so nothing depends on a named prepared statement surviving
+  between queries, which transaction pooling would not guarantee.
+- **Limits.** A statement runs for at most 60 seconds, then Hyperdrive
+  terminates it. Keep the push transaction short: it holds an origin
+  connection until it commits, and a configuration has a bounded number of
+  origin connections (about 20 on the free plan, configurable on paid plans).
