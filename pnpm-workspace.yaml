@@ -93,7 +93,7 @@ catalog:
   better-auth: ^1.7.25
   better-sqlite3: ^13.2.0
   fake-indexeddb: ^6.2.8
-  fallow: 3.43.1
+  fallow: 3.43.2
   jsdom: ^31.0.1
   # The commerce façade's browser test drives Chromium through it. Pinned
   # exact: each release expects one Chromium revision
