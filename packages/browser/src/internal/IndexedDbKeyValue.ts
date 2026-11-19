@@ -179,6 +179,16 @@ const runRequest = <A>(
   });
 
 /**
+ * `KeyValueStore.make`'s options with `keys` spelled out, so this module type-checks at both ends
+ * of the `effect ^4.0.0` peer (#691). From effect 4.1 `keys` is a required option (and derives
+ * `clearPrefix`); 4.0's `MakeOptions` doesn't declare it, but its `make` spreads the options onto
+ * the store, so the store lists its keys at runtime on 4.0 as well.
+ */
+type KeyValueOptions = KeyValueStore.MakeOptions & {
+  readonly keys: Effect.Effect<ReadonlyArray<string>, KeyValueStore.KeyValueStoreError>;
+};
+
+/**
  * The platform's `KeyValueStore` semantics over the database {@link openDatabase}
  * opened: a string value reads back as a string, a `Uint8Array` as bytes, and
  * every call is its own transaction, as the platform's store makes them.
@@ -186,7 +196,7 @@ const runRequest = <A>(
 const keyValueOver = (connection: Connection): KeyValueStore.KeyValueStore => {
   /** A stored record: the `{ key, value }` the platform writes. */
   type StoredRecord = { readonly key: string; readonly value: unknown } | undefined;
-  return KeyValueStore.make({
+  const options: KeyValueOptions = {
     get: (key) =>
       runRequest<StoredRecord>(
         connection,
@@ -240,7 +250,10 @@ const keyValueOver = (connection: Connection): KeyValueStore.KeyValueStore => {
       { method: "keys", message: "Failed to list keys in backing store" },
       (store) => store.getAllKeys()
     ).pipe(Effect.map((keys) => keys.filter(P.isString))),
-  });
+  };
+  // Passed as a variable, not a literal: effect 4.0's `MakeOptions` has no `keys`, and only a
+  // literal is checked for excess properties (#691).
+  return KeyValueStore.make(options);
 };
 
 /**

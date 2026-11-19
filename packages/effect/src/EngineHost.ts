@@ -76,6 +76,7 @@ import * as Clock from "effect/Clock";
 import * as Deferred from "effect/Deferred";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
+import * as Eq from "effect/Equal";
 import * as Exit from "effect/Exit";
 import * as Fiber from "effect/Fiber";
 import * as HashMap from "effect/HashMap";
@@ -84,6 +85,7 @@ import * as Option from "effect/Option";
 import * as Ref from "effect/Ref";
 import * as Schema from "effect/Schema";
 import * as Scope from "effect/Scope";
+import * as Semaphore from "effect/Semaphore";
 import * as Stream from "effect/Stream";
 import type { MirrorChannel } from "./MirrorChannel.js";
 import * as MirrorProtocol from "./MirrorProtocol.js";
@@ -175,7 +177,13 @@ interface Active {
   readonly mirrors: ReadonlySet<string>;
   /** The mirrors holding this registration by URL (`SubscribeUrl`); the URL is reported while any remains. */
   readonly urlMirrors: ReadonlySet<string>;
-  readonly fiber: Fiber.Fiber<void, never>;
+  /**
+   * The broadcast loop: each run observes the engine afresh, so its first
+   * emission is the replica as it stands when the run starts.
+   */
+  readonly loop: Effect.Effect<void, unknown>;
+  /** The fiber running {@link loop} now; replaced when the loop is restarted (#672). */
+  readonly fiber: Ref.Ref<Fiber.Fiber<void, never>>;
   /** Engine-side release beyond interrupting the fiber (e.g. unsubscribe). */
   readonly teardown: Effect.Effect<void>;
   /** Re-hydrate a newly-joining mirror from the current result. */
@@ -280,15 +288,66 @@ export const run = (options: EngineHostOptions): Effect.Effect<Host, never, Scop
     const lastSeen = yield* Ref.make(new Map<string, number>());
     // Each registration's pull mark (#426): pulled once a pull started after it has applied.
     const marks = PullMarks.make(engine);
-    // The pulled summaries last sent to mirrors, so `PulledRegistrations` goes out only when they change.
-    const announced = yield* Ref.make<string | undefined>(undefined);
-    const announce = Effect.gen(function* () {
-      const registrations = yield* marks.registrations;
-      const serialised = JSON.stringify(registrations);
-      if (serialised === (yield* Ref.get(announced))) return;
-      yield* Ref.set(announced, serialised);
-      yield* channel.post({ _tag: "PulledRegistrations", registrations }).pipe(Effect.ignore);
-    });
+    // The scope broadcast loops run in, so a loop restarted by `announce` lives as long as the host.
+    const hostScope = yield* Effect.scope;
+    // Serialises what `announce` reads and restarts against what `acquire` and
+    // `release` add and remove, so a loop is never restarted for an entry being
+    // torn down, nor announced before its entry is listed.
+    const registryLock = yield* Semaphore.make(1);
+    // The pulled summaries last sent to mirrors, so `PulledRegistrations` goes
+    // out only when they change and a registration's loop restarts only when its
+    // own summary does.
+    const announced = yield* Ref.make<
+      ReadonlyArray<{ readonly key: string; readonly pulled: Coverage.Pulled }> | undefined
+    >(undefined);
+
+    // Bring a registration's mirrors up to the replica as it stands (#672):
+    // stop its broadcast loop, post its current rows, and start the loop again
+    // from a fresh observation. Every update the registration broadcasts after
+    // this reflects at least the rows the replica holds now.
+    const restart = (entry: Active) =>
+      Effect.gen(function* () {
+        yield* Fiber.interrupt(yield* Ref.get(entry.fiber));
+        yield* entry.hydrate;
+        yield* Ref.set(
+          entry.fiber,
+          yield* entry.loop.pipe(Effect.ignore, Effect.forkIn(hostScope))
+        );
+      });
+
+    // Tell the mirrors which registrations are pulled (#426), rows first (#672).
+    // A pull marks its windows only after its rows are in the replica, but a
+    // registration's broadcast loop may still be working through changes from
+    // before that pull, and a mirror judges an answer complete by reading its
+    // marks and then its rows. So each registration whose summary changed and
+    // holds a pulled window restarts its loop before the marks go out: the
+    // mirrors receive its current rows first, and nothing older after. Only
+    // listed registrations are announced, so a registration still being made
+    // is announced, rows first, once `acquire` lists it.
+    const announce = Semaphore.withPermit(
+      registryLock,
+      Effect.gen(function* () {
+        const entries = yield* Ref.get(active);
+        const registrations = (yield* marks.registrations).filter(({ key }) => entries.has(key));
+        const previous = yield* Ref.get(announced);
+        if (Eq.equals(registrations, previous)) return;
+        yield* Effect.forEach(
+          registrations,
+          ({ key, pulled }) => {
+            const entry = entries.get(key);
+            const before = previous?.find((announcement) => announcement.key === key);
+            return entry !== undefined &&
+              !Eq.equals(before?.pulled, pulled) &&
+              pulled.windows.some((window) => window.pulled)
+              ? restart(entry)
+              : Effect.void;
+          },
+          { concurrency: 1, discard: true }
+        );
+        yield* Ref.set(announced, registrations);
+        yield* channel.post({ _tag: "PulledRegistrations", registrations }).pipe(Effect.ignore);
+      })
+    );
 
     // Pulls that sync new registrations, at most one fibre at a time (#426). A
     // registration made while one runs sets `again`, and the running fibre pulls
@@ -380,15 +439,23 @@ export const run = (options: EngineHostOptions): Effect.Effect<Host, never, Scop
         // nothing and records nothing; the message loop swallows the error and
         // the mirror simply never hydrates.
         const { loop, teardown, hydrate } = yield* start;
-        const fiber = yield* Effect.forkScoped(loop.pipe(Effect.ignore));
-        yield* Ref.update(active, (map) =>
-          new Map(map).set(key, {
-            mirrors: new Set([mirrorId]),
-            urlMirrors: new Set(byUrl ? [mirrorId] : []),
-            fiber,
-            teardown,
-            hydrate,
-            ...Defined.fields({ registered }),
+        yield* Semaphore.withPermit(
+          registryLock,
+          Effect.gen(function* () {
+            const fiber = yield* Ref.make(
+              yield* Effect.forkIn(loop.pipe(Effect.ignore), hostScope)
+            );
+            yield* Ref.update(active, (map) =>
+              new Map(map).set(key, {
+                mirrors: new Set([mirrorId]),
+                urlMirrors: new Set(byUrl ? [mirrorId] : []),
+                loop,
+                fiber,
+                teardown,
+                hydrate,
+                ...Defined.fields({ registered }),
+              })
+            );
           })
         );
         yield* announce;
@@ -410,13 +477,18 @@ export const run = (options: EngineHostOptions): Effect.Effect<Host, never, Scop
           );
           return;
         }
-        yield* Fiber.interrupt(entry.fiber);
-        yield* entry.teardown.pipe(Effect.ignore);
-        yield* Ref.update(active, (map) => {
-          const next = new Map(map);
-          next.delete(key);
-          return next;
-        });
+        yield* Semaphore.withPermit(
+          registryLock,
+          Effect.gen(function* () {
+            yield* Fiber.interrupt(yield* Ref.get(entry.fiber));
+            yield* entry.teardown.pipe(Effect.ignore);
+            yield* Ref.update(active, (map) => {
+              const next = new Map(map);
+              next.delete(key);
+              return next;
+            });
+          })
+        );
         yield* announce;
       });
 

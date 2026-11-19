@@ -21,10 +21,13 @@ catalog:
   # Alchemy's Cloudflare provider and the engine it runs on, one release train
   # at exact versions (each `@alchemy.run/*` package pins `alchemy` exactly).
   # legation-alchemy-cloudflare builds on the provider's Effect-native services
-  # (ADR-0034). 2.0.0-beta.85 is the release the apps pin; it requires
-  # `effect ^4.1.0`, hence `catalogs.alchemy-peers` below.
-  alchemy: 2.0.0-beta.85
-  "@alchemy.run/cloudflare": 2.0.0-beta.85
+  # (ADR-0034). 2.0.0-beta.87 is the release the apps pin; it requires
+  # `effect ^4.1.4`, hence `catalogs.alchemy-peers` below.
+  alchemy: 2.0.0-beta.87
+  "@alchemy.run/cloudflare": 2.0.0-beta.87
+  # The repository's own GitHub configuration (`stacks/github.ts`), on the
+  # same release train.
+  "@alchemy.run/github": 2.0.0-beta.87
   "@arethetypeswrong/cli": ^0.18.5
   "@changesets/cli": ^3.0.3
   # Dev only: the declarations of `@alchemy.run/cloudflare` import the workerd
@@ -53,14 +56,14 @@ catalog:
   # of the 6/7 split. `effect-tsgo patch` overwrites the native `tsc` binary
   # (and the `oxlint` vite-plus carries) with an Effect-patched build matched
   # by gitHead, so this pins in lockstep with `@typescript/native` below and
-  # with the `oxlint` / `oxlint-tsgolint` that `vite-plus` pulls in: 0.67.7
-  # supports typescript 7.0.2, oxlint 1.89.0 / 1.91.0 – 1.93.0 and tsgolint
-  # 7.0.2004 – 7.0.2006; vite-plus 1.5.1 carries oxlint 1.91.0 and tsgolint 7.0.2005.
+  # with the `oxlint` / `oxlint-tsgolint` that `vite-plus` pulls in: 0.69.0
+  # supports typescript 7.0.2, oxlint 1.91.0 – 1.93.0 and tsgolint
+  # 7.0.2005 – 7.0.2007; vite-plus 1.6.0 carries oxlint 1.93.0 and tsgolint 7.0.2006.
   # Each @effect/tsgo release hard-errors (UnsupportedTargetPackageVersionError)
   # on any other component version, failing `pnpm install` itself. Read the
   # `components` table in node_modules/@effect/tsgo/dist/effect-tsgo.cjs
   # before bumping any of the three.
-  "@effect/tsgo": 0.67.7
+  "@effect/tsgo": 0.69.0
   "@electric-sql/pglite": ^0.5.16
   # The Effect lint preset (`effect/*` rules, `configs.recommended` in
   # vite.config.ts). It depends on `effect` exactly, but the `overrides`
@@ -76,9 +79,9 @@ catalog:
   # example apps that use it take it from here too.
   "@thomasfosterau/effect-jsonapi": ^0.22.1
   # legation-auth's dev pin (a peer there, `catalogs.auth-peers`): the newest
-  # 0.4.x. Its own `@thomasfosterau/effect-jsonapi` peer is optional and
+  # 0.5.x. Its own `@thomasfosterau/effect-jsonapi` peer is optional and
   # legation-auth does not use its JSON:API surface.
-  "@thomasfosterau/effect-auth": 0.4.0
+  "@thomasfosterau/effect-auth": 0.5.2
   # A runtime dependency of a published package (legation-svelte): `pnpm pack`
   # rewrites `catalog:` to this range in the packed manifest.
   "@thomasfosterau/effect-svelte": ^0.7.0
@@ -109,12 +112,12 @@ catalog:
   typescript: "npm:@typescript/typescript6@6.0.2"
   "@typescript/native": "npm:typescript@7.0.2"
   # vite-plus pins `oxlint`, `oxfmt`, `vitest` and the `@vitest/*` packages to
-  # exact versions (1.5.1 → oxlint 1.91.0, oxfmt 0.76.0, oxlint-tsgolint
-  # 7.0.2005, vitest 5.1.0). `vitest` and
+  # exact versions (1.6.0 → oxlint 1.93.0, oxfmt 0.78.0, oxlint-tsgolint
+  # 7.0.2006, vitest 5.1.0). `vitest` and
   # `@vitest/coverage-v8` FOLLOW that pin, and `vite` is the same release under
   # its aliased core package. They move together with `@effect/tsgo` (above).
-  vite-plus: 1.5.1
-  vite: npm:@voidzero-dev/vite-plus-core@1.5.1
+  vite-plus: 1.6.0
+  vite: npm:@voidzero-dev/vite-plus-core@1.6.0
   vitest: 5.1.0
 
 # Peer ranges the PUBLISHED packages declare: the published floor, a promise
@@ -137,20 +140,20 @@ catalogs:
     svelte: ">=5.40"
     "@sveltejs/kit": ^2.0.0 || ^3.0.0
   # legation-alchemy-cloudflare alone: `alchemy` and `@alchemy.run/cloudflare`
-  # 2.0.0-beta.85 peer `effect ^4.1.0` (they import Effect 4.1's modules), so
-  # its `effect` floor is 4.1.0. The Alchemy peers are exact: each
-  # `@alchemy.run/*` release pins `alchemy` exactly, and beta.85 is the release
+  # 2.0.0-beta.87 peer `effect ^4.1.4` (they import Effect 4.1's modules), so
+  # its `effect` floor is 4.1.4. The Alchemy peers are exact: each
+  # `@alchemy.run/*` release pins `alchemy` exactly, and beta.87 is the release
   # the apps deploy with.
   alchemy-peers:
-    effect: ^4.1.0
-    alchemy: 2.0.0-beta.85
-    "@alchemy.run/cloudflare": 2.0.0-beta.85
-  # legation-auth alone: `@thomasfosterau/effect-auth` 0.4.x peers
+    effect: ^4.1.4
+    alchemy: 2.0.0-beta.87
+    "@alchemy.run/cloudflare": 2.0.0-beta.87
+  # legation-auth alone: `@thomasfosterau/effect-auth` 0.5.x peers
   # `effect ^4.1.0`, so its `effect` floor is 4.1.0. effect-auth is a peer
   # (the app configures its services, so there must be one copy).
   auth-peers:
     effect: ^4.1.0
-    "@thomasfosterau/effect-auth": ^0.4.0
+    "@thomasfosterau/effect-auth": ^0.5.2
   # legation-jsonapi alone: `@thomasfosterau/effect-jsonapi` 0.22.x peers
   # `effect ^4.1.0` (its declarations need Effect 4.1's HttpApi types), so its
   # `effect` floor is 4.1.0. effect-jsonapi is a peer (the app passes its own

@@ -271,7 +271,7 @@ const journal = yield * intro.journal;
 
 - `HostRequest.single(name, { request, response })` / `HostRequest.streaming(...)` declare a kind; `HostRequest.handler(kind, (input) => Effect)` / `HostRequest.streamHandler(kind, (input) => Stream)` serve one. A later handler for a name replaces an earlier one. `HostRequest.NoInput` and `HostRequest.Done` are the empty request and response.
 - `mirror.request(kind, input)` waits for one value; `mirror.stream(kind, input)` follows a streaming kind's answer until the host ends it. Stopping or interrupting the stream sends `HostRequestCancel`, and the host interrupts its handler; the mirror's `Disconnect` (or the host's liveness sweep) cancels everything it holds.
-- Failures are a `HostRequestError` with `kind`, `message` and `reason`: `UnknownKind` (the host does not serve it), `InvalidRequest` (the payload does not fit the request schema), `Failed` (the handler failed or died), or `Unanswered`. A request is `Unanswered` when no answer arrives within `requestTimeout` (default 10 seconds; what a host that predates the envelope looks like), and every request in flight is `Unanswered` when the host restarts. A stream has no reply timeout, since it may rightly stay quiet, and is not replayed after a restart: re-request it.
+- Failures are a `HostRequestError` with `kind`, `message` and `reason`: `UnknownKind` (the host does not serve it), `InvalidRequest` (the payload does not fit the request schema), `Failed` (the handler failed or died), or `Unanswered`. A request is `Unanswered` when no answer arrives within `requestTimeout` (default 10 seconds; what a host that predates the envelope looks like), and every request in flight is `Unanswered` when the host restarts. A stream's first reply is due within `requestTimeout` too (the host sends `Started` as soon as it accepts the request), and after that it has no deadline, since it may rightly stay quiet. A stream is not replayed after a restart: re-request it.
 - **Introspection.** Given its `store`, the host serves `Introspection.requests`: single-reply `introspect/subscriptions`, `introspect/journal`, `introspect/cookie`, `introspect/collections` and `introspect/syncFailures`, and streaming `introspect/events`, each typed by the `EngineIntrospection` member it serves. `Introspection.fromMirror(mirror)` builds the same view `Introspection.make(engine, store)` does. Mutation states stay on `mirror.mutationStates`. `EngineIntrospection.syncFailures` is the engine's recent terminal sync failures (`ClientEngine.recentSyncFailures`, the last 50, oldest first).
 - **Hydration into a hosted store** (#146). Given its `store`, the host also serves `Hydration.requests.hydrate` (on the root entry): a tab holding a server-rendered `Hydration.Snapshot` asks `mirror.request(Hydration.requests.hydrate, snapshot)`, and the host answers `{ hydrated: true }` or `{ hydrated: false, reason }`. The host owns the empty-store gate (`Hydration.hydrateUnpulled(engine, store, snapshot)`): with the engine's pulls held (`ClientEngine.withPullsHeld`), it hydrates iff the store is empty (`Hydration.isEmpty`: no cookie, no rows, no journalled or unpulled mutations) and no pull has started since the engine was built. Otherwise the reason is `NotEmpty` or `AlreadyPulling`, the store is untouched, and nothing needs doing: the host's replica is at least as fresh as the snapshot. The first snapshot to reach an empty host wins. After a hydration the engine re-syncs its views and its first pull continues from the snapshot's cookie. A cold host's first pull usually beats the tab's snapshot across the mirror, so `EngineHost.run({ hydrationWindow })` holds the pulls of a host started over an empty, unpulled store until the first `hydrate` request or the window's end (`Hydration.makeGate`); a store that is not empty is never held. `@thomasfosterau/legation-svelte`'s `createClient({ channel, snapshot })` is the tab half.
 
@@ -432,9 +432,13 @@ connection string: a Worker cannot reuse one request's connection in another.
 `Backend.perRequest(acquire)` does that for a `Server`: `acquire` builds the
 `SqlBackend` for one request, and the server runs it once per push, pull and
 read, so a push's transaction is on the one client it opened (#681).
-What Hyperdrive guarantees about transactions, isolation statements and query
-caching is still to be confirmed against its documentation:
-[#506](https://github.com/thomasfosterau/legation/issues/506).
+Hyperdrive pools in transaction mode, so a transaction stays on one origin
+connection and the `SET TRANSACTION ISOLATION LEVEL SERIALIZABLE` that
+`Sql.postgres` issues first is honoured: Backend guarantee 1 holds through it.
+Its query caching does not: it serves read-only queries outside a transaction
+from cache, without invalidating them on a write, and `evaluate` and `getRows`
+run outside one. Use a Hyperdrive configuration with caching disabled for the
+sync backend. The details are in the repository's `docs/alchemy-postgres.md`.
 
 ### Ledger without the `rejections` column
 

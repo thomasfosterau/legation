@@ -42,6 +42,10 @@ export const memoryApiKeyStore = (): typeof ApiKeyStore.Service => {
     update: (key) => Effect.sync(() => (MutableHashMap.set(keys, key.id, key), key)),
     delete: (id) => Effect.sync(() => void MutableHashMap.remove(keys, id)),
     listByUserId: (userId) => Effect.sync(() => all().filter((key) => key.userId === userId)),
+    deleteByUserId: (userId) =>
+      Effect.sync(() => {
+        for (const key of all()) if (key.userId === userId) MutableHashMap.remove(keys, key.id);
+      }),
   };
 };
 
@@ -77,10 +81,12 @@ export const authLayer = (
   const table = memoryUserTable();
   MutableHashMap.set(table.users, alice.id, alice);
   MutableHashMap.set(table.users, bob.id, bob);
+  // effect-auth 0.5 reads a key's owner on every verify, so both services share the users.
+  const users = Layer.succeed(UserStore, memoryUserStore(table));
   const sessions = SessionService.layer(sessionConfig).pipe(
     Layer.provide(
       Layer.mergeAll(
-        Layer.succeed(UserStore, memoryUserStore(table)),
+        users,
         Layer.succeed(SessionStore, sessionStoreFor(modes.sessions ?? "ok")),
         Hooks.Default
       )
@@ -90,6 +96,7 @@ export const authLayer = (
     Layer.provide(
       Layer.mergeAll(
         Layer.succeed(ApiKeyStore, apiKeyStoreFor(modes.apiKeys ?? "ok")),
+        users,
         RateLimiter.layer().pipe(Layer.provide(layerKV), Layer.provide(layerMemoryKeyValueStore))
       )
     )

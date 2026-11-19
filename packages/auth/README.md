@@ -26,8 +26,8 @@ npm install @thomasfosterau/legation-auth @thomasfosterau/legation \
   @thomasfosterau/effect-auth effect
 ```
 
-Peers: `@thomasfosterau/effect-auth ^0.4.0` and `effect ^4.1.0` (effect-auth
-0.4 requires Effect 4.1). ESM only. Tested against `effect` 4.1.0 (the floor)
+Peers: `@thomasfosterau/effect-auth ^0.5.2` and `effect ^4.1.0` (effect-auth
+0.5 requires Effect 4.1). ESM only. Tested against `effect` 4.1.0 (the floor)
 and the workspace pin.
 
 ## Identity: `Resolver`

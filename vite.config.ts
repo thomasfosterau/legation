@@ -505,6 +505,20 @@ export default defineConfig({
         command: "node scripts/effect-floor.mjs test",
         cache: false,
       },
+      // The repository's GitHub configuration (`stacks/github.ts`): an
+      // owner-run stack on its own fixed `github` stage. It needs an
+      // admin-scoped GitHub token and the Cloudflare credentials of the state
+      // store, so it never runs in CI or an agent session.
+      "github:plan": {
+        command:
+          "node --no-warnings=ExperimentalWarning node_modules/alchemy/bin/alchemy.js plan ./stacks/github.ts --stage github",
+        cache: false,
+      },
+      "github:deploy": {
+        command:
+          "node --no-warnings=ExperimentalWarning node_modules/alchemy/bin/alchemy.js deploy ./stacks/github.ts --stage github",
+        cache: false,
+      },
       // Chromium for the commerce façade's browser test (`test:coverage`),
       // with its system libraries (`--with-deps`: apt on Linux, via sudo when
       // not root). A no-op download when it is already installed.
@@ -561,7 +575,7 @@ export default defineConfig({
       },
       {
         // The Alchemy adapter's suite, apart because it has its own `effect`
-        // floor (`catalogs.alchemy-peers`, 4.1.0, which Alchemy requires):
+        // floor (`catalogs.alchemy-peers`, 4.1.4, which Alchemy requires):
         // `vp run ci:floor` runs it at that floor and every other
         // project at the core's.
         extends: true,

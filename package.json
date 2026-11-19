@@ -23,6 +23,8 @@
     "prepare": "vp config && effect-tsgo patch --typescript --oxlint"
   },
   "devDependencies": {
+    "@alchemy.run/cloudflare": "catalog:",
+    "@alchemy.run/github": "catalog:",
     "@arethetypeswrong/cli": "catalog:",
     "@changesets/cli": "catalog:",
     "@effect/language-service": "catalog:",
@@ -33,6 +35,7 @@
     "@types/node": "catalog:",
     "@typescript/native": "catalog:",
     "@vitest/coverage-v8": "catalog:",
+    "alchemy": "catalog:",
     "effect": "catalog:",
     "fallow": "catalog:",
     "jsdom": "catalog:",
