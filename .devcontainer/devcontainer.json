@@ -1,15 +1,14 @@
 {
   "name": "legation",
   // The tag follows the catalog's `vite-plus` pin (moved by hand).
-  "image": "ghcr.io/voidzero-dev/vite-plus:1.5.1",
+  "image": "ghcr.io/voidzero-dev/vite-plus:1.6.0",
   "features": {
     "ghcr.io/devcontainers/features/github-cli:1": {},
     "ghcr.io/devcontainers-extra/features/ripgrep:1": {},
     "ghcr.io/anthropics/devcontainer-features/claude-code:1.0": {},
     "ghcr.io/devcontainer-community/devcontainer-features/jq:1": {}
   },
-  // Chromium for the commerce façade's browser test.
-  "postCreateCommand": "vp install --frozen-lockfile && vp exec playwright-core install --with-deps chromium",
+  "postCreateCommand": "vp install --frozen-lockfile",
   "customizations": {
     "vscode": {
       "extensions": ["svelte.svelte-vscode", "Anthropic.claude-code", "oxc.oxc-vscode"]

@@ -64,3 +64,29 @@ jobs:
             vp-task-v2-${{ runner.os }}-node-${{ matrix.node }}-
       - name: CI
         run: vp run ci
+
+  devcontainer:
+    name: devcontainer
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    env:
+      # `vp dlx` honours `minimumReleaseAge`: keep this at a release ≥8 hours old.
+      DEVCONTAINER_CLI: "@devcontainers/cli@0.89.0"
+    steps:
+      - uses: actions/checkout@v7.0.1
+        with:
+          persist-credentials: false
+      # Only to run the CLI on the runner; the container brings its own.
+      - name: Setup Vite+
+        uses: voidzero-dev/setup-vp@v1.22.0
+        with:
+          version-file: pnpm-workspace.yaml
+          cache: false
+          run-install: false
+      # Fails when the image, a feature or `postCreateCommand` fails.
+      - name: Build and start the container
+        run: vp dlx "$DEVCONTAINER_CLI" up --workspace-folder . --log-level info
+      - name: Check the toolchain inside it
+        run: vp dlx "$DEVCONTAINER_CLI" exec --workspace-folder . bash -lc 'vp --version && test -x node_modules/.bin/vp'

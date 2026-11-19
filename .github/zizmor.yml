@@ -4,3 +4,8 @@ rules:
     config:
       # Longer than pnpm's 8-hour `minimumReleaseAge`.
       days: 1
+  unpinned-uses:
+    config:
+      # Actions are pinned to exact tags; .github/workflows/actions.lock pins their commits.
+      policies:
+        "*": ref-pin
