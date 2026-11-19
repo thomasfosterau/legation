@@ -12,7 +12,8 @@ The reference deployment on Cloudflare (ADR-0022 topology, ADR-0023 topic-derive
 
 ## Invariants
 
-- **WebSockets carry only contentless poke frames**; data moves over stateless HTTP, so hibernated sockets cost nothing between writes.
+- **WebSockets carry only contentless poke frames**; data moves over stateless HTTP, so an evicted room loses nothing a pull cannot recover.
+- **A room does not hibernate.** `FanoutBus`'s lease heartbeat keeps a timer pending from the room's construction, and a pending timer stops a Durable Object hibernating; the room stays resident (and billed) until evicted. Don't describe the room as hibernation-friendly. Moving the refresh onto a Durable Object alarm is #736.
 - **Every shard call, room poke and lease registration is bounded** by `publishTimeout`: a hung shard drops its poke, it never holds a push open. Alchemy's RPC stubs take no abort signal, so a call past the bound is abandoned, not aborted.
 - **A stub's RPC can fail with `RpcCallError` although its types say `never`**: every call through a stub is fire-and-forget (`DurableFanoutBroker`'s `call`), never trusted to succeed.
 - **The provider reports a failed storage or D1 call as a defect**; `DurableCvrStore` and `D1Executor` turn it into `StoreError` / `BackendError`.

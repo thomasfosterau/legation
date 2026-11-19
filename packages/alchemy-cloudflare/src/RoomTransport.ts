@@ -2,8 +2,8 @@
  * RoomTransport
  *
  * The browser-side `ClientTransport` for the room topology: push, pull,
- * and fallthrough reads travel as stateless HTTP POSTs (each one wakes the
- * hibernated room, is answered, and lets it sleep again), while a single
+ * and fallthrough reads travel as stateless HTTP POSTs (any room instance
+ * can answer one, a freshly constructed one included), while a single
  * WebSocket carries the room's contentless poke frames. The socket
  * reconnects with backoff and its state drives the connection status; sync
  * stays correct over HTTP alone (a dead socket only delays pokes — the
