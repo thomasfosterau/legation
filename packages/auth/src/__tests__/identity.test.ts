@@ -72,8 +72,8 @@ describe("Resolver: the session plane", () => {
           user: { id: alice.id, name: "Alice" },
           sessionAttributes: { activeOrganizationId: "org-1" },
         });
-        // The principal carries no credential: effect-auth reports a validated
-        // session's id as the raw token, and it is left out.
+        // The principal carries no credential: the token `createSession`
+        // returned appears nowhere in it.
         expect(mentions(principal, token)).toBe(false);
       })
     );
