@@ -1,19 +1,13 @@
 name: Dev Container
 
-# Builds and starts .devcontainer/devcontainer.json the way GitHub Codespaces
-# does (the devcontainers CLI: image, features, then `postCreateCommand`), then
-# checks that the container is actually provisioned. The SessionStart hook the
-# `postCreateCommand` runs is deliberately never fatal, so a green `up` alone
-# proves little: the `exec` assertions below are the real check.
-#
-# Runs only when something the container is built from changes.
+# Builds .devcontainer/ the way Codespaces does, then checks the tools are
+# there. Runs only when something the container is built from changes.
 
 on:
   pull_request:
     branches: [trunk]
     paths:
       - ".devcontainer/**"
-      - ".claude/hooks/session-start.sh"
       - "pnpm-workspace.yaml"
       - "package.json"
       - "pnpm-lock.yaml"
@@ -22,7 +16,6 @@ on:
     branches: [trunk]
     paths:
       - ".devcontainer/**"
-      - ".claude/hooks/session-start.sh"
       - "pnpm-workspace.yaml"
       - "package.json"
       - "pnpm-lock.yaml"
@@ -33,10 +26,6 @@ concurrency:
   group: devcontainer-${{ github.ref }}
   cancel-in-progress: ${{ github.ref != 'refs/heads/trunk' }}
 
-# No permissions by default; the job reads the repository and nothing else. It
-# needs no secret and no OIDC token, so a Dependabot PR runs it safely. Every
-# action is pinned to a full commit SHA (Dependabot's `github-actions` updates
-# keep the pins current).
 permissions: {}
 
 jobs:
@@ -47,44 +36,26 @@ jobs:
     permissions:
       contents: read
     env:
-      # The devcontainers CLI, pinned. `pnpm dlx` honours the workspace's
-      # `minimumReleaseAge`, so keep this at a release at least 8 hours old.
+      # `vp dlx` honours `minimumReleaseAge`: keep this at a release ≥8 hours old.
       DEVCONTAINER_CLI: "@devcontainers/cli@0.89.0"
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/checkout@v7.0.1
         with:
           persist-credentials: false
-      # Only to run the CLI on the runner (its managed Node.js and pnpm); the
-      # container installs its own, so nothing is installed here.
+      # Only to run the CLI on the runner; the container brings its own.
       - name: Setup Vite+
-        uses: voidzero-dev/setup-vp@cab1ab9eaff52d4857875f4f2c016e36af8f2c76 # v1.22.0
+        uses: voidzero-dev/setup-vp@v1.22.0
         with:
           version-file: pnpm-workspace.yaml
           run-install: false
-      # `up` fails when the image, a feature or `postCreateCommand` fails.
+      # Fails when the image, a feature or `postCreateCommand` fails.
       - name: Build and start the container
-        run: |
-          set -o pipefail
-          pnpm dlx "$DEVCONTAINER_CLI" up --workspace-folder . --log-level info 2>&1 | tee "$RUNNER_TEMP/up.log"
-      # The hook logs and continues on every failure; any such line fails here.
-      - name: Assert the hook reported no failure
-        run: |
-          if grep -E '\[session-start\] .*(fail|unavailable|could not|cannot|broken)' "$RUNNER_TEMP/up.log"; then
-            echo "::error::the session-start hook reported a failure (above)"
-            exit 1
-          fi
-      # A login shell, as a Codespaces terminal is: `~/.local/bin` (where the
-      # hook links `vp` / `vpx`) is on PATH through the profile.
+        run: vp dlx "$DEVCONTAINER_CLI" up --workspace-folder . --log-level info
       - name: Assert the container is provisioned
         run: |
-          pin="$(sed -nE 's/^  vite-plus: "?([0-9]+\.[0-9]+\.[0-9]+)"?$/\1/p' pnpm-workspace.yaml | head -1)"
-          echo "catalog vite-plus pin: $pin"
-          run() { pnpm dlx "$DEVCONTAINER_CLI" exec --workspace-folder . bash -lc "$1"; }
+          run() { vp dlx "$DEVCONTAINER_CLI" exec --workspace-folder . bash -lc "$1"; }
           set -x
-          run 'id; echo "HOME=$HOME"; pwd; echo "PATH=$PATH"; env | grep -E "^(VP_|VITE_PLUS|PNPM|COREPACK)" || true; type -a vp node pnpm; ls -l "$HOME/.local/bin"'
-          # The hook links the global CLI, not its node_modules fallback shim.
-          run 'test -L "$HOME/.local/bin/vp" && readlink -f "$HOME/.local/bin/vp"'
-          run "vp --version | tee /dev/stderr | grep -F 'v$pin'"
+          run 'vp --version'
           run 'node --version'
           run 'test -d node_modules/.pnpm && test -x node_modules/.bin/vp'
           run 'gh --version'

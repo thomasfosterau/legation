@@ -1,20 +1,15 @@
 {
   "name": "legation",
-  // The Vite+ base image: Node + pnpm + the vp CLI. The tag is the catalog's
-  // `vite-plus` pin (pnpm-workspace.yaml); move it in the same PR that bumps
-  // vite-plus, since Dependabot's devcontainers updates cover only the features.
-  "image": "ghcr.io/voidzero-dev/vite-plus:1.4.0",
+  // The tag follows the catalog's `vite-plus` pin (moved by hand).
+  "image": "ghcr.io/voidzero-dev/vite-plus:1.5.1",
   "features": {
     "ghcr.io/devcontainers/features/github-cli:1": {},
     "ghcr.io/devcontainers-extra/features/ripgrep:1": {},
     "ghcr.io/anthropics/devcontainer-features/claude-code:1.0": {},
     "ghcr.io/devcontainer-community/devcontainer-features/jq:1": {}
   },
-  // Same provisioning as an agent session: the pinned Vite+ CLI, vp/vpx links
-  // and the frozen install (see that file's header). Then the Chromium the
-  // pinned `playwright-core` expects, for the commerce façade's browser test,
-  // which fails rather than skips without it.
-  "postCreateCommand": "bash .claude/hooks/session-start.sh && pnpm exec playwright-core install --with-deps chromium",
+  // Chromium for the commerce façade's browser test.
+  "postCreateCommand": "vp install --frozen-lockfile && vp exec playwright-core install --with-deps chromium",
   "customizations": {
     "vscode": {
       "extensions": ["svelte.svelte-vscode", "Anthropic.claude-code", "oxc.oxc-vscode"]

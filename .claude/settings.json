@@ -1,26 +1,14 @@
 {
   "$schema": "https://json.schemastore.org/claude-code-settings.json",
   "hooks": {
-    "SessionStart": [
-      {
-        "matcher": "startup|resume",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "\"$CLAUDE_PROJECT_DIR\"/.claude/hooks/session-start.sh",
-            "timeout": 300
-          }
-        ]
-      }
-    ],
     "PreToolUse": [
       {
         "matcher": "Bash",
         "hooks": [
           {
             "type": "command",
-            "command": "\"$CLAUDE_PROJECT_DIR\"/.claude/hooks/fallow-gate.sh",
-            "timeout": 600
+            "timeout": 600,
+            "command": "grep -qE '\\bgit\\b[^\"]*\\b(commit|push)\\b' || exit 0; cd \"$CLAUDE_PROJECT_DIR\" || exit 0; out=$(vp exec fallow audit --base origin/trunk --format json --quiet --explain --gate-marker agent 2>&1); [ $? -eq 1 ] || exit 0; printf '%s\\n' \"$out\" >&2; exit 2"
           }
         ]
       }
