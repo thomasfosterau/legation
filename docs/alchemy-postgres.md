@@ -13,8 +13,9 @@ what Hyperdrive guarantees about the backend's transactions and reads.
   every request until the instance goes. So a client built in `backend`
   outlives the request, by design: the server, its CVR conversations and its
   poke hub are long-lived, and so is the backend they hold.
-- **A wake rebuilds it.** A wake from hibernation, or the first request after
-  an eviction, constructs a new instance and runs `backend` again.
+- **An eviction rebuilds it.** The first request after an eviction constructs
+  a new instance and runs `backend` again. (A room does not hibernate: its
+  lease heartbeat keeps it resident until it is evicted.)
 - **Its scope is the instance's, and is never closed.** `backend` runs with the
   room instance's `Scope`, so `Layer.build(PgClient.layer(...))` there holds
   the pool for the instance's life. Nothing closes that scope: on eviction the
@@ -51,12 +52,13 @@ backend: Effect.gen(function* () {
 - **Keep the pool small.** Every awake room holds its own pool, so the server
   sees up to (awake rooms) × `maxConnections`. One or two per room, behind a
   pooler, is the usual shape.
-- **Set an idle timeout.** An open outbound connection keeps a Durable Object
-  from hibernating (Cloudflare's "Durable Object lifecycle": a TCP socket is
-  pending I/O, which prevents eviction for up to 15 minutes per operation), so
-  a room holding an idle pool stays resident and is billed for it. The idle
-  timeout closes the connections, lets the room hibernate, and keeps the
-  server from holding sockets that will never close cleanly.
+- **Set an idle timeout.** An open outbound connection is pending I/O, which
+  keeps a Durable Object from being evicted for up to 15 minutes per
+  operation (Cloudflare's "Durable Object lifecycle"). A room is resident
+  anyway (its lease heartbeat stops it hibernating), but an idle pool would
+  hold database connections for every resident room and keep the server
+  holding sockets that will never close cleanly. The idle timeout releases
+  them.
 - **A dropped connection is not an error to handle.** A statement on a dead
   connection fails as a `BackendError`, the client retries its push or pull,
   and the pool reconnects.

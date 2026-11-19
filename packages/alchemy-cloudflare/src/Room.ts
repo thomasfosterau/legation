@@ -3,11 +3,19 @@
  *
  * The per-user Durable Object of ADR-0022's reference topology, as an Alchemy
  * Durable Object: it runs the sync `Server` for one user — push/pull/read over
- * stateless HTTP (hibernation-proof), CVRs in the object's transactional
- * storage (co-located with the user), a `FanoutBus` over the topic shards for
- * cross-room fan-out, and WebSockets that carry exactly one thing: contentless
- * poke frames, sent when a publish matches the room's leases, so hibernated
- * sockets cost nothing between writes.
+ * stateless HTTP, CVRs in the object's transactional storage (co-located with
+ * the user), a `FanoutBus` over the topic shards for cross-room fan-out, and
+ * WebSockets that carry exactly one thing: contentless poke frames, sent when
+ * a publish matches the room's leases.
+ *
+ * **A room instance does not hibernate.** The bus renews the room's shard
+ * leases on a heartbeat, a timer that is always pending, and a Durable Object
+ * with a pending timer cannot hibernate (Cloudflare's "Durable Object
+ * lifecycle"). So a room stays in memory, billed for its duration, from its
+ * first request until the platform evicts it; that is also what keeps its
+ * leases alive, so publishes keep reaching its sockets. Its sockets are still
+ * accepted under the hibernation API and hold no per-socket state, so an
+ * eviction loses nothing a pull cannot recover.
  *
  * The app declares the class (the shard class beside it) and binds
  * {@link make} to it, resolving the bindings the room needs at init:
@@ -32,7 +40,7 @@
  *
  * The server is built once per in-memory instance, in the object's
  * per-instance phase (Alchemy runs it under `blockConcurrencyWhile` when the
- * object is constructed, a wake from hibernation included). Its CVRs, bus and
+ * object is constructed, after an eviction included). Its CVRs, bus and
  * named-set cache live as long as the instance; a `backend` built with
  * `Backend.perRequest` is the one part acquired per request (#681).
  */
@@ -150,16 +158,18 @@ export interface RoomConfig<R = never> {
    * without values (a polling source's) derives only its collection's coarse topic, so it pokes
    * the rooms whose windows leased that topic, not those that leased a fine one.
    *
-   * A polling source (`PollingHintSource`) keeps the room awake: its timer stops the instance
-   * hibernating between requests, so the room is billed for that time, and it polls only while the
-   * platform keeps the instance in memory. Every room instance runs its own source, so N awake
-   * rooms poll N times and publish each change N times. For a cron or queue writer, publish from
+   * A polling source (`PollingHintSource`) polls only while the platform keeps the instance in
+   * memory. Every room instance runs its own source, so N resident rooms poll N times and publish
+   * each change N times. For a cron or queue writer, publish from
    * the writer instead (`DurableFanoutBroker.publishOutOfBand`).
    */
   readonly hints?: Effect.Effect<HintSource.HintSource, never, RoomServices | Scope.Scope>;
   /** The topic-shard namespace: the app's shard class (`LegationShard`), yielded at init. */
   readonly shards: Effect.Effect<Workers.DurableObject<FanoutShard.ShardObject>, never, R>;
-  /** Shard lease heartbeat (default 30 seconds; TTL is 3×). */
+  /**
+   * Shard lease heartbeat (default 30 seconds; TTL is 3×). Its pending timer keeps the room
+   * instance in memory: a room does not hibernate while it lives.
+   */
   readonly heartbeat?: Duration.Input | undefined;
   /**
    * Bound on each shard or room call the room makes and each lease

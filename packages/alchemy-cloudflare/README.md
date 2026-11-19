@@ -10,12 +10,15 @@ are Alchemy Durable Objects, their state, storage and sockets are the provider's
 `Cloudflare.D1.QueryDatabase` client.
 
 - **`Room`** — the per-user Durable Object (`LegationRoom.make(Room.make(...))`).
-  It runs the sync `Server` for one user: push/pull/read over stateless HTTP
-  (each request wakes the object, is answered, and lets it hibernate), CVRs in
-  the object's transactional storage (`DurableCvrStore`, co-located with the
-  user), a `FanoutBus` over the topic shards, and hibernatable WebSockets
-  (`Cloudflare.upgrade`) that carry only contentless poke frames — so hibernated
-  sockets cost nothing between writes. Each shard call, room poke and lease
+  It runs the sync `Server` for one user: push/pull/read over stateless HTTP,
+  CVRs in the object's transactional storage (`DurableCvrStore`, co-located
+  with the user), a `FanoutBus` over the topic shards, and WebSockets accepted
+  under the hibernation API (`Cloudflare.upgrade`) that carry only contentless
+  poke frames. **A room does not hibernate**: the bus renews its shard leases
+  on a heartbeat (`heartbeat`, default 30 seconds), and a Durable Object with a
+  pending timer cannot hibernate, so a room stays in memory and is billed for
+  duration from its first request until the platform evicts it. Staying
+  resident is also what keeps its leases, and so its pokes, alive. Each shard call, room poke and lease
   registration is bounded by `publishTimeout` (default 5 seconds): a hung shard
   is dropped with its poke, so it cannot hold a push open, and a lost poke only
   delays the next pull.
@@ -192,10 +195,9 @@ equality on an edge or hint key) waits for its next interval pull. Each call is
 bounded by `timeout` (default 5 seconds) and fire-and-forget.
 
 `Room.make` also takes `hints`, a `HintSource` the room runs on its bus. A
-polling source (`PollingHintSource`) keeps the room awake: its timer stops the
-room hibernating, so it is billed between requests, it polls only while the
-instance is in memory, and every awake room polls and publishes the same
-change. Prefer publishing from the writer.
+polling source (`PollingHintSource`) polls only while the instance is in
+memory, and every resident room polls and publishes the same change, so N
+rooms read the source N times per interval. Prefer publishing from the writer.
 
 ## PostgreSQL inside a room
 

@@ -1,9 +1,9 @@
 /**
  * RoomProtocol
  *
- * The room's wire format, chosen for WebSocket **hibernation**: requests
- * (push/pull/read) travel as stateless HTTP POST JSON — a hibernated room
- * wakes, answers, and may be evicted again — while the WebSocket carries
+ * The room's wire format, chosen so that eviction loses nothing: requests
+ * (push/pull/read) travel as stateless HTTP POST JSON — a fresh instance
+ * answers them as well as the one it replaced — while the WebSocket carries
  * exactly one thing: contentless **poke** frames. No server-side session
  * state survives eviction, so none is kept.
  *
