@@ -16,11 +16,10 @@
   },
   "type": "module",
   "scripts": {
+    "prepare": "vp config && effect-tsgo patch --typescript --oxlint",
     "changeset": "changeset",
-    "version": "changeset version && vp fmt && pnpm install --lockfile-only",
-    "release": "vp run build && node scripts/publish.mjs",
-    "release:dry-run": "vp run build && node scripts/publish.mjs --dry-run",
-    "prepare": "vp config && effect-tsgo patch --typescript --oxlint"
+    "version": "changeset version",
+    "release": "node scripts/publish.mjs"
   },
   "devDependencies": {
     "@alchemy.run/cloudflare": "catalog:",
@@ -47,9 +46,11 @@
     "vite-plus": "catalog:",
     "vitest": "catalog:"
   },
-  "engines": {
-    "node": ">=22",
-    "pnpm": ">=11"
+  "devEngines": {
+    "runtime": {
+      "name": "node",
+      "version": "lts"
+    }
   },
   "packageManager": "pnpm@11.28.6"
 }

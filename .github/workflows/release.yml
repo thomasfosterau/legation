@@ -114,8 +114,10 @@ jobs:
       # major arrives through review.
       - name: Upgrade npm
         run: npm install -g npm@11 # zizmor: ignore[adhoc-packages] the publisher itself, major-pinned
-      # Builds, then packs, checks and publishes each unpublished package
-      # (scripts/publish.mjs).
+      - name: Build
+        run: vp run build
+      # Packs, checks and publishes each unpublished package
+      # (scripts/publish.mjs). `pnpm run` forwards the OIDC environment npm needs.
       - name: Publish to npm
         uses: changesets/action/publish@v2.1.2
         with:

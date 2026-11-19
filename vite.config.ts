@@ -475,6 +475,18 @@ export default defineConfig({
         dependsOn: ["build"],
         cache: false,
       },
+      // Fallow's change-set audit, run by the pre-commit hook; it reads the coverage map.
+      "fallow:audit": {
+        command: "vp exec fallow audit --base origin/trunk --quiet",
+        dependsOn: ["test:coverage"],
+        cache: false,
+      },
+      // Packs and checks every unpublished package without publishing.
+      "release:dry-run": {
+        command: "node scripts/publish.mjs --dry-run",
+        dependsOn: ["build"],
+        cache: false,
+      },
       bench: {
         command: "vp test bench --run --reporter=verbose",
         cache: false,
@@ -533,6 +545,9 @@ export default defineConfig({
   },
   test: {
     globals: true,
+    // The contract and property suites run past Vitest's 5 s default under
+    // coverage on a small machine.
+    testTimeout: 20_000,
     projects: [
       {
         extends: true,

@@ -1,18 +1,6 @@
 {
   "$schema": "https://json.schemastore.org/claude-code-settings.json",
   "hooks": {
-    "PreToolUse": [
-      {
-        "matcher": "Bash",
-        "hooks": [
-          {
-            "type": "command",
-            "timeout": 600,
-            "command": "grep -qE '\\bgit\\b[^\"]*\\b(commit|push)\\b' || exit 0; cd \"$CLAUDE_PROJECT_DIR\" || exit 0; out=$(vp exec fallow audit --base origin/trunk --format json --quiet --explain --gate-marker agent 2>&1); [ $? -eq 1 ] || exit 0; printf '%s\\n' \"$out\" >&2; exit 2"
-          }
-        ]
-      }
-    ],
     "PostToolUse": [
       {
         "matcher": "Write|Edit|MultiEdit",
