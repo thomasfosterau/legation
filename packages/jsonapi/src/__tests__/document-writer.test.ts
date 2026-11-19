@@ -1,5 +1,5 @@
 /**
- * DocumentWriter tests (#163): rows → compound documents as a pure function
+ * DocumentWriter tests: rows → compound documents as a pure function
  * of (graph, read, rows, fields) — linkage from `via` keys and edge rows,
  * `included` deduplicated with full linkage checked, `fields[]` as a
  * projection applied after linkage, `links.self` canonical and `links.next`
@@ -125,7 +125,7 @@ describe("DocumentWriter.collection", () => {
     expect(plain.data[0]).not.toHaveProperty("relationships");
   });
 
-  it("writes `meta` as given, and none without it (#210)", () => {
+  it("writes `meta` as given, and none without it", () => {
     const input = { nodes, read: { collection: "categories" }, rows: [row(audio)] };
     expect(DocumentWriter.collection(input)).not.toHaveProperty("meta");
     const counted = DocumentWriter.collection({ ...input, meta: { total: 7 } });
@@ -285,7 +285,7 @@ describe("DocumentWriter.collection", () => {
     expect(short.links).toEqual({ self: "/products?sort=name&page[limit]=2&page[after]=p-2" });
   });
 
-  it("offset pagination (#209): slices the over-fetched rows to the page and links in the offset idiom", () => {
+  it("offset pagination: slices the over-fetched rows to the page and links in the offset idiom", () => {
     // The root window was compiled with limit = offset + first (Query.plan's
     // rootLimit), so `rows` here is the over-fetched superset — exactly
     // what Query.runVia/view.query returns for such a window. The writer
@@ -341,7 +341,7 @@ describe("DocumentWriter.collection", () => {
   });
 
   it.effect(
-    "offset links round-trip through the parser, never switching the caller to cursors (#209)",
+    "offset links round-trip through the parser, never switching the caller to cursors",
     () =>
       Effect.gen(function* () {
         const read: Query.Read = { collection: "products", order: ["name"], offset: 0, first: 2 };

@@ -1,5 +1,5 @@
 /**
- * SSR over a service binding (issue #211).
+ * SSR over a service binding.
  *
  * The topology under test is the ordinary two-Worker Cloudflare shape: a front
  * Worker renders the page, a binding-only API Worker holds the sync server and

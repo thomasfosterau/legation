@@ -55,7 +55,7 @@ export interface MirrorOptions {
    */
   readonly heartbeatInterval?: Duration.Input;
   /**
-   * Capacity of the bounded change hub (#44). A stalled observer cannot
+   * Capacity of the bounded change hub. A stalled observer cannot
    * make the hub grow without limit: at capacity the hub drops the newest
    * subset keys, and the observer collapses the resulting seq gap into a full
    * re-read of its subset — lossless because the newest rows live in the
@@ -113,7 +113,7 @@ const hostUnavailable = new TransportError({
 
 /**
  * Raised when an enhanced form submit's begin reaches a host that predates
- * carrying it over the mirror protocol (#536): that host answers the begin's
+ * carrying it over the mirror protocol: that host answers the begin's
  * `Mutate` as an unknown mutator, and nothing was overlaid or journaled.
  */
 const hostPredatesFormMutations = new TransportError({
@@ -166,7 +166,7 @@ export interface Mirror {
    * interrupts its handler. A host restart (`HostReady`) or this mirror
    * closing fails it with `Unanswered`; it is not replayed, so a caller that
    * wants to keep following re-requests. The host's first reply (its
-   * `Started`, #628) is due within `requestTimeout`, or the stream fails with
+   * `Started`) is due within `requestTimeout`, or the stream fails with
    * `Unanswered`, as against a host that predates the envelope; after it no
    * timeout applies, since a stream may rightly stay quiet.
    */
@@ -186,8 +186,8 @@ export interface Mirror {
     args: unknown
   ) => Effect.Effect<ClientEngine.MutationOutcome, MutatorError | TransportError>;
   /**
-   * The client half of an enhanced form submit (ADR-0030 #215 §4), carried to
-   * the host (#536): the host's engine overlays the Mutation under the form
+   * The client half of an enhanced form submit (ADR-0030 §4), carried to
+   * the host: the host's engine overlays the Mutation under the form
    * client's id without journaling it, and holds the in-flight entry, so its
    * overlay and unpulled tail serve every mirror. Settling or abandoning the
    * returned submission tells the host; as on an engine, an acknowledgement
@@ -223,12 +223,12 @@ export interface Mirror {
   ) => Effect.Effect<ReadonlyArray<ClientEngine.LocalRow>>;
   /** Emits the current rows now and on every mirror update for the subset. */
   readonly observe: (subset: Subset.Subset) => Stream.Stream<ReadonlyArray<ClientEngine.LocalRow>>;
-  /** The host's pulled summary of the registration under `key` (#426); see {@link ClientView.ClientView.pulled}. */
+  /** The host's pulled summary of the registration under `key`; see {@link ClientView.ClientView.pulled}. */
   readonly pulled: (key: string) => Effect.Effect<Coverage.Pulled>;
-  /** Emits as the host's pulled summaries arrive (#653); see {@link ClientView.ClientView.pulledChanges}. */
+  /** Emits as the host's pulled summaries arrive; see {@link ClientView.ClientView.pulledChanges}. */
   readonly pulledChanges: Stream.Stream<void>;
   /**
-   * Row-level deltas of a subset's live window (#115) — see
+   * Row-level deltas of a subset's live window — see
    * {@link ClientEngine.ClientEngine.observeChanges}. The mirror has no
    * incremental `LiveView` of its own: it diffs consecutive whole-page
    * `MirrorUpdate`s (`RowChange.diff`), which is exact because the host
@@ -243,7 +243,7 @@ export interface Mirror {
     options?: { readonly includeInitial?: boolean }
   ) => Stream.Stream<ReadonlyArray<RowChange.RowChange<ClientEngine.LocalRow>>>;
   /**
-   * The host engine's keyed mutation-state map (#116), mirrored so every tab
+   * The host engine's keyed mutation-state map, mirrored so every tab
    * sees the same states the host holds. Registers interest with the host for
    * the stream's lifetime (refcounted like `observe`); emits the current map
    * now and on every host-side fold.
@@ -267,7 +267,7 @@ export interface Mirror {
     subset: Subset.Subset,
     edges: ReadonlyArray<string | Related.EdgeSelect>
   ) => Effect.Effect<Stream.Stream<ReadonlyArray<Related.RelatedRow>, never>, never, Scope.Scope>;
-  /** The host's current rows of a held relational read (#653); see {@link ClientView.ClientView.queryRelated}. */
+  /** The host's current rows of a held relational read; see {@link ClientView.ClientView.queryRelated}. */
   readonly queryRelated: (
     registry: Collection.CollectionRegistry,
     collectionName: string,
@@ -332,7 +332,7 @@ export const make = (options: MirrorOptions): Effect.Effect<Mirror, never, Scope
     const seenHostReady = yield* Ref.make(false);
     /** Add one unit of interest; posts Subscribe when it is the first. */
     // The keys whose rows have reached this mirror since it last took an
-    // interest in them (#672). A host broadcasts its pulled summaries to every
+    // interest in them. A host broadcasts its pulled summaries to every
     // mirror, so a mirror can hold a key's mark before the host has sent it
     // that key's rows: a key that has none here is not pulled, whatever its
     // mark says. Cleared when the interest begins or ends, and on a host
@@ -412,17 +412,17 @@ export const make = (options: MirrorOptions): Effect.Effect<Mirror, never, Scope
     // Resolved relational rows, keyed by the host's related key. Kept apart
     // from `rows` because the row shape differs (base value + resolved names).
     const relatedRows = yield* Ref.make(new Map<string, ReadonlyArray<Related.RelatedRow>>());
-    // The mirrored mutation-state map (#116), kept apart from `rows` because
+    // The mirrored mutation-state map, kept apart from `rows` because
     // it is a singleton (one map, not one per subset/named-query key) whose
     // shape differs from `LocalRow`.
     const mutationStatesRow = yield* Ref.make<MutationState.MutationStateMap>(HashMap.empty());
-    // The host's pulled summaries of its registrations (#426); see `PulledRegistrations`.
+    // The host's pulled summaries of its registrations; see `PulledRegistrations`.
     const pulledKeys = yield* SubscriptionRef.make<ReadonlyMap<string, Coverage.Pulled>>(new Map());
     // Monotonic seq stamped on every published key. The `rows` Ref is updated
     // before the key is published, so a re-read after a gap always sees the
     // latest rows even for a dropped key.
     const keySeq = yield* Ref.make(0);
-    // Bounded, dropping change hub (#44): a stalled observer holds keys in the
+    // Bounded, dropping change hub: a stalled observer holds keys in the
     // shared hub; at capacity the hub drops the newest keys rather than growing
     // without limit. A consumer detects a drop as a seq gap and re-reads its
     // subset from the always-current `rows` Ref — lossless under pressure,
@@ -444,7 +444,7 @@ export const make = (options: MirrorOptions): Effect.Effect<Mirror, never, Scope
     // Fallthrough reads awaiting their host answer (ADR-0025), same
     // requestId space.
     const pendingReads = yield* makePending<ReadonlyArray<ClientEngine.ReadRow>>();
-    // Enhanced form submits awaiting the host (#536): a begin and its end,
+    // Enhanced form submits awaiting the host: a begin and its end,
     // keyed by the begin's requestId. Kept apart from `pending` because the
     // generic `MutateAck` / `MutateError` replies carry no mirror id, and
     // another tab's request may share this requestId; only the form replies
@@ -520,7 +520,7 @@ export const make = (options: MirrorOptions): Effect.Effect<Mirror, never, Scope
         yield* complete(deferred);
       });
 
-    // Complete this mirror's waiting form request (#536) from the host's reply;
+    // Complete this mirror's waiting form request from the host's reply;
     // a reply addressed to another mirror is not ours, whatever its requestId.
     const resolveForm = (
       message: { readonly mirrorId: string; readonly requestId: number },
@@ -533,7 +533,7 @@ export const make = (options: MirrorOptions): Effect.Effect<Mirror, never, Scope
         : Effect.void;
 
     // Complete this mirror's waiting request in `ref` from a `Mutate` or `Read`
-    // reply (#546). Every tab hears the host's replies and numbers its requests
+    // reply. Every tab hears the host's replies and numbers its requests
     // from zero, so a reply addressed to another mirror is not ours, whatever
     // its requestId. A reply with no mirror id comes from a host that predates
     // the field, and is taken by its requestId as before.
@@ -704,7 +704,7 @@ export const make = (options: MirrorOptions): Effect.Effect<Mirror, never, Scope
           )
         );
       }),
-      // A form begin's or end's answer (#536), addressed to one mirror.
+      // A form begin's or end's answer, addressed to one mirror.
       Match.tag("FormMutationBegun", (message) =>
         resolveForm(message, (deferred) => Deferred.succeed(deferred, Option.none()))
       ),
@@ -819,7 +819,7 @@ export const make = (options: MirrorOptions): Effect.Effect<Mirror, never, Scope
         )
       );
 
-    // Subscribe BEFORE the first read (#84): a key published while the
+    // Subscribe BEFORE the first read: a key published while the
     // initial read runs must land in this subscription's buffer, or a quiet
     // mirror never re-reads (gap detection needs a next item).
     const subscribeToKeyHub = Effect.gen(function* () {
@@ -865,7 +865,7 @@ export const make = (options: MirrorOptions): Effect.Effect<Mirror, never, Scope
         })
       );
 
-    // Row-level deltas over `key`'s whole-page reads (#115): a trigger
+    // Row-level deltas over `key`'s whole-page reads: a trigger
     // decision like {@link observeKey}, but also carrying whether the
     // trigger was a gap (`reset`, since the skipped updates are unknown) so
     // the caller can diff or reset instead of just re-reading.
@@ -976,7 +976,7 @@ export const make = (options: MirrorOptions): Effect.Effect<Mirror, never, Scope
             closeHostRequest(requestId)
           ).pipe(
             Effect.map(({ replies }) =>
-              // The first reply is due within `requestTimeout` (#628): a host
+              // The first reply is due within `requestTimeout`: a host
               // sends `Started` once it accepts the request, and one that
               // predates `Started` sends its first `Item`, `End` or `Failure`,
               // so any reply acknowledges it. After that the stream waits as
@@ -1083,7 +1083,7 @@ export const make = (options: MirrorOptions): Effect.Effect<Mirror, never, Scope
           return yield* Deferred.await(deferred);
         }),
       queryNamed: (name, args) => readKey(MirrorProtocol.namedKey(name, args)),
-      // A key's mark counts only once its rows are here (#672); see `received`.
+      // A key's mark counts only once its rows are here; see `received`.
       pulled: (key: string) =>
         Effect.all(
           { marks: SubscriptionRef.get(pulledKeys), rowsHere: Ref.get(received) },

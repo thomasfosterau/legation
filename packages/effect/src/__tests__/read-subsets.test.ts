@@ -1,5 +1,5 @@
 /**
- * `SyncServer.readSubsets` (ADR-0025's read without its carrier, #163):
+ * `SyncServer.readSubsets` (ADR-0025's read without its carrier):
  * every subset of a batch is authorized before any backend call, so a
  * denied subset anywhere in the batch costs nothing; the rows of a subset
  * come back in the evaluated order whatever order `getRows` returns them.
@@ -97,7 +97,7 @@ describe("SyncServer.readSubsets", () => {
     })
   );
 
-  it.effect("evaluates a batch with one evaluateMany and fetches once per collection (#534)", () =>
+  it.effect("evaluates a batch with one evaluateMany and fetches once per collection", () =>
     Effect.gen(function* () {
       const { backend: base } = yield* makeBackend;
       const counts = { evaluate: 0, evaluateMany: 0 };

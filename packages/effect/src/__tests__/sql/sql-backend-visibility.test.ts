@@ -1,5 +1,5 @@
 /**
- * SqlBackend visibility before the bump (Backend guarantee 1, #381).
+ * SqlBackend visibility before the bump (Backend guarantee 1).
  *
  * A handler's writes and its ledger bump must stay invisible to a concurrent
  * read until its mutation commits, then both become visible together.
@@ -203,7 +203,7 @@ const expectInvisibleWhileParked = (parked: View) => {
   expect(parked.ledger).toEqual({});
 };
 
-layer(platformLayer)("SqlBackend visibility before the bump (guarantee 1, #381)", (it) => {
+layer(platformLayer)("SqlBackend visibility before the bump (guarantee 1)", (it) => {
   it.effect("a concurrent read sees neither a parked handler's write nor its bump", () =>
     Effect.gen(function* () {
       const observed = yield* probe(makeExecutor);

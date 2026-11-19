@@ -8,7 +8,7 @@
  * `Predicate.evaluate` on that row (ADR-0028 §6), so the `WHERE` returns
  * precisely the rows the JS evaluator returns `Some(true)` for — on Postgres
  * (normative) and on SQLite alike. The differential harness
- * (`__tests__/differential.test.ts`, issue #153) proves it against a real
+ * (`__tests__/differential.test.ts`) proves it against a real
  * Postgres and SQLite over the generated corpus, set and per-row verdict
  * both. The `SqlBackend` still finalises order/limit/cursor locally with
  * `Subset.apply`; that is redundancy, not correction.
@@ -89,7 +89,7 @@ export interface Dialect {
   readonly greatest: (left: string, right: string) => string;
   /**
    * The statement that makes the transaction it runs in SERIALIZABLE, run first
-   * in each `applyMutations` transaction (#353). It must be the transaction's first
+   * in each `applyMutations` transaction. It must be the transaction's first
    * statement in a top-level transaction: a nested one refuses it, and the batch
    * then fails. Absent on a dialect whose writers already serialise (SQLite takes
    * its write lock with `BEGIN IMMEDIATE`); a hand-written dialect without it gets
@@ -98,7 +98,7 @@ export interface Dialect {
   readonly serializable?: string | undefined;
   /**
    * How each arm of `SqlBackend.evaluateMany`'s one `UNION ALL` statement
-   * carries its row (#505), since mappings' columns differ per collection.
+   * carries its row, since mappings' columns differ per collection.
    * Absent on a hand-written dialect, `evaluateMany` is too, and a pull
    * evaluates its subsets one statement each. See {@link UnionRows}.
    */
@@ -107,7 +107,7 @@ export interface Dialect {
 
 /**
  * How a `UNION ALL` arm carries a row whose columns differ from the other
- * arms' (`Dialect.unionRows`, #505):
+ * arms' (`Dialect.unionRows`):
  *
  * - `Columns`: the relation's own columns by position, padded with `NULL` to
  *   the widest arm. Only for a database whose `UNION ALL` columns take any
@@ -302,7 +302,7 @@ const compileNode: (predicate: Predicate.Predicate, compilation: Compilation) =>
     (predicate, _, compilation) => `NOT (${compileNode(predicate.predicate, compilation)})`
   ),
   Match.tag("Exists", (predicate, _, compilation) => compileExists(predicate, compilation)),
-  // An unbound named set is the empty set (#205): the sync server binds
+  // An unbound named set is the empty set: the sync server binds
   // every `InSet` before a subset reaches a backend, so this is the
   // fail-closed fallback, like `IN ()`.
   Match.tag("InSet", () => "1 = 0"),

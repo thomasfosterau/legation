@@ -38,7 +38,7 @@ are Alchemy Durable Objects, their state, storage and sockets are the provider's
   `Cloudflare.D1.QueryDatabase`. D1 has no interactive transactions, so a
   mutation's writes and its mutation-id bump commit separately, and D1 isolates
   no handler's reads from another client group's writes: SqlBackend on D1 does
-  not meet Backend guarantee 1 (#342, #353). For apps that need it, use Durable
+  not meet Backend guarantee 1. For apps that need it, use Durable
   Object storage or Postgres via Hyperdrive; on D1, prefer single-statement,
   idempotent handlers.
 - **`RoomTransport`** — the browser-side `ClientTransport`: push/pull/read as
@@ -216,7 +216,7 @@ dropped, not closed.
   only within the invocation that read them, so return
   `Backend.perRequest(acquire)` from `backend`: the room builds the client in
   `acquire` once per push, pull and read, in that request's scope, and one
-  push's transaction stays on its connection (#681). Hyperdrive pools in
+  push's transaction stays on its connection. Hyperdrive pools in
   transaction mode, so the push stays atomic. Bind the room to a
   configuration with **query caching disabled** (`--caching-disabled`):
   Hyperdrive caches reads outside a transaction without invalidating them on
@@ -276,7 +276,7 @@ reset on every first paint. `binding-snapshot.test.ts` pins both sides of that.
 ## Evicting server-side caches on a write
 
 `EdgeInvalidation` turns the hints a committed write publishes into evictions
-of the caches an app keeps on Cloudflare (#206): `kv` deletes the
+of the caches an app keeps on Cloudflare: `kv` deletes the
 `{collection}:{id}` entry of every touched row from a KV read-through cache, and
 `cachePurge` purges the Workers cache by tag, with the same tag spelling the
 browser's Cache API invalidation uses (`collection:{name}`,

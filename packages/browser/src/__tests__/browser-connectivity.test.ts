@@ -1,16 +1,16 @@
 /**
  * @vitest-environment jsdom
  *
- * BrowserConnectivity (issue #33): layering `navigator.onLine` + focus signals
+ * BrowserConnectivity: layering `navigator.onLine` + focus signals
  * onto a `ClientTransport` makes the sync loop's reconnect/focus triggers fire.
  *
  * Signals arrive on background fibres. The suite runs under `it.effect` and
  * waits for the specific event each step needs (a completed network leg, the
  * engine seeing a status), advancing the `TestClock` only to yield to those
  * fibres. Nothing waits on wall-clock time, so a loaded machine cannot reorder
- * a step (#282).
+ * a step.
  *
- * The worker case (#328) has no `window`: its `navigator.onLine` is a stub the
+ * The worker case has no `window`: its `navigator.onLine` is a stub the
  * test flips, and the probe that BrowserConnectivity runs in its place is
  * driven by the same TestClock.
  */
@@ -126,7 +126,7 @@ const count = (counter: Ref.Ref<number>) => Ref.update(counter, (n) => n + 1);
 const atLeast = (counter: Ref.Ref<number>, n: number) =>
   Effect.map(Ref.get(counter), (value) => value >= n);
 
-describe("BrowserConnectivity (#33)", () => {
+describe("BrowserConnectivity", () => {
   it.effect("online/offline drives status; reconnect triggers push+pull; focus triggers pull", () =>
     Effect.gen(function* () {
       setVisible();
@@ -198,7 +198,7 @@ describe("BrowserConnectivity (#33)", () => {
   );
 
   it.effect(
-    "worker (no window): probed navigator.onLine flips drive status and the reconnect push (#328)",
+    "worker (no window): probed navigator.onLine flips drive status and the reconnect push",
     () =>
       Effect.scoped(
         Effect.gen(function* () {
@@ -262,7 +262,7 @@ describe("BrowserConnectivity (#33)", () => {
   );
 
   it.effect(
-    "worker: a navigator reconnect edge emits connected and pushes at once, even when the carrier reports disconnected (#328)",
+    "worker: a navigator reconnect edge emits connected and pushes at once, even when the carrier reports disconnected",
     () =>
       Effect.scoped(
         Effect.gen(function* () {
@@ -323,7 +323,7 @@ describe("BrowserConnectivity (#33)", () => {
       )
   );
 
-  it.effect("worker: an auto-push goes out while status is disconnected, by design (#328)", () =>
+  it.effect("worker: an auto-push goes out while status is disconnected, by design", () =>
     Effect.scoped(
       Effect.gen(function* () {
         // Offline from the start: the combined status is "disconnected".

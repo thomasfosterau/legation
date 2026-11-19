@@ -46,7 +46,7 @@ describe("live read hooks", () => {
     await runtime.dispose();
   });
 
-  it("useAnswer gives the rows with their completeness (#653)", async () => {
+  it("useAnswer gives the rows with their completeness", async () => {
     const runtime = makeClientRuntime();
     const app = mount(QueryHarness, {
       target: document.body,

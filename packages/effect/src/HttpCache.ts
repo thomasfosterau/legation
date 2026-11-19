@@ -8,7 +8,7 @@
  * the Cache API (fixing the former text-only body limitation) and closes the
  * loop on collection- and row-driven invalidation: `HttpCacheInvalidation`
  * maps an engine's collection and row changes (the `collection:{name}` /
- * `collection:{name}:{id}` tag convention, #207) onto `invalidateTags`, so a
+ * `collection:{name}:{id}` tag convention) onto `invalidateTags`, so a
  * synced change evicts the responses tagged for what it touched.
  * Implementations for edge runtimes can back the store with their own
  * primitives.
@@ -86,7 +86,7 @@ export interface HttpCachePolicy {
   readonly cacheable?: (response: Response) => boolean;
 }
 
-// ─── The tag convention (#207, #206) ─────────────────────────────────────────
+// ─── The tag convention ─────────────────────────────────────────
 //
 // One spelling for every cache that evicts by what a write touched: the
 // browser's Cache API (`HttpCacheInvalidation` in `@thomasfosterau/legation-browser`)

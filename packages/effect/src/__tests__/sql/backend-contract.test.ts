@@ -5,7 +5,7 @@
  * other `SqlBackend` tests use — several rules (the mutation-id ledger bump
  * atomic with effects, rollback on permanent rejection via SAVEPOINT) are
  * about transactional behaviour a stub cannot exhibit. Rule 6 carries the
- * differential harness's generated corpus (#153), so this run also proves the
+ * differential harness's generated corpus, so this run also proves the
  * SQLite compiler exact against `Subset.apply` (ADR-0028) on a real engine.
  */
 import { describe, expect, it } from "@effect/vitest";
@@ -270,7 +270,7 @@ const recordingExecutor = (
 };
 
 /**
- * A per-request contract SqlBackend over one SQLite database (#681): each acquisition builds
+ * A per-request contract SqlBackend over one SQLite database: each acquisition builds
  * `SqlBackend.make` over its own recording executor, numbered from 1, and counts its release.
  */
 const makePerRequestContractBackend = Effect.fn("makePerRequestContractBackend")(function* () {
@@ -298,7 +298,7 @@ const putContractRow = (mutationId: number, id: string) => ({
   createdAt: 0,
 });
 
-describe("Backend.perRequest over SqlBackend (#681)", () => {
+describe("Backend.perRequest over SqlBackend", () => {
   it.effect("passes verifyBackendContract over a real SQLite executor", () =>
     Effect.scoped(
       Effect.gen(function* () {
@@ -346,7 +346,7 @@ describe("Backend.perRequest over SqlBackend (#681)", () => {
 // A counter bump on the contract table: applying it twice would read `n: 2`.
 const formBump = Mutator.make("form/bump", Schema.Struct({ id: Schema.String }));
 
-describe("Server.mutate over SqlBackend (ADR-0030 #215)", () => {
+describe("Server.mutate over SqlBackend", () => {
   const makeServer = Effect.fn("makeServer")(function* () {
     const backend = yield* makeContractBackend(
       {
@@ -463,7 +463,7 @@ const todoHandlers: Record<string, SqlBackend.SqlHandler> = {
 
 const allTodos = Subset.make({ collection: "todos" });
 
-describe("paced compaction against SqlBackend (#249)", () => {
+describe("paced compaction against SqlBackend", () => {
   it.effect("pushes a compacted journal through the SQL ledger and drains it", () =>
     Effect.scoped(
       Effect.gen(function* () {
@@ -564,7 +564,7 @@ const PG_DDL: ReadonlyArray<string> = [
   )`,
 ];
 
-/** The shipped PostgreSQL executor (#203): real transactions, unprepared statements. */
+/** The shipped PostgreSQL executor: real transactions, unprepared statements. */
 const pgExecutor = PgExecutor.make;
 
 /** The contract mutators, as PostgreSQL statements (`$n` placeholders, `ON CONFLICT` upserts). */
@@ -660,7 +660,7 @@ it("has DATABASE_URL in CI, so the PostgreSQL contract run cannot skip silently"
   const ciWithoutDatabase = Env.inCi && databaseUrl === undefined;
   expect(
     ciWithoutDatabase,
-    "DATABASE_URL is not set in CI: the PostgreSQL contract run (#353) needs the PostgreSQL service container in .github/workflows/ci.yml"
+    "DATABASE_URL is not set in CI: the PostgreSQL contract run needs the PostgreSQL service container in .github/workflows/ci.yml"
   ).toBe(false);
 });
 
@@ -701,7 +701,7 @@ const peerBlockedOnLock = (sql: SqlClient) =>
     );
 
 /**
- * PostgreSQL's `awaitPeer` (#416): the peer's statements are real I/O, so a turn
+ * PostgreSQL's `awaitPeer`: the peer's statements are real I/O, so a turn
  * count cannot reach the overlap. Rule 11 holds the parked call until the peer has
  * finished, or is blocked on a lock (only the parked call can hold it). Both are
  * observed conditions, polled every few milliseconds, with no deadline of the
@@ -727,7 +727,7 @@ const awaitPeerOn =
     );
 
 /**
- * The `countUp` handler for the lock-wait test (#431). It takes the counter row's
+ * The `countUp` handler for the lock-wait test. It takes the counter row's
  * lock before it parks (a no-op `SET n = n`), so the peer group blocks on that lock
  * instead of running to completion. It then reads, parks, and writes the increment
  * exactly as `pgHandlers`' `countUp` does, so rule 11 checks the same thing. It is
@@ -770,15 +770,15 @@ const backendOver = (
 
 /**
  * `awaitPeerOn`, setting `returnedOnLock` only when it returns through its lock-wait
- * branch (#431). A return by the peer settling leaves the flag unset.
+ * branch. A return by the peer settling leaves the flag unset.
  */
 const awaitPeerRecording = (
   sql: SqlClient,
   returnedOnLock: Ref.Ref<boolean>
 ): BackendContract.PeerSettle => awaitPeerOn(sql, Ref.set(returnedOnLock, true));
 
-describePostgres("SqlBackend on PostgreSQL: verifyBackendContract (#353)", () => {
-  // `it.live`: the PostgreSQL client and its pool run on real I/O (CONTRIBUTING, "Tests").
+describePostgres("SqlBackend on PostgreSQL: verifyBackendContract", () => {
+  // `it.live`: the PostgreSQL client and its pool run on real I/O (docs/CONTRIBUTING.md).
   it.live(
     "passes verifyBackendContract at SERIALIZABLE, rule 11 included, and sees the overlap refused with 40001",
     () =>
@@ -816,14 +816,14 @@ describePostgres("SqlBackend on PostgreSQL: verifyBackendContract (#353)", () =>
     60_000
   );
 
-  // The lock-wait branch of `awaitPeerOn` (#431). The parked call locks the row
+  // The lock-wait branch of `awaitPeerOn`. The parked call locks the row
   // before it parks, so the peer blocks on that lock and cannot finish until the
   // parked call is released. `awaitPeer` must return on that observation (it is
   // recorded), and rule 11 must then reach a verdict. Removing the lock branch
   // leaves `awaitPeer` waiting on a peer that waits on the parked call: a hang that
   // the 20 s timeout reports, well inside the 60 s test backstop.
   it.live(
-    "returns awaitPeer on the peer's lock wait and still reaches a verdict (#431)",
+    "returns awaitPeer on the peer's lock wait and still reaches a verdict",
     () =>
       withPgContract(databaseUrl ?? "", (sql) =>
         Effect.gen(function* () {

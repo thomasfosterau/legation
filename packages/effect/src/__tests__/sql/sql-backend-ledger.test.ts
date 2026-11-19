@@ -1,5 +1,5 @@
 /**
- * SqlBackend's mutation-id ledger on a real SQLite connection (issue #352).
+ * SqlBackend's mutation-id ledger on a real SQLite connection.
  * A mutation is claimed (a conditional UPDATE from `id - 1` to `id`) before its
  * handler runs, so a replay or a stale copy is skipped rather than applied
  * again, and a claim is rolled back with the handler's effects when a
@@ -28,7 +28,7 @@ import { defined } from "../defined.js";
 const CLIENT_GROUP = "g";
 const CLIENT = "c1";
 
-/** The schema a new install creates: the ledger with its `rejections` column (#366). */
+/** The schema a new install creates: the ledger with its `rejections` column. */
 const DDL: ReadonlyArray<string> = [
   `CREATE TABLE todos (id TEXT PRIMARY KEY, title TEXT)`,
   // A log of every write a handler made: one row per application, so a second
@@ -163,7 +163,7 @@ const countOf = (sql: SqlClient, table: string) =>
 
 const context = { clientGroupId: CLIENT_GROUP };
 
-describe("SqlBackend ledger on SQLite (issue #352)", () => {
+describe("SqlBackend ledger on SQLite", () => {
   it.effect(
     "two overlapping calls for one mutation apply it once and the ledger stays monotonic",
     () =>
@@ -429,7 +429,7 @@ const rejected = (mutationId: number) => ({
   reason: `forbidden ${mutationId}`,
 });
 
-describe("SqlBackend rejection memory on SQLite (#366)", () => {
+describe("SqlBackend rejection memory on SQLite", () => {
   it.effect("a replayed copy of a committed rejection reports it with its stored reason", () =>
     withDatabase((sql) =>
       Effect.gen(function* () {

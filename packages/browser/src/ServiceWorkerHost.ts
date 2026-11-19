@@ -9,13 +9,13 @@
  * The engine stays host-agnostic: the same `run` works on the main thread
  * (the documented degraded mode) since it only needs BroadcastChannel.
  *
- * Background Sync is composed in, opt-in (#213): install
+ * Background Sync is composed in, opt-in: install
  * `BackgroundSync.listen({ identity })` at the top level of the worker script and pass
  * the listener as `backgroundSync`, and the host answers the library's `sync`
  * tag by flushing the journal through `ClientEngine.push` — so a write
  * journaled offline lands after its tab has closed — and registers the tag
  * when the journal cannot drain now (a mutation journaled offline, or a push
- * that failed terminally; never an online write, #246). Periodic Background Sync stays app code
+ * that failed terminally; never an online write). Periodic Background Sync stays app code
  * (a `periodicsync` listener calling `ClientEngine.pull`); see
  * `BackgroundSync` for why.
  *
@@ -66,8 +66,8 @@ export interface ServiceWorkerHostOptions {
    */
   readonly registry?: Collection.CollectionRegistry;
   /**
-   * The node graph and URL-keyed reads for `SubscribeUrl` registrations
-   * (#159): a page with no `Client` posts `{ _tag: "SubscribeUrl",
+   * The node graph and URL-keyed reads for `SubscribeUrl` registrations:
+   * a page with no `Client` posts `{ _tag: "SubscribeUrl",
    * mirrorId, url }` on the channel and the host pins the URL's windows
    * under that id — forwarded to {@link EngineHost.run}. Build `urls` with
    * `JsonApiQuery.urlReads(nodes)` from `@thomasfosterau/legation-jsonapi`.
@@ -75,7 +75,7 @@ export interface ServiceWorkerHostOptions {
   readonly nodes?: Node.NodeRegistry;
   readonly urls?: Client.UrlReads;
   /**
-   * The worker's Background Sync listener (#213), from
+   * The worker's Background Sync listener, from
    * `BackgroundSync.listen({ identity })` at the top level of the worker script. The host
    * attaches its engine for as long as it serves: the listener's `sync`
    * events — including one that woke the worker before the host had booted —
@@ -84,7 +84,7 @@ export interface ServiceWorkerHostOptions {
    */
   readonly backgroundSync?: BackgroundSync.Listener;
   /**
-   * Web Push as a poke carrier (#214): install `PushPoke.listen({ identity })`
+   * Web Push as a poke carrier: install `PushPoke.listen({ identity })`
    * at the top level of the worker script and pass it here. The host attaches
    * its engine, so a recognised push registers the Background Sync (or pulls,
    * with `action: "pull"`) once the replica's identity checks out. Unset, the
@@ -92,7 +92,7 @@ export interface ServiceWorkerHostOptions {
    */
   readonly pushPoke?: PushPoke.Listener;
   /**
-   * Host-request handlers to serve beside the introspection kinds (#136),
+   * Host-request handlers to serve beside the introspection kinds,
    * forwarded to {@link EngineHost.run} — `Devtools.hostRequests(engine,
    * store)` from `@thomasfosterau/legation-devtools`, say, so a tab's
    * devtools can drive this engine.
@@ -100,7 +100,7 @@ export interface ServiceWorkerHostOptions {
   readonly requests?: ReadonlyArray<HostRequest.Handler>;
   /**
    * How long a cold host holds its engine's pulls for a tab's server-rendered
-   * snapshot (#146), forwarded to {@link EngineHost.run}: a worker started
+   * snapshot, forwarded to {@link EngineHost.run}: a worker started
    * over an empty store waits up to this long for the first `hydrate` request
    * before its sync loop's first pull, so the snapshot wins. Needs the
    * engine's `ClientStore` in context; unset, nothing is held.

@@ -16,9 +16,9 @@
  *   a mid-batch stock violation is rejected on the wire, resent without the
  *   offending mutation, recorded as `rejected`, and every mutation is
  *   acknowledged — with nothing from the rejected batch persisted before the
- *   resend (#160's contract, end to end against this server);
+ *   resend (the backend contract, end to end against this server);
  * - the per-resource `POST` handlers share those rules (`server/rules.ts`) and
- *   keep a client `data.id` under the same ownership rule (#525), so an
+ *   keep a client `data.id` under the same ownership rule, so an
  *   online forward and an offline journal of one create name one row.
  */
 import { describe, expect, it } from "@effect/vitest";
@@ -383,7 +383,7 @@ describe("atomic operations endpoint", () => {
   );
 });
 
-// ─── #160: JsonApiBackend in atomic mode against this endpoint ──────────────
+// ─── JsonApiBackend in atomic mode against this endpoint ──────────────
 
 const pushContext: Backend.SyncContext = { clientGroupId: "group-u1" };
 const mutation = (mutationId: number, mutator: string, args: unknown) => ({
@@ -590,7 +590,7 @@ const send = (
       )
   ).pipe(Effect.orDie);
 
-describe("per-resource writes keep client ids under the shared rules (#525)", () => {
+describe("per-resource writes keep client ids under the shared rules", () => {
   it.effect("a cart line keeps its id; a resend replaces it; another user's id is a 409", () =>
     Effect.scoped(
       Effect.gen(function* () {

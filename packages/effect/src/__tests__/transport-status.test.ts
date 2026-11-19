@@ -238,7 +238,7 @@ describe("Transport.withFallback", () => {
     )
   );
 
-  it.effect("forwards read through the same sideline and fallback as pull (#632)", () =>
+  it.effect("forwards read through the same sideline and fallback as pull", () =>
     Effect.scoped(
       Effect.gen(function* () {
         const primary = yield* makeFake(Stream.empty, undefined, "primary");
@@ -366,9 +366,9 @@ describe("Transport.simulateOffline", () => {
   // the current value only to a live subscriber, so by then both streams
   // `statusChanges` combines are subscribed and no toggle below can be missed.
   // Each step then waits for the collector to record the change. No sleep and
-  // no clock, so a loaded machine cannot reorder a step (#284), and every wait
+  // no clock, so a loaded machine cannot reorder a step, and every wait
   // is bounded in scheduler turns, so a missing status fails instead of
-  // hanging (#325).
+  // hanging.
   it.effect(
     "status/statusChanges report disconnected while offline, else the wrapped transport's",
     () =>

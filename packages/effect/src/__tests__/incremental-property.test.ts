@@ -1,5 +1,5 @@
 /**
- * Property test (issue #114 acceptance criteria): each derived combinator's
+ * Property test: each derived combinator's
  * incrementally-maintained result must equal a naive from-scratch recompute —
  * after *every prefix* of a randomized delta sequence, not just the final
  * state, so a bug that self-corrects after enough churn can't hide. This drives

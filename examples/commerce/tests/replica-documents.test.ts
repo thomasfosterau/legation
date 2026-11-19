@@ -1,9 +1,9 @@
 /**
- * Same URL, same result (ADR-0029 §6, issue #164): for the commerce seed and
+ * Same URL, same result (ADR-0029 §6): for the commerce seed and
  * every read the app declares (`src/lib/domain.ts` — the shell pins and the
  * page reads), the document the replica-side writer (`ReplicaDocuments`)
  * produces from a synced replica equals, byte for byte, the document the
- * derived REST handler (`RestHandlers`, #163) produces from the SQLite
+ * derived REST handler (`RestHandlers`) produces from the SQLite
  * server for the same URL under the same resource declarations
  * (`src/lib/resources.ts`). The host never appears in `links.self` on either
  * side (both prefix `/jsonapi`), so nothing is ignored.
@@ -14,7 +14,7 @@
  * identity resolver binds the replica's client group to `u1`, synced into an
  * owned engine by the shell's own pins (`shellReads("u1")`). The replica
  * holds what a signed-in user's shell holds; the writer reads it as the
- * façade would — and the façade itself (`src/lib/facade.ts`, #166) is then
+ * façade would — and the façade itself (`src/lib/facade.ts`) is then
  * run over the same replica: a covered URL's response body is the served
  * document byte for byte, an uncovered one is the network's.
  */
@@ -279,7 +279,7 @@ const makeWorlds = Effect.gen(function* () {
 const bytes = (document: unknown) => JSON.stringify(document);
 
 /**
- * A collection read's `meta` over this replica (#210): its filter counted over
+ * A collection read's `meta` over this replica: its filter counted over
  * every row the replica holds, whatever the page. The settled replica holds
  * every row the derived REST handler counts, so this is its `meta.total`.
  */
@@ -398,7 +398,7 @@ describe("the replica-side writer against the derived REST handler (ADR-0029 §6
   );
 });
 
-// ─── The façade over the same replica (#166) ─────────────────────────────────
+// ─── The façade over the same replica ─────────────────────────────────
 
 const jsonApi = (url: string) =>
   new Request(`http://commerce.test${url}`, { headers: { accept: "application/vnd.api+json" } });

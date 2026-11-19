@@ -71,7 +71,7 @@ import * as seed from "./seed";
 
 export interface World {
   readonly runtime: ClientRuntime;
-  /** The `@thomasfosterau/legation-devtools` headless core (#120) over this engine + store. */
+  /** The `@thomasfosterau/legation-devtools` headless core over this engine + store. */
   readonly devtools: Devtools.DevtoolsCore;
   readonly setOnline: (online: boolean) => Promise<void>;
   /** Connection status: the current value now, then every change. */
@@ -152,7 +152,7 @@ const authPolicy = Authorization.policy(
     orders: Authorization.allowAll,
     orderDetails: Authorization.allowAll,
   },
-  // The nodes' filterable sets bound what a client may filter or sort by (#154).
+  // The nodes' filterable sets bound what a client may filter or sort by.
   { collections: nodes.collections }
 );
 
@@ -197,14 +197,14 @@ const rigLayer = Layer.effect(Rig)(
     yield* seedBackend(backend);
 
     // A loopback transport that can be taken offline (the devtools' offline
-    // action drives the same toggle, #120) + a durable store.
+    // action drives the same toggle) + a durable store.
     const transport = yield* Transport.makeInMemory(server.handler, CLIENT_GROUP_ID);
     const store = yield* ClientStore.makeKeyValue({ prefix: "northwind/" }).pipe(
       Effect.provide(BrowserKeyValueStore.layerLocalStorage)
     );
 
     // `Client.make` builds the engine and forks its sync loop, and hands the
-    // engine back with the Client, so the devtools core (#120) attaches to it.
+    // engine back with the Client, so the devtools core attaches to it.
     const { client, engine } = yield* Client.make({
       nodes,
       mutations: clientMutations,
@@ -226,7 +226,7 @@ const rigLayer = Layer.effect(Rig)(
 
     return {
       client,
-      // The devtools headless core (#120): the offline control is the same
+      // The devtools headless core: the offline control is the same
       // `setOnline` toggle the banner's own button drives, read back from the
       // status it sets.
       devtools: Devtools.make(engine, store, {

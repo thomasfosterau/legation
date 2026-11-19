@@ -1,5 +1,5 @@
 /**
- * `Authorization.namedSet` (#647): a named set whose members are read off a
+ * `Authorization.namedSet`: a named set whose members are read off a
  * backend collection. Its members are the distinct member values of the rows
  * `where` selects; `where` returning `None` (an anonymous viewer) is the empty
  * set without a read; a `BackendError` is an `AuthorizationError` naming the
@@ -84,7 +84,7 @@ const followingOver = (backend: Backend): Authorization.NamedSet =>
 const viewer = (identity?: string): SyncContext =>
   identity === undefined ? { clientGroupId: "g" } : { clientGroupId: "g", identity };
 
-describe("Authorization.namedSet (#647)", () => {
+describe("Authorization.namedSet", () => {
   it.effect("declares its source and maxAge, and reads the distinct scalar members", () =>
     Effect.gen(function* () {
       const { backend } = yield* makeBackend();

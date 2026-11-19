@@ -1,5 +1,5 @@
 /**
- * JsonApiQuery tests (#161): the filter AST ⇄ `Predicate` bridge, the exact
+ * JsonApiQuery tests: the filter AST ⇄ `Predicate` bridge, the exact
  * encoder (every operator reaches the wire; nothing is dropped), URL →
  * `Query.Read` parsing over a node graph with `QueryError`s naming the
  * parameter, and the canonical string round trip over generated reads.
@@ -195,7 +195,7 @@ describe("JsonApiQuery.fromFilterAst / toFilterAst", () => {
    * would select — is the same.
    */
   it.effect(
-    "the Date encode step is exact over a generated corpus, and agrees with the wire text a Date-declaring resource would send (#218)",
+    "the Date encode step is exact over a generated corpus, and agrees with the wire text a Date-declaring resource would send",
     () =>
       Effect.gen(function* () {
         // `reviews` (declared above) filters `createdAt` at kind "instant":
@@ -541,7 +541,7 @@ describe("JsonApiQuery.parseRead", () => {
     })
   );
 
-  it.effect("decodes filter[id] through the resource id's Filter.able operators (#590)", () =>
+  it.effect("decodes filter[id] through the resource id's Filter.able operators", () =>
     Effect.gen(function* () {
       expect((yield* parse("/products?filter[id]=p-1")).read.where).toEqual(
         Predicate.eq("id", "p-1")
@@ -636,7 +636,7 @@ describe("JsonApiQuery.parseRead", () => {
   );
 
   it.effect(
-    "parses page[offset] alongside page[limit] (#209): every listing in the audited apps pages by it",
+    "parses page[offset] alongside page[limit]: every listing in the audited apps pages by it",
     () =>
       Effect.gen(function* () {
         expect((yield* parse("/products?page[offset]=20&page[limit]=5")).read).toEqual({
@@ -841,7 +841,7 @@ describe("JsonApiQuery.canonical", () => {
     ).toBe("/products?filter[g0][group][conjunction]=OR");
   });
 
-  it.effect("emits page[offset] from the read, not the inflated fetch window (#209)", () =>
+  it.effect("emits page[offset] from the read, not the inflated fetch window", () =>
     Effect.gen(function* () {
       const read: Query.Read = { collection: "products", order: ["id"], offset: 20, first: 5 };
       const url = JsonApiQuery.canonical(nodes, read);
@@ -975,7 +975,7 @@ const orderTokens = (orderBy: ReadonlyArray<Subset.OrderBy>): ReadonlyArray<stri
 
 // ─── The UrlReads seam ───────────────────────────────────────────────────────
 
-describe("JsonApiQuery.urlReads (Client.subscribe(url), ADR-0029 §2, #159)", () => {
+describe("JsonApiQuery.urlReads (Client.subscribe(url), ADR-0029 §2)", () => {
   const products = "/products?include=category%2Cvariants&filter[name]=Desk";
   const read: Query.Read = {
     collection: "products",
@@ -995,7 +995,7 @@ describe("JsonApiQuery.urlReads (Client.subscribe(url), ADR-0029 §2, #159)", ()
         yield* client.subscribe(products);
         yield* client.subscribe(read);
         expect(yield* client.subscriptions).toEqual([products]);
-        // Offline no pull lands, so the pin covers nothing yet (#426); the
+        // Offline no pull lands, so the pin covers nothing yet; the
         // covered verdict and its URL are checked over a pulled engine in
         // packages/effect's client tests.
         expect((yield* client.coverageOf(read))._tag).toBe("Uncovered");

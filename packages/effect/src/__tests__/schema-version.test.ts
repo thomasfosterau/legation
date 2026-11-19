@@ -1,5 +1,5 @@
 /**
- * Schema-version negotiation (#48): the protocol carries an optional
+ * Schema-version negotiation: the protocol carries an optional
  * `schemaVersion`, the server may reject an unsupported one up front with a
  * typed `VersionNotSupportedError` (never poisoning the journal), the client
  * fires `onUpdateNeeded` exactly once per ongoing rejection, a local

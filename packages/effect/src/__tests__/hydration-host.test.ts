@@ -1,5 +1,5 @@
 /**
- * Hydration through the engine host (#146, ADR-0021 amendment §6): the host
+ * Hydration through the engine host (ADR-0021 amendment §6): the host
  * owns the empty-store gate. Under the engine's pulls it hydrates a snapshot
  * iff the store is empty and no pull has started; otherwise it answers
  * `hydrated: false` with the reason and leaves the store alone. The first of
@@ -150,7 +150,7 @@ const contents = (store: ClientStore.ClientStore) =>
     { concurrency: 1 }
   );
 
-describe("Hydration.hydrateUnpulled (#146)", () => {
+describe("Hydration.hydrateUnpulled", () => {
   it.effect("hydrates an empty, unpulled store, and the first pull continues from its cookie", () =>
     Effect.gen(function* () {
       const { snapshot, store, engine, pulls } = yield* setup();
@@ -240,7 +240,7 @@ const serve = (
     return yield* Mirror.make({ channel: pair.mirror, mutators });
   });
 
-describe("the hydrate request kind over the mirror (#146)", () => {
+describe("the hydrate request kind over the mirror", () => {
   it.effect("the first snapshot to reach an empty host hydrates it; a later one is NotEmpty", () =>
     Effect.gen(function* () {
       const { snapshot, store, engine } = yield* setup();

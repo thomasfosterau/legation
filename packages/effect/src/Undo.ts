@@ -2,12 +2,12 @@
  * Undo
  *
  * An optional, additive undo/redo module layered over anything that can
- * `mutate(name, args)` — no engine surgery (issue #46). It follows the
+ * `mutate(name, args)` — no engine surgery. It follows the
  * *paired-intents* design (the `@rocicorp/undo` shape): the caller supplies
  * both directions of a change at run time, and undo/redo replay through the
  * supplied handle's ordinary `mutate` pipeline — a `ClientEngine`, a
- * `Client`, or a test double all satisfy {@link MutateHandle} structurally
- * (issue #223). Because they are just mutations, undo and redo are
+ * `Client`, or a test double all satisfy {@link MutateHandle} structurally.
+ * Because they are just mutations, undo and redo are
  * optimistic, journaled, rebased, and offline-safe like any other write —
  * the module adds only the in-memory history.
  *
@@ -72,7 +72,7 @@ const EMPTY_HISTORY: History = { undo: [], redo: [] };
 /**
  * The structural shape {@link make} needs: anything that can run a named
  * mutation. A `ClientEngine` and a `Client` both satisfy this — with
- * different error channels, hence the type parameter (issue #223).
+ * different error channels, hence the type parameter.
  */
 export interface MutateHandle<E> {
   readonly mutate: (mutator: string, args: unknown) => Effect.Effect<void, E>;

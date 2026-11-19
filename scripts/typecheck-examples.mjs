@@ -4,7 +4,7 @@
  * Svelte apps — against its own tsconfig.json. This is the counterpart to
  * `vp run check` (packages + tests only, via tsconfig.check.json): examples
  * aren't on that project's `include`, so binding-API changes in `packages/*`
- * could silently rot every example (#80). The task depends on `build`, so the
+ * could silently rot every example. The task depends on `build`, so the
  * `@thomasfosterau/legation-*` packages resolve through their built `dist/`,
  * matching what the examples import at runtime.
  */

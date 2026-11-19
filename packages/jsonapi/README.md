@@ -233,7 +233,7 @@ Name its `database`: the platform default, `effect_key_value_store`, is the
 database `IndexedDbClientStore` uses by default. This store is durable, but it
 is not `IndexedDbClientStore`: it has no atomic batch, so the client store
 commits a pull's release through a release record that is finished on the next
-open if a crash interrupts it, rather than in one IndexedDB transaction (#393).
+open if a crash interrupts it, rather than in one IndexedDB transaction.
 It also opens its database at version 1, so it cannot open a database another
 version has upgraded.
 
@@ -331,7 +331,7 @@ route.
 
 ### Totals
 
-A listing also gives each subscription its total (`evaluateCounted`, #210),
+A listing also gives each subscription its total (`evaluateCounted`),
 which a pull reports and the façade writes as `meta.total`. The backend lists
 the filter and cuts the window itself, so the total is the rows the listing
 returned, unless the listing's own document says otherwise: a non-negative
@@ -520,7 +520,7 @@ What the derivation guarantees:
 - **Sorting and paging are `Subset.apply`'s** (ADR-0026 / ADR-0028): code-point
   text order, NULLs last, the id tie-break, `page[after]` as the cursor.
   `links.next` continues after the last row when the window is full.
-- **A `list` document carries `meta: { total }`** (#210): how many rows the
+- **A `list` document carries `meta: { total }`**: how many rows the
   read's filter matches under the request's auth filter, whatever the page,
   counted through the same path as its rows (`SyncServer.readTotal`). The
   façade writes the same member for the same URL.
@@ -683,10 +683,10 @@ self.addEventListener("fetch", (event) => {
   the registrations an `EngineHost` holds on its mirrors' behalf — the only
   ledger in a worker that knows what the tabs pinned. A registration is listed
   with the pulled state of its windows, and a covered read needs the windows its
-  rows link to pulled (ADR-0029 amendment #426). Every read
+  rows link to pulled (ADR-0029 amendment). Every read
   `ReplicaDocuments.toCover` names must be covered; the façade never
   subscribes on a request's behalf.
-- **`meta.total` on every listing** (#210). A collection document the façade
+- **`meta.total` on every listing**. A collection document the façade
   serves carries `meta: { total }`, the count the derived REST handler writes
   for the same URL: the rows the read's filter matches, whatever its page.
   Under an unwindowed pin the façade counts the replica. Under a windowed pin
@@ -701,8 +701,8 @@ self.addEventListener("fetch", (event) => {
 - **The overlay.** A covered response sees pending optimistic mutations as
   `Client.query` does; an uncovered network response is the server's
   authoritative answer and does not (ADR-0029 §4).
-- **Offset pagination is covered by slicing, not by an offset window**
-  (#209). `page[offset]` parses beside `page[after]` — the two are different
+- **Offset pagination is covered by slicing, not by an offset window**.
+  `page[offset]` parses beside `page[after]` — the two are different
   pagination idioms, and a request naming both is a `400`. An offset read
   compiles to a plain limit-only window (`limit = offset + first`, no
   `cursor`), so it is covered by the ordinary rule: the subsuming

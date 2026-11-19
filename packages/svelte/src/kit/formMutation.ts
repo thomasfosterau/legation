@@ -1,5 +1,5 @@
 /**
- * Form-action Mutations (ADR-0030, amendment #215)
+ * Form-action Mutations (ADR-0030)
  *
  * A SvelteKit form action that can name the client group runs a named
  * Mutation as one of that group's mutations, under a **form client** id
@@ -21,7 +21,7 @@
  * app's API and announcing the change with `Server.broadcast`.
  *
  * One path per write: a page writes a submission either through its form
- * action (this module) or through a façade write (#169, ADR-0030 §1–§2),
+ * action (this module) or through a façade write (ADR-0030 §1–§2),
  * never both for the same submission, or the write would be applied twice.
  */
 import type { Cookies } from "@sveltejs/kit";
@@ -54,7 +54,7 @@ export interface FormClient {
 
 /**
  * Mint a form client for one rendered form: a fresh id with mutation id `1`
- * (ADR-0030 #215 §2). The page's server `load` mints one per form and renders
+ * (ADR-0030 §2). The page's server `load` mints one per form and renders
  * it in the {@link FORM_CLIENT_FIELD} and {@link FORM_MUTATION_FIELD} hidden
  * fields, so a resubmission of the same rendered form is the same mutation.
  */
@@ -185,7 +185,7 @@ export interface EnhanceFormMutationOptions<Args, ArgsEncoded> {
   /**
    * Re-run the page's `load` functions after the action, SvelteKit's default.
    * Default `false`: the overlay already shows the write, and the pull that
-   * covers it brings the confirmed rows (ADR-0030 #215 §4).
+   * covers it brings the confirmed rows (ADR-0030 §4).
    */
   readonly refreshAll?: boolean | undefined;
   /** Mint the per-submit form client id. Default `crypto.randomUUID`. */

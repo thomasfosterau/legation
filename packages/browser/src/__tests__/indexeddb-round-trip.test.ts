@@ -1,5 +1,5 @@
 /**
- * The IndexedDB store and the platform's own KeyValueStore read each other's records (#393): the
+ * The IndexedDB store and the platform's own KeyValueStore read each other's records: the
  * store's keys and value shapes are the platform's, so a host that reads either one sees the same
  * data. Backed by fake-indexeddb, as the other IndexedDB tests are.
  */
@@ -30,7 +30,7 @@ const platformKeyValue = (database: string) =>
 const clientStore = (database: string) =>
   IndexedDbClientStore.layer({ database }).pipe(Layer.provide(fakeIndexedDb));
 
-describe("IndexedDbClientStore round trips with the platform store (#393)", () => {
+describe("IndexedDbClientStore round trips with the platform store", () => {
   it.effect(
     "the new key-value store and the platform's read each other's writes, removes and clears",
     () =>
@@ -68,7 +68,7 @@ describe("IndexedDbClientStore round trips with the platform store (#393)", () =
           const kv = yield* KeyValueStore.KeyValueStore;
           expect(yield* kv.get("rt/platform")).toBe("p");
           expect(yield* kv.has("rt/string")).toBe(false);
-          // The platform's write is listed by the new store's `keys` (#589).
+          // The platform's write is listed by the new store's `keys`.
           expect((yield* kv.keys).toSorted()).toEqual(["rt/bytes", "rt/platform"]);
           yield* kv.clear;
           expect(yield* kv.size).toBe(0);

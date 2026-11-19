@@ -1,5 +1,5 @@
 /**
- * The enhanced form submit over a connected host (#536): a Client joined to an
+ * The enhanced form submit over a connected host: a Client joined to an
  * engine host over a `MirrorChannel` asks the host to begin the form mutation,
  * and settles or abandons it on the receipt. The host holds the engine's
  * in-flight entry, so the optimistic effect is released by the pull that
@@ -170,7 +170,7 @@ const eventually = <E>(
 const mirrorRows = (view: ClientView.ClientView, count: number) =>
   eventually(view.observe(countersSubset), count);
 
-describe("enhanced form submit over a connected host (#536)", () => {
+describe("enhanced form submit over a connected host", () => {
   it.effect("is dropped on the covering pull, not on the action's response", () =>
     Effect.scoped(
       Effect.gen(function* () {

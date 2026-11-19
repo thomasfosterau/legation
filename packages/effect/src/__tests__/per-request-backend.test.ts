@@ -1,5 +1,5 @@
 /**
- * Per-request backends (#681): `Backend.perRequest` builds a backend whose
+ * Per-request backends: `Backend.perRequest` builds a backend whose
  * store is acquired in a request's scope, and the sync server opens one
  * acquisition per push, pull and read (`Backend.forRequest`). The SQLite half
  * (the contract over `SqlBackend`, and a push's statements on one acquisition)

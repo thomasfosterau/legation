@@ -1,5 +1,5 @@
 /**
- * Differential filter harness (issue #153, ADR-0028).
+ * Differential filter harness (ADR-0028).
  *
  * Three evaluators of one predicate AST are compared over a seeded random
  * corpus: `Sql.compileWhere` on Postgres (the oracle, in-process via
@@ -61,7 +61,7 @@ const renderVerdicts = (verdicts: Verdicts): Ids =>
 
 // ─── JS subject ──────────────────────────────────────────────────────────────
 //
-// `Predicate.evaluate` is the three-valued evaluator (#155); `jsMatches` is
+// `Predicate.evaluate` is the three-valued evaluator; `jsMatches` is
 // its `WHERE` collapse, identical to `Predicate.test`. Rows are evaluated in
 // their JS object form — absent keys stay absent.
 

@@ -6,7 +6,7 @@
  * and {@link requestCredentials} (the request's credentials, for the server's
  * `IdentityResolver`).
  * Client: {@link clientRuntime} (snapshot-hydrated Client boot).
- * Form actions (ADR-0030 #215): {@link formMutationTarget} and
+ * Form actions: {@link formMutationTarget} and
  * {@link runFormMutation} on the server, {@link enhanceFormMutation} for the
  * enhanced submit.
  *

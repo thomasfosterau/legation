@@ -1,5 +1,5 @@
 /**
- * The SQL legs of the differential filter harness (issue #153, ADR-0028):
+ * The SQL legs of the differential filter harness (ADR-0028):
  * one `corpus` table per engine, loaded from `FilterCorpus` rows, queried
  * with `Sql.compileSelect` on the engine's dialect with the corpus columns'
  * declared kinds, and ordered with an explicit `ORDER BY` that states
@@ -9,7 +9,7 @@
  *   to WASM), so the leg needs no service and runs unconditionally. The
  *   `text` column is declared `COLLATE "C"`; the `instant` column is a real
  *   `timestamptz`, which rejects a collation clause — so the corpus itself
- *   proves the compiler emits none for instants (#156) and that a
+ *   proves the compiler emits none for instants and that a
  *   `timestamptz` column compares like `Date#toISOString` text (rule (e)).
  * - SQLite runs via `@effect/sql-sqlite-node` (over `node:sqlite`) on
  *   `:memory:`. Booleans are stored as 0/1 (the driver refuses boolean
@@ -17,7 +17,7 @@
  *
  * Bind parameters go to the driver exactly as the compiler produced them:
  * the typed binds (booleans as `1`/`0` on SQLite) and the collation clause
- * are the compiler's, and the harness proves them (#156). Only row inserts
+ * are the compiler's, and the harness proves them. Only row inserts
  * encode values here. An absent JS field is inserted as SQL NULL on both
  * (rule (b)).
  *

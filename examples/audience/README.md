@@ -37,7 +37,7 @@ src/server.ts   effect-auth SessionService over its testing memory stores,
                 legation-auth's Resolver, Server + MemoryBackend, RestHandlers
 src/device.ts   one browser profile: replica, cookie jar, transport, Client,
                 SignOut.follow, JsonApiFacade
-tests/          the five tests of #221
+tests/          the five tests
 ```
 
 Users are effect-auth's own fixtures (`fixtureUser` from
@@ -60,7 +60,7 @@ vp test run --project auth examples/audience
 | 1   | `tests/replicas.test.ts`      | Owner, follower, stranger, moderator and anonymous subscribe to the same collection; each durable replica holds exactly the rows its policy admits.                                                                                                                               |
 | 2   | `tests/policy-corpus.test.ts` | A property test over 6 seeded corpora (40 posts, 6 users, a random follow graph): every viewer's replica, through the real server, equals the rows effect-auth's `ReadScope.matches` and `Policy.decidePure` admit row by row — before and after the follow graph moves.          |
 | 3   | `tests/same-url.test.ts`      | For each signed-in viewer, the façade's answer from the replica and the derived REST handler's answer under the viewer's cookie are the same document, byte for byte; a row the viewer may not read is forwarded and the server answers 404.                                      |
-| 4   | `tests/sign-out.test.ts`      | A signs out, B signs in on the same device: B cannot read A's rows before or after B's first pull, nor through the façade; A's unpushed draft is quarantined (#212), never pushed under B, and A's again when A signs back in.                                                    |
+| 4   | `tests/sign-out.test.ts`      | A signs out, B signs in on the same device: B cannot read A's rows before or after B's first pull, nor through the façade; A's unpushed draft is quarantined, never pushed under B, and A's again when A signs back in.                                                    |
 | 5   | `tests/offline.test.ts`       | Offline, the replica answers what it answered online and no more; an uncovered façade read is the `503`, never a partial document; server writes made meanwhile do not leak in; back online one pull narrows to the current policy; signing out offline still clears the replica. |
 
 `pnpm run typecheck` (part of `vp run check:examples`) type-checks the app and

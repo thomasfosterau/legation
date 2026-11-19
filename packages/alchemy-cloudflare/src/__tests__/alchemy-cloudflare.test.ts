@@ -13,7 +13,7 @@
  * heartbeat runs on a TestClock, so a beat happens only when the test advances
  * time, and its leases outlive any real run (see the headline test), so a
  * loaded machine cannot age a lease out between its beat and the write it must
- * route (#282).
+ * route.
  */
 import { describe, expect, it } from "@effect/vitest";
 import type * as cf from "@cloudflare/workers-types";
@@ -173,14 +173,12 @@ const makeRawD1 = (rows: ReadonlyArray<Record<string, unknown>>, fail = false) =
 };
 
 describe("D1Executor", () => {
-  it.effect(
-    "declares no transactions, so SqlBackend keeps the handler-then-bump order (#342, #359)",
-    () =>
-      Effect.gen(function* () {
-        // A claim committed on its own would be skipped by a retry after a crash.
-        const executor = yield* inRuntime(D1Executor.make(makeRawD1([]).client));
-        expect(executor.transactional).toBe(false);
-      })
+  it.effect("declares no transactions, so SqlBackend keeps the handler-then-bump order", () =>
+    Effect.gen(function* () {
+      // A claim committed on its own would be skipped by a retry after a crash.
+      const executor = yield* inRuntime(D1Executor.make(makeRawD1([]).client));
+      expect(executor.transactional).toBe(false);
+    })
   );
 
   it.effect("runs queries and statements through the client's prepared statements", () =>
@@ -911,7 +909,7 @@ describe("Room backend lifetime", () => {
   );
 });
 
-describe("Room per-request backend (#681)", () => {
+describe("Room per-request backend", () => {
   it.live("acquires the backend once per request and releases it when the request ends", () =>
     Effect.gen(function* () {
       const clock = yield* TestClock.make();

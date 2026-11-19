@@ -14,7 +14,7 @@
  * sortable declarations (ADR-0028, #154 — `Filter.able` / `Sort.able`, or the
  * `filter` / `sort` sugar of `Resource.attribute`) the node's filterable set.
  * The `list` / `get` endpoints are derived from the node graph
- * (`RestHandlers`, #163), so what a resource declares is what its documents
+ * (`RestHandlers`), so what a resource declares is what its documents
  * carry: `userId` is an attribute of the private collections because the
  * sync tier ships it and the auth policy scopes by it (server-set — never a
  * create input — and filterable by `eq`, the one filter the app's own reads

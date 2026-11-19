@@ -71,7 +71,7 @@ unsubscribed URL still comes back from the network with no such header.
 > **With the engine in a service worker, this phase is not available yet.**
 > `clientRuntime` hydrates a store it builds in the page, but with
 > Phase 1's topology the store is the worker's. The tab-to-worker hand-off
-> is designed (a proposed host-request envelope in ADR-0021, #146) and not
+> is designed (a proposed host-request envelope in ADR-0021) and not
 > yet built.
 > Until it is, a service-worker app seeds its hooks from the page's own
 > `load` (each hook's `initial` option), and the steps below apply to an app
@@ -163,7 +163,7 @@ mutations survive the tab closing.
 
 **Entry condition: the identity boundary is set up.** A durable replica
 belongs to exactly one resolved identity, and an identity change is a
-reset, not a rebase (CONTEXT.md, "Identity boundary", #212). Give the
+reset, not a rebase (CONTEXT.md, "Identity boundary"). Give the
 engine the signed-in principal's **identity fingerprint** (an opaque hash
 of the session subject, never PII or a credential) through `Client.make`'s
 `identity` option or the store's own option, and call `Client.reset` on
@@ -220,17 +220,17 @@ An app that already caches its API will have up to three layers. They are
 not interchangeable with the replica, and an adopter that keeps or deletes
 the wrong one either serves stale data or loses its edge performance.
 
-| Cache                                                                                   | On adoption                                                                  | Why                                                                                                                                                                                                                                                                                                                                                                                    |
-| --------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| A client-side, URL-keyed read cache (IndexedDB, `localStorage`, a fetch wrapper's memo) | **Retire** it once its reads are subscribed.                                 | The replica replaces it outright: same rows, kept current by pulls and pokes, scoped to the identity (Phase 4). Two client caches disagree, and the URL-keyed one has no invalidation.                                                                                                                                                                                                 |
-| The browser Cache API under the service worker                                          | **Keep** it behind the façade, for what the façade forwards.                 | The façade answers first; what it forwards can still be cached stale-while-revalidate (`CacheApiHttpCache`), evicted by `collection:{name}` tag as collections change (`HttpCacheInvalidation`).                                                                                                                                                                                       |
-| Edge caches: a KV read-through cache, the Workers cache with `Cache-Tag` purges         | **Keep** them, and make them subscribers of the engine's invalidation hints. | They serve the reads that are never covered, and every first visit. `EdgeInvalidation` (`@thomasfosterau/legation-alchemy-cloudflare`, #206) turns each committed write's hints into KV deletes of `{collection}:{id}` and tag purges in the same `collection:{name}` / `collection:{name}:{id}` spelling; the API Worker forwards hints to the front-door Worker that owns the cache. |
+| Cache                                                                                   | On adoption                                                                  | Why                                                                                                                                                                                                                                                                                                                                                                              |
+| --------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| A client-side, URL-keyed read cache (IndexedDB, `localStorage`, a fetch wrapper's memo) | **Retire** it once its reads are subscribed.                                 | The replica replaces it outright: same rows, kept current by pulls and pokes, scoped to the identity (Phase 4). Two client caches disagree, and the URL-keyed one has no invalidation.                                                                                                                                                                                           |
+| The browser Cache API under the service worker                                          | **Keep** it behind the façade, for what the façade forwards.                 | The façade answers first; what it forwards can still be cached stale-while-revalidate (`CacheApiHttpCache`), evicted by `collection:{name}` tag as collections change (`HttpCacheInvalidation`).                                                                                                                                                                                 |
+| Edge caches: a KV read-through cache, the Workers cache with `Cache-Tag` purges         | **Keep** them, and make them subscribers of the engine's invalidation hints. | They serve the reads that are never covered, and every first visit. `EdgeInvalidation` (`@thomasfosterau/legation-alchemy-cloudflare`) turns each committed write's hints into KV deletes of `{collection}:{id}` and tag purges in the same `collection:{name}` / `collection:{name}:{id}` spelling; the API Worker forwards hints to the front-door Worker that owns the cache. |
 
 ## Trap 2: declare what may be filtered and sorted
 
 A bridged node's **filterable set** is read off the resource's own
 declarations ([ADR-0028](adr/0028-filter-grammar-and-normative-semantics.md)
-rule d, #154). A resource that declares none has an almost empty set: `id`
+rule d). A resource that declares none has an almost empty set: `id`
 and each to-one relationship's key field, by `eq` / `in` only, sortable by
 `id` (`FilterPolicy.bareFor`, `FilterPolicy.keyDefaults`). Every other
 filter or sort is refused before anything is evaluated:

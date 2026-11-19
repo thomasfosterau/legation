@@ -81,7 +81,7 @@ export interface MutationArg {
   readonly args: unknown;
 }
 
-/** The mutation-state map's Atom value (#116): an `AsyncResult` of the current map. */
+/** The mutation-state map's Atom value: an `AsyncResult` of the current map. */
 export type MutationStatesResult = AsyncResult.AsyncResult<
   MutationState.MutationStateMap,
   Cause.NoSuchElementError
@@ -127,7 +127,7 @@ export interface EngineAtoms {
   /** Write a {@link MutationArg} to run a mutator; its result is an `AsyncResult`. */
   readonly mutation: Atom.AtomResultFn<MutationArg, void, MutatorError | StoreError>;
   /**
-   * The Atom for the engine's whole keyed mutation-state map (#116) —
+   * The Atom for the engine's whole keyed mutation-state map —
    * `ClientEngine.mutationStates` re-emits on every fold; a single shared
    * Atom, so mounting it from many components shares one subscription.
    */

@@ -1,5 +1,5 @@
 /**
- * ClientEngine.observeChanges / Mirror.observeChanges (#115): row-level
+ * ClientEngine.observeChanges / Mirror.observeChanges: row-level
  * enter/update/exit deltas over a subset's live window, batched per
  * view-step. Anchored to `observeSubset`'s existing Patch/Rebuild/gap-collapse
  * machinery (`backpressure.test.ts`, `incremental.test.ts`) so these tests
@@ -32,12 +32,12 @@
  *   rather than guessing a fixed duration, since CI's scheduling variance
  *   makes a fixed sleep an unreliable proxy for "has this propagated yet".
  *
- * `LiveView` rows carry a stable `position` (fractional index, #112), and
+ * `LiveView` rows carry a stable `position` (fractional index), and
  * `enter`/`update`/`move` now surface it on the `RowChange` itself (since
  * `LocalRow`'s type doesn't expose `row.position`, unlike the underlying
  * runtime object) — see `row-change.test.ts` for position/move coverage.
  * `stripPositions` drops it here so these assertions stay focused on
- * membership/value, the same contract before #112's position keys were
+ * membership/value, the same contract before position keys were
  * surfaced.
  */
 import * as Defined from "../Defined.js";
@@ -164,7 +164,7 @@ const foldBatches = (
 };
 
 /**
- * `LiveView`-backed rows (#112) carry a stable `position` (fractional index)
+ * `LiveView`-backed rows carry a stable `position` (fractional index)
  * at runtime alongside `id`/`value`, which `LocalRow`'s public type doesn't
  * expose. These tests assert on `id`/`value` only — `position` isn't part of
  * `observeChanges`'s current contract (a natural follow-up now that stable
@@ -289,7 +289,7 @@ describe("ClientEngine.observeChanges", () => {
   );
 
   it.effect(
-    "a local mutation produces a precise Patch enter (#109's delta-maintained overlay)",
+    "a local mutation produces a precise Patch enter",
     () =>
       Effect.gen(function* () {
         const handler = yield* makeServer;
@@ -356,7 +356,7 @@ describe("ClientEngine.observeChanges", () => {
   );
 
   it.effect(
-    "#133: an observer of an untouched collection sees no spurious reset under a scoped rebuild",
+    "an observer of an untouched collection sees no spurious reset under a scoped rebuild",
     () =>
       Effect.gen(function* () {
         const handler = yield* makeServer;
@@ -542,7 +542,7 @@ describe("Mirror.observeChanges", () => {
   );
 });
 
-// ─── Randomized property through the real engine stream (#133 item 5) ───────
+// ─── Randomized property through the real engine stream ───────
 //
 // `row-change.test.ts` drives the same fold-reproduces-the-page property
 // directly against `LiveView` — fast, and exhaustive over hundreds of steps.

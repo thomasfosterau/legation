@@ -1,5 +1,5 @@
 /**
- * The Cache API HTTP cache's bundle-size budget (#678): a service worker that
+ * The Cache API HTTP cache's bundle-size budget: a service worker that
  * imports `CacheApiHttpCache` alone ships the cache, Effect and the error
  * classes' schemas, and nothing of the engine.
  *
@@ -55,7 +55,7 @@ const measure = measurer([
   { directory: new URL("../../", import.meta.url), manifest: browserManifest },
 ]);
 
-describe("CacheApiHttpCache bundle size (#678)", () => {
+describe("CacheApiHttpCache bundle size", () => {
   it.effect(
     "bundles within budget over the error floor, from either entry, reaching nothing of the engine",
     () =>

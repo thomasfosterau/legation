@@ -14,7 +14,7 @@ app is a SvelteKit **SPA**: `ssr = false` in the root layout and
 - **Optimistic writes** — adding, toggling, or deleting a todo runs a mutation;
   the row updates immediately, before any round trip. The mutator handlers are
   idempotent because they re-run on every rebase.
-- **Undo / redo (#46)** — every write goes through the `Undo` manager as a
+- **Undo / redo** — every write goes through the `Undo` manager as a
   _paired intent_ (the mutation to run plus the mutation that reverses it). Undo
   and redo replay through the same optimistic `mutate` pipeline, so they are
   journaled, rebased, and offline-safe like any write. Press **⌘Z / Ctrl+Z** to
@@ -83,7 +83,7 @@ long as the app does.
 The `Undo` module (`@thomasfosterau/legation/internal`) adds undo/redo without touching the
 engine: the caller supplies both directions of a change, and undo/redo replay
 through the supplied handle's `mutate` — a `Client` (as here) or a
-`ClientEngine` both work (#223) — so they inherit the overlay, the journal,
+`ClientEngine` both work — so they inherit the overlay, the journal,
 rebase, and offline behaviour for free.
 
 ```ts

@@ -130,7 +130,7 @@ const planCompaction = <T extends Numbered>(
 
 /**
  * A replica read as one state: the rows, the cookie, the journal, the unpulled tail and the mutation
- * counters (see {@link ClientStore.snapshot}, #392, #271).
+ * counters (see {@link ClientStore.snapshot}).
  */
 export interface ReplicaState {
   /** Every confirmed row, tagged with the collection it belongs to. */
@@ -163,7 +163,7 @@ export interface ClientStore {
    * bulk write for the pull path: grouping ops by collection lets the durable
    * store rewrite each touched collection's id-index at most once per batch —
    * so a K-op patch on a large collection writes K row values plus ~1 index per
-   * collection, not the whole collection K times (#47). A `Clear` resets rows.
+   * collection, not the whole collection K times. A `Clear` resets rows.
    */
   readonly applyRowOps: (ops: ReadonlyArray<PatchOp>) => Effect.Effect<void, StoreError>;
 
@@ -177,7 +177,7 @@ export interface ClientStore {
   readonly appendMutation: (mutation: Mutation) => Effect.Effect<void, StoreError>;
   /**
    * Allocate the client's next mutation id **and** append the entry as one
-   * store step (#258), returning the journaled mutation (id included).
+   * store step, returning the journaled mutation (id included).
    *
    * This is how the engine journals. Allocating with
    * {@link ClientStore.nextMutationId} and then calling
@@ -199,7 +199,7 @@ export interface ClientStore {
   readonly appendNext: (draft: Omit<Mutation, "mutationId">) => Effect.Effect<Mutation, StoreError>;
   readonly pendingMutations: Effect.Effect<ReadonlyArray<Mutation>, StoreError>;
   /**
-   * How many entries the journal holds, without reading them (#260).
+   * How many entries the journal holds, without reading them.
    *
    * What the engine samples the journal-depth gauge from, on every append,
    * acknowledgement and paced compaction, so it must stay cheap on a long
@@ -209,15 +209,15 @@ export interface ClientStore {
    * that the key-value store counts an index entry whose body is missing,
    * which `pendingMutations` skips. A crash or failed write mid-acknowledge
    * can leave one; the key-value store drops such entries the next time it
-   * opens (#294).
+   * opens.
    */
   readonly pendingCount: Effect.Effect<number, StoreError>;
   /** Drop journal entries with `mutationId <= upTo` for the client. */
   readonly acknowledge: (clientId: string, upTo: number) => Effect.Effect<void, StoreError>;
   /**
-   * Compact the unpushed tail of `clientId`'s journal (#117's pacing
+   * Compact the unpushed tail of `clientId`'s journal (pacing
    * strategies: debounce/throttle/coalesce drop a superseded entry) **and
-   * renumber the survivors** (#249), as one atomic step.
+   * renumber the survivors**, as one atomic step.
    *
    * The backend's exactly-once ledger (ADR-0008) requires a client's mutation
    * ids to arrive gap-free: `id <= lastMutationId` is skipped, `id ===
@@ -258,7 +258,7 @@ export interface ClientStore {
   /**
    * Reserve the next mutation id without journaling anything. Low-level:
    * prefer {@link ClientStore.appendNext}, since an id reserved here and never
-   * appended is a gap (#258).
+   * appended is a gap.
    */
   readonly nextMutationId: (clientId: string) => Effect.Effect<number, StoreError>;
   /**
@@ -268,7 +268,7 @@ export interface ClientStore {
    */
   readonly mutationCounters: Effect.Effect<Readonly<Record<string, number>>, StoreError>;
   /**
-   * Raise each client's counter to at least its value in `counters`, never lowering one (#271).
+   * Raise each client's counter to at least its value in `counters`, never lowering one.
    * What `Hydration.hydrate` restores a snapshot's counters with, so a client id reused across the
    * hydration boundary continues above the ids it has already had acknowledged, which the backend
    * would skip as duplicates.
@@ -277,7 +277,7 @@ export interface ClientStore {
     counters: Readonly<Record<string, number>>
   ) => Effect.Effect<void, StoreError>;
 
-  // Unpulled tail (#336, ADR-0008)
+  // Unpulled tail (ADR-0008)
   /**
    * The acknowledged-but-unpulled tail (CONTEXT.md, "Unpulled tail"): applied
    * mutations the journal no longer holds, oldest first. The overlay keeps
@@ -302,7 +302,7 @@ export interface ClientStore {
    * than reverting it. It re-applies the patch (idempotent, since every
    * operation sets a row or removes it), writes the cookie, trims the journal
    * and releases the tail to the watermark. So a crash at any point after this
-   * call shows the pull's effects, never the rows without them (#387). A release
+   * call shows the pull's effects, never the rows without them. A release
    * still outstanding is finished first, whichever engine on this store began it,
    * so a record is only overwritten once its own finish has run (the finish
    * applies the whole recorded patch, so the other engine's release is completed,
@@ -327,10 +327,10 @@ export interface ClientStore {
    * patch, writes the cookie, trims the journal and releases the tail, so the
    * store is in the state the release describes. With no release outstanding it
    * only settles the tail as an open does: a journal copy of a parked entry is
-   * dropped (#336). A failed read of the record fails this call alone, with
+   * dropped. A failed read of the record fails this call alone, with
    * nothing written. A failure after that read, in the roll-forward or the
    * journal trim, seals the store: every later call fails until it is reopened,
-   * and the next open finishes the release from the same record (#387).
+   * and the next open finishes the release from the same record.
    */
   readonly finishRelease: Effect.Effect<void, StoreError>;
   /**
@@ -339,10 +339,10 @@ export interface ClientStore {
    */
   readonly clearUnpulled: Effect.Effect<void, StoreError>;
 
-  // Atomic batches (#393, #411). Present on the in-memory store, and on the key-value store when it has
+  // Atomic batches. Present on the in-memory store, and on the key-value store when it has
   // an {@link AtomicKeyValue} in context; the engine takes its release-record path, through the members
   // above, when they are absent. A push acknowledgement's park and trim are the batch; the tail never
-  // takes an overflow release, so there is no batch for one (#429).
+  // takes an overflow release, so there is no batch for one.
   /**
    * Write a pull's whole release as one atomic batch: its rows, its cookie, the journal trim and the
    * tail release that {@link ClientStore.beginRelease}, the patch, the cookie, the acknowledgement and
@@ -364,7 +364,7 @@ export interface ClientStore {
       ) => Effect.Effect<void, StoreError>)
     | undefined;
 
-  // Whole-replica read (#392)
+  // Whole-replica read
   /**
    * The replica read as one state: the confirmed rows, the pull cookie, the journal and the unpulled
    * tail, with nothing landing between the reads, so the result is the state at one moment. A pull or a
@@ -451,7 +451,7 @@ export const ClientStore = Context.Service<ClientStore>("@thomasfosterau/legatio
 const entryKey = (entry: { readonly clientId: string; readonly mutationId: number }): string =>
   `${entry.clientId}\u0000${entry.mutationId}`;
 
-/** `held` followed by whatever of `incoming` it does not already hold, in order (#336). */
+/** `held` followed by whatever of `incoming` it does not already hold, in order. */
 const appendMissing = <T extends { readonly clientId: string; readonly mutationId: number }>(
   held: ReadonlyArray<T>,
   incoming: ReadonlyArray<T>
@@ -483,7 +483,7 @@ const coveredBy = (
 /**
  * Freeze everything currently pending: raise each client's sent watermark to
  * its highest pending id, so {@link ClientStore.compactPending} treats it as
- * possibly-sent and leaves it alone (#249). Used wherever entries arrive whose
+ * possibly-sent and leaves it alone. Used wherever entries arrive whose
  * push history this process cannot see: engine boot (a journal persisted by an
  * earlier session, or by a release that predates the watermark, may have been
  * pushed) and snapshot hydration (the entries came from another context). The
@@ -503,7 +503,7 @@ export const freezePending = (store: ClientStore): Effect.Effect<void, StoreErro
   });
 
 /**
- * What a release will do, recorded by {@link ClientStore.beginRelease} before it writes (#387).
+ * What a release will do, recorded by {@link ClientStore.beginRelease} before it writes.
  */
 export interface PullRelease {
   /** The watermark the release covers: the entries at or below it leave the tail. */
@@ -521,7 +521,7 @@ export interface PullRelease {
 }
 
 /**
- * `current` with each client raised to the highest id among `entries`, never lowered (#411). The
+ * `current` with each client raised to the highest id among `entries`, never lowered. The
  * pure form of the counter raise the record path makes one entry at a time, over the memory store's
  * `Map` counters.
  */
@@ -545,9 +545,9 @@ export const makeMemory: Effect.Effect<ClientStore> = Effect.gen(function* () {
   const cookie = yield* Ref.make<string | undefined>(undefined);
   const identity = yield* Ref.make<Identity.Fingerprint | undefined>(undefined);
   const quarantine = yield* Ref.make(new Map<Identity.Fingerprint, ReadonlyArray<Mutation>>());
-  // The acknowledged-but-unpulled tail (#336), oldest first.
+  // The acknowledged-but-unpulled tail, oldest first.
   const tail = yield* Ref.make<ReadonlyArray<Mutation>>([]);
-  // The release in progress, if any (#387). A memory store does not outlive the process, so the
+  // The release in progress, if any. A memory store does not outlive the process, so the
   // record only serves a roll-forward in this process.
   const outstanding = yield* Ref.make<PullRelease | undefined>(undefined);
   // The journal, the quarantine and the counters are separate Refs, and several
@@ -556,7 +556,7 @@ export const makeMemory: Effect.Effect<ClientStore> = Effect.gen(function* () {
   // `appendMutation`, `appendNext`, `acknowledge`, `compactPending`,
   // `nextMutationId`, `raiseMutationCounters`, `quarantinePending`, `releaseQuarantine`,
   // `discardQuarantine`, and the tail writers `parkUnpulled`,
-  // `releaseUnpulled`, `clearUnpulled` and the atomic batch members (#411). A read-then-write
+  // `releaseUnpulled`, `clearUnpulled` and the atomic batch members. A read-then-write
   // holder is only safe if every other writer is also excluded; a writer that skipped the permit
   // could land between the read and the set and be overwritten (the lost-append and
   // lost-release races). Pure reads stay unlocked: each is one `Ref.get`.
@@ -603,8 +603,8 @@ export const makeMemory: Effect.Effect<ClientStore> = Effect.gen(function* () {
     return next;
   };
 
-  // Finish the release in progress, if any: the same steps the key-value store's open runs (#387).
-  // Then settle the tail the way the key-value store's open does (#336): a journal copy of a
+  // Finish the release in progress, if any: the same steps the key-value store's open runs.
+  // Then settle the tail the way the key-value store's open does: a journal copy of a
   // parked entry is dropped, so the entry is neither replayed twice nor pushed again. Runs under
   // the lock, and is a no-op on the journal when the tail holds no parked copy.
   const finishInner = Effect.gen(function* () {
@@ -626,10 +626,10 @@ export const makeMemory: Effect.Effect<ClientStore> = Effect.gen(function* () {
     yield* Ref.update(journal, (entries) => entries.filter((m) => !parked.has(entryKey(m))));
   });
 
-  // ─── Atomic batch members (#411) ─────────────────────────────────────────
+  // ─── Atomic batch members ─────────────────────────────────────────
   // The batch form of each record-path step, so the engine takes the batch path on this store as it
   // does on the key-value store. Each member is one step under `lock`: it finishes an outstanding
-  // record first, as a row write does (#387), computes every new value from the current state, then
+  // record first, as a row write does, computes every new value from the current state, then
   // writes them together. Nothing is recorded, so the memory store cannot be left mid-release. The
   // writes run uninterruptible, so an interrupt cannot land between them.
   const finishOutstanding = Effect.gen(function* () {
@@ -691,7 +691,7 @@ export const makeMemory: Effect.Effect<ClientStore> = Effect.gen(function* () {
       Ref.get(rows).pipe(Effect.map((m) => Array.from(collectionMap(m, collection).values()))),
     listCollections: Ref.get(rows).pipe(Effect.map((m) => Array.from(m.keys()))),
     // A row write finishes an outstanding release first, in the same permit hold, so the release's
-    // patch cannot land over it on a later finish (#387). The release's own patch goes through
+    // patch cannot land over it on a later finish. The release's own patch goes through
     // `applyRowOps`, which does not finish.
     putRow: (collection, row) =>
       locked(
@@ -721,7 +721,7 @@ export const makeMemory: Effect.Effect<ClientStore> = Effect.gen(function* () {
           )
         )
       ),
-    // An outstanding release is finished first, so its patch cannot land over the cleared rows (#387).
+    // An outstanding release is finished first, so its patch cannot land over the cleared rows.
     clearRows: locked(finishInner.pipe(Effect.andThen(Ref.set(rows, new Map())))),
     applyRowOps: (ops) => locked(Ref.update(rows, (map) => applyOpsTo(map, ops))),
 
@@ -736,7 +736,7 @@ export const makeMemory: Effect.Effect<ClientStore> = Effect.gen(function* () {
         })
       ),
     // Uninterruptible and under the store lock: the counter and the journal
-    // change together, and no other operation interleaves (#258). The id is
+    // change together, and no other operation interleaves. The id is
     // the larger of the counter and the highest id the journal already holds
     // for the client, the same healing the KeyValueStore store applies, so the
     // two implementations agree when an entry arrived by `appendMutation`.
@@ -776,7 +776,7 @@ export const makeMemory: Effect.Effect<ClientStore> = Effect.gen(function* () {
       ),
     // Uninterruptible: the journal and the counter must change together. An
     // interrupt between the two writes would leave a renumbered journal with a
-    // counter that still hands out the old numbering, i.e. a gap (#249).
+    // counter that still hands out the old numbering, i.e. a gap.
     compactPending: (clientId, mutationIds) =>
       locked(
         Effect.uninterruptible(
@@ -835,10 +835,10 @@ export const makeMemory: Effect.Effect<ClientStore> = Effect.gen(function* () {
       ),
     // The record-path methods (`beginRelease`, `releaseUnpulled`) stay on this store for the
     // interface and the record-path contract tests, which run over both stores. The engine never
-    // reaches them here now that the batch members are present (#411): the key-value store over a
+    // reaches them here now that the batch members are present: the key-value store over a
     // plain KeyValueStore, with no AtomicKeyValue in context, is the store that still needs them.
     //
-    // An outstanding release is finished first, as an open would finish it (#387), so a second
+    // An outstanding release is finished first, as an open would finish it, so a second
     // release begins rather than being refused. The finish cannot fail here: nothing is stored.
     beginRelease: (release) =>
       locked(
@@ -854,10 +854,10 @@ export const makeMemory: Effect.Effect<ClientStore> = Effect.gen(function* () {
         )
       ),
     finishRelease: locked(finishInner),
-    // Drops the release record with the tail, as the key-value store removes its record (#387).
+    // Drops the release record with the tail, as the key-value store removes its record.
     clearUnpulled: locked(Ref.set(tail, []).pipe(Effect.andThen(Ref.set(outstanding, undefined)))),
 
-    // One read under the lock: every writer of the snapshot's state below takes the same lock, so the four reads see one state (#392).
+    // One read under the lock: every writer of the snapshot's state below takes the same lock, so the four reads see one state.
     snapshot: locked(
       Effect.gen(function* () {
         const byCollection = yield* Ref.get(rows);
@@ -876,7 +876,7 @@ export const makeMemory: Effect.Effect<ClientStore> = Effect.gen(function* () {
     ),
 
     getCookie: Ref.get(cookie),
-    // Locked so every writer of the snapshot's state takes the lock and the snapshot rule holds without case analysis (#392).
+    // Locked so every writer of the snapshot's state takes the lock and the snapshot rule holds without case analysis.
     setCookie: (value) => locked(Ref.set(cookie, value)),
     clearCookie: locked(Ref.set(cookie, undefined)),
 
@@ -932,7 +932,7 @@ export const layerMemory: Layer.Layer<ClientStore> = Layer.effect(ClientStore)(m
 /**
  * A store that refuses every operation with `cause`.
  *
- * The fail-closed end of the identity boundary (#212). If the open-time
+ * The fail-closed end of the identity boundary. If the open-time
  * identity transition cannot be completed — a corrupt journal blob, a KVS
  * that errors mid-reset — the replica's rows may still belong to the
  * superseded principal and its journal may still hold that principal's
@@ -944,7 +944,7 @@ export const layerMemory: Layer.Layer<ClientStore> = Layer.effect(ClientStore)(m
  */
 const sealed = (cause: StoreError): ClientStore => {
   // The reason is named in the message itself, so a backend's specific failure (a missing object
-  // store, say) is not lost behind the generic wording (#393).
+  // store, say) is not lost behind the generic wording.
   const detail = causeDetail(cause);
   const refuse = <A>(): Effect.Effect<A, StoreError> =>
     Effect.fail(
@@ -1010,7 +1010,7 @@ const causeDetail = (error: unknown): string => {
 };
 
 /**
- * The refusal an append gets for an entry the unpulled tail already holds (#336). A journal copy of a
+ * The refusal an append gets for an entry the unpulled tail already holds. A journal copy of a
  * parked entry would be double-counted by reads, and pushed again.
  */
 const alreadyParked = (mutation: Mutation): StoreError =>
@@ -1019,7 +1019,7 @@ const alreadyParked = (mutation: Mutation): StoreError =>
   });
 
 /**
- * The error every member fails with once a release could not be finished in this process (#387).
+ * The error every member fails with once a release could not be finished in this process.
  * Reopening the store finishes the release from its durable record.
  */
 const sealedByRelease = (cause: StoreError): StoreError =>
@@ -1040,13 +1040,13 @@ export interface KeyValueOptions {
   /**
    * Maximum number of pending mutations the journal will hold. When an
    * `appendMutation` would exceed it, the append fails with a `StoreError`
-   * rather than silently dropping the intent (#47) — the failure surfaces
+   * rather than silently dropping the intent — the failure surfaces
    * through `mutate` so the app can block writes or warn. KVS-only: the memory
    * store is ephemeral and imposes no bound. Unset means unbounded.
    */
   readonly journalHighWater?: number;
   /**
-   * Local store-version buster (#48). On open, if the persisted store-version
+   * Local store-version buster. On open, if the persisted store-version
    * key differs from this value, the confirmed rows and the pull cookie are
    * cleared — so the next pull is a full reset ({@link Cvr} sends `Clear` + full
    * puts for the now-absent cookie) — and the new version is persisted. The
@@ -1089,24 +1089,24 @@ export interface KeyValueOptions {
 
 /**
  * The current durable layout version. Stamped at `__layout` on first open; a
- * store found at an earlier (or absent) version is migrated forward once (#47).
+ * store found at an earlier (or absent) version is migrated forward once.
  */
 const CURRENT_LAYOUT = "2";
 const LAYOUT_KEY = "__layout";
-/** Where the app-supplied {@link KeyValueOptions.storeVersion} is persisted (#48). */
+/** Where the app-supplied {@link KeyValueOptions.storeVersion} is persisted. */
 const STORE_VERSION_KEY = "__storeVersion";
-/** Where the replica's {@link Identity.Fingerprint} stamp is persisted (#212). */
+/** Where the replica's {@link Identity.Fingerprint} stamp is persisted. */
 const IDENTITY_KEY = "__identity";
 /** The index of fingerprints currently holding a quarantine. */
 const QUARANTINE_INDEX_KEY = "quarantineIndex";
-/** The in-progress compaction's write-ahead intent (#249); present only mid-compaction. */
+/** The in-progress compaction's write-ahead intent; present only mid-compaction. */
 const COMPACTION_KEY = "compactionIntent";
-/** Per-client highest mutation id a push attempt may have sent (#249). */
+/** Per-client highest mutation id a push attempt may have sent. */
 const SENT_KEY = "sentUpTo";
-/** The index of the acknowledged-but-unpulled tail, oldest first (#336). */
+/** The index of the acknowledged-but-unpulled tail, oldest first. */
 const UNPULLED_INDEX_KEY = "unpulledIndex";
 /**
- * The pull release in progress, present only mid-release (#336, #387): its
+ * The pull release in progress, present only mid-release: its
  * watermark, cookie and patch, so an open can finish it.
  */
 const RELEASE_KEY = "releaseIntent";
@@ -1153,7 +1153,7 @@ const ReleaseIntentFromJson = Schema.fromJsonString(
   })
 );
 /**
- * The write-ahead record of an in-progress compaction (#249): everything
+ * The write-ahead record of an in-progress compaction: everything
  * needed to finish it from scratch, so replaying it is idempotent.
  */
 const CompactionIntentFromJson = Schema.fromJsonString(
@@ -1202,7 +1202,7 @@ const highestIds = (ids: ReadonlyArray<JournalIndexEntry>): Record<string, numbe
 
 /**
  * `counters` with each client raised to at least its id in `highest`, or `undefined` when no counter
- * rises. The one rule both the record path and the atomic batch apply (#249, #258).
+ * rises. The one rule both the record path and the atomic batch apply.
  */
 const raisedCounters = (
   counters: Readonly<Record<string, number>>,
@@ -1271,7 +1271,7 @@ const readerOver =
         );
   };
 
-// The reads of a replica's state, through `read`: the store's own keys, or one read of every entry (#392).
+// The reads of a replica's state, through `read`: the store's own keys, or one read of every entry.
 const collectionsWith = (read: KeyReader) =>
   read("collections", CollectionsFromJson).pipe(Effect.map((list) => list ?? []));
 
@@ -1321,7 +1321,7 @@ const unpulledWith = (read: KeyReader): Effect.Effect<ReadonlyArray<Mutation>, S
     return mutations;
   });
 
-// The whole replica, read through `read`: the same reads the members make, in one order (#392).
+// The whole replica, read through `read`: the same reads the members make, in one order.
 const replicaStateWith = (read: KeyReader): Effect.Effect<ReplicaState, StoreError> =>
   Effect.gen(function* () {
     const rows: Array<{ readonly collection: string; readonly row: StoredRow }> = [];
@@ -1343,7 +1343,7 @@ const replicaStateWith = (read: KeyReader): Effect.Effect<ReplicaState, StoreErr
  * browser IndexedDB/localStorage, Node file system, SQL — persists the
  * engine.
  *
- * Layout 2 (#47) stores state per row and per mutation, because the KVS has no
+ * Layout 2 stores state per row and per mutation, because the KVS has no
  * key enumeration: each confirmed row is a `row/{collection}/{id}` value with a
  * per-collection `rowIndex/{collection}` id-array; each pending mutation is a
  * `journal/{clientId}/{mutationId}` body with a compact ordered `journalIndex`.
@@ -1357,7 +1357,7 @@ const replicaStateWith = (read: KeyReader): Effect.Effect<ReplicaState, StoreErr
  * makes one store instance safe for concurrent fibers — not for concurrent
  * processes (the service-worker host is the per-origin singleton, ADR-0010).
  *
- * Two paths write a pull's release (#387, #393). With an {@link AtomicKeyValue}
+ * Two paths write a pull's release. With an {@link AtomicKeyValue}
  * in context, the release (`commitPull`, `commitAcknowledgement`) is one batch
  * and no release record is written. Without
  * it, the release goes through the record `beginRelease` writes first, which
@@ -1377,12 +1377,12 @@ export const makeKeyValue = (
     const store = KeyValueStore.prefix(yield* KeyValueStore.KeyValueStore, namespace);
     const highWater = options?.journalHighWater;
     const lock = yield* Semaphore.make(1);
-    // Set when an outstanding release could not be finished in this process. Every member checks it
-    // (#387): the writers inside the permit, so a call queued behind the failing finish is refused
+    // Set when an outstanding release could not be finished in this process. Every member checks it:
+    //the writers inside the permit, so a call queued behind the failing finish is refused
     // rather than run over the outstanding record; the readers before they read.
     const sealedBy = yield* Ref.make<StoreError | undefined>(undefined);
     // Set whenever a release record or a parked journal copy may exist. While it is clear the
-    // in-process finish has nothing to do, so a row write reads neither (#387). Set before a write
+    // in-process finish has nothing to do, so a row write reads neither. Set before a write
     // that may land despite reporting failure; cleared only by a finish that completes.
     const finishPending = yield* Ref.make(false);
     const unsealed = <A, E>(effect: Effect.Effect<A, E>): Effect.Effect<A, E | StoreError> =>
@@ -1447,7 +1447,7 @@ export const makeKeyValue = (
         if (raised !== undefined) yield* writeJson("counters", raised);
       });
 
-    // ─── Compaction (unlocked inner forms; #249) ───────────────────────────
+    // ─── Compaction (unlocked inner forms) ───────────────────────────
     //
     // Dropping superseded entries and renumbering the survivors rewrites
     // several keys, and the KVS has no transactions. So the whole outcome is
@@ -1494,8 +1494,8 @@ export const makeKeyValue = (
 
     const pendingMutationsOf = pendingMutationsWith(readDecoded);
 
-    // `pendingMutationsOf`'s count from the index alone: one read, no bodies
-    // (#260). A store not yet migrated holds the legacy blob instead.
+    // `pendingMutationsOf`'s count from the index alone: one read, no bodies.
+    //A store not yet migrated holds the legacy blob instead.
     const pendingCountOf: Effect.Effect<number, StoreError> = Effect.gen(function* () {
       const index = yield* readDecoded("journalIndex", JournalIndexFromJson);
       if (index !== undefined) return index.length;
@@ -1503,7 +1503,7 @@ export const makeKeyValue = (
       return legacy?.length ?? 0;
     });
 
-    // ─── Unpulled tail (unlocked inner forms; #336) ────────────────────────
+    // ─── Unpulled tail (unlocked inner forms) ────────────────────────
     //
     // The tail has its own keyspace, an index plus one body per entry, laid
     // out like the journal. A park writes the bodies and then the index, which
@@ -1529,7 +1529,7 @@ export const makeKeyValue = (
     ): Effect.Effect<void, StoreError> =>
       Effect.gen(function* () {
         if (Arr.isReadonlyArrayEmpty(mutations)) return;
-        // A journal copy may be left behind by the trim that follows, so the finish must run (#387).
+        // A journal copy may be left behind by the trim that follows, so the finish must run.
         yield* Ref.set(finishPending, true);
         for (const m of mutations) yield* writeJson(unpulledBodyKey(m.clientId, m.mutationId), m);
         const index = yield* unpulledIndexOf;
@@ -1573,7 +1573,7 @@ export const makeKeyValue = (
       yield* remove(RELEASE_KEY);
     });
 
-    // ─── Quarantine (unlocked inner forms; #212) ───────────────────────────
+    // ─── Quarantine (unlocked inner forms) ───────────────────────────
     //
     // A quarantine lives in its own keyspace, not in the journal — that is
     // the security property, not an implementation detail: `pendingMutations`
@@ -1778,7 +1778,7 @@ export const makeKeyValue = (
       Effect.catchTag(["KeyValueStoreError", "StoreError"], () => Effect.void)
     );
 
-    // Finish a compaction a previous run was interrupted in (#249). Kept
+    // Finish a compaction a previous run was interrupted in. Kept
     // infallible at construction like the opens around it: if recovery fails
     // here the flag stays set, and the first journal operation retries it.
     yield* locked(recoverCompaction).pipe(
@@ -1789,11 +1789,11 @@ export const makeKeyValue = (
       )
     );
 
-    // Drop journal index entries whose body is gone (#294). Removals delete
+    // Drop journal index entries whose body is gone. Removals delete
     // the bodies before rewriting the index (`acknowledge`, the quarantine's
     // `clearJournalInner`), so a crash between the two leaves entries with
     // nothing to push. Reads already skip them, but `pendingCount` and the
-    // high-water check count the index alone (#260), and `compactPending`
+    // high-water check count the index alone, and `compactPending`
     // refuses a run with a missing body, so they are repaired here, once per
     // open, rather than paying a body read on every count. The dropped ids
     // stay reserved, as `acknowledge` keeps them (see `raiseCounters`). Runs
@@ -1821,10 +1821,10 @@ export const makeKeyValue = (
     yield* locked(settleCompaction.pipe(Effect.andThen(repairJournalIndex))).pipe(Effect.ignore);
 
     // Finish a pull release, or drop the journal copies of a park, that a
-    // crash interrupted (#336). Not swallowed: the tail and the journal then
+    // crash interrupted. Not swallowed: the tail and the journal then
     // disagree, and serving either would double-count or revert, so the store
     // is sealed like an unestablished identity boundary. The next open retries.
-    // Roll an outstanding release forward from its record (#336, #387). The patch is idempotent, so
+    // Roll an outstanding release forward from its record. The patch is idempotent, so
     // re-applying it is correct whether or not the interrupted run had written rows.
     const rollForward = (release: PullRelease): Effect.Effect<void, StoreError> =>
       Effect.gen(function* () {
@@ -1841,7 +1841,7 @@ export const makeKeyValue = (
       const release = yield* readDecoded(RELEASE_KEY, ReleaseIntentFromJson);
       if (release !== undefined) yield* rollForward(release);
     });
-    // The journal copies of whatever the tail still parks, dropped as an open drops them (#336). Read
+    // The journal copies of whatever the tail still parks, dropped as an open drops them. Read
     // after the roll-forward, which releases entries from the tail. A failed trim seals the store even
     // with no record outstanding: a copy left in both the journal and the tail would be double-counted
     // by reads and pushed again.
@@ -1853,7 +1853,7 @@ export const makeKeyValue = (
       }
     });
     // The tail settle: the roll-forward, then the journal copies of whatever is still parked. The
-    // open runs this one body, so it leaves the same state as the in-process finish (#387).
+    // open runs this one body, so it leaves the same state as the in-process finish.
     const settleTailInner = Effect.gen(function* () {
       yield* finishReleaseInner;
       yield* trimParkedCopies;
@@ -1865,7 +1865,7 @@ export const makeKeyValue = (
     if (tailFailure !== undefined) return sealed(tailFailure);
     yield* Ref.set(finishPending, false);
     // The finish of a record already read: the roll-forward, then the parked copies. Any failure seals
-    // the store (#387), since the writes may be part-way.
+    // the store, since the writes may be part-way.
     const finishRead = (release: PullRelease | undefined): Effect.Effect<void, StoreError> =>
       Effect.gen(function* () {
         yield* Effect.gen(function* () {
@@ -1878,13 +1878,13 @@ export const makeKeyValue = (
     // while `finishPending` is clear. Its first step is a read of the record, and a failure there
     // fails the call alone: nothing has been written. Every failure after that read seals the store,
     // because a roll-forward or a journal trim may have part-way written what the record describes,
-    // and no later write may run over it. The open then finishes it from the same record (#387).
+    // and no later write may run over it. The open then finishes it from the same record.
     const finishOrSeal = Effect.gen(function* () {
       if (!(yield* Ref.get(finishPending))) return;
       yield* finishRead(yield* readDecoded(RELEASE_KEY, ReleaseIntentFromJson));
     });
 
-    // Local store-version buster (#48): a mismatch clears confirmed rows + the
+    // Local store-version buster: a mismatch clears confirmed rows + the
     // cookie (so the next pull rehydrates fully) but preserves the journal, then
     // stamps the new version. Kept infallible at construction, like the
     // migration open above.
@@ -1906,7 +1906,7 @@ export const makeKeyValue = (
     });
     yield* openStoreVersion.pipe(Effect.ignore);
 
-    // The identity boundary on open (#212): compare the configured
+    // The identity boundary on open: compare the configured
     // fingerprint with the replica's stamp and apply `Identity.transitionOf`.
     // A `Reset` quarantines the unpushed journal under the **superseded**
     // fingerprint before dropping rows and the cookie, so the previous
@@ -1955,7 +1955,7 @@ export const makeKeyValue = (
     );
     if (boundaryFailure !== undefined) return sealed(boundaryFailure);
 
-    // ─── Atomic batches (unlocked staged forms; #393) ──────────────────────
+    // ─── Atomic batches (unlocked staged forms) ──────────────────────
     //
     // With an AtomicKeyValue in context, a pull's release and a push ack's park-then-trim commit as ONE
     // batch, with no release record. Each batch stages every write the record path would make, reading
@@ -2103,7 +2103,7 @@ export const makeKeyValue = (
         return Arr.isReadonlyArrayEmpty(ops) ? Effect.void : atomicSeam.apply(ops);
       });
 
-    // Each member first finishes an outstanding release record, as a row write does (#387). A record
+    // Each member first finishes an outstanding release record, as a row write does. A record
     // left by a failed record-path write would otherwise replay over the batch's newer state on a later
     // finish; the finish reads the record, so a failure there fails the batch with nothing written.
     const batchMembers: Pick<ClientStore, "commitPull" | "commitAcknowledgement"> =
@@ -2136,7 +2136,7 @@ export const makeKeyValue = (
               ),
           };
 
-    // The snapshot (#392). Under `locked`, which excludes this store's writers. With an AtomicKeyValue that
+    // The snapshot. Under `locked`, which excludes this store's writers. With an AtomicKeyValue that
     // reads every entry in one transaction, the state is decoded from that one read, so a batch another
     // connection commits cannot land between the reads either.
     const readAll = atomic?.readAll;
@@ -2163,7 +2163,7 @@ export const makeKeyValue = (
       listRows: (collection) => unsealed(listRowsOf(collection)),
       listCollections: unsealed(collections),
       // A row write finishes an outstanding release first, under the same permit hold, so the
-      // release's patch cannot land over it on a later finish (#387). The release's own patch
+      // release's patch cannot land over it on a later finish. The release's own patch
       // goes through `applyRowOps`, which does not finish: it is the release's write.
       putRow: (collection, row) =>
         locked(
@@ -2188,7 +2188,7 @@ export const makeKeyValue = (
               );
           })
         ),
-      // An outstanding release is finished under the same lock, before the rows go (#387).
+      // An outstanding release is finished under the same lock, before the rows go.
       clearRows: locked(finishOrSeal.pipe(Effect.andThen(clearRowsInner))),
       applyRowOps: (ops) => locked(applyRowOpsInner(ops)),
 
@@ -2214,7 +2214,7 @@ export const makeKeyValue = (
             ]);
           })
         ),
-      // Allocate and append under one lock hold (#258). The high-water check
+      // Allocate and append under one lock hold. The high-water check
       // runs first and the counter is written *last*: a refused or failed
       // append never advances it, and a crash between the index write and the
       // counter write is healed by taking the larger of the counter and the
@@ -2270,7 +2270,7 @@ export const makeKeyValue = (
           )
         ),
       pendingMutations: locked(settleCompaction.pipe(Effect.andThen(pendingMutationsOf))),
-      // The index alone, no bodies (#260). Settling a compaction first matters:
+      // The index alone, no bodies. Settling a compaction first matters:
       // a committed but unapplied intent's index is the one that counts.
       pendingCount: locked(settleCompaction.pipe(Effect.andThen(pendingCountOf))),
       acknowledge: (clientId, upTo) =>
@@ -2411,7 +2411,7 @@ export const makeKeyValue = (
 
       unpulled: unsealed(unpulledOf),
       parkUnpulled: (mutations) => locked(parkUnpulledInner(mutations)),
-      // An outstanding record is finished before this one is written (#387). If that finish fails, this
+      // An outstanding record is finished before this one is written. If that finish fails, this
       // call fails and the record stays for the next call to finish; a failure after its read seals.
       beginRelease: (release) =>
         locked(

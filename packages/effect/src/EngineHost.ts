@@ -103,7 +103,7 @@ export interface EngineHostOptions {
   readonly registry?: Collection.CollectionRegistry;
   /**
    * The node graph and URL-keyed reads `SubscribeUrl` registrations are
-   * parsed and planned against (#159). Without both, a `SubscribeUrl` is
+   * parsed and planned against. Without both, a `SubscribeUrl` is
    * answered with a logged warning and registers nothing.
    */
   readonly nodes?: Node.NodeRegistry;
@@ -119,10 +119,10 @@ export interface EngineHostOptions {
   };
   /**
    * The engine's store. Given it, the host serves the introspection request
-   * kinds (`Introspection.requests`, #136) over `Introspection.make(engine,
+   * kinds (`Introspection.requests`) over `Introspection.make(engine,
    * store)`, so a tab's devtools can read this engine through
    * `Introspection.fromMirror`, and the `hydrate` kind
-   * (`Hydration.requests.hydrate`, #146), so a tab holding a server-rendered
+   * (`Hydration.requests.hydrate`), so a tab holding a server-rendered
    * snapshot hands it to this store through the empty-store gate
    * (`Hydration.hydrateUnpulled`). Opt-in because the host is otherwise
    * handed only the engine, and the journal, cookie and collections are the
@@ -130,7 +130,7 @@ export interface EngineHostOptions {
    */
   readonly store?: ClientStore.ClientStore;
   /**
-   * How long a cold host holds its engine's pulls for a tab's snapshot (#146):
+   * How long a cold host holds its engine's pulls for a tab's snapshot:
    * when the host starts over an empty store whose engine has not pulled, no
    * pull (the sync loop's connect pull, a registration's) starts until the
    * first `hydrate` request is answered or this elapses
@@ -154,7 +154,7 @@ export interface EngineHostOptions {
 export interface Host {
   /**
    * The registrations the host holds on mirrors' behalf at this moment, each
-   * with its pulled summary (#426): root windows (`Subscribe`), relational
+   * with its pulled summary: root windows (`Subscribe`), relational
    * registrations with their edge selects (`SubscribeRelated`) and both
    * halves of a `SubscribeUrl`, the latter carrying its canonical URL for as
    * long as some party holds it by that URL. A registration's windows are
@@ -182,7 +182,7 @@ interface Active {
    * emission is the replica as it stands when the run starts.
    */
   readonly loop: Effect.Effect<void, unknown>;
-  /** The fiber running {@link loop} now; replaced when the loop is restarted (#672). */
+  /** The fiber running {@link loop} now; replaced when the loop is restarted. */
   readonly fiber: Ref.Ref<Fiber.Fiber<void, never>>;
   /** Engine-side release beyond interrupting the fiber (e.g. unsubscribe). */
   readonly teardown: Effect.Effect<void>;
@@ -224,7 +224,7 @@ const livenessOf = (options: EngineHostOptions) => ({
   sweepInterval: options.liveness?.sweepInterval ?? "10 seconds",
 });
 
-/** The key a mirror's enhanced form submission is held under (#536): its mirror and the begin's requestId. */
+/** The key a mirror's enhanced form submission is held under: its mirror and the begin's requestId. */
 const formKey = (mirrorId: string, requestId: number) => `${mirrorId}:${requestId}`;
 
 /** The key a mirror's host request is held under while it runs: its mirror and requestId. */
@@ -259,7 +259,7 @@ interface Request {
 }
 
 /**
- * A reply's address (#546): the request's `requestId`, and its `mirrorId` when
+ * A reply's address: the request's `requestId`, and its `mirrorId` when
  * the mirror sent one, so another tab with a request of the same number ignores
  * the reply. A mirror that predates it sends none and gets none back.
  */
@@ -286,7 +286,7 @@ export const run = (options: EngineHostOptions): Effect.Effect<Host, never, Scop
     const inbox = yield* channel.subscribe;
     const active = yield* Ref.make(new Map<string, Active>());
     const lastSeen = yield* Ref.make(new Map<string, number>());
-    // Each registration's pull mark (#426): pulled once a pull started after it has applied.
+    // Each registration's pull mark: pulled once a pull started after it has applied.
     const marks = PullMarks.make(engine);
     // The scope broadcast loops run in, so a loop restarted by `announce` lives as long as the host.
     const hostScope = yield* Effect.scope;
@@ -301,7 +301,7 @@ export const run = (options: EngineHostOptions): Effect.Effect<Host, never, Scop
       ReadonlyArray<{ readonly key: string; readonly pulled: Coverage.Pulled }> | undefined
     >(undefined);
 
-    // Bring a registration's mirrors up to the replica as it stands (#672):
+    // Bring a registration's mirrors up to the replica as it stands:
     // stop its broadcast loop, post its current rows, and start the loop again
     // from a fresh observation. Every update the registration broadcasts after
     // this reflects at least the rows the replica holds now.
@@ -315,7 +315,7 @@ export const run = (options: EngineHostOptions): Effect.Effect<Host, never, Scop
         );
       });
 
-    // Tell the mirrors which registrations are pulled (#426), rows first (#672).
+    // Tell the mirrors which registrations are pulled, rows first.
     // A pull marks its windows only after its rows are in the replica, but a
     // registration's broadcast loop may still be working through changes from
     // before that pull, and a mirror judges an answer complete by reading its
@@ -349,7 +349,7 @@ export const run = (options: EngineHostOptions): Effect.Effect<Host, never, Scop
       })
     );
 
-    // Pulls that sync new registrations, at most one fibre at a time (#426). A
+    // Pulls that sync new registrations, at most one fibre at a time. A
     // registration made while one runs sets `again`, and the running fibre pulls
     // once more after it ends, so the pull that makes the registration pulled
     // starts after it. A burst of subscribes therefore costs one extra pull, not
@@ -503,7 +503,7 @@ export const run = (options: EngineHostOptions): Effect.Effect<Host, never, Scop
             .wrap(key)
             .subscribe(subset)
             .pipe(Effect.tapError(() => marks.close(key)));
-          // Sync the registration promptly, as a named query's is (#426): the rows
+          // Sync the registration promptly, as a named query's is: the rows
           // a covered read needs arrive on a pull that starts after this one. Forked,
           // so the message loop does not wait on the network.
           yield* syncRegistrations;
@@ -611,7 +611,7 @@ export const run = (options: EngineHostOptions): Effect.Effect<Host, never, Scop
       );
     };
 
-    // The mutation-state map (#116): a singleton registration (unlike
+    // The mutation-state map: a singleton registration (unlike
     // subsets/named queries, there is exactly one per engine), so it acquires
     // under the fixed `MUTATION_STATES_KEY` — refcounted across mirrors the
     // same way a subset subscription is.
@@ -633,7 +633,7 @@ export const run = (options: EngineHostOptions): Effect.Effect<Host, never, Scop
         })
       );
 
-    // A URL-keyed registration (#159) from a party without a Client: parsed
+    // A URL-keyed registration from a party without a Client: parsed
     // and planned here, then registered as the party's Subscribe (root) and
     // SubscribeRelated (edge windows) would be — same refcount per mirrorId,
     // same liveness sweep. A URL the host cannot parse registers nothing.
@@ -710,7 +710,7 @@ export const run = (options: EngineHostOptions): Effect.Effect<Host, never, Scop
         )
       );
 
-    // Enhanced form submissions begun by mirrors (#536), keyed by mirror and
+    // Enhanced form submissions begun by mirrors, keyed by mirror and
     // the begin's requestId. The host holds the engine's in-flight entry, so
     // its overlay and unpulled tail serve every mirror; a mirror that leaves
     // (or is swept) abandons what it still held.
@@ -718,7 +718,7 @@ export const run = (options: EngineHostOptions): Effect.Effect<Host, never, Scop
     const takeForm = (key: string) =>
       Ref.modify(forms, (map) => [HashMap.get(map, key), HashMap.remove(map, key)] as const);
 
-    // Begin a mirror's form mutation on the engine (#536). The args arrive
+    // Begin a mirror's form mutation on the engine. The args arrive
     // encoded, so the engine decodes them against its own Mutation. Every
     // reply names the mirror: replies are broadcast to all of them.
     const beginForm = (requestId: number, begin: MirrorProtocol.FormMutationBegin) =>
@@ -889,7 +889,7 @@ export const run = (options: EngineHostOptions): Effect.Effect<Host, never, Scop
       });
 
     // A `Mutate` naming the reserved form mutator is an enhanced form submit's
-    // begin (#536), never journaled; any other is an ordinary mutation.
+    // begin, never journaled; any other is an ordinary mutation.
     const handleMutate = (message: MirrorProtocol.MirrorMessage & { readonly _tag: "Mutate" }) =>
       message.mutator === MirrorProtocol.FORM_MUTATION_MUTATOR
         ? handleBeginForm(message)
@@ -1029,7 +1029,7 @@ export const run = (options: EngineHostOptions): Effect.Effect<Host, never, Scop
     // A pull that applies may make a registration pulled: tell the mirrors. The
     // stream is opened here, before anything is forked: `engineEvents` subscribes
     // when it is first pulled, so a `PullCompleted` published before a forked
-    // reader ran would be missed (#426).
+    // reader ran would be missed.
     const pullEvents = yield* Stream.toPull(engine.engineEvents);
     yield* Effect.forkScoped(
       Effect.forever(

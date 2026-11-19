@@ -11,8 +11,8 @@ becomes offline-first and live.
 | App feature                                                 | Library path                                                                                                                                                                                                                                                                                                                                   |
 | ----------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | SSR pages with no loading flash                             | the catalog seeds from the snapshot above; the product, cart and orders pages keep `initial` seeding, where it is simpler (their reads include edges, which a snapshot projection does not resolve): the loads read the JSON:API at the **canonical URL** of the read the page keeps live (`JsonApiQuery.canonical`), rune hooks' `initial` seeded from those documents — the SSR request and the tab's subscription are one string (ADR-0029 §2)                                                                                                    |
-| SSR snapshot into the service worker's replica (#146)      | the root layout's `load` renders the shell's working set over a request-scoped engine (`server/snapshot.ts`, `loadSnapshot` over an HTTP carrier to the sync server); the tab hands it to the worker (`createClient({ channel, snapshot })`), which hydrates its IndexedDB replica only when it is empty and has not pulled (`hydrationWindow` holds a first visit's first pull for it), so the first pull continues from the server's cookie; the catalog's first paint is seeded from it (`Hydration.rowsFor`). A returning visitor's replica is never touched (`tests/snapshot-browser.test.ts`) |
-| One read path for REST and sync                             | every `list` / `get` endpoint is **derived** (`RestHandlers`, #163): the URL is the filter grammar (ADR-0028), parsed once into a `Query.Read`, run through `Query.plan` → `authorize` → `SqlBackend.evaluate` — the pull path — and serialised by `DocumentWriter`; the REST resources and the node graph agree declaration for declaration      |
+| SSR snapshot into the service worker's replica      | the root layout's `load` renders the shell's working set over a request-scoped engine (`server/snapshot.ts`, `loadSnapshot` over an HTTP carrier to the sync server); the tab hands it to the worker (`createClient({ channel, snapshot })`), which hydrates its IndexedDB replica only when it is empty and has not pulled (`hydrationWindow` holds a first visit's first pull for it), so the first pull continues from the server's cookie; the catalog's first paint is seeded from it (`Hydration.rowsFor`). A returning visitor's replica is never touched (`tests/snapshot-browser.test.ts`) |
+| One read path for REST and sync                             | every `list` / `get` endpoint is **derived** (`RestHandlers`): the URL is the filter grammar (ADR-0028), parsed once into a `Query.Read`, run through `Query.plan` → `authorize` → `SqlBackend.evaluate` — the pull path — and serialised by `DocumentWriter`; the REST resources and the node graph agree declaration for declaration      |
 | Public catalog + private cart/orders                        | deny-by-default auth: `allowAll` for catalog collections, identity-scoped allow-sets for private ones (ADR-0015), `IdentityResolver` reading the `client_groups` binding written at sign-in — identity is never client-asserted (a forged `userId` push is permanently rejected); the REST tier scopes by the same policy, no `WHERE userId` anywhere |
 | Product page joins (variants, seller), cart lines → variants | declared edges + `include=` (live, incrementally-maintained joins over the mirror); reviews are their own windowed collection read (`useConnection`), not a product edge                                                                                                                                                                        |
 | Category filter + pagination                                | `?category=` and `?after=` in the page URL: plain links for the no-JS tier, reactive rune-hook inputs re-subscribing typed subsets for the enhanced one; cursor+limit windows (`Subset.window`) on both tiers — `page[limit]` / `page[after]` and `links.next` on REST                                                                          |
@@ -115,9 +115,9 @@ authoritative cart. Relationship operations are not supported.
 so a `JsonApiBackend` over this server pushes each journal batch as one
 all-or-nothing request, drops a pointer-named rejection as a permanent
 rejection of that mutation, and resends the rest. Because that backend reads each
-row an update or delete touches before writing it (#372), a queued cart-item delete
+row an update or delete touches before writing it, a queued cart-item delete
 for an item an order placement already removed fails with a 404 on that read and
-stalls that client's queue until the client is reset: an accepted trade-off of #372.
+stalls that client's queue until the client is reset: an accepted trade-off.
 
 ## Running it
 
@@ -154,7 +154,7 @@ the workspace runner:
 
 - `backend-contract.test.ts` — the ADR-0009 contract verification of the
   SQLite executor, whose rule 6 carries the differential harness's generated
-  corpus (#153): every operator in the core over NULL, absent and astral
+  corpus: every operator in the core over NULL, absent and astral
   values, so the SQLite compiler is proven exact against `Subset.apply`.
 - `auth-split.test.ts` — the public/private auth split over the sync tier
   (anonymous catalog sync, empty private allow-sets, forged-identity
@@ -169,7 +169,7 @@ the workspace runner:
 - `atomic-operations.test.ts` — the atomic operations endpoint:
   all-or-nothing batches, `lid` resolution, identity, remove-as-no-op, order
   placement, and a `JsonApiBackend` pushing through it as one request per
-  batch (#160's contract, end to end against this server).
+  batch (the backend contract, end to end against this server).
 - `no-js-loads.test.ts` — the no-JS baseline: the real SvelteKit `load`
   functions (the server loads and the universal catalog load, as the server
   runs it for the first render) run against the in-process api, page by
@@ -179,11 +179,11 @@ the workspace runner:
   declared read's document from a synced replica equals the derived REST
   handler's byte for byte, and the façade over that replica answers covered
   URLs with those bytes.
-- `facade-browser.test.ts` — the façade end to end in a browser (#168): the
+- `facade-browser.test.ts` — the façade end to end in a browser: the
   `commerce-browser` Vitest project's global setup
   (`tests/support/global-setup.ts`) builds the app (`vite build`, about
   fifteen seconds) once per run, before any test file starts, so the build
-  doesn't compete with the parallel test phase (#289); the harness
+  doesn't compete with the parallel test phase; the harness
   (`tests/support/app.ts`) serves that build in-process with its service
   worker active, in front of the sync server on ephemeral ports; Playwright
   drives the pre-installed Chromium and issues plain `fetch()`es from the

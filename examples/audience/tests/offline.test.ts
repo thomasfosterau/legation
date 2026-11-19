@@ -4,7 +4,7 @@
  * and nothing more: no read the pin covers widens past the policy, a read
  * the replica does not cover is the façade's `503` (never a partial
  * document) and, through the Client, at most the admitted rows it holds,
- * as a partial answer (#653), and nothing written on the server meanwhile
+ * as a partial answer, and nothing written on the server meanwhile
  * leaks in. Back online, one pull brings the replica to exactly the current
  * policy — including a post its owner narrowed while the follower was away,
  * which leaves.
@@ -42,7 +42,7 @@ describe("offline is still bounded", () => {
 
         // The same reads answer the same rows, and no more.
         expect(idsOf(yield* device.posts(feed))).toEqual(followerView);
-        // Covered by the pulled pin, the replica's answer is complete (#653).
+        // Covered by the pulled pin, the replica's answer is complete.
         expect((yield* device.client.answer(feed)).completeness).toBe("complete");
         expect(idsOf(yield* device.posts(byOwner(alice.id)))).toEqual(["a-followers", "a-public"]);
         expect(idsOf(yield* device.posts(byVisibility("private")))).toEqual(["b-private"]);
@@ -118,7 +118,7 @@ describe("offline is still bounded", () => {
         // an answer): the rows the replica holds, which the policy admitted —
         // narrower than the feed, never wider.
         expect(idsOf(yield* device.posts(feed))).toEqual(["a-public", "b-public"]);
-        // ... and says so: its answer is partial (#653).
+        // ... and says so: its answer is partial.
         const partial = yield* device.client.answer(feed);
         expect(idsOf(partial.rows)).toEqual(["a-public", "b-public"]);
         expect(partial.completeness).toBe("partial");

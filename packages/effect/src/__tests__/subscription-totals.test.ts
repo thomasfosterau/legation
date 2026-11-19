@@ -1,5 +1,5 @@
 /**
- * Subscription totals (#210, ADR-0029's #210 amendment): a pull reports each
+ * Subscription totals (ADR-0029 amendment): a pull reports each
  * subscription's total, the rows its `where` matches under the server's auth
  * filter whatever its window, and the engine keeps the last pull's totals for
  * `totalOf`.
@@ -99,7 +99,7 @@ const makeEngine = (handler: ServerHandler) =>
     );
   });
 
-describe("subscription totals on the pull (#210)", () => {
+describe("subscription totals on the pull", () => {
   it.effect("a pull reports each subscription's total, the collection's and not the window's", () =>
     Effect.gen(function* () {
       const handler = yield* makeServer(yield* seededBackend());
@@ -148,7 +148,7 @@ describe("subscription totals on the pull (#210)", () => {
   );
 });
 
-describe("ClientEngine.totalOf (#210)", () => {
+describe("ClientEngine.totalOf", () => {
   it.effect("is undefined before a pull, then the last pull's total for the same filter", () =>
     Effect.gen(function* () {
       const engine = yield* makeEngine(yield* makeServer(yield* seededBackend()));

@@ -1,5 +1,5 @@
 /**
- * Backpressure (#44): the engine's message hubs are bounded, so a stalled
+ * Backpressure: the engine's message hubs are bounded, so a stalled
  * consumer or a hint storm cannot grow a queue without limit. Each hub trades
  * an unbounded queue for a bounded, lossless-under-pressure policy:
  *

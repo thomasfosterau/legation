@@ -1,12 +1,7 @@
 name: CI
 
-# The repository's one CI workflow. Each matrix leg sets up Vite+ on one
-# Node.js line, installs, and runs `vp run ci`: the `ci` task in vite.config.ts
-# holds the pipeline (AGENTS.md "Verification", in its order), so a local
-# `vp run ci` runs what CI runs. There is no aggregate job: the ruleset
-# requires each leg by its check name. The published `effect` floors are not
-# tested in CI before 1.0 (`vp run ci:floor` checks one by hand; CONTRIBUTING.md
-# "Effect version upgrades").
+# One job per Node.js line running `vp run ci`; the task graph lives in
+# vite.config.ts, so a local `vp run ci` is the same pipeline.
 
 on:
   pull_request:
@@ -14,12 +9,10 @@ on:
     branches: [trunk]
   workflow_dispatch:
 
-# A new push to a pull request cancels its superseded run; trunk runs finish.
 concurrency:
   group: ci-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
-# No permissions by default; each job grants only read access.
 permissions: {}
 
 jobs:
@@ -32,13 +25,9 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        # Vite+ aliases: `lts` is the newest LTS release, `latest` the newest
-        # stable release (pre-releases are skipped). Both satisfy
-        # `engines.node`.
         node: [lts, latest]
-    # The PostgreSQL overlap test (packages/effect/src/__tests__/sql/sql-backend-postgres.test.ts,
-    # #360) runs against this server. It skips locally without DATABASE_URL
-    # but fails, not skips, when it is unset in CI.
+    # For the PostgreSQL overlap test, which fails rather than skips in CI
+    # without DATABASE_URL.
     services:
       postgres:
         image: postgres:16@sha256:ca0bd484cb98bf4b24eb1010e73fb3fcbd6714d240fbc1a10eea5b7dbecb641d
@@ -54,33 +43,50 @@ jobs:
     env:
       DATABASE_URL: postgres://postgres:postgres@localhost:5432/postgres
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/checkout@v7.0.1
         with:
-          # Full history so fallow audit can diff against origin/trunk.
+          # `fallow audit` diffs against origin/trunk.
           fetch-depth: 0
           persist-credentials: false
-
-      # Vite+ at the catalog's `vite-plus` pin, the matrix's Node.js (via
-      # `vp env use`), pnpm (the `packageManager` field) and the dependency
-      # cache. The install is the next step.
       - name: Setup Vite+
-        uses: voidzero-dev/setup-vp@cab1ab9eaff52d4857875f4f2c016e36af8f2c76 # v1.22.0
+        uses: voidzero-dev/setup-vp@v1.22.0
         with:
           version-file: pnpm-workspace.yaml
           node-version: ${{ matrix.node }}
           cache: true
-          run-install: false
-
+          run-install: true
       - name: Restore the Vite+ task cache
-        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        uses: actions/cache@v6.1.0
         with:
           path: node_modules/.vite/task-cache
           key: vp-task-v2-${{ runner.os }}-node-${{ matrix.node }}-${{ github.sha }}
           restore-keys: |
             vp-task-v2-${{ runner.os }}-node-${{ matrix.node }}-
-
-      - name: Install dependencies
-        run: vp install --frozen-lockfile
-
       - name: CI
         run: vp run ci
+
+  devcontainer:
+    name: devcontainer
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    env:
+      # `vp dlx` honours `minimumReleaseAge`: keep this at a release ≥24 hours old.
+      DEVCONTAINER_CLI: "@devcontainers/cli@0.89.0"
+    steps:
+      - uses: actions/checkout@v7.0.1
+        with:
+          persist-credentials: false
+      # Only to run the CLI on the runner; the container brings its own.
+      - name: Setup Vite+
+        uses: voidzero-dev/setup-vp@v1.22.0
+        with:
+          version-file: pnpm-workspace.yaml
+          cache: false
+          run-install: false
+      # Fails when the image, a feature or `postCreateCommand` fails.
+      - name: Build and start the container
+        run: vp dlx "$DEVCONTAINER_CLI" up --workspace-folder . --log-level info
+      - name: Check the toolchain inside it
+        run: vp dlx "$DEVCONTAINER_CLI" exec --workspace-folder . bash -lc 'vp --version && test -x node_modules/.bin/vp'

@@ -1,5 +1,5 @@
 /**
- * The inverse intent codec (ADR-0030 §5, #529): `FacadeWrites.writesOf` turns
+ * The inverse intent codec (ADR-0030 §5): `FacadeWrites.writesOf` turns
  * the graph-derived CRUD mutations' args back into JSON:API writes, each `one`
  * edge's `via` key rebuilt as the relationship's linkage, so a `JsonApiBackend`
  * over a node-graph app replays a façade-journaled write as the request the app
@@ -38,7 +38,7 @@ const roundTrip = (write: JsonApiBackend.Write) =>
     )
   );
 
-describe("FacadeWrites.writesOf (#529)", () => {
+describe("FacadeWrites.writesOf", () => {
   it("is the inverse of graphIntentOf, with each via key rebuilt as linkage", () => {
     expect(
       roundTrip({
@@ -126,7 +126,7 @@ const ref = (method: string, path: string) => ({
   path,
 });
 
-describe("a JsonApiBackend over a node-graph app (#529)", () => {
+describe("a JsonApiBackend over a node-graph app", () => {
   it.effect("replays a façade-journaled create as the POST the app would send", () =>
     Effect.gen(function* () {
       const sent: Array<{ readonly method: string; readonly url: string; readonly body: string }> =

@@ -1,5 +1,5 @@
 /**
- * Tab-side backend outcomes (#36): `Mirror.mutateWithAck` resolves with the
+ * Tab-side backend outcomes: `Mirror.mutateWithAck` resolves with the
  * mutation's authoritative outcome (applied or permanently rejected), forwarded
  * from the host over the mirror. Wiring mirrors `tab-mirror.test.ts`; the
  * rejecting backend mirrors the engine's `poison-mutations.test.ts`.
@@ -94,7 +94,7 @@ const makeEngine = Effect.gen(function* () {
   return { engine, store };
 });
 
-describe("Mirror.mutateWithAck (#36)", () => {
+describe("Mirror.mutateWithAck", () => {
   it.effect("resolves applied once the host forwards the backend outcome", () =>
     Effect.gen(function* () {
       const { engine, store } = yield* makeEngine;

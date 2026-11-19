@@ -1,5 +1,5 @@
 /**
- * Web Push as a poke carrier, the worker side (#214): a fake `self` dispatches
+ * Web Push as a poke carrier, the worker side: a fake `self` dispatches
  * `push` events to `PushPoke.listen`. A push with the library's marker
  * registers the Background Sync tag (the default) or pulls (`action: "pull"`),
  * once the replica's identity checks out; every other push is left to the
@@ -98,7 +98,7 @@ const makeEngine = (stamp: Identity.Fingerprint) =>
 const outcome = (held: Array<Promise<unknown>>) =>
   awaitPromise(() => held[0] ?? Promise.resolve("nothing held")).pipe(Effect.orDie);
 
-describe("PushPoke.listen (#214)", () => {
+describe("PushPoke.listen", () => {
   it.effect("registers the Background Sync tag for the library's push, by default", () =>
     Effect.gen(function* () {
       const self = fakeScope();

@@ -416,7 +416,7 @@ yield * undo.undo; // replays the `undo` intent
 (`debounceStrategy` / `throttleStrategy` / `queueStrategy`, built on
 `@tanstack/pacer-lite`) — the same concern this section covers, without a pacer
 dependency: `Paced` is ~150 lines over `engine.mutateWithAck` + Effect's own
-`Effect.sleep`/`Fiber.interrupt` (#117).
+`Effect.sleep`/`Fiber.interrupt`.
 
 A high-frequency write source — a text field autosaving per keystroke, a
 slider, a cart-quantity stepper — journals **one mutation per call** by
@@ -460,7 +460,7 @@ identical tradeoff TanStack DB's own debounce/throttle strategies make.
 `coalesce` never loses an edit (everything journals immediately) at the cost
 of those short-lived extra entries.
 
-**Mutation ids move (#249):** the backend requires a client's mutation ids to
+**Mutation ids move:** the backend requires a client's mutation ids to
 arrive without gaps, so compaction renumbers the surviving unpushed entries to
 keep them contiguous. An id from `mutateWithAck` is therefore only a label for
 "now" while the entry is unpushed: its `acknowledged` effect follows it through

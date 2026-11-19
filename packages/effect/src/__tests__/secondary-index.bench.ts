@@ -1,5 +1,5 @@
 /**
- * Secondary-index benchmark (#113): a point-predicate `query` over a 50k-row
+ * Secondary-index benchmark: a point-predicate `query` over a 50k-row
  * collection, indexed vs unindexed — the acceptance criterion is the indexed
  * path dropping from O(n) (`Subset.apply`'s full scan) to O(hits) (index
  * lookup + residual test over just the matches).

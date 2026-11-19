@@ -1,5 +1,5 @@
 /**
- * The read-thunk opt-out (#141): every rune hook that takes a read thunk
+ * The read-thunk opt-out: every rune hook that takes a read thunk
  * (`useQuery`, `useConnection`, `useNamedQuery`, `useAggregate`,
  * `useAggregateGrouped`) treats `undefined` as "no read right now". No
  * window is registered and no request is issued, and the hook's `current`
@@ -9,7 +9,7 @@
  * Assertions go through `engine.activeSubscriptions` (the ledger) and
  * recorded `transport.pull` requests, never the rendered DOM alone: a test
  * that only checks the DOM would pass while the window stayed registered,
- * which is the entire bug (#141's northwind/realworld `?? ""` sentinels).
+ * which is the entire bug (northwind/realworld `?? ""` sentinels).
  */
 import { afterEach, describe, expect, it } from "vite-plus/test";
 import { mount, unmount } from "svelte";
@@ -32,7 +32,7 @@ afterEach(() => {
   document.body.innerHTML = "";
 });
 
-describe("read-thunk opt-out (#141)", () => {
+describe("read-thunk opt-out", () => {
   it("useQuery: undefined registers no window and issues no request; Initial is distinguishable from an empty Success", async () => {
     const { runtime, pulls } = makeCountingClientRuntime();
     // A row that WOULD match once subscribed — proves the opted-out hook

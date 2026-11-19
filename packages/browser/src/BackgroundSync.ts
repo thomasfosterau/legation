@@ -1,7 +1,7 @@
 /**
  * BackgroundSync
  *
- * Flush the journal after the tab is gone (#213). `BrowserConnectivity`
+ * Flush the journal after the tab is gone. `BrowserConnectivity`
  * covers every case where a page is open — `online`/`offline`, and a
  * return-to-visible as a poke — but by construction none of those fire when
  * there is no page. A write journaled offline and then left behind by a
@@ -49,8 +49,8 @@
  * Online, Chromium fires a fresh registration's `sync` event almost at once,
  * and the flush is a direct `push`. Registering after every mutation would
  * therefore give every online write its own push — bypassing the sync loop's
- * `pushDebounce`, and defeating paced compaction (#117), since
- * `dropIfPending` never touches an entry a push has claimed (#246). So the
+ * `pushDebounce`, and defeating paced compaction, since
+ * `dropIfPending` never touches an entry a push has claimed. So the
  * host registers only in the two cases the sync loop cannot cover by itself:
  * a mutation journaled while the worker is **offline**, and a push that
  * **failed terminally** (the engine's retry policy exhausted). Online, the
@@ -76,7 +76,7 @@
  * ## The identity boundary
  *
  * A background flush runs with no page and no user present, so it must not
- * push a journal that belongs to a superseded identity (#212). Two layers
+ * push a journal that belongs to a superseded identity. Two layers
  * guarantee that:
  *
  * - **Quarantine is structural.** A reset moves the superseded identity's
@@ -286,7 +286,7 @@ export interface RegisterOnJournalOptions extends RegisterOptions {
  *
  * Never on an online mutation: the sync loop drains those, debounced and
  * compacted, and an online registration would fire `sync` at once and push
- * each write on its own (#246). Chromium only accepts a registration from a
+ * each write on its own. Chromium only accepts a registration from a
  * worker while a window of the origin is open; a refusal is a debug line.
  */
 export const registerOnJournal = (
@@ -366,7 +366,7 @@ export interface FlushOptions {
  * Flush `engine`'s journal through the ordinary push path, behind the
  * identity check. A journal larger than half the engine's unpulled bound goes
  * in chunks with a pull before each chunk after the first, so a flush may
- * pull (#429); a smaller journal is pushed without pulling. Fails — so the
+ * pull; a smaller journal is pushed without pulling. Fails — so the
  * `sync` event rejects and the browser reschedules — on a transport or store
  * failure, with the journal intact. A pull between chunks that fails is a
  * transport failure of the same kind, so the flush never reports `Flushed`

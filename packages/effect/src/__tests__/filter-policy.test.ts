@@ -1,5 +1,5 @@
 /**
- * The filterable set (ADR-0028 rule d, #154): declared on the Node with
+ * The filterable set (ADR-0028 rule d): declared on the Node with
  * `id` / one-edge key defaults and schema-derived literal kinds, carried on
  * the Collection, and enforced by `authorize` on pull and read before
  * `Backend.evaluate` — while the auth filter's own predicate and a named
@@ -413,7 +413,7 @@ describe("FilterPolicy: authorize", () => {
         products({ where: Predicate.eq("rating", 5) }),
         "server"
       );
-      // `allowAll` is the `AllowAll` scope (#205): the subset passes unnarrowed.
+      // `allowAll` is the `AllowAll` scope: the subset passes unnarrowed.
       expect(admitted.where).toEqual(Predicate.eq("rating", 5));
     })
   );
@@ -436,7 +436,7 @@ describe("FilterPolicy: authorize", () => {
 
   it.effect("a declared identity is what the filter policy admits, not the literal id", () =>
     Effect.gen(function* () {
-      // `profiles` is identified by `username` (#144), so the natural-key read
+      // `profiles` is identified by `username`, so the natural-key read
       // the graph exists to enable must pass the authorization boundary with
       // no `filterable` / `sortable` declaration of its own.
       const Profile = Node.make("profiles", {

@@ -56,7 +56,7 @@ describe("ClientStore.makeKeyValue", () => {
   });
 
   layer(KeyValueStore.layerMemory)((scoped) => {
-    scoped.effect("reads and raises the counters durably, never lowering one (#271)", () =>
+    scoped.effect("reads and raises the counters durably, never lowering one", () =>
       Effect.gen(function* () {
         const first = yield* ClientStoreModule.makeKeyValue();
         yield* first.appendMutation(mutation(yield* first.nextMutationId("c1")));
@@ -132,8 +132,8 @@ describe("ClientStore.makeKeyValue", () => {
           yield* store.appendMutation({ ...mutation(1), clientId: "c2" });
 
           // Drop the middle entry only — a non-prefix id set `acknowledge` can't
-          // express. The survivor behind it is renumbered so the ids stay gap-free
-          // (#249), and the other client's entries are untouched.
+          // express. The survivor behind it is renumbered so the ids stay gap-free,
+          //and the other client's entries are untouched.
           const result = yield* store.compactPending("c1", [2]);
           expect(result).toEqual({ dropped: [2], renumbered: [{ from: 3, to: 2 }] });
           const pending = yield* store.pendingMutations;
@@ -338,7 +338,7 @@ const onDisk = (kv: Faulty) => {
   return { index, withBody };
 };
 
-describeWrapped("KeyValue journal compaction is crash-safe (#249)", (it) => {
+describeWrapped("KeyValue journal compaction is crash-safe", (it) => {
   /** The compaction under test: drop 2 and 4 from 1..5, leaving 1,3,5 renumbered 1,2,3. */
   const EXPECTED = {
     dropped: [2, 4],
@@ -363,7 +363,7 @@ describeWrapped("KeyValue journal compaction is crash-safe (#249)", (it) => {
           kv.budget.writes = Number.POSITIVE_INFINITY;
 
           // Once the intent is durable the compaction is committed: the caller
-          // is told the renumbering even though applying it failed (#249 B1),
+          // is told the renumbering even though applying it failed,
           // so it can move everything it keyed by the old ids.
           Exit.match(exit, {
             onSuccess: (renumbering) => expect(renumbering, `writes=${writes}`).toEqual(EXPECTED),
@@ -482,7 +482,7 @@ describeWrapped("KeyValue journal compaction is crash-safe (#249)", (it) => {
   );
 });
 
-describeWrapped("KeyValue acknowledge leaves no index entry without a body (#294)", (it) => {
+describeWrapped("KeyValue acknowledge leaves no index entry without a body", (it) => {
   /** c1 holds 1..5 and c2 holds 1..2; the acknowledgement under test is c1 up to 3. */
   const seededTwoClients = Effect.gen(function* () {
     const { kv, first } = yield* seeded(5);
@@ -530,7 +530,7 @@ describeWrapped("KeyValue acknowledge leaves no index entry without a body (#294
         ).toContainEqual(c1);
         expect(c2, label).toEqual([1, 2]);
 
-        // The pending count is read from the index alone (#260).
+        // The pending count is read from the index alone.
         restarted.reads.length = 0;
         yield* store.pendingCount;
         expect(
@@ -539,7 +539,7 @@ describeWrapped("KeyValue acknowledge leaves no index entry without a body (#294
         ).toEqual([]);
 
         // No acknowledged id is reissued, and a compaction no longer trips
-        // over a missing body (#249 N-d).
+        // over a missing body.
         const next = yield* store.appendNext({
           clientId: "c1",
           mutator: "noop",

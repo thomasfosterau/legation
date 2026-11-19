@@ -340,7 +340,7 @@ const writeOf = (
 };
 
 /**
- * Refuse args whose `type` is not the mutation's own (#529): a `notes/create`
+ * Refuse args whose `type` is not the mutation's own: a `notes/create`
  * naming `secrets` would otherwise write a type the mutation's name, which the
  * server authorised, never covered. `JsonApiBackend` reports the refusal as
  * invalid args, as it does args that do not decode.

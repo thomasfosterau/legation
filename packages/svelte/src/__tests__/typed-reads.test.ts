@@ -1,5 +1,5 @@
 /**
- * Typed reads through the rune hooks (#140), in a program that registers no
+ * Typed reads through the rune hooks, in a program that registers no
  * graph: `useQuery` / `useAnswer` / `useConnection` accept any read, literal or dynamic,
  * and resolve it to the untyped row — never a compile error. (With a graph
  * registered, the examples' `svelte-check` runs are the typed half: their
@@ -35,7 +35,7 @@ describe("typed reads, unregistered", () => {
       >();
     }));
 
-  it("types useAnswer's rows as useQuery's, beside the completeness (#653)", () =>
+  it("types useAnswer's rows as useQuery's, beside the completeness", () =>
     compileOnly(() => {
       const answer = useAnswer(() => allTodos);
       expectTypeOf(answer).toEqualTypeOf<Live<Client.Answer<typeof allTodos>>>();

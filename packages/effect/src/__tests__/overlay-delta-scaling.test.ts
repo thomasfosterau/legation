@@ -1,5 +1,5 @@
 /**
- * CI-checkable proof of #109's acceptance-criteria benchmark claim ("per-
+ * CI-checkable proof of the overlay benchmark claim ("per-
  * mutation cost proportional to rows touched, not collection size × journal
  * length"): a `store.listRows` call is the one operation whose cost scales
  * with collection size (`ClientStore.listRows` reads every row of a
@@ -69,7 +69,7 @@ const makeCountedClient = () =>
     return { engine, listRowsCount };
   });
 
-describe("overlay delta-maintenance scaling (#109)", () => {
+describe("overlay delta-maintenance scaling", () => {
   it.live(
     `a ${MUTATIONS}-mutation burst over ${ROWS} rows with ${LIVE_QUERIES} live queries costs zero further collection scans once warm`,
     () =>
@@ -105,14 +105,14 @@ describe("overlay delta-maintenance scaling (#109)", () => {
           { concurrency: 1, discard: true }
         );
 
-        // Every mutate patched the already-warm cache in place (#109): no
+        // Every mutate patched the already-warm cache in place: no
         // mutate re-scanned the 10k-row collection, regardless of the
         // growing journal or how many live queries were watching.
         expect(yield* Ref.get(listRowsCount)).toBe(0);
       }),
     // The seed is a fixed 10k mutates of CPU-bound work: about 2 s on the
     // 4-core host it was measured on, but 12-25 s with six busy loops added
-    // to compete for the cores (#277). The assertion counts scans, which
+    // to compete for the cores. The assertion counts scans, which
     // wall-clock time cannot change, so the timeout only has to bound a hang.
     60_000
   );

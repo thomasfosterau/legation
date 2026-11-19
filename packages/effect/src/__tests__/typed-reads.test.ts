@@ -1,5 +1,5 @@
 /**
- * Typed reads (#140): a read declared `as const satisfies Query.Read` keeps its
+ * Typed reads: a read declared `as const satisfies Query.Read` keeps its
  * literal collection, include keys and order tokens; `Client.query` /
  * `Client.observe` (and `answer` / `observeAnswers`) check its names against the node graph and type its rows
  * from it (`Client.ResolvedRow`). A read the graph cannot describe statically
@@ -94,7 +94,7 @@ const compileOnly = (assertions: () => void): void => {
   expect(assertions).toBeTypeOf("function");
 };
 
-describe("typed reads (#140)", () => {
+describe("typed reads", () => {
   it("as const satisfies Query.Read keeps the literal collection, include keys and order", () => {
     expectTypeOf(allProducts.collection).toEqualTypeOf<"products">();
     expectTypeOf(allProducts.include).toEqualTypeOf<{
@@ -164,7 +164,7 @@ describe("typed reads (#140)", () => {
       >();
     }));
 
-  it("answer and observeAnswers type their rows as query does, beside the completeness (#653)", () =>
+  it("answer and observeAnswers type their rows as query does, beside the completeness", () =>
     compileOnly(() => {
       const answer = valueOf(client.answer(allProducts));
       expectTypeOf(answer).toEqualTypeOf<Client.Answer<typeof allProducts, Graph>>();
@@ -183,7 +183,7 @@ describe("typed reads (#140)", () => {
       >();
     }));
 
-  it("answer and observeAnswers reject a misnamed read as query does (#653)", () =>
+  it("answer and observeAnswers reject a misnamed read as query does", () =>
     compileOnly(() => {
       // @ts-expect-error "sellr" is not an edge of products
       void client.answer({ collection: "products", include: { sellr: true } });

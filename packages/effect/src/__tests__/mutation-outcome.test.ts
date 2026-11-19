@@ -1,5 +1,5 @@
 /**
- * Per-mutation outcome surface (#36): `mutateWithAck` returns a handle whose
+ * Per-mutation outcome surface: `mutateWithAck` returns a handle whose
  * `acknowledged` effect resolves with the mutation's authoritative outcome
  * (applied or permanently rejected), `mutationEvents` reports the lifecycle,
  * pending acknowledgements are interrupted on scope close, and plain `mutate`
@@ -85,7 +85,7 @@ const makeEngine = (handler: ServerHandler, store: ClientStore) =>
     )
   );
 
-describe("per-mutation outcome (#36)", () => {
+describe("per-mutation outcome", () => {
   it.effect("acknowledged resolves applied after push for a good mutation", () =>
     Effect.gen(function* () {
       const handler = yield* makeServer;

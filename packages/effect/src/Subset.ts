@@ -216,7 +216,7 @@ const compareValues = (left: unknown, right: unknown): number => {
  * first, then row id ascending as a tie-break. The id tie-break is what
  * makes this a genuine total order even for an empty `orderBy` (every row
  * would otherwise tie) — `LiveView` relies on that to locate a delta's row
- * in O(log n) instead of scanning every same-key row (issue #112). Stable
+ * in O(log n) instead of scanning every same-key row. Stable
  * across the same `orderBy`, so it can both sort a set from scratch
  * (`sortFiltered`) and place one row incrementally (`LiveView`).
  *
@@ -277,7 +277,7 @@ export const apply = <R extends Row>(rows: ReadonlyArray<R>, subset: Subset): Re
   window(sortFiltered(rows, subset), subset);
 
 /**
- * {@link apply}, with the subset's **total** (#210): how many rows match its
+ * {@link apply}, with the subset's **total**: how many rows match its
  * `where`, whatever its `orderBy`, `cursor` and `limit`. The window's rows
  * are cut from exactly that set, so a backend that filters in memory has the
  * total for free.
@@ -298,7 +298,7 @@ export const unwindowed = (subset: Subset): Subset => ({
   cursor: undefined,
 });
 
-// ─── Indexed evaluation (issue #113) ─────────────────────────────────────────
+// ─── Indexed evaluation ─────────────────────────────────────────
 //
 // Same semantics as `sortFiltered`/`apply`, but over an id-keyed row map with
 // an optional `Index.CollectionIndex` in front of the filter step: an

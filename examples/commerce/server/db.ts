@@ -50,7 +50,7 @@ export const makeExecutor = (sql: SqlClient): SqlBackend.SqlExecutor => {
 // Postgres deployment declares them `COLLATE "C"` (`id TEXT COLLATE "C"
 // PRIMARY KEY`, `createdAt TEXT COLLATE "C" NOT NULL`, …). `NOCASE` is never
 // an option for such a column. The compilers emit an explicit collation on
-// every text comparison regardless (#156), so the schema rule costs index
+// every text comparison regardless, so the schema rule costs index
 // use, not correctness, when it is missed.
 const DDL: ReadonlyArray<string> = [
   `CREATE TABLE IF NOT EXISTS categories (

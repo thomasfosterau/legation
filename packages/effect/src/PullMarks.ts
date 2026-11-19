@@ -2,7 +2,7 @@
  * PullMarks
  *
  * Whether a registration's windows have their rows in the replica yet
- * (ADR-0029 section 3, #426). Marks are kept **per window**: each subset an
+ * (ADR-0029 section 3). Marks are kept **per window**: each subset an
  * engine is asked to hold gets its own mark, taken when it is first held.
  * A window is **pulled** once a pull numbered above the engine's count at
  * that moment has applied: a pull already in flight may predate it, so it
@@ -36,7 +36,7 @@ interface Window {
   /**
    * The engine's `started` count when the window was first held; absent until then.
    * A window held by several registrations keeps the mark of its first hold: it is
-   * one engine window, so one pull marks it for all of them (N1, #426).
+   * one engine window, so one pull marks it for all of them (N1).
    */
   readonly since: number | undefined;
 }

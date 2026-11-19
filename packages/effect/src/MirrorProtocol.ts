@@ -51,7 +51,7 @@ export const EdgeSelect = Schema.Struct({
 /** The type {@link EdgeSelect} decodes to. */
 export type EdgeSelect = typeof EdgeSelect.Type;
 
-/** Wire codec for one {@link MutationState.MutationState} entry (#116). */
+/** Wire codec for one {@link MutationState.MutationState} entry. */
 export const MutationStateEntry = Schema.Struct({
   mutationId: Schema.Number,
   mutator: Schema.String,
@@ -73,7 +73,7 @@ export const namedKey = (name: string, args: unknown): string =>
 
 /**
  * The broadcast key {@link ClientEngine.ClientEngine.mutationStates} is
- * mirrored under (#116) — a singleton, unparameterized registration (unlike
+ * mirrored under — a singleton, unparameterized registration (unlike
  * subsets/named queries, there is exactly one mutation-state map per engine).
  */
 export const MUTATION_STATES_KEY = "mutationStates";
@@ -94,11 +94,11 @@ export const relatedKey = (
   return `related:${collection}:${Subset.hash(subset)}:${Arr.sort(parts, Order.String).join("+")}`;
 };
 
-// ─── Enhanced form submits (#536) ─────────────────────────────────────────────
+// ─── Enhanced form submits ─────────────────────────────────────────────
 
 /**
  * The reserved mutator name an enhanced form submit's begin travels under
- * (ADR-0030 #215 §4, #536). A mirror asks its host to begin a form mutation
+ * (ADR-0030 §4). A mirror asks its host to begin a form mutation
  * with a `Mutate` naming this mutator, its args a {@link FormMutationBegin}.
  * A host that knows it answers `FormMutationBegun` or `FormMutationFailed`
  * and journals nothing. It travels as a `Mutate`, not a tag of its own, so a
@@ -142,7 +142,7 @@ export type MirrorMessage =
       readonly _tag: "Mutate";
       readonly requestId: number;
       /**
-       * The requesting mirror (#546). Its replies echo it, so a mirror ignores a
+       * The requesting mirror. Its replies echo it, so a mirror ignores a
        * reply to another tab's request of the same `requestId`. Absent from a
        * mirror that predates it.
        */
@@ -180,7 +180,7 @@ export type MirrorMessage =
       readonly edges: ReadonlyArray<Related.EdgeSelect>;
     }
   /**
-   * A URL-keyed subscription (ADR-0029 section 2, #159) from a party with
+   * A URL-keyed subscription (ADR-0029 section 2) from a party with
    * no `Client` of its own — a page posting on the channel. The host parses
    * the URL through its `UrlReads`, and registers the read's root window
    * and edge windows under `mirrorId` exactly as a mirror's `Subscribe` and
@@ -195,14 +195,14 @@ export type MirrorMessage =
       readonly _tag: "Read";
       readonly requestId: number;
       /**
-       * The requesting mirror (#546). Its replies echo it, so a mirror ignores a
+       * The requesting mirror. Its replies echo it, so a mirror ignores a
        * reply to another tab's request of the same `requestId`. Absent from a
        * mirror that predates it.
        */
       readonly mirrorId?: string;
       readonly subsets: ReadonlyArray<Subset.Subset>;
     }
-  /** Register interest in the mutation-state map (#116); see {@link MUTATION_STATES_KEY}. */
+  /** Register interest in the mutation-state map; see {@link MUTATION_STATES_KEY}. */
   | { readonly _tag: "SubscribeMutationStates"; readonly mirrorId: string }
   | { readonly _tag: "UnsubscribeMutationStates"; readonly mirrorId: string }
   /** A mirror leaving: release every subscription it held. */
@@ -211,7 +211,7 @@ export type MirrorMessage =
   | { readonly _tag: "Heartbeat"; readonly mirrorId: string }
   /**
    * End an enhanced form submission begun with a {@link FORM_MUTATION_MUTATOR}
-   * `Mutate` (#536): `ruling` settles it on the form action's receipt, and its
+   * `Mutate`: `ruling` settles it on the form action's receipt, and its
    * absence abandons it. `requestId` is the begin's. Answered by
    * `FormMutationEnded`, also when the host no longer holds the entry.
    */
@@ -222,7 +222,7 @@ export type MirrorMessage =
       readonly ruling?: ClientEngine.FormRuling;
     }
   /**
-   * A host request (ADR-0021 amendment, #146, #136): ask the host for what
+   * A host request (ADR-0021 amendment): ask the host for what
    * the request kind named by `kind` serves, with `payload` that kind's
    * encoded request. `requestId` is unique per mirror. Answered by one or
    * more `HostResponse`s addressed to `mirrorId`; a host that predates the
@@ -350,7 +350,7 @@ export type HostMessage =
       readonly _tag: "MutateAck";
       readonly requestId: number;
       /**
-       * The mirror the request came from (#546), echoed from the request. A
+       * The mirror the request came from, echoed from the request. A
        * mirror ignores a reply addressed to another; a host that predates it
        * sends none, and the reply is taken by `requestId` alone.
        */
@@ -360,7 +360,7 @@ export type HostMessage =
       readonly _tag: "MutateError";
       readonly requestId: number;
       /**
-       * The mirror the request came from (#546), echoed from the request. A
+       * The mirror the request came from, echoed from the request. A
        * mirror ignores a reply addressed to another; a host that predates it
        * sends none, and the reply is taken by `requestId` alone.
        */
@@ -376,7 +376,7 @@ export type HostMessage =
       readonly _tag: "MutateSettled";
       readonly requestId: number;
       /**
-       * The mirror the request came from (#546), echoed from the request. A
+       * The mirror the request came from, echoed from the request. A
        * mirror ignores a reply addressed to another; a host that predates it
        * sends none, and the reply is taken by `requestId` alone.
        */
@@ -401,7 +401,7 @@ export type HostMessage =
       readonly _tag: "ReadResult";
       readonly requestId: number;
       /**
-       * The mirror the request came from (#546), echoed from the request. A
+       * The mirror the request came from, echoed from the request. A
        * mirror ignores a reply addressed to another; a host that predates it
        * sends none, and the reply is taken by `requestId` alone.
        */
@@ -414,13 +414,13 @@ export type HostMessage =
       /** Set instead of rows when the host could not serve the read. */
       readonly error?: string;
     }
-  /** The whole mutation-state map, broadcast on every fold (#116). */
+  /** The whole mutation-state map, broadcast on every fold. */
   | {
       readonly _tag: "MutationStatesUpdate";
       readonly states: ReadonlyArray<MutationState.MutationState>;
     }
   /**
-   * The pulled summaries of the host's registrations (#426): per key (a
+   * The pulled summaries of the host's registrations: per key (a
    * `Subscribe`'s subset hash, or a `SubscribeRelated`'s {@link relatedKey}),
    * each window the registration holds with whether its rows are in the
    * replica. A mirror answers a covered read locally only when the windows
@@ -436,8 +436,8 @@ export type HostMessage =
       readonly registrations: ReadonlyArray<PulledRegistration>;
     }
   /**
-   * A {@link FORM_MUTATION_MUTATOR} begin overlaid under its form client
-   * (#536). The form replies carry the begin's `mirrorId` as well as its
+   * A {@link FORM_MUTATION_MUTATOR} begin overlaid under its form client.
+   * The form replies carry the begin's `mirrorId` as well as its
    * `requestId`: host messages are broadcast to every mirror, and each
    * mirror numbers its requests from zero, so a `requestId` alone could
    * complete another tab's request.
@@ -484,7 +484,7 @@ export type HostFailureReason = "UnknownKind" | "InvalidRequest" | "Failed";
 
 /**
  * What one `HostResponse` carries: a single-reply kind's `Value` (which ends
- * the request), a streaming kind's `Started` (the host accepted it, #628),
+ * the request), a streaming kind's `Started` (the host accepted it),
  * `Item` (more follow) or `End`, or a `Failure` (which ends the request).
  * `value` is in the kind's encoded response form.
  *
@@ -637,7 +637,7 @@ export const relatedUpdate = (
   rows: rows.map((row) => ({ id: row.id, value: row.value, related: row.related })),
 });
 
-/** Build a MutationStatesUpdate from the engine's current mutation-state map (#116). */
+/** Build a MutationStatesUpdate from the engine's current mutation-state map. */
 export const mutationStatesUpdate = (states: MutationState.MutationStateMap): HostMessage => ({
   _tag: "MutationStatesUpdate",
   states: [...HashMap.values(states)],

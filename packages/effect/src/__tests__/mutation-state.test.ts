@@ -1,5 +1,5 @@
 /**
- * MutationState (#116): the pure fold — seed from the journal, fold
+ * MutationState: the pure fold — seed from the journal, fold
  * `journaled`/`acknowledged`/`rejected` transitions, and bound terminal
  * retention so a mutation storm cannot grow the map without limit. Backed by
  * `HashMap` (not the native `Map`) so folding one entry stays `O(log N)`
@@ -24,7 +24,7 @@ const mutation = (mutationId: number, mutator = "todo/set"): Mutation => ({
 const get = (map: MutationState.MutationStateMap, id: number) =>
   Option.getOrUndefined(HashMap.get(map, id));
 
-describe("MutationState (#116)", () => {
+describe("MutationState", () => {
   it("seed reflects every pending journal entry as pending", () => {
     const map = MutationState.seed([mutation(1), mutation(2, "todo/remove")]);
     expect(HashMap.size(map)).toBe(2);
@@ -82,7 +82,7 @@ describe("MutationState (#116)", () => {
     expect(MutationState.rejected(map, 999, "x", 1)).toBe(map);
   });
 
-  it("a settled entry never moves: a later outcome is a no-op (#364)", () => {
+  it("a settled entry never moves: a later outcome is a no-op", () => {
     const acknowledged = MutationState.acknowledged(MutationState.seed([mutation(1)]), 1, 2000);
     expect(MutationState.rejected(acknowledged, 1, "late", 3000)).toBe(acknowledged);
     expect(MutationState.dropped(acknowledged, 1, 3000)).toBe(acknowledged);

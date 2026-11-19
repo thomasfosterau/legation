@@ -1,16 +1,5 @@
-# pnpm workspace — `@thomasfosterau/legation`, the `@thomasfosterau/legation-*` packages and the example
-# apps that drive them end to end.
-#
-# The `catalog:` protocol pins versions that MUST be singletons across the
-# workspace. Effect especially: two copies of `effect` break Context / Layer /
-# Schema identity at runtime, so every package references `catalog:`.
-#
-# EVERY external dependency version lives here — package.json files reference
-# only `catalog:` / `catalog:peers` (or `workspace:` for internal packages).
-# `catalogMode: strict` makes `pnpm add` enforce this at add time. After
-# editing this catalog, ALWAYS run `pnpm install` and commit the regenerated
-# pnpm-lock.yaml — a stale lockfile fails CI at once with
-# ERR_PNPM_LOCKFILE_CONFIG_MISMATCH.
+# Every external version lives here; package.json files reference only
+# `catalog:`, a named catalog or `workspace:`.
 packages:
   - packages/*
   - examples/*
@@ -18,175 +7,111 @@ packages:
 catalogMode: strict
 
 catalog:
-  # Alchemy's Cloudflare provider and the engine it runs on, one release train
-  # at exact versions (each `@alchemy.run/*` package pins `alchemy` exactly).
-  # legation-alchemy-cloudflare builds on the provider's Effect-native services
-  # (ADR-0034). 2.0.0-beta.87 is the release the apps pin; it requires
-  # `effect ^4.1.4`, hence `catalogs.alchemy-peers` below.
+  # One release train at exact versions. 2.0.0-beta.87 is the release the apps
+  # pin; it requires `effect ^4.1.4` (see `catalogs.alchemy-peers`).
   alchemy: 2.0.0-beta.87
   "@alchemy.run/cloudflare": 2.0.0-beta.87
-  # The repository's own GitHub configuration (`stacks/github.ts`), on the
-  # same release train.
+  # The repository's GitHub settings (`stacks/github.ts`).
   "@alchemy.run/github": 2.0.0-beta.87
   "@arethetypeswrong/cli": ^0.18.5
   "@changesets/cli": ^3.0.3
-  # Dev only: the declarations of `@alchemy.run/cloudflare` import the workerd
-  # types from it, which the provider declares only as a devDependency.
+  # The workerd types `@alchemy.run/cloudflare`'s declarations import.
   "@cloudflare/workers-types": ^5.20261115.1
-  # The Effect dev pin: `effect` and every `@effect/*` runtime package move
-  # together, at one exact version (CONTRIBUTING.md "Effect version
-  # upgrades"). The published floor is `catalogs.peers` below, never this.
-  # `vp run ci:floor` (scripts/effect-floor.mjs) rewrites exactly these entries
-  # to the floor (`@effect/tsgo` and `@effect/language-service` excepted).
+  # The Effect dev pin: `effect` and every `@effect/*` runtime package at one
+  # version. `vp run ci:floor` (scripts/effect-floor.mjs) rewrites these
+  # entries to a published floor.
   effect: 4.1.4
   "@effect/platform-browser": 4.1.4
   "@effect/platform-node": 4.1.4
-  # Not a direct dependency: the `overrides` entry below holds this transitive
-  # dependency of `@effect/platform-node` (which ranges it with a caret) at the
-  # pin, so the lockfile carries one Effect line.
+  # Transitive (of `@effect/platform-node` and `@alchemy.run/cloudflare`),
+  # held at the pin by `overrides` so the lockfile has one Effect line.
   "@effect/platform-node-shared": 4.1.4
-  # Not a direct dependency either: `@alchemy.run/cloudflare` depends on it
-  # (`^4.1.0`), and the `overrides` entry below holds it at the pin.
   "@effect/sql-d1": 4.1.4
   "@effect/sql-pg": 4.1.4
   "@effect/sql-sqlite-node": 4.1.4
   "@effect/vitest": 4.1.4
   "@effect/language-service": ^0.87.3
-  # Effect Language Service as a native (TypeScript-Go) binary — the TS7 side
-  # of the 6/7 split. `effect-tsgo patch` overwrites the native `tsc` binary
-  # (and the `oxlint` vite-plus carries) with an Effect-patched build matched
-  # by gitHead, so this pins in lockstep with `@typescript/native` below and
-  # with the `oxlint` / `oxlint-tsgolint` that `vite-plus` pulls in: 0.69.0
-  # supports typescript 7.0.2, oxlint 1.91.0 – 1.93.0 and tsgolint
-  # 7.0.2005 – 7.0.2007; vite-plus 1.6.0 carries oxlint 1.93.0 and tsgolint 7.0.2006.
-  # Each @effect/tsgo release hard-errors (UnsupportedTargetPackageVersionError)
-  # on any other component version, failing `pnpm install` itself. Read the
-  # `components` table in node_modules/@effect/tsgo/dist/effect-tsgo.cjs
-  # before bumping any of the three.
+  # `effect-tsgo patch` replaces the native `tsc` and vite-plus's oxlint /
+  # tsgolint with Effect-patched builds and fails `pnpm install` on versions
+  # it doesn't support. 0.69.0 supports typescript 7.0.2, oxlint 1.91.0–1.93.0
+  # and tsgolint 7.0.2005–7.0.2007. Check the `components` table in
+  # node_modules/@effect/tsgo/dist/effect-tsgo.cjs before bumping it,
+  # `@typescript/native` or `vite-plus`.
   "@effect/tsgo": 0.69.0
   "@electric-sql/pglite": ^0.5.16
-  # The Effect lint preset (`effect/*` rules, `configs.recommended` in
-  # vite.config.ts). It depends on `effect` exactly, but the `overrides`
-  # singleton below forces it onto the catalog's copy, which it lints fine on.
-  # Ungrouped in Dependabot: it ranges `@oxlint/plugins` `^1.85.0`, so no
-  # oxlint pins it.
   "@enfect/oxlint": 0.10.0
   "@sveltejs/adapter-node": ^6.0.4
   "@sveltejs/adapter-static": ^4.0.1
   "@sveltejs/kit": ^3.3.1
   "@sveltejs/vite-plugin-svelte": ^7.3.1
-  # legation-jsonapi's dev pin (a peer there, `catalogs.jsonapi-peers`). The
-  # example apps that use it take it from here too.
   "@thomasfosterau/effect-jsonapi": ^0.22.1
-  # legation-auth's dev pin (a peer there, `catalogs.auth-peers`): the newest
-  # 0.5.x. Its own `@thomasfosterau/effect-jsonapi` peer is optional and
-  # legation-auth does not use its JSON:API surface.
   "@thomasfosterau/effect-auth": 0.5.2
-  # A runtime dependency of a published package (legation-svelte): `pnpm pack`
-  # rewrites `catalog:` to this range in the packed manifest.
   "@thomasfosterau/effect-svelte": ^0.7.0
   "@types/better-sqlite3": ^9.6.0
   "@types/node": ^26.6.6
-  # Must equal the vitest that vite-plus bundles (see `vitest` below); vite-plus
-  # refuses to run coverage on a mismatch.
+  # Must equal the vitest vite-plus bundles.
   "@vitest/coverage-v8": 5.1.0
   better-auth: ^1.7.25
   better-sqlite3: ^13.2.0
   fake-indexeddb: ^6.2.8
   fallow: 3.43.2
   jsdom: ^31.0.1
-  # The commerce façade's browser test drives Chromium through it. Pinned
-  # exact: each release expects one Chromium revision
-  # (`playwright-core install chromium` fetches it).
+  # Exact: each release expects one Chromium revision.
   playwright-core: 1.65.1
   publint: ^0.3.25
   svelte: ^5.58.0
   svelte-check: ^4.7.8
-  # TypeScript 6/7 side by side: TS7 (the native Go compiler) ships no JS API
-  # until 7.1, so JS-API consumers (svelte-check, @effect/language-service,
-  # tsdown's declaration bundler) stay on TS6 while native `tsc` builds
-  # nothing and type-checks everything. The alias keeps the TS6 package
-  # importable as `typescript` (bin `tsc6`); `@typescript/native` is TS7 (bin
-  # `tsc`). Pinned exact: @typescript/native's gitHead must match
-  # @effect/tsgo's bundled binary.
+  # TypeScript 6 for JS-API consumers (svelte-check, the language service,
+  # tsdown's declaration bundler; bin `tsc6`) beside the native TypeScript 7
+  # `tsc` that type-checks, whose version must match @effect/tsgo's binary.
   typescript: "npm:@typescript/typescript6@6.0.2"
   "@typescript/native": "npm:typescript@7.0.2"
-  # vite-plus pins `oxlint`, `oxfmt`, `vitest` and the `@vitest/*` packages to
-  # exact versions (1.6.0 → oxlint 1.93.0, oxfmt 0.78.0, oxlint-tsgolint
-  # 7.0.2006, vitest 5.1.0). `vitest` and
-  # `@vitest/coverage-v8` FOLLOW that pin, and `vite` is the same release under
-  # its aliased core package. They move together with `@effect/tsgo` (above).
+  # vite-plus pins oxlint, oxfmt and vitest; `vite` is its aliased core.
   vite-plus: 1.6.0
   vite: npm:@voidzero-dev/vite-plus-core@1.6.0
   vitest: 5.1.0
 
-# Peer ranges the PUBLISHED packages declare: the published floor, a promise
-# to consumers, kept apart from the dev pin above. `pnpm pack` (the release
-# path, scripts/publish.mjs) replaces `catalog:peers` with these ranges in the
-# packed manifest. Never an exact version: an exact published peer makes the
-# package impossible to install beside a library that needs a different
-# release (ADR-0003; `scripts/pack-check.mjs` fails on one). Raising a floor
-# is a `minor` changeset for every package that declares it.
+# The published peer ranges (`pnpm pack` writes them into the tarball). Never
+# exact. `effect` is `^4.0.0` unless a package's own dependency requires more;
+# raising a floor is a `minor` changeset.
 catalogs:
   peers:
-    # The owner's policy: `effect` (and each sibling `@effect/*` peer) is
-    # `^4.0.0`, raised only when a dependency of the package that declares it
-    # requires more, naming that dependency here. Our own code is written to
-    # run on 4.0.0. Nothing here forces more: `@effect/platform-browser`
-    # 4.0.0 peers `effect ^4.0.0`, and `@thomasfosterau/effect-svelte` 0.6.1
-    # (legation-svelte's) peers `effect ^4.0.0`.
     effect: ^4.0.0
     "@effect/platform-browser": ^4.0.0
     svelte: ">=5.40"
     "@sveltejs/kit": ^2.0.0 || ^3.0.0
-  # legation-alchemy-cloudflare alone: `alchemy` and `@alchemy.run/cloudflare`
-  # 2.0.0-beta.87 peer `effect ^4.1.4` (they import Effect 4.1's modules), so
-  # its `effect` floor is 4.1.4. The Alchemy peers are exact: each
-  # `@alchemy.run/*` release pins `alchemy` exactly, and beta.87 is the release
-  # the apps deploy with.
+  # legation-alchemy-cloudflare: Alchemy beta.87 peers `effect ^4.1.4`, and
+  # each `@alchemy.run/*` release pins `alchemy` exactly.
   alchemy-peers:
     effect: ^4.1.4
     alchemy: 2.0.0-beta.87
     "@alchemy.run/cloudflare": 2.0.0-beta.87
-  # legation-auth alone: `@thomasfosterau/effect-auth` 0.5.x peers
-  # `effect ^4.1.0`, so its `effect` floor is 4.1.0. effect-auth is a peer
-  # (the app configures its services, so there must be one copy).
+  # legation-auth: effect-auth 0.5.x peers `effect ^4.1.0`.
   auth-peers:
     effect: ^4.1.0
     "@thomasfosterau/effect-auth": ^0.5.2
-  # legation-jsonapi alone: `@thomasfosterau/effect-jsonapi` 0.22.x peers
-  # `effect ^4.1.0` (its declarations need Effect 4.1's HttpApi types), so its
-  # `effect` floor is 4.1.0. effect-jsonapi is a peer (the app passes its own
-  # resources, documents and errors in, so there must be one copy).
+  # legation-jsonapi: effect-jsonapi 0.22.x peers `effect ^4.1.0`.
   jsonapi-peers:
     effect: ^4.1.0
     "@thomasfosterau/effect-jsonapi": ^0.22.1
 
 overrides:
-  # `effect` MUST be a singleton (see the header): force every resolution to
-  # the catalog version so a hoisting reshuffle cannot introduce a second copy.
+  # `effect` must be a singleton: two copies break Context / Layer / Schema identity.
   effect: "catalog:"
-  # See its catalog entry.
   "@effect/platform-node-shared": "catalog:"
   "@effect/sql-d1": "catalog:"
-  # Vite+'s managed overrides (`vp migrate` writes the `@*` form): every
-  # `vite` resolves to vite-plus's aliased core and every `vitest` to the pin
-  # vite-plus carries. Dependabot cannot bump either key; they follow the
-  # catalog entries.
+  # Vite+'s managed overrides.
   vite@*: "catalog:"
   vitest@*: "catalog:"
 
 nodeLinker: hoisted
 
-# Install scripts are opt-in. better-sqlite3 builds its native binding (the
-# commerce example's server); esbuild and fallow fetch their platform binary.
 allowBuilds:
+  # The commerce example's server.
   better-sqlite3: true
   esbuild: true
   fallow: true
-  # workerd arrives with `@alchemy.run/cloudflare` (its local runtime). Its
-  # postinstall fetches the workerd binary, which nothing here runs: the
-  # Alchemy adapter's tests stub the provider's services in Node.
+  # Nothing here runs workerd; the Alchemy adapter's tests stub the provider.
   workerd: false
 
 peerDependencyRules:
@@ -197,11 +122,7 @@ peerDependencyRules:
     vite: "*"
     vitest: "*"
 
-# Supply-chain delay (owner's policy): hold newly published versions for 8
-# hours (unit: MINUTES) before pnpm will install them. Dependabot's `cooldown`
-# (whole days only) is 1 day, longer than this, so it never proposes a version
-# pnpm would still refuse.
-minimumReleaseAge: 480
+# Hold new versions for 24 hours (minutes); first-party releases are exempt.
+minimumReleaseAge: 1440
 minimumReleaseAgeExclude:
-  # @thomasfosterau/* is first-party — exempt so our own releases install immediately.
   - "@thomasfosterau/*"

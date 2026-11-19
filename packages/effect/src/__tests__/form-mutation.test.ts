@@ -1,10 +1,10 @@
 /**
- * The client half of an enhanced form submit (ADR-0030 #215 §4). The engine
+ * The client half of an enhanced form submit (ADR-0030 §4). The engine
  * overlays the Mutation under the form client's id without journaling it, the
  * form action runs it on the server (`Server.mutate`), and the receipt moves
  * the entry to the unpulled tail. The optimistic effect is released by the
  * pull whose `lastMutationIds` covers the form client, **not** by the action's
- * response (#215's criterion).
+ * response.
  */
 import { describe, expect, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
@@ -115,7 +115,7 @@ const countsOf = (engine: ClientEngineModule.ClientEngine) =>
 
 const form = { clientId: "form-1", mutationId: 1 } as const;
 
-describe("enhanced form submit (ADR-0030 #215 §4)", () => {
+describe("enhanced form submit", () => {
   it.effect("is dropped on acknowledgement (the covering pull), not on the action's response", () =>
     Effect.scoped(
       Effect.gen(function* () {

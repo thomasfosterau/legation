@@ -1,5 +1,5 @@
 /**
- * The platform-compatible IndexedDB key-value seam under {@link IndexedDbClientStore} (#393). Not part of
+ * The platform-compatible IndexedDB key-value seam under {@link IndexedDbClientStore}. Not part of
  * the package's public surface: the store and the tests import it from here, and nothing re-exports it.
  *
  * It opens the platform's database without a version, keeps one connection per layer, and gives the
@@ -24,7 +24,7 @@ import { KeyValueStore } from "effect/persistence";
  * whose records are `{ key, value }`. Both are written here in the same layout,
  * so the store and the atomic batch read one database.
  *
- * The database is opened without a version (#393). The platform's layer opens
+ * The database is opened without a version. The platform's layer opens
  * at version 1, which fails with a `VersionError` on a database a later version
  * created, and that failure kills the layer. Opening at whatever version exists
  * keeps the layer alive. A database without the `entries` store cannot be fixed
@@ -35,7 +35,7 @@ const PLATFORM_DATABASE = "effect_key_value_store";
 const ENTRIES_STORE = "entries";
 
 /**
- * What every call on a store whose database another connection upgraded fails with (#393). The
+ * What every call on a store whose database another connection upgraded fails with. The
  * connection is closed by then, so the call cannot run; the message says why.
  */
 const UPGRADED_MESSAGE =
@@ -180,7 +180,7 @@ const runRequest = <A>(
 
 /**
  * `KeyValueStore.make`'s options with `keys` spelled out, so this module type-checks at both ends
- * of the `effect ^4.0.0` peer (#691). From effect 4.1 `keys` is a required option (and derives
+ * of the `effect ^4.0.0` peer. From effect 4.1 `keys` is a required option (and derives
  * `clearPrefix`); 4.0's `MakeOptions` doesn't declare it, but its `make` spreads the options onto
  * the store, so the store lists its keys at runtime on 4.0 as well.
  */
@@ -252,7 +252,7 @@ const keyValueOver = (connection: Connection): KeyValueStore.KeyValueStore => {
     ).pipe(Effect.map((keys) => keys.filter(P.isString))),
   };
   // Passed as a variable, not a literal: effect 4.0's `MakeOptions` has no `keys`, and only a
-  // literal is checked for excess properties (#691).
+  // literal is checked for excess properties.
   return KeyValueStore.make(options);
 };
 
@@ -348,7 +348,7 @@ export const keyValueLayer = (
   );
 
 /**
- * Every string entry in the entries store, read in one `readonly` transaction (#392): a single
+ * Every string entry in the entries store, read in one `readonly` transaction: a single
  * request, so the records are one state of the database and a batch another connection commits is
  * either wholly in them or wholly absent. The platform store writes only strings for the keys this
  * layer reads, so other values are left out.
@@ -371,8 +371,8 @@ const readEntries = (
   );
 
 /**
- * The atomic batch over the same IndexedDB database as the `KeyValueStore`
- * (#393), with its one-transaction read of the entries (#392). Keys arrive in
+ * The atomic batch over the same IndexedDB database as the `KeyValueStore`,
+ * with its one-transaction read of the entries. Keys arrive in
  * full, namespace prefix included, as the store holds them, so the batch needs
  * no knowledge of the prefix.
  */

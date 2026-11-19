@@ -1,5 +1,5 @@
 /**
- * `PgExecutor` on a real PostgreSQL server (#203): the round-trip budget of a
+ * `PgExecutor` on a real PostgreSQL server: the round-trip budget of a
  * read and a push through the shipped executor, counted at the executor seam.
  * Its conformance run is the PostgreSQL block of `backend-contract.test.ts`,
  * which builds its backend over the same `PgExecutor.make`.
@@ -120,8 +120,8 @@ const withCounted = <A>(
 
 const describePostgres = databaseUrl === undefined ? describe.skip : describe;
 
-describePostgres("PgExecutor round trips (#203)", () => {
-  // `it.live`: the PostgreSQL client and its pool run on real I/O (CONTRIBUTING, "Tests").
+describePostgres("PgExecutor round trips", () => {
+  // `it.live`: the PostgreSQL client and its pool run on real I/O (docs/CONTRIBUTING.md).
   it.live("evaluate costs one statement per subset, whatever its predicate", () =>
     withCounted(databaseUrl ?? "", (backend, counts) =>
       Effect.gen(function* () {
@@ -175,7 +175,7 @@ describePostgres("PgExecutor round trips (#203)", () => {
   );
 
   it.live(
-    "evaluateMany costs one statement for all of a pull's subsets, plus one per Exists node (#505)",
+    "evaluateMany costs one statement for all of a pull's subsets, plus one per Exists node",
     () =>
       withCounted(databaseUrl ?? "", (backend, counts) =>
         Effect.gen(function* () {
@@ -225,7 +225,7 @@ describePostgres("PgExecutor round trips (#203)", () => {
       )
   );
 
-  it.live("evaluateMany gives evaluate's entries for bigint columns beyond 2^53 (#505)", () =>
+  it.live("evaluateMany gives evaluate's entries for bigint columns beyond 2^53", () =>
     withCounted(databaseUrl ?? "", (backend) =>
       Effect.gen(function* () {
         const evaluateMany = backend.evaluateMany;

@@ -1,5 +1,5 @@
 /**
- * MemoryBackend change hints across mutations (ADR-0023, #344): a push's hint
+ * MemoryBackend change hints across mutations (ADR-0023): a push's hint
  * carries the current value of every row it PUT and omits every row it
  * deleted, whichever mutation of the push wrote last. A put in an earlier
  * mutation of the same push must not leave a value behind once a later
@@ -35,7 +35,7 @@ const handlers: Record<string, MemoryBackend.BackendHandler> = {
   },
 };
 
-describe("MemoryBackend change hints across mutations (#344)", () => {
+describe("MemoryBackend change hints across mutations", () => {
   it.effect("a put then a later delete of the same row in one push carries no value", () =>
     Effect.gen(function* () {
       const backend = yield* MemoryBackend.make(handlers);

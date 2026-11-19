@@ -39,8 +39,8 @@ window emits nothing; there's no need to filter empty arrays yourself.
 ### Position and `move`
 
 `enter`, `update`, and `move` carry the row's stable `position` — a
-{@link FractionalIndex} sort key the maintained window has assigned to it
-(issue #112), present whenever the source can compute one. A row whose
+{@link FractionalIndex} sort key the maintained window has assigned to it,
+present whenever the source can compute one. A row whose
 `value` is unchanged but whose neighbors shifted enough to move it (a
 sibling entering/leaving the window re-ranks it) emits `move` — `position`
 and `previousPosition` — instead of being silently dropped as "unchanged."

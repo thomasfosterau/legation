@@ -1,5 +1,5 @@
 /**
- * Paced mutations (#117)
+ * Paced mutations
  *
  * Debounce/throttle/coalesce strategies for rapid mutation intents — a text
  * field autosaving per keystroke, a slider, a cart-quantity stepper — layered
@@ -46,7 +46,7 @@
  * the opposite one: momentarily more journal entries (until the next call's
  * compaction catches up), never a lost edit.
  *
- * ## Compaction renumbers (#249)
+ * ## Compaction renumbers
  *
  * The backends reject a gap in a client's mutation ids (ADR-0008), so dropping
  * a superseded entry is not enough: `dropIfPending` also renumbers the
@@ -123,7 +123,7 @@ const track = (engine: ClientEngine, tracker: Tracker): void => {
  */
 const compact = (engine: ClientEngine, previous: number): Effect.Effect<void, StoreError> =>
   // Uninterruptible: once the engine has renumbered the journal, every tracker
-  // must hear about it, or a later call would drop an unrelated entry (#249).
+  // must hear about it, or a later call would drop an unrelated entry.
   Effect.uninterruptible(
     Effect.gen(function* () {
       const { renumbered } = yield* engine.dropIfPending([previous]);

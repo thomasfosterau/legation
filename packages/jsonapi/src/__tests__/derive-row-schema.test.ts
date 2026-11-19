@@ -1,5 +1,5 @@
 /**
- * `Derive.RowSchema` is a real row codec (#562): it checks a row's `id` and its relationship
+ * `Derive.RowSchema` is a real row codec: it checks a row's `id` and its relationship
  * linkage, and passes the flattened attributes through untouched, so the row `toRow` builds
  * round-trips and a row without an `id` or with malformed linkage is rejected.
  */

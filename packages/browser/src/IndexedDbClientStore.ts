@@ -7,7 +7,7 @@
  * closed tab in main-thread hosting) rehydrates losslessly.
  *
  * A durable replica on a browser is a durable replica on a **device**, which
- * is where the identity boundary earns its keep (#212, CONTEXT.md): a
+ * is where the identity boundary earns its keep (CONTEXT.md): a
  * multi-tenant app on a shared device syncs one user's private rows
  * legitimately — the server's auth filter said they could have them — and
  * then the next user opens the app to the freshest thing on the machine.
@@ -69,7 +69,7 @@ const keyValueOptions = (
  * use {@link layerWindow} where browser globals are available, or provide
  * `IndexedDb` yourself (tests use fake-indexeddb).
  *
- * A pull and a push acknowledgement commit as one IndexedDB transaction (#393),
+ * A pull and a push acknowledgement commit as one IndexedDB transaction,
  * so a durable pull writes its rows once and writes no release record.
  */
 export const layer = (
@@ -97,7 +97,7 @@ export const namespacedPrefix = (identity: Identity.Fingerprint): string =>
   `legation/identity/${Identity.keySegment(identity)}/`;
 
 /**
- * The namespacing alternative to resetting (#212): one replica per identity
+ * The namespacing alternative to resetting: one replica per identity
  * in a single IndexedDB database, keyed by fingerprint.
  *
  * A principal's rows are unreachable from another principal's store because

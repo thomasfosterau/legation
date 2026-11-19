@@ -1,6 +1,6 @@
 /**
  * The SSR snapshot path end to end, in a browser, with the engine in the
- * service worker (#146): the built commerce app (`tests/support/app.ts`)
+ * service worker: the built commerce app (`tests/support/app.ts`)
  * driven with Playwright over the pre-installed Chromium, in a fresh browser
  * context (an empty IndexedDB, no worker installed).
  *
@@ -76,7 +76,7 @@ const answered = async (): Promise<{ readonly hydration: string; readonly cookie
   };
 };
 
-describe("the SSR snapshot hydrates the service worker's replica (#146)", () => {
+describe("the SSR snapshot hydrates the service worker's replica", () => {
   beforeAll(async () => {
     const executablePath = chromium.executablePath();
     if (!existsSync(executablePath)) {

@@ -25,7 +25,7 @@
  * (ADR-0015's denormalized key) — declared as `hintKeys`, so ADR-0023's
  * fine fan-out topics can use the same field.
  *
- * Each node also declares its **filterable set** (ADR-0028, #154): exactly
+ * Each node also declares its **filterable set** (ADR-0028): exactly
  * the fields the reads below filter and order by. `id` and every one-edge
  * key are `eq`/`in` by default; `userId` (a scoping key, not an edge) and
  * the sort fields are declared explicitly. Anything else is unreachable
@@ -361,8 +361,8 @@ export const ProfileUpdateArgs = ProfileSchema;
  * or `POST /jsonapi/orders` with a client id, journaled offline (or on
  * `Prefer: respond-async`) as the graph-derived `{type}/{operation}`. Each has
  * a server half of that name in `server/handlers.ts`, under the same rules
- * (`server/rules.ts`) as the per-resource handlers and the atomic endpoint
- * (#525): a name the server lacked would be a transient failure that aborts
+ * (`server/rules.ts`) as the per-resource handlers and the atomic endpoint:
+ * a name the server lacked would be a transient failure that aborts
  * every later push. A cart line's quantity has no `PATCH` route, so
  * `cartItems/update` is not journaled.
  */

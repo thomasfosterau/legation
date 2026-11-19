@@ -1,5 +1,5 @@
 /**
- * IndexedDB-native ClientStore probe (#158): the measurements behind
+ * IndexedDB-native ClientStore probe: the measurements behind
  * `docs/indexeddb-native-store.md`. Four sections, each printed as a table
  * at load, plus a handful of timed benches:
  *

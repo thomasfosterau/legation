@@ -1,5 +1,5 @@
 /**
- * BackgroundSync (#213): a journal written offline flushes after its tab has
+ * BackgroundSync: a journal written offline flushes after its tab has
  * closed, through the ordinary push path.
  *
  * Every test drives the worker side with a fake `self` — an object with
@@ -15,7 +15,7 @@
  * `rejected` rather than discarded, and a transport failure rejects the
  * event so the browser reschedules it rather than resolving it silently.
  *
- * Registration is gated (#246): only a mutation journaled offline, or a
+ * Registration is gated: only a mutation journaled offline, or a
  * terminally failed push, registers the tag. The coalescing test uses a
  * `SyncManager` that fires `sync` the moment a tag is registered — what
  * Chromium does online — to show online writes still coalesce.
@@ -286,7 +286,7 @@ const uniqueChannel = () => `legation-bg-${crypto.randomUUID()}`;
 
 // ─── Tests ───────────────────────────────────────────────────────────────────
 
-describeWrapped("BackgroundSync (#213)", (it) => {
+describeWrapped("BackgroundSync", (it) => {
   it.live(
     "journal → sync event → push → acknowledgement → overlay drop, composed into ServiceWorkerHost",
     () =>
@@ -398,7 +398,7 @@ describeWrapped("BackgroundSync (#213)", (it) => {
       Effect.gen(function* () {
         const self = fakeScope();
         const listener = listenOn(self);
-        // A bound of 8 splits nine mutations into chunks of four, with a pull before the second (#429).
+        // A bound of 8 splits nine mutations into chunks of four, with a pull before the second.
         const { engine, store, pushes, pullsDown } = yield* makeEngine(
           yield* ClientStore.makeMemory,
           { unpulledLimit: 8, retry: { pull: Schedule.recurs(0) } }
@@ -469,7 +469,7 @@ describeWrapped("BackgroundSync (#213)", (it) => {
     }).pipe(Effect.scoped)
   );
 
-  describe("registration is gated on the journal being unable to drain (#246)", () => {
+  describe("registration is gated on the journal being unable to drain", () => {
     it.live(
       "online writes coalesce into one debounced push; an immediately-firing SyncManager is never asked",
       () =>
@@ -676,7 +676,7 @@ describeWrapped("BackgroundSync (#213)", (it) => {
 });
 
 // A live clock (`excludeTestServices`): the flushes below race the host's real timers.
-describe("BackgroundSync identity boundary (#212)", () => {
+describe("BackgroundSync identity boundary", () => {
   layer(KeyValueStore.layerMemory, { excludeTestServices: true })((scoped) => {
     scoped.effect("a sync event does not push a quarantined journal", () =>
       Effect.gen(function* () {

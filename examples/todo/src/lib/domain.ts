@@ -38,7 +38,7 @@ export type RemoveArgs = typeof RemoveArgs.Type;
 
 const { id: _id, ...todoAttributes } = Todo.fields;
 
-// The filterable set (#154): `activeTodos` filters `done`, `allTodos` orders
+// The filterable set: `activeTodos` filters `done`, `allTodos` orders
 // by `createdAt`; nothing else is reachable from a client.
 export const todos = Node.make("todos", {
   attributes: todoAttributes,

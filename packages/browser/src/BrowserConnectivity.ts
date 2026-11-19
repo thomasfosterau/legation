@@ -1,7 +1,7 @@
 /**
  * BrowserConnectivity
  *
- * Signals belong at the transport seam, not in core (issue #33). This layers
+ * Signals belong at the transport seam, not in core. This layers
  * the browser's connectivity and focus signals onto any `ClientTransport`:
  *
  * - `navigator.onLine` is **combined with the wrapped transport's own status**
@@ -13,7 +13,7 @@
  * - Where there is a `window` (a page), the `online`/`offline` events drive
  *   that signal. A service worker has no `window` and no such events, so there
  *   the signal is a probe instead: `navigator.onLine` is read every
- *   `pollInterval` and a status change is emitted when it flips (#328). The
+ *   `pollInterval` and a status change is emitted when it flips. The
  *   reconnect edge then reaches the sync loop as it would from an event.
  * - `visibilitychange` to visible surfaces a poke ("pull soon"), so returning
  *   to a tab converges it — the browser analogue of TanStack Query's window
@@ -24,7 +24,7 @@
  *
  * `statusChanges` has one addition to the combination above: the reconnect
  * edge. Each navigator `disconnected` → `connected` flip emits `connected`
- * once, whatever the carrier reports, in a worker or a window (#328). The sync
+ * once, whatever the carrier reports, in a worker or a window. The sync
  * loop's push and pull therefore run at once, and a carrier that really is
  * down fails that push and backs off as usual. The next change then emits the
  * combined value again, which may read `disconnected`. `status` is not
@@ -33,7 +33,7 @@
  * reconnect edge it can read `connected` while `status` reads `disconnected`.
  * A connection label should read `status`.
  *
- * Auto-push does not consult this status, by design (#328). A push attempted
+ * Auto-push does not consult this status, by design. A push attempted
  * while `disconnected` goes out anyway: `navigator.onLine` is a hint and can be
  * wrong (in #315 it read `false` while the worker's WebSocket still worked),
  * and a failed push already backs off on its own retry policy. The reconnect
@@ -171,7 +171,7 @@ export const withBrowserConnectivity = (
       // Both sources emit their current value first (the seam's contract), so
       // the combination emits promptly; dedup keeps reconnect triggers calm.
       // The reconnect edge: a navigator flip from `disconnected` to `connected`
-      // emits `connected` even if the carrier reads `disconnected` (#328).
+      // emits `connected` even if the carrier reads `disconnected`.
       statusChanges: Stream.zipLatest(
         SubscriptionRef.changes(status),
         transport.statusChanges

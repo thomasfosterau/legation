@@ -1,5 +1,5 @@
 /**
- * Per-row / per-mutation KeyValueStore layout (#47): confirmed rows live at
+ * Per-row / per-mutation KeyValueStore layout: confirmed rows live at
  * `row/{collection}/{id}` behind a `rowIndex/{collection}`, pending mutations at
  * `journal/{clientId}/{mutationId}` behind a compact `journalIndex`. This suite
  * covers the round-trip, the transparent legacy-blob migration, that
@@ -52,7 +52,7 @@ const countingStore = () => {
   return { store, sets, data };
 };
 
-describe("ClientStore per-row layout (#47)", () => {
+describe("ClientStore per-row layout", () => {
   layer(KeyValueStore.layerMemory)((scoped) => {
     scoped.effect("round-trips rows, journal, counters, and cookie, and rehydrates", () =>
       Effect.gen(function* () {
@@ -161,7 +161,7 @@ describe("ClientStore per-row layout (#47)", () => {
   });
 
   layer(KeyValueStore.layerMemory)((scoped) => {
-    scoped.effect("compactPending (#117) rewrites only the bodies it renumbers (#249)", () =>
+    scoped.effect("compactPending rewrites only the bodies it renumbers", () =>
       Effect.gen(function* () {
         const { store, sets } = countingStore();
         yield* Effect.gen(function* () {

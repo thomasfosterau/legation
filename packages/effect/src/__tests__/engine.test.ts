@@ -58,7 +58,7 @@ const setTodo = Mutator.registry([
 ]);
 
 // A non-idempotent counter: every application adds one, so a double application
-// shows as an extra count. The put-by-id mutators above cannot show it (#286).
+// shows as an extra count. The put-by-id mutators above cannot show it.
 interface Counter {
   readonly id: string;
   readonly n: number;
@@ -318,7 +318,7 @@ const titleOf = (
   id: string
 ) => (rows.find((row) => row.id === id)?.value as Todo | undefined)?.title;
 
-describe("a push acknowledgement keeps the overlay until a pull reports it (#286)", () => {
+describe("a push acknowledgement keeps the overlay until a pull reports it", () => {
   it.live("an observer never sees an acknowledged mutation revert before its pull", () =>
     Effect.gen(function* () {
       const handler = yield* makeServer;
@@ -419,7 +419,7 @@ describe("a push acknowledgement keeps the overlay until a pull reports it (#286
         }
 
         yield* engine.push;
-        // The push goes in chunks with a pull between them (#429): the tail is released as it builds, so it
+        // The push goes in chunks with a pull between them: the tail is released as it builds, so it
         // never passes the bound, and nothing reverts: every acknowledged effect is still in the view.
         expect((yield* store.unpulled).length).toBeLessThanOrEqual(1024);
         const overlaid = yield* engine.query(allTodos);
@@ -432,7 +432,7 @@ describe("a push acknowledgement keeps the overlay until a pull reports it (#286
   );
 });
 
-// The counter, as the engine's view shows it: confirmed row plus overlay (#286).
+// The counter, as the engine's view shows it: confirmed row plus overlay.
 const countersSubset = Subset.make({ collection: "counters" });
 const counterValue = (engine: ClientEngineModule.ClientEngine) =>
   engine
@@ -512,7 +512,7 @@ type ReadPoint = "watermark" | "evaluate" | "rows";
 // For the rows read it parks before the rows are fetched.
 const parkedBackend = (inner: Backend, at: ReadPoint, parking: Parking): Backend => ({
   ...inner,
-  // The pull reads through `evaluate` here, where the park is (#210's counted read is off).
+  // The pull reads through `evaluate` here, where the park is.
   evaluateCounted: undefined,
   lastMutationIds: (context) =>
     inner
@@ -538,7 +538,7 @@ const runUntilFinishedOrStalled = <A, E>(fiber: Fiber.Fiber<A, E>) =>
     return fiber.pollUnsafe();
   });
 
-describe("a push that commits during a pull never double-counts (#286)", () => {
+describe("a push that commits during a pull never double-counts", () => {
   // The pull's watermark and rows must be one snapshot. A push that commits
   // between them would be in the rows but not the watermark, so the client would
   // keep its entry in the tail and replay it over rows that already hold it.
@@ -578,14 +578,14 @@ describe("a push that commits during a pull never double-counts (#286)", () => {
   }
 });
 
-describe("a pull's reveal is atomic with its tail release (#286)", () => {
+describe("a pull's reveal is atomic with its tail release", () => {
   it.effect("a read between the pull's store commit and its copy update sees the true count", () =>
     Effect.gen(function* () {
       const parking = yield* makeParking;
       const server = yield* serverOver(yield* MemoryBackend.make(backendHandlers));
       const inner = yield* ClientStoreModule.makeMemory;
       // The pull parks after the store has committed its confirmed rows and released the acknowledged
-      // tail (one batch on the memory store, #411), before the engine updates its own copy.
+      // tail (one batch on the memory store), before the engine updates its own copy.
       const store: ClientStore = {
         ...inner,
         commitPull: (release) =>
@@ -656,7 +656,7 @@ describe("a pull's reveal is atomic with its tail release (#286)", () => {
   );
 });
 
-describe("a pull's watermark and rows are one snapshot (#286)", () => {
+describe("a pull's watermark and rows are one snapshot", () => {
   it.effect("under writes on every pass, the pull never reports less than its rows carry", () =>
     Effect.gen(function* () {
       const inner = yield* MemoryBackend.make(backendHandlers);
@@ -742,7 +742,7 @@ describe("a pull's watermark and rows are one snapshot (#286)", () => {
           );
           const racing: Backend = {
             ...inner,
-            // The pull reads through `evaluate` here, where the push lands (#210's counted read is off).
+            // The pull reads through `evaluate` here, where the push lands.
             evaluateCounted: undefined,
             lastMutationIds: (context) =>
               inner

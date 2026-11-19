@@ -1,5 +1,5 @@
 /**
- * ReplicaDocuments tests (#164): the replica-side writer over a local view —
+ * ReplicaDocuments tests: the replica-side writer over a local view —
  * a URL parsed and run over the rows the replica holds, serialised by the
  * one `DocumentWriter` — beside the derived REST handler over a
  * `MemoryBackend` holding the same rows, so "same URL, same result"
@@ -158,7 +158,7 @@ const restGet = (rest: RestHandlers.RestHandlers, resource: Resource.Any, url: s
 const bytes = (document: unknown) => JSON.stringify(document);
 
 /**
- * A collection URL's total over this replica (#210): its filter over every row
+ * A collection URL's total over this replica: its filter over every row
  * the replica holds, whatever the page. The replica holds every row here, so
  * this is exact, and the REST handler's `meta.total` must equal it.
  */
@@ -203,7 +203,7 @@ describe("ReplicaDocuments over the replica", () => {
             "/products?include=variants,category&filter[priceCents][gt]=150&sort=-priceCents",
             "/products?sort=name&page[limit]=2",
             "/products?sort=name&page[limit]=2&page[after]=p-1",
-            // Offset pagination (#209): the same "same URL, same result"
+            // Offset pagination: the same "same URL, same result"
             // obligation, for the idiom every audited app actually pages by.
             "/products?sort=name&page[offset]=0&page[limit]=2",
             "/products?sort=name&page[offset]=1&page[limit]=2",

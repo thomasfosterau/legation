@@ -58,7 +58,7 @@ const takeHandle = <A>(
 /**
  * Allocate a bounded, dropping PubSub (shut down with the scope) plus a
  * `publish` that tallies overflows — the backpressure primitive shared by the
- * in-process bus and the memory broker (#44).
+ * in-process bus and the memory broker.
  */
 const droppingHub = <A>(
   capacity?: number
@@ -106,7 +106,7 @@ export const InvalidationBus = Context.Service<InvalidationBus>(
 );
 
 /**
- * In-process bus over a bounded, dropping PubSub (#44).
+ * In-process bus over a bounded, dropping PubSub.
  *
  * Delivery guarantee: the hub is bounded (`dropping` at `capacity`) so a bus
  * consumer that falls behind cannot make the publisher grow the queue without
@@ -245,7 +245,7 @@ export const layerSerialized = (
  * same broker exchanges hints, modelling several instances on one process. The
  * reference broker for tests and the executable shape a real broker mimics.
  *
- * Delivery guarantee (#44): bounded with a `dropping` strategy, matching the
+ * Delivery guarantee: bounded with a `dropping` strategy, matching the
  * in-process bus — a lagging subscriber cannot make a publisher grow the queue
  * without limit. An overflowing publish is dropped and counted in
  * `legation_hints_dropped_total`; the next pull repairs any missed hint

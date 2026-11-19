@@ -1,13 +1,12 @@
 # IndexedDB-native `ClientStore` with per-collection indexes
 
-**This is a design note, not an ADR.** It answers issue #158 (child of the
-façade epic #149): does the durable browser store need to move from a
-`KeyValueStore` layout to IndexedDB object stores with native indexes, and
+**This is a design note, not an ADR.** It answers: does the durable browser
+store need to move from a `KeyValueStore` layout to IndexedDB object stores with native indexes, and
 when? It records measurements, a schema, and a recommendation. If the
 recommendation's trigger fires, the decision would be written up as an ADR
 with the working title "IndexedDB-native `ClientStore`: one object store per
 collection, UTF-8 index keys, one transaction per pull", taking the next free
-number at that time (ADR-0029 is the façade, #157).
+number at that time (ADR-0029 is the façade).
 
 Date: 2026-09-03. Depends on ADR-0028 (filter grammar; rule (c) on text
 ordering). Does not change `CollectionIndex` semantics.
@@ -16,16 +15,16 @@ ordering). Does not change `CollectionIndex` semantics.
 
 What exists today, with file references.
 
-| Piece                                 | Where                                                                                      | What it does                                                                                                                                                                                                                                                                                                                                            |
-| ------------------------------------- | ------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `ClientStore.makeKeyValue` (layout 2) | `packages/effect/src/ClientStore.ts`                                                       | One KVS key per confirmed row (`row/{collection}/{id}`), one id-index array per collection (`rowIndex/{collection}`), one `collections` list, per-mutation journal bodies plus a `journalIndex`, `counters`, and `cookie`. A semaphore serialises writes.                                                                                               |
-| `applyRowOps`                         | `ClientStore.ts`, `planRowOps` / `flushCollection`                                         | Groups a patch by collection, writes each row value, then rewrites the whole id-index array once per touched collection (#47).                                                                                                                                                                                                                          |
-| `IndexedDbClientStore`                | `packages/browser/src/IndexedDbClientStore.ts`                                             | The KVS store over IndexedDB, opened without a version so a database a later version created still opens (#393): a single object store `entries` keyed by string; every `get`, `set` and `remove` is its own IndexedDB transaction. Its layout is `@effect/platform-browser`'s `BrowserKeyValueStore.layerIndexedDb` layout, whose open pins version 1. |
-| `CollectionIndex`                     | `packages/effect/src/CollectionIndex.ts`                                                   | In-memory hash plus sorted runs per indexed field. `plan` splits a top-level `And` into indexable conjuncts and a residual; `evaluate` intersects the indexable hits and runs `Predicate.test` over the residual.                                                                                                                                       |
-| Index wiring                          | `packages/effect/src/ClientEngine.ts`, `ensureIndexBuilt` / `updateIndexes` / `applyPatch` | The engine loads a whole collection (`store.listRows`) into an id-keyed map, rebuilds the index from it lazily, and maintains it from patch ops.                                                                                                                                                                                                        |
-| The pull commit                       | `ClientEngine.ts`, `applyPull`                                                             | `applyPatch(ops)` then `acknowledge(lastMutationIds)` then `store.setCookie(cookie)`: three separate store calls, each several KVS writes.                                                                                                                                                                                                              |
-| Reset path                            | ADR-0008; `KeyValueOptions.storeVersion` (#48)                                             | An unknown or absent cookie makes the server send `Clear` plus full puts. The store-version buster clears rows and the cookie but keeps the journal.                                                                                                                                                                                                    |
-| Ordering rule                         | ADR-0028 §2 rule (c), §4                                                                   | Text orders by code point (`COLLATE "C"`). IndexedDB orders strings by UTF-16 code unit, so IndexedDB text keys must be UTF-8 byte arrays. NULL sorts last on `asc`, first on `desc`.                                                                                                                                                                   |
+| Piece                                 | Where                                                                                      | What it does                                                                                                                                                                                                                                                                                                                                     |
+| ------------------------------------- | ------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `ClientStore.makeKeyValue` (layout 2) | `packages/effect/src/ClientStore.ts`                                                       | One KVS key per confirmed row (`row/{collection}/{id}`), one id-index array per collection (`rowIndex/{collection}`), one `collections` list, per-mutation journal bodies plus a `journalIndex`, `counters`, and `cookie`. A semaphore serialises writes.                                                                                        |
+| `applyRowOps`                         | `ClientStore.ts`, `planRowOps` / `flushCollection`                                         | Groups a patch by collection, writes each row value, then rewrites the whole id-index array once per touched collection.                                                                                                                                                                                                                         |
+| `IndexedDbClientStore`                | `packages/browser/src/IndexedDbClientStore.ts`                                             | The KVS store over IndexedDB, opened without a version so a database a later version created still opens: a single object store `entries` keyed by string; every `get`, `set` and `remove` is its own IndexedDB transaction. Its layout is `@effect/platform-browser`'s `BrowserKeyValueStore.layerIndexedDb` layout, whose open pins version 1. |
+| `CollectionIndex`                     | `packages/effect/src/CollectionIndex.ts`                                                   | In-memory hash plus sorted runs per indexed field. `plan` splits a top-level `And` into indexable conjuncts and a residual; `evaluate` intersects the indexable hits and runs `Predicate.test` over the residual.                                                                                                                                |
+| Index wiring                          | `packages/effect/src/ClientEngine.ts`, `ensureIndexBuilt` / `updateIndexes` / `applyPatch` | The engine loads a whole collection (`store.listRows`) into an id-keyed map, rebuilds the index from it lazily, and maintains it from patch ops.                                                                                                                                                                                                 |
+| The pull commit                       | `ClientEngine.ts`, `applyPull`                                                             | `applyPatch(ops)` then `acknowledge(lastMutationIds)` then `store.setCookie(cookie)`: three separate store calls, each several KVS writes.                                                                                                                                                                                                       |
+| Reset path                            | ADR-0008; `KeyValueOptions.storeVersion`                                                   | An unknown or absent cookie makes the server send `Clear` plus full puts. The store-version buster clears rows and the cookie but keeps the journal.                                                                                                                                                                                             |
+| Ordering rule                         | ADR-0028 §2 rule (c), §4                                                                   | Text orders by code point (`COLLATE "C"`). IndexedDB orders strings by UTF-16 code unit, so IndexedDB text keys must be UTF-8 byte arrays. NULL sorts last on `asc`, first on `desc`.                                                                                                                                                            |
 
 There are no IndexedDB indexes and no `IDBKeyRange` scans anywhere. The
 replica is bounded by worker memory, and every pull rewrites one id-index
@@ -99,7 +98,7 @@ about 8.6 bytes per id; with UUID ids it would be about 39 bytes per id
 | 50 000  |         429 KB |               429 KB |                16.5 ms |
 | 200 000 |       1 845 KB |             1 845 KB |                70.4 ms |
 
-Linear in rows, as designed (#47). The cost is the `JSON.parse`, `Set`
+Linear in rows, as designed. The cost is the `JSON.parse`, `Set`
 rebuild and `JSON.stringify` of the whole array on every pull.
 
 ### B. `CollectionIndex` over 50k rows (in-memory, medians of 9)
@@ -200,8 +199,8 @@ One IndexedDB database per client store (versioned), with:
   store on write. IndexedDB cannot compute keys, so the writer materialises
   them; the engine's row values stay `Unknown` and untouched (ADR-0014).
 - **Indexed fields** are `Node.indexes` ∪ sortable fields ∪ filterable fields
-  that admit a range (per-attribute `filterable`/`sortable`, effect-jsonapi
-  #84). Each has one index, `createIndex(field, ["k_<field>", "k_id"])`: a
+  that admit a range (per-attribute `filterable`/`sortable` in effect-jsonapi). Each has one index,
+  `createIndex(field, ["k_<field>", "k_id"])`: a
   compound key of the encoded value and the encoded id, so cursor order is
   `(value, id)` and equals `Subset.comparator`'s id tie-break exactly.
 - **Key encoding**, one function shared by the writer and the planner:
@@ -219,7 +218,7 @@ One IndexedDB database per client store (versioned), with:
 - **`journal`** object store, `keyPath: ["clientId", "mutationId"]`, one
   record per pending mutation. `acknowledge(clientId, upTo)` is one
   `delete(IDBKeyRange.bound([clientId, 0], [clientId, upTo]))`.
-  `pendingCount` (#260) is one `journal.count()`, reading no records.
+  `pendingCount` is one `journal.count()`, reading no records.
 - **`meta`** object store keyed by name: `cookie`, `counters`, `layout`,
   `storeVersion`.
 
@@ -260,7 +259,7 @@ indexable conjunct drives a cursor and everything else is residual.
 4. Window with `limit` and `cursor` as `Subset.apply` does today.
 
 Semantics never move: `Predicate.evaluate` and `Subset.comparator` remain the
-JS implementation of ADR-0028, and the differential harness (#153) with
+JS implementation of ADR-0028, and the differential harness with
 Postgres as oracle is what proves the IndexedDB evaluator agrees, exactly as
 it does for the SQL compilers.
 
@@ -278,10 +277,10 @@ current design survives them:
 | `applyRowOps`, before `acknowledge`          | Rows confirmed; acknowledged mutations still in the journal  | They are re-pushed; the backend's `lastMutationId` makes re-application a no-op (ADR-0008), and the next ack trims them.                                 |
 | `acknowledge`, before `setCookie`            | Journal trimmed; cookie stale                                | The next pull re-sends the patch. Idempotent again.                                                                                                      |
 | Mid-`Clear` (`clearRowsInner`)               | Some collections wiped, others not                           | The cookie is unchanged, so the reset patch is re-sent in full.                                                                                          |
-| Mid-`acknowledge` (#294)                     | Some acknowledged bodies removed; the index still lists them | Reads skip a missing body; the next open drops those index entries (their ids already reserved), so `pendingCount` and the high-water check agree again. |
-| Mid-`compactPending` (#249)                  | Journal bodies, index and counter partly rewritten           | A write-ahead `compactionIntent` is the commit point; it is rolled forward on the next open (see below).                                                 |
+| Mid-`acknowledge`                            | Some acknowledged bodies removed; the index still lists them | Reads skip a missing body; the next open drops those index entries (their ids already reserved), so `pendingCount` and the high-water check agree again. |
+| Mid-`compactPending`                         | Journal bodies, index and counter partly rewritten           | A write-ahead `compactionIntent` is the commit point; it is rolled forward on the next open (see below).                                                 |
 
-Paced compaction (#117, #249) is the one journal write that is neither a
+Paced compaction is the one journal write that is neither a
 prefix trim nor idempotent by construction: it drops superseded unpushed
 entries and renumbers the survivors, rewriting several bodies, the
 `journalIndex` and `counters`. The KV store makes it crash-safe with a
@@ -301,7 +300,7 @@ never drops or renumbers at or below it.
 Idempotent patches paper over every window as long as the server re-sends
 the same patch for the same cookie. What they cannot give is **snapshot
 isolation for concurrent readers**: while a K-row pull is being written, a
-reader (the façade of #149 answering a fetch from the replica, or a mirror
+reader (the JSON:API façade answering a fetch from the replica, or a mirror
 hydrating) can observe row A updated and row B not, or rows updated while
 the journal still holds the mutations that produced them, so the overlay
 replays effects that are already confirmed. ADR-0008's "reveal atomically"
@@ -331,9 +330,9 @@ methods. The scope of the transaction is known up front from `planRowOps`
   plus full puts. This is the precedent set by the rename changeset
   (`.changeset/rename-to-legation.md`: the key prefix changed, old state was
   orphaned, clients rehydrated via a full pull) and by the store-version
-  buster (#48).
+  buster.
 - **Journal and counters: carry across.** Pending intents are the user's
-  unsynced work and must survive, exactly as #48 preserves them. `counters`
+  unsynced work and must survive, exactly as the store-version buster preserves them. `counters`
   must also carry across: a fresh `nextMutationId` would reissue ids the
   backend has already applied, and those mutations would be silently
   dropped as duplicates. On first open of the native store, if the KVS
@@ -357,7 +356,7 @@ Reasoning tied to the numbers and to the façade's needs:
   `CollectionIndex` algorithm issue with a one-line fix, not a storage issue.
 - **The example apps are three orders of magnitude below the thresholds.**
   The seeds are 56 rows (northwind), 23 (commerce), a handful (realworld,
-  todo). The façade (#149) serves reads from the replica, and the replica is
+  todo). The façade serves reads from the replica, and the replica is
   bounded by explicit subscriptions with windows; a subscription that would
   pull 100k rows into a browser is a subscription design problem before it
   is a storage problem. ADR-0027 §2's law that sync windows stay narrow
@@ -365,7 +364,7 @@ Reasoning tied to the numbers and to the façade's needs:
 - **The planner split already exists at an in-memory seam.** Section 5 is a
   reuse of `CollectionIndex.plan`'s shape, not new theory. Building it as a
   second `ClientStore` behind the same interface is straightforward but is
-  a second implementation to keep exact against the harness (#153), plus a
+  a second implementation to keep exact against the harness, plus a
   migration, plus browser-only testing. That cost is worth paying when a
   trigger fires, not speculatively.
 - **The browser target stays first-class without it.** ADR-0028 §6 names
@@ -425,7 +424,7 @@ UTF-8 index keys, one transaction per pull
   memory and KV stores implement it as the existing three steps.
 - Migration as section 7: new database, rows and cookie rehydrate via the
   reset path, journal and counters copied across, old database deleted.
-- Acceptance: the differential harness (#153) green with the native store as
+- Acceptance: the differential harness green with the native store as
   a subject; `keyvalue-client-store.test.ts` and
   `indexeddb-client-store.test.ts` equivalents pass against it; the bench in
   Appendix A extended with real-browser numbers (Playwright or WebDriver)

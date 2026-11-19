@@ -1,5 +1,5 @@
 /**
- * RoomTransport's HTTP tier runs on Effect's Fetch `HttpClient` (#562). Each request is a JSON POST
+ * RoomTransport's HTTP tier runs on Effect's Fetch `HttpClient`. Each request is a JSON POST
  * with the app's headers and no trace-propagation headers (a cross-origin room would otherwise
  * need `b3` / `traceparent` in its CORS allowance), and each answer is decoded through the
  * protocol's response schema. The fetch is swapped through `FetchHttpClient.Fetch`, so no global

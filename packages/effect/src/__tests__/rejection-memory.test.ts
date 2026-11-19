@@ -1,5 +1,5 @@
 /**
- * The shared forgetting bound for rejection memory (#355): the per-client floors
+ * The shared forgetting bound for rejection memory: the per-client floors
  * a push carries, and the rejections below each floor that are forgotten. The
  * backends' own tests cover this end to end; these cover the module's edges.
  */

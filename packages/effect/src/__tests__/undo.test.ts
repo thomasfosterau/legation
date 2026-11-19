@@ -1,11 +1,10 @@
 /**
- * Undo/redo (issue #46): paired-intents undo layered over any mutate-capable
+ * Undo/redo: paired-intents undo layered over any mutate-capable
  * handle. Every undo/redo replays through the handle's `mutate`, so it is
  * optimistic, journaled, rebased, and offline-safe like any mutation — most of
  * these tests exercise that through the MemoryBackend + SyncServer +
  * ClientEngine stack from `engine.test.ts`; one drives the same manager
- * through a `Client` instead, since the two do not share an error channel
- * (issue #223).
+ * through a `Client` instead, since the two do not share an error channel.
  */
 import { describe, expect, it } from "@effect/vitest";
 import * as Arr from "effect/Array";
@@ -106,7 +105,7 @@ const nodes = Node.registry([
   Node.make("todos", { attributes: { title: Schema.String, done: Schema.Boolean } }),
 ]);
 
-describe("Undo (#46)", () => {
+describe("Undo", () => {
   it.effect("basic undo/redo tracks stacks and a new run clears redo", () =>
     Effect.gen(function* () {
       const handler = yield* makeServer;
@@ -282,13 +281,13 @@ describe("Undo (#46)", () => {
     })
   );
 
-  it.effect("undo/redo built from a Client, not a ClientEngine (#223)", () =>
+  it.effect("undo/redo built from a Client, not a ClientEngine", () =>
     Effect.gen(function* () {
       const handler = yield* makeServer;
       const transport = yield* makeInMemory(handler, "group-client");
       const store = yield* ClientStoreModule.makeMemory;
       // The engine is held here only to pull: a pinned read answers locally
-      // once a pull has landed (ADR-0029 section 3, #426). `Undo.make` takes
+      // once a pull has landed (ADR-0029 section 3). `Undo.make` takes
       // the Client itself, not the engine, and infers its error type from
       // `Client.mutate`.
       const engine = yield* ClientEngineModule.make({
@@ -304,7 +303,7 @@ describe("Undo (#46)", () => {
       const allTodosRead = { collection: "todos" };
       // Pin the read so `query` answers locally instead of falling through
       // to the (unrelated) server tier — ADR-0025 — and pull it so the pin
-      // covers (#426).
+      // covers.
       yield* client.subscribe(allTodosRead);
       yield* engine.pull.pipe(Effect.orDie);
 

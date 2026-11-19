@@ -26,7 +26,7 @@ export interface PokeHub {
  * Build a poke hub: pokes keyed by client group, scoped to the sync server
  * that owns it.
  *
- * Delivery guarantee (#44): one `sliding(1)` PubSub per client group, so a
+ * Delivery guarantee: one `sliding(1)` PubSub per client group, so a
  * poke storm dedupes. A poke is a contentless "pull soon" hint, so an
  * outstanding, not-yet-consumed poke absorbs any number of fresh ones — the
  * sliding strategy replaces the queued poke rather than growing the queue, and

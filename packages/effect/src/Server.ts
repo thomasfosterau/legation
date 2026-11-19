@@ -21,7 +21,7 @@
  * signature.
  *
  * A third verb, **mutate**, runs one named Mutation server-side as one of a
- * client group's mutations (ADR-0030, amendment #215): the entry point a form
+ * client group's mutations (ADR-0030): the entry point a form
  * action calls. It is a push minus the transport, so it goes through the
  * handler's push path (identity, middleware, the backend's ledger, the
  * broadcast), and it answers a {@link Receipt} carrying the backend's ruling.
@@ -55,7 +55,7 @@ export interface Broadcast {
  * and mutation id that name it, and the Mutation with its args.
  *
  * A form action passes a **form client** id minted for the rendered form, with
- * mutation id `1` (ADR-0030 #215 §2). A mutation id is per client and
+ * mutation id `1` (ADR-0030 §2). A mutation id is per client and
  * contiguous, so the action must not borrow the next id of a tab's engine.
  */
 export interface MutateRequest<Args, ArgsEncoded> {
@@ -73,7 +73,7 @@ export interface MutateRequest<Args, ArgsEncoded> {
    * again as for a pushed mutation.
    */
   readonly args: Args;
-  /** The schema version to check, as a push carries it (#48); unset when omitted. */
+  /** The schema version to check, as a push carries it; unset when omitted. */
   readonly schemaVersion?: string | undefined;
   /**
    * The credentials of the request the mutation arrived on (a form action's
@@ -86,7 +86,7 @@ export interface MutateRequest<Args, ArgsEncoded> {
 
 /**
  * What {@link Server.mutate} answers: the mutation it ran, named by its client
- * and mutation id, and the backend's ruling (ADR-0030 #215 §3). The phase uses
+ * and mutation id, and the backend's ruling (ADR-0030 §3). The phase uses
  * `MutationState`'s vocabulary: `acknowledged`, or `rejected` with the reason
  * the backend gave. A client holding an optimistic effect for this mutation
  * releases it when a pull's `lastMutationIds` covers it, not on the receipt.
@@ -117,7 +117,7 @@ export interface Server {
   readonly broadcast: (change: Broadcast) => Effect.Effect<void>;
   /**
    * Run one named Mutation as one of a client group's mutations, and answer
-   * its {@link Receipt} (ADR-0030 #215 §1–§3).
+   * its {@link Receipt} (ADR-0030 §1–§3).
    *
    * The path is the push path minus the transport: the group's identity is
    * resolved through the `IdentityResolver` (from `request.credentials`), the middleware's `onPush` runs,
@@ -175,7 +175,7 @@ const receiptOf = (
 export interface MakeOptions {
   /**
    * The storage contract (ADR-0009). A backend from `Backend.perRequest` is
-   * acquired once per push, pull and read, in that request's scope (#681).
+   * acquired once per push, pull and read, in that request's scope.
    */
   readonly backend: BackendService;
   readonly auth: {

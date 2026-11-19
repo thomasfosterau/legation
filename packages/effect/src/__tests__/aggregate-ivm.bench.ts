@@ -1,5 +1,5 @@
 /**
- * Incremental-aggregate benchmark (#110): three live aggregates (`Count`,
+ * Incremental-aggregate benchmark: three live aggregates (`Count`,
  * `Sum`, and a grouped `Count`) held open over a 10k-row collection, then
  * single-row churn — each churn is a mutate + push + pull round trip against
  * a real server, so it lands as exactly one `Put` in a `Patch` (the
@@ -63,7 +63,7 @@ const makeServer = Effect.gen(function* () {
 
 // The seeded engine is built inside the test, in the test's scope (`SyncServer.make` and the engine
 // need one), so the 10k-row seed happens once and only the timed churn repeats per iteration.
-describe("incremental aggregates (#110)", () => {
+describe("incremental aggregates", () => {
   // Live clock: the bench measures wall-clock time.
   it.live(
     `single-row churn over ${ROWS} rows (Count + Sum + grouped Count live)`,

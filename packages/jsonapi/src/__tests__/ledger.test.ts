@@ -1,5 +1,5 @@
 /**
- * Ledger stores (#468): the in-memory default and the key/value store adapter.
+ * Ledger stores: the in-memory default and the key/value store adapter.
  */
 import { describeWrapped, expect, layer, describe } from "@effect/vitest";
 import * as Effect from "effect/Effect";
@@ -75,7 +75,7 @@ describe("Ledger.keyValue", () => {
 });
 
 /**
- * The forgetting bound on the backend (#475, as MemoryBackend's #355): a
+ * The forgetting bound on the backend (as for MemoryBackend): a
  * rejection at exactly a push's floor is still reported, because the push does
  * not start past it, and it stops being reported once a push starts past it.
  * The per-resource server refuses every update and delete with a 422.
@@ -131,7 +131,7 @@ const boundMutation = (mutationId: number, mutator: string, args: unknown) => ({
   createdAt: 0,
 });
 
-describeWrapped("JsonApiBackend rejection memory bound (#475)", (it) => {
+describeWrapped("JsonApiBackend rejection memory bound", (it) => {
   it.effect("a rejection at a push's floor is kept, and forgotten once a push starts past it", () =>
     Effect.gen(function* () {
       const backend = yield* JsonApiBackend.make({

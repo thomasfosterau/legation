@@ -2,9 +2,9 @@
  * DocumentWriter
  *
  * Rows to a JSON:API compound document — the **one serialiser** ADR-0029 §6
- * binds both the derived REST handlers ({@link RestHandlers}, #163) and the
+ * binds both the derived REST handlers ({@link RestHandlers}) and the
  * replica-side writer behind the service-worker façade
- * ({@link ReplicaDocuments}, #164) to: "same URL, same result". The
+ * ({@link ReplicaDocuments}) to: "same URL, same result". The
  * document is a pure function of the node graph, the read, the resolved
  * rows and the `fields[]` projection — no HTTP, no backend, no clock — so
  * the two sides agree byte for byte on document content whichever source
@@ -102,10 +102,10 @@ export interface ResourceValue {
 }
 
 /**
- * The `meta` a collection document carries (#210): `total`, how many rows the
+ * The `meta` a collection document carries: `total`, how many rows the
  * read's filter matches under the caller's auth filter, whatever its page. The
  * derived REST handler and the façade write it from the same place, so the
- * same URL carries the same total on either side (ADR-0029's #210 amendment).
+ * same URL carries the same total on either side (ADR-0029 amendment).
  */
 export type CollectionMeta = {
   readonly total: number;
@@ -155,7 +155,7 @@ export interface Input {
   /** Prepended to every link (the api's mount path, e.g. `/jsonapi`); default `""`. */
   readonly prefix?: string;
   /**
-   * A collection document's `meta` (#210): the read's total. Written as given;
+   * A collection document's `meta`: the read's total. Written as given;
    * absent, the document has no `meta`. A single-resource document
    * ignores it.
    */
@@ -344,8 +344,8 @@ const linkOf = (input: Input, read: Query.Read): string => {
 const selfLink = (input: Input): string => linkOf(input, input.read);
 
 /**
- * The read's resolved rows sliced to the page it actually asked for
- * (#209). An offset read's root window was compiled with
+ * The read's resolved rows sliced to the page it actually asked for.
+ * An offset read's root window was compiled with
  * `limit = offset + first` (`Query.plan`'s `rootLimit`) so a covering
  * subscription could be judged by the ordinary limit-prefix rule and the
  * window fetched in one shot; `input.rows` therefore holds up to
@@ -368,7 +368,7 @@ const pageOf = (input: Input): ReadonlyArray<Related.RelatedRow> => {
  * from. A short page — fewer rows than `first`, or no window at all — has
  * no next; switching a cursor request to `page[after]`-of-offset (or vice
  * versa) is never done — pagination links stay in the idiom the request
- * used (#209).
+ * used.
  */
 const nextLink = (input: Input, page: ReadonlyArray<Related.RelatedRow>): Option.Option<string> => {
   const { first, offset } = input.read;

@@ -1,8 +1,8 @@
 /**
  * PgExecutor
  *
- * A `SqlBackend` executor over a PostgreSQL `SqlClient` from `effect/sql`
- * (#203). Pair it with `dialect: Sql.postgres`:
+ * A `SqlBackend` executor over a PostgreSQL `SqlClient` from `effect/sql`.
+ * Pair it with `dialect: Sql.postgres`:
  *
  * ```ts
  * const sql = yield* SqlClient; // from `PgClient.layer(...)` (`@effect/sql-pg`)
@@ -52,7 +52,7 @@ const asBackendError = (message: string) => (cause: unknown) =>
  *
  * Structural, so the driver's own client is accepted as well as the generic `SqlClient` service: from
  * effect 4.1.3 a driver client such as `@effect/sql-pg`'s `PgClient` extends `SqlClient`'s `Base`,
- * without the `SqlClient` type id, and is no longer a `SqlClient` (#687). Both members have the same
+ * without the `SqlClient` type id, and is no longer a `SqlClient`. Both members have the same
  * type on every effect 4 release.
  */
 export type Client = Pick<SqlClient, "unsafe" | "withTransaction">;

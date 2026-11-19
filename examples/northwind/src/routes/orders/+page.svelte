@@ -22,7 +22,7 @@
   let open = $state<string | null>(null);
 
   // The read is rebuilt whenever `open` changes; `undefined` opts the hook
-  // out entirely while no panel is expanded (#141) — no window registered,
+  // out entirely while no panel is expanded — no window registered,
   // no request issued.
   const lineRows = useQuery(() => (open === null ? undefined : orderLines(open)));
 

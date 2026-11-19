@@ -1,5 +1,5 @@
 /**
- * The façade's writes over the real stack (ADR-0030, #510): the commerce
+ * The façade's writes over the real stack (ADR-0030): the commerce
  * façade (`src/lib/facade.ts`) over an engine synced with the SQLite server
  * (`syncLayer`), the client group bound to a signed-in user, the shell's pins
  * applied. Offline, a plain-fetch `POST /jsonapi/reviews` with a client id is
@@ -9,7 +9,7 @@
  * acknowledged with the author set from identity, or permanently rejected
  * ("rating out of range"), after which the review leaves covered reads.
  *
- * Cart lines and orders take the same path (#525): each type and operation in
+ * Cart lines and orders take the same path: each type and operation in
  * `facadeWrites` has a server handler under its derived name, sharing
  * `server/rules.ts` with the per-resource handlers and the atomic endpoint.
  *
@@ -143,7 +143,7 @@ const reviewsOfP01 = new Request(
 
 const json = (response: Response) => Effect.promise(() => response.json() as Promise<any>);
 
-describe("the commerce façade's writes (ADR-0030, #510)", () => {
+describe("the commerce façade's writes (ADR-0030)", () => {
   it.effect("journals an offline review, shows it, and the server acknowledges it", () =>
     Effect.scoped(
       Effect.gen(function* () {

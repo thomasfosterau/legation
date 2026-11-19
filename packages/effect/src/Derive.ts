@@ -30,7 +30,7 @@
  * describes, and the fallback for a plain page source (a raw `Stream`, or
  * another combinator's output).
  *
- * **`observed` prefers `observeChanges` (#115).** When the leaf is built from
+ * **`observed` prefers `observeChanges`.** When the leaf is built from
  * a full `ClientView` (rather than the narrower `Reader`), `observed` reads
  * its `observeChanges` enter/update/exit/move feed directly instead of
  * `observe`'s pages: `LiveView` already decided each row's delta, so

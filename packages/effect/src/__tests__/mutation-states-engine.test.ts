@@ -1,5 +1,5 @@
 /**
- * ClientEngine.mutationStates (#116): the keyed, reactive mutation-state map
+ * ClientEngine.mutationStates: the keyed, reactive mutation-state map
  * — seeded from the journal at boot, folded from journal/ack/reject
  * regardless of whether a mutation went through `mutate`, `mutateEncoded`, or
  * `mutateWithAck` (the previous `mutationEvents` ack/reject events only fired
@@ -108,7 +108,7 @@ const snapshot = (engine: ClientEngineModule.ClientEngine) =>
 const get = (map: MutationState.MutationStateMap, id: number) =>
   Option.getOrUndefined(HashMap.get(map, id));
 
-describe("ClientEngine.mutationStates (#116)", () => {
+describe("ClientEngine.mutationStates", () => {
   it.effect("is empty before any mutation is journaled", () =>
     Effect.gen(function* () {
       const handler = yield* makeServer;
@@ -228,34 +228,32 @@ describe("ClientEngine.mutationStates (#116)", () => {
     })
   );
 
-  it.effect(
-    "dropIfPending (#117 paced compaction) settles the compacted entry as 'dropped', not stuck pending",
-    () =>
-      Effect.gen(function* () {
-        const handler = yield* makeServer;
-        const store = yield* ClientStoreModule.makeMemory;
-        const engine = yield* makeEngine(handler, store);
-        yield* engine.subscribe(allTodos);
+  it.effect("dropIfPending settles the compacted entry as 'dropped', not stuck pending", () =>
+    Effect.gen(function* () {
+      const handler = yield* makeServer;
+      const store = yield* ClientStoreModule.makeMemory;
+      const engine = yield* makeEngine(handler, store);
+      yield* engine.subscribe(allTodos);
 
-        yield* engine.mutate("todo/set", { id: "1", title: "superseded", done: false });
-        const { dropped } = yield* engine.dropIfPending([1]);
-        expect(dropped).toEqual([1]);
+      yield* engine.mutate("todo/set", { id: "1", title: "superseded", done: false });
+      const { dropped } = yield* engine.dropIfPending([1]);
+      expect(dropped).toEqual([1]);
 
-        // The journal no longer has it...
-        const pending = yield* store.pendingMutations;
-        expect(pending.find((m) => m.mutationId === 1)).toBeUndefined();
+      // The journal no longer has it...
+      const pending = yield* store.pendingMutations;
+      expect(pending.find((m) => m.mutationId === 1)).toBeUndefined();
 
-        // ...and the state map must not leave it stranded on "pending" forever
-        // (the bug this test guards): it settles to "dropped" like any other
-        // terminal outcome, so a devtools mutation timeline never shows a
-        // phantom in-flight entry for a compacted-away mutation.
-        const states = yield* snapshot(engine);
-        expect(get(states, 1)?.phase).toBe("dropped");
-        expect(get(states, 1)?.settledAt).toBeDefined();
-      })
+      // ...and the state map must not leave it stranded on "pending" forever
+      // (the bug this test guards): it settles to "dropped" like any other
+      // terminal outcome, so a devtools mutation timeline never shows a
+      // phantom in-flight entry for a compacted-away mutation.
+      const states = yield* snapshot(engine);
+      expect(get(states, 1)?.phase).toBe("dropped");
+      expect(get(states, 1)?.settledAt).toBeDefined();
+    })
   );
 
-  it.effect("a 'dropped' state survives the mirror wire (#249 review N2)", () =>
+  it.effect("a 'dropped' state survives the mirror wire", () =>
     Effect.gen(function* () {
       const handler = yield* makeServer;
       const store = yield* ClientStoreModule.makeMemory;
@@ -351,7 +349,7 @@ const eventsFor = (events: ReadonlyArray<ClientEngineModule.EngineEvent>, mutati
     "mutationId" in event && event.mutationId === mutationId ? [event._tag] : []
   );
 
-describe("hydrated journal entries in a running engine (#358)", () => {
+describe("hydrated journal entries in a running engine", () => {
   const todo: Todo = { id: "h", title: "from a snapshot", done: false };
 
   it.effect(
@@ -503,7 +501,7 @@ describe("hydrated journal entries in a running engine (#358)", () => {
   );
 
   it.effect(
-    "a pull that trims a hydrated entry while its adoption read is in flight does not re-track it (#358 review S1)",
+    "a pull that trims a hydrated entry while its adoption read is in flight does not re-track it",
     () =>
       Effect.gen(function* () {
         const handler = yield* makeServer;
@@ -578,7 +576,7 @@ describe("hydrated journal entries in a running engine (#358)", () => {
   );
 
   it.effect(
-    "a rejection that contradicts an acknowledgement is logged at warning and ignored (#358 review N3)",
+    "a rejection that contradicts an acknowledgement is logged at warning and ignored",
     () => {
       const warnings: Array<string> = [];
       const logger = Logger.make((options) => {

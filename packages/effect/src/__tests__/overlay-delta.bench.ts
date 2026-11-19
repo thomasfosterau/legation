@@ -1,5 +1,5 @@
 /**
- * Delta-maintained overlay benchmark (#109's acceptance-criteria scenario): a
+ * Delta-maintained overlay benchmark (acceptance-criteria scenario): a
  * burst of single-row mutates over a large collection with a handful of live
  * queries open. Before #109, every mutate invalidated the shared overlay
  * cache and forced a full journal replay (`ClientEngine.ts`'s old
@@ -92,7 +92,7 @@ const transportLayer = layerInMemory("bench").pipe(
 );
 
 // `excludeTestServices`: the bench measures wall-clock time, so the scenario runs on the live clock.
-layer(transportLayer, { excludeTestServices: true })("delta-maintained overlay (#109)", (it) => {
+layer(transportLayer, { excludeTestServices: true })("delta-maintained overlay", (it) => {
   it.effect(
     `${MUTATIONS} mutates over ${ROWS} rows with ${LIVE_QUERIES} live queries`,
     ({ bench }) =>

@@ -16,7 +16,7 @@
  * author: true, favorites: true }` resolves onto each row's `related`.
  *
  * Conduit's keys are natural, so each node **declares** the attribute that is
- * its identity (`Node.make("users", { id: "username", … })`, issue #144): the
+ * its identity (`Node.make("users", { id: "username", … })`): the
  * key is stored once, every edge joins against it, and `where: { slug }` is
  * what a read says. Nothing keeps a second `id` attribute equal to it, because
  * there is no second attribute. The join collections keep a surrogate `id` —

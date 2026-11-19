@@ -20,7 +20,7 @@ yield * HintSource.run(source);
 ```
 
 A source that publishes **value-less** hints (no `values`) is matched at the
-collection level by the predicate-aware fan-out matcher (#42): every group
+collection level by the predicate-aware fan-out matcher: every group
 subscribed to the changed collection is poked and reconciles on its next pull.
 That is sound — over-matching a poke only costs an empty pull; poke is never a
 correctness dependency (ADR-0009).

@@ -295,7 +295,7 @@ describeWrapped("JsonApiBackend in per-resource mode", (it) => {
   );
 });
 
-// ─── The ledger store across a restart (#468) ────────────────────────────────
+// ─── The ledger store across a restart ────────────────────────────────
 
 const restartClient = "restart-client";
 const restartContext = { clientGroupId: "restart-group" };
@@ -318,7 +318,7 @@ const restartPush = () => [
   },
 ];
 
-describe("JsonApiBackend ledger store (#468), per-resource mode", () => {
+describe("JsonApiBackend ledger store, per-resource mode", () => {
   layer(KeyValueStore.layerMemory)((scoped) => {
     scoped.effect("satisfies verifyBackendContract over a durable ledger store", () =>
       Effect.gen(function* () {
@@ -356,7 +356,7 @@ describe("JsonApiBackend ledger store (#468), per-resource mode", () => {
   });
 });
 
-describe("JsonApiBackend ledger store failures (#468), per-resource mode", () => {
+describe("JsonApiBackend ledger store failures, per-resource mode", () => {
   layer(KeyValueStore.layerMemory)((scoped) => {
     scoped.effect(
       "a ledger write that fails after the second write keeps the first acknowledged, and the resend re-applies the second",
@@ -452,7 +452,7 @@ describe("JsonApiBackend ledger store failures (#468), per-resource mode", () =>
   });
 });
 
-// ─── The contract across a restart in the same client group (#477, #483) ───
+// ─── The contract across a restart in the same client group ───
 
 const sameGroup = "contract-same-group";
 const CONTRACT_CLIENT = "contract-client";
@@ -462,7 +462,7 @@ const CONTRACT_CLIENT = "contract-client";
  * ledger the first run left: `restartWith` picks the store the restart reads. The
  * restarted backend has its own server tables, since the contract needs them empty.
  * The restarted run is verified with the ledgers the first run left, returned as
- * `outcome` (the restored ledger is what a restart expects, #483), together with what
+ * `outcome` (the restored ledger is what a restart expects), together with what
  * the restarted backend reports before the contract runs.
  */
 const restartInSameGroup = (restartWith: (ledger: Ledger.LedgerStore) => Ledger.LedgerStore) =>
@@ -495,7 +495,7 @@ const restartInSameGroup = (restartWith: (ledger: Ledger.LedgerStore) => Ledger.
     return { acknowledged, rejected, restartedLedger, restartedRejected, outcome };
   });
 
-describe("JsonApiBackend restarted on the same ledger in the same group (#477, #483), per-resource mode", () => {
+describe("JsonApiBackend restarted on the same ledger in the same group, per-resource mode", () => {
   layer(KeyValueStore.layerMemory)((scoped) => {
     scoped.effect(
       "runs the full contract over a backend restarted on the same durable ledger",

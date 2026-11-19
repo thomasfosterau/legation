@@ -1,7 +1,7 @@
 /**
  * MutationState
  *
- * A keyed, reactive mutation-state map (#116): the per-mutation lifecycle
+ * A keyed, reactive mutation-state map: the per-mutation lifecycle
  * `ClientEngine.mutationEvents` already streams, folded into a map anyone can
  * read as of now (`ClientEngine.mutationStates`) — TanStack Query's
  * `useMutationState` analogue. Seeded from the journal at boot (so a reload
@@ -84,12 +84,12 @@ export const seed = (pending: ReadonlyArray<Mutation>): MutationStateMap =>
     ])
   );
 
-/** Whether any of `pending` is not tracked by the map, so {@link adopt} would change it (#358). */
+/** Whether any of `pending` is not tracked by the map, so {@link adopt} would change it. */
 export const hasUntracked = (map: MutationStateMap, pending: ReadonlyArray<Mutation>): boolean =>
   pending.some((mutation) => !HashMap.has(map, mutation.mutationId));
 
 /**
- * Track the journal entries the map does not know yet as `"pending"` (#358): the entries a direct
+ * Track the journal entries the map does not know yet as `"pending"`: the entries a direct
  * store write (`Hydration.hydrate`) appended under a running engine, which never went through
  * `journaled`. An entry the map already tracks keeps its phase, whatever the journal says, so a
  * settled entry is never reset to pending. Returns the entries it adopted, in journal order, so
@@ -133,7 +133,7 @@ export const journaled = (
   });
 
 /**
- * Drop the oldest-settled terminal entries beyond `maxTerminal` (#116) — the
+ * Drop the oldest-settled terminal entries beyond `maxTerminal` — the
  * bound that keeps the map from growing without limit across a mutation
  * storm. Pending entries are never touched. `O(size)`: scans every entry to
  * find the terminal ones, so callers settling many mutations at once (a push
@@ -166,7 +166,7 @@ export const phaseOf = (map: MutationStateMap, mutationId: number): MutationPhas
 
 /**
  * Fold one mutation's terminal outcome in, without applying retention. Only a
- * `"pending"` entry moves (#364): a settled phase is never overwritten, so the
+ * `"pending"` entry moves: a settled phase is never overwritten, so the
  * first outcome the client observed stands and a later, repeated or
  * contradictory report folds nothing.
  */
@@ -210,7 +210,7 @@ export const rejected = (
 
 /**
  * Fold a paced-compaction drop in for one mutation (`ClientEngine.dropIfPending`,
- * #117's debounce/throttle/coalesce strategies superseding a still-unpushed
+ * the debounce/throttle/coalesce strategies superseding a still-unpushed
  * entry), then apply terminal retention. Unlike {@link acknowledged} /
  * {@link rejected}, this is not a backend verdict — the entry never reached the
  * backend — but it must still leave `"pending"`: left untouched, a compacted
@@ -247,7 +247,7 @@ export const droppedMany = (
 };
 
 /**
- * Fold a paced compaction in (#117, #249): the `dropped` ids settle as
+ * Fold a paced compaction in: the `dropped` ids settle as
  * `"dropped"`, and each `renumbered` survivor's still-`"pending"` state moves
  * from its old id to its new one (the `mutationId` field follows the key).
  * The map is keyed by id and a survivor may take an id a dropped entry just

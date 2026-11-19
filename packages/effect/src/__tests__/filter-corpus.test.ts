@@ -1,5 +1,5 @@
 /**
- * FilterCorpus generator tests (issue #153): the corpus is deterministic per
+ * FilterCorpus generator tests: the corpus is deterministic per
  * seed, covers every operator in the ADR-0028 core and every literal kind of
  * rule (e) at the default seed, never crosses types (rule (d)), never emits
  * `Exists`, and the minimiser shrinks a disagreement to its smallest

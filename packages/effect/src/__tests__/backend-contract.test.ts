@@ -198,7 +198,7 @@ describe("verifyBackendContract", () => {
     })
   );
 
-  it.effect("passes a backend whose evaluateMany is per-subset evaluate (#505)", () =>
+  it.effect("passes a backend whose evaluateMany is per-subset evaluate", () =>
     Effect.gen(function* () {
       const inner = yield* MemoryBackend.make(BackendContract.memoryHandlers);
       const batched: Backend = {
@@ -210,7 +210,7 @@ describe("verifyBackendContract", () => {
     })
   );
 
-  it.effect("catches a backend whose evaluateMany disagrees with evaluate (#505)", () =>
+  it.effect("catches a backend whose evaluateMany disagrees with evaluate", () =>
     Effect.gen(function* () {
       const inner = yield* MemoryBackend.make(BackendContract.memoryHandlers);
       // Drops each subset's last entry: right for an empty subset, wrong otherwise.
@@ -229,32 +229,30 @@ describe("verifyBackendContract", () => {
       expect(failure.rule).toContain("evaluateMany");
     })
   );
-  it.effect(
-    "catches a backend whose evaluateCounted reports the window's size as the total (#210)",
-    () =>
-      Effect.gen(function* () {
-        const inner = yield* MemoryBackend.make(BackendContract.memoryHandlers);
-        const windowed: Backend = {
-          ...inner,
-          evaluateCounted: (context, subsets) =>
-            Effect.forEach(
-              subsets,
-              (subset) =>
-                inner
-                  .evaluate(context, subset)
-                  .pipe(Effect.map((entries) => ({ entries, total: entries.length }))),
-              { concurrency: 1 }
-            ),
-        };
-        const failure = yield* Effect.flip(BackendContract.verifyBackendContract(windowed));
-        expect(failure._tag).toBe("ContractViolation");
-        expect(failure.rule).toContain("evaluateCounted");
-        expect(failure.message).toContain("total");
-      })
+  it.effect("catches a backend whose evaluateCounted reports the window's size as the total", () =>
+    Effect.gen(function* () {
+      const inner = yield* MemoryBackend.make(BackendContract.memoryHandlers);
+      const windowed: Backend = {
+        ...inner,
+        evaluateCounted: (context, subsets) =>
+          Effect.forEach(
+            subsets,
+            (subset) =>
+              inner
+                .evaluate(context, subset)
+                .pipe(Effect.map((entries) => ({ entries, total: entries.length }))),
+            { concurrency: 1 }
+          ),
+      };
+      const failure = yield* Effect.flip(BackendContract.verifyBackendContract(windowed));
+      expect(failure._tag).toBe("ContractViolation");
+      expect(failure.rule).toContain("evaluateCounted");
+      expect(failure.message).toContain("total");
+    })
   );
 });
 
-describe("Backend.evaluateAll (#505)", () => {
+describe("Backend.evaluateAll", () => {
   it.effect("asks evaluate per subset when the backend has no evaluateMany", () =>
     Effect.gen(function* () {
       const inner = yield* MemoryBackend.make(BackendContract.memoryHandlers);
@@ -289,7 +287,7 @@ describe("Backend.evaluateAll (#505)", () => {
   );
 });
 
-describe("Backend totals (#210)", () => {
+describe("Backend totals", () => {
   const seeded = Effect.fnUntraced(function* () {
     const backend = yield* MemoryBackend.make(BackendContract.memoryHandlers);
     yield* Effect.forEach(

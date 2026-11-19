@@ -1,6 +1,6 @@
 # @thomasfosterau/legation-devtools
 
-A devtools panel over the introspection substrate (#120): the journal &
+A devtools panel over the introspection substrate: the journal &
 mutation timeline, subscriptions & collections, sync activity log, and
 actions (force pull/push, a simulated-offline toggle, drop a subscription,
 and a destructive clear-store behind a confirm).
@@ -33,7 +33,7 @@ Peers `effect ^4.0.0`. Tested against `4.1.2` (the version CI pins) and `4.0.0` 
 Two sources, one `DevtoolsCore`:
 
 - **An owned engine:** an app that constructs its own `ClientEngine` + `ClientStore` in-process (see `examples/northwind`) builds the core with `Devtools.make(engine, store, options)`.
-- **A hosted engine, over a mirror (#136):** a tab that reaches a service-worker-hosted engine only through a `Mirror` builds it with `Devtools.fromMirror(mirror, options)`. The reads ride core's introspection request kinds, which the host serves when given its store; the row counts and actions ride this package's own kinds (`Devtools.requests`, named `@thomasfosterau/legation-devtools/…`), which the host serves once given `Devtools.hostRequests(engine, store)`. A kind the host does not serve fails with a `HostRequestError` of reason `UnknownKind`, and a host that predates host requests leaves the reads `Unanswered`; the panel shows what it can.
+- **A hosted engine, over a mirror:** a tab that reaches a service-worker-hosted engine only through a `Mirror` builds it with `Devtools.fromMirror(mirror, options)`. The reads ride core's introspection request kinds, which the host serves when given its store; the row counts and actions ride this package's own kinds (`Devtools.requests`, named `@thomasfosterau/legation-devtools/…`), which the host serves once given `Devtools.hostRequests(engine, store)`. A kind the host does not serve fails with a `HostRequestError` of reason `UnknownKind`, and a host that predates host requests leaves the reads `Unanswered`; the panel shows what it can.
 
 Over a mirror the reads and actions can fail with a `HostRequestError`, so the core's error channels include it. `syncFailures` is a point-in-time read of the engine's recent terminal sync failures (oldest first), which the Svelte panel re-reads on every event and every few seconds. `events` follows the host's event stream again after a host restart.
 

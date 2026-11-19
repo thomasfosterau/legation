@@ -1,5 +1,5 @@
 /**
- * Pull serialisation (#412): pulls run one at a time, each in its caller's fibre, and a caller
+ * Pull serialisation: pulls run one at a time, each in its caller's fibre, and a caller
  * waits only for a pull that starts after it asked. Two responses can then never be applied out of
  * order, so an older response cannot revert rows or the cookie, and every caller keeps its own
  * context and interruption, as on trunk.
@@ -163,7 +163,7 @@ const snapshot = (client: Client) =>
     return { cookie, titles: rows.map((row) => (row.value as { readonly title: string }).title) };
   });
 
-describe("pull serialisation (#412)", () => {
+describe("pull serialisation", () => {
   it.effect(
     "a second pull is not issued while the first is in flight, and rows and cookie never revert",
     () =>

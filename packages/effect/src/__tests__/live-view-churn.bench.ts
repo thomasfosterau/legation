@@ -1,5 +1,5 @@
 /**
- * LiveView churn benchmark (issue #112's acceptance criterion: "per-delta
+ * LiveView churn benchmark (acceptance criterion: "per-delta
  * cost O(log n + window) on a maintained ordered set; no O(n) array copies
  * on unrelated-row churn" — TanStack DB's headline scenario: a 100k-row
  * maintained set, single-row updates).

@@ -1,5 +1,5 @@
 /**
- * A hung broker cannot hold the publish open (#356 follow-up). `SyncServer.handlePush`
+ * A hung broker cannot hold the publish open. `SyncServer.handlePush`
  * runs `bus.publish` inside an uninterruptible region, so the bus bounds each broker
  * call itself: a publish that never returns is dropped at its timeout, and the lease
  * refresh that follows it still runs. Time is the TestClock, so the bound is crossed by
@@ -19,7 +19,7 @@ import { TestFailure } from "./test-failure.js";
 const Product = Node.make("products", { attributes: { name: Schema.String } });
 const nodes = Node.registry([Product]);
 
-describe("FanoutBus broker timeouts (#356)", () => {
+describe("FanoutBus broker timeouts", () => {
   it.effect(
     "a hung broker publish is dropped at its bound, inside the uninterruptible region",
     () =>

@@ -1,5 +1,5 @@
 /**
- * Session-resolved read scopes (#205, ADR-0015's amendment): an auth filter's
+ * Session-resolved read scopes (ADR-0015's amendment): an auth filter's
  * three-way `ReadScope`, named sets bound per session, and the scope epoch in
  * the CVR cookie. The scope is Gardeneria's owned-leaf rule, as one declaration
  * per collection:
@@ -203,7 +203,7 @@ const setOf = (members: ReadonlyArray<string>): Authorization.NamedSet => ({
 const putIds = (response: PullResponse) =>
   response.patch.flatMap((op: PatchOp) => (P.isTagged(op, "Put") ? [op.id] : [])).toSorted();
 
-describe("session-resolved read scopes (#205)", () => {
+describe("session-resolved read scopes", () => {
   it.effect("expresses the multi-tenant scope as one declaration per collection", () =>
     Effect.gen(function* () {
       const { pull, write } = yield* setup;
@@ -270,7 +270,7 @@ describe("session-resolved read scopes (#205)", () => {
     })
   );
 
-  it.effect("never serves a set's members from before a push, on the very next pull (#652)", () =>
+  it.effect("never serves a set's members from before a push, on the very next pull", () =>
     Effect.gen(function* () {
       // No scheduler turn between the write and the pull: the push itself marks
       // the session's set stale before it answers, so the pull that follows binds

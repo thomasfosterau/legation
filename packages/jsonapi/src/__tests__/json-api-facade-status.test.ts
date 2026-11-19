@@ -1,5 +1,5 @@
 /**
- * JsonApiFacade mutation status URL tests (#511, ADR-0030 §2):
+ * JsonApiFacade mutation status URL tests (ADR-0030 §2):
  * `{prefix}/_legation/mutations/{mutationId}`, answered from the engine's
  * mutation-state map and never forwarded — `200` with the phase per
  * mutation, `404 unknown_mutation` for an id the map does not hold, and

@@ -280,7 +280,7 @@ describe("Derive — observable via the standard atom surface", () => {
   );
 });
 
-describe("Derive — observed leaf consumes observeChanges (#133 item 1), not page-diff", () => {
+describe("Derive — observed leaf consumes observeChanges, not page-diff", () => {
   it.effect("a pipeline built on Derive.observed stays correct across enter/update/exit", () =>
     Effect.gen(function* () {
       const engine = yield* makeClient(yield* makeServer);

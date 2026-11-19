@@ -1,5 +1,5 @@
 /**
- * The `commerce-browser` Vitest project's global setup (#289): builds the
+ * The `commerce-browser` Vitest project's global setup: builds the
  * commerce app once, before the run's test files start, and provides the
  * outcome to `facade-browser.test.ts` (see `build.ts`). Vitest runs a
  * project's global setup only when that project has test files in the run,

@@ -9,7 +9,7 @@
   // svelte-ignore state_referenced_locally
   setClientRuntime(runtime);
 
-  // Starts opted out (#141): no selection to aggregate over yet.
+  // Starts opted out: no selection to aggregate over yet.
   let authorId = $state<string | undefined>(undefined);
   const read = () =>
     authorId === undefined ? undefined : { collection: "todos", where: { authorId } };

@@ -1,5 +1,5 @@
 /**
- * The page's SSR snapshot (ADR-0020, #146): the root layout's `load` renders
+ * The page's SSR snapshot (ADR-0020): the root layout's `load` renders
  * the app shell's working set (`shellReads`) over a request-scoped engine
  * under the browser's client group, and ships the dehydrated rows and CVR
  * cookie in the page data. The tab hands it to the service worker's engine

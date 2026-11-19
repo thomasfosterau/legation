@@ -1,7 +1,7 @@
 /**
  * ReplicaDocuments
  *
- * JSON:API documents written from the **replica** (issue #164): the
+ * JSON:API documents written from the **replica**: the
  * worker-side caller of {@link DocumentWriter}, the counterpart of the
  * derived REST handlers ({@link RestHandlers}) that write the same
  * documents from the backend. Given the node graph and a local view, a URL
@@ -21,7 +21,7 @@
  * same input — a resource declaration per type ({@link Options.resources})
  * — and derives its plan through the same function, so for the same
  * declarations both sides resolve the same edges and write the same bytes
- * by construction; the façade (#166) is built from the app's `HttpApi` and
+ * by construction; the façade is built from the app's `HttpApi` and
  * has these declarations at hand. An app that has only the node graph
  * passes nothing and gets `JsonApiQuery.resourcesOf(nodes)`: the synthetic
  * resources whose relationships are the node's edges — every collection
@@ -112,7 +112,7 @@ export interface ReplicaDocuments {
     view: ClientView.Reader,
     parsed: JsonApiQuery.ParsedRead,
     /**
-     * The document's `meta` (#210): the read's total, which the replica alone
+     * The document's `meta`: the read's total, which the replica alone
      * cannot know for a windowed subscription, so the caller supplies it (the
      * façade, from the subscription's pulled total). Absent, no `meta`.
      */

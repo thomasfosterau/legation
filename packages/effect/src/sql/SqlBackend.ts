@@ -29,7 +29,7 @@
  * order instead (see D1 below).
  *
  * A permanent rejection is remembered in the client's ledger row, in the same
- * transaction as the claim (#366), in a `rejections` column that holds a JSON
+ * transaction as the claim, in a `rejections` column that holds a JSON
  * object of mutation id → reason. A replayed copy lists its mutation in
  * `rejected` with the stored reason, so every copy reports the committed outcome
  * (guarantee 1). A copy that a concurrent call committed first is dropped on
@@ -40,7 +40,7 @@
  * again keeps its last push's rejections. It assumes one journal per `clientId`,
  * which backend contiguity already requires.
  *
- * Mutations from different client groups are serialisable (guarantee 1, #353),
+ * Mutations from different client groups are serialisable (guarantee 1),
  * per dialect:
  *
  * - SQLite serialises transactions on its one connection, and the client takes
@@ -62,7 +62,7 @@
  *   transient path covers it without a second retry policy. A PostgreSQL
  *   executor that sets `transactional: false` loses this guarantee, since the
  *   ordering then has no transaction to isolate.
- * - D1 is non-conforming (#342, #353). It has no interactive transactions, so its
+ * - D1 is non-conforming. It has no interactive transactions, so its
  *   executor sets `transactional: false` and each statement commits on its own.
  *   `applyMutations` then keeps trunk's order: the handler runs, then the
  *   ledger is bumped to the larger of the stored and the new id, so an
@@ -71,16 +71,16 @@
  *   the effect without the watermark; a crash after the writes and before the
  *   bump makes the retry run the handler again; and a transient failure leaves
  *   the writes committed for the retry to repeat. A rejection recorded before a
- *   failed bump is forgotten when the retry applies the id (#425). Nothing
+ *   failed bump is forgotten when the retry applies the id. Nothing
  *   isolates a handler's reads from another group's writes, so a lost update is
  *   possible. The claim order is not used on D1 because a claim committed on its
  *   own would leave a crash between the claim and the handler's commit claimed
- *   and unapplied, so a retry would skip the mutation (#359).
+ *   and unapplied, so a retry would skip the mutation.
  *
  * An executor on another database must provide the same isolation, or the
  * handlers' reads must be version-checked, before it can claim guarantee 1.
  *
- * A mapping's reads run against `readRelation` when given (issue #204): a
+ * A mapping's reads run against `readRelation` when given: a
  * real app's current-state relation is often a view — one that resolves each
  * node's current version and joins the leaf at exactly that version — never
  * the table mutator handlers write through. A mapping's `tombstone`
@@ -91,7 +91,7 @@
  * exactly as a row that vanished from the relation outright would (fail-open
  * would be a bug: a soft-deleted row must never keep syncing as a put).
  *
- * A pull's subsets are evaluated together by `evaluateMany` (#505): one
+ * A pull's subsets are evaluated together by `evaluateMany`: one
  * `UNION ALL` statement whose arms each select their subset's index and their
  * row, plus one statement per `Exists` node, as in `evaluate`. On SQLite, whose
  * `UNION ALL` columns take any type per row, an arm carries the relation's own
@@ -151,7 +151,7 @@ interface SqlBatch {
 /**
  * One opened mutation: its context, its savepoint, and, without transactions,
  * whether the ledger remembers a rejection for its id that a failed bump left
- * behind (#425).
+ * behind.
  */
 interface SqlUnit {
   readonly context: Backend.SyncContext;
@@ -193,7 +193,7 @@ export type SqlRow = Record<string, unknown>;
 /**
  * The minimal database surface the backend needs.
  *
- * **Isolation (guarantee 1, #353):** `transaction` must run its effect as one
+ * **Isolation (guarantee 1):** `transaction` must run its effect as one
  * database transaction whose reads a concurrent transaction cannot change under
  * them before it commits, so a handler never writes from a stale read. That is
  * SERIALIZABLE isolation, or an equivalent check, and the reference executors
@@ -204,7 +204,7 @@ export type SqlRow = Record<string, unknown>;
  * `BackendError`. An executor whose database cannot do this does not conform. A
  * serialization failure (PostgreSQL SQLSTATE 40001 or 40P01) must surface as a
  * `BackendError`, so the client retries the batch; the D1 executor does not meet
- * the requirement (`transactional: false`, #342).
+ * the requirement (`transactional: false`).
  */
 export interface SqlExecutor {
   /** Run a query and return its rows. */
@@ -236,7 +236,7 @@ export interface TableMapping {
   readonly table: string;
   /**
    * The relation reads evaluate against, when it differs from `table`
-   * (issue #204) — typically a view joining a root version table to a leaf
+   * — typically a view joining a root version table to a leaf
    * at its current version. Read-only: `SqlBackend` never writes rows
    * itself, only the mutation-id ledger, so nothing here needs `table` to be
    * writable. Defaults to `table`.
@@ -273,7 +273,7 @@ export interface TableMapping {
 
 /**
  * Derive a `TableMapping` from a `Collection`: column kinds come from its
- * declared filterable set (`Collection.filterDeclarationOf`, #154) instead of
+ * declared filterable set (`Collection.filterDeclarationOf`) instead of
  * being restated by hand — the common case. `table`, and optionally
  * `readRelation` / `idColumn` / `versionColumn` / `tombstone`, are still
  * given explicitly; the hand-written record shape (this function's return
@@ -359,7 +359,7 @@ const decodeManyJson = (text: string) =>
 /**
  * Why a pull fell back from its batched statement to one `evaluate` per
  * subset: a number in a JSON row (PostgreSQL's `row_to_json`) that JSON
- * cannot carry exactly (#505). `JSON.parse` reads every JSON number as a
+ * cannot carry exactly. `JSON.parse` reads every JSON number as a
  * double, so one with more significant digits than a double holds (a `bigint`
  * past ±(2^53 − 1), a `numeric` of high precision, such a number inside a
  * `json` / `jsonb` column) would read back as a different value than the
@@ -454,7 +454,7 @@ const inexactColumns = (text: string): ReadonlyArray<string> => {
 /** Content-hash fallback version when no version column is mapped. */
 export const versionOf = Hash.contentHash;
 
-/** One client's ledger row: its watermark and the rejections it still remembers (#366). */
+/** One client's ledger row: its watermark and the rejections it still remembers. */
 interface LedgerRow {
   readonly last: number;
   readonly rejections: ReadonlyMap<number, string>;
@@ -478,7 +478,7 @@ export const make = (config: SqlBackendConfig): Backend.Backend => {
     return column !== undefined ? (row[column] as string | number) : versionOf(row);
   };
   // What a read queries: the mapping's `readRelation` when it names one
-  // (typically a view), else the write target `table` (#204).
+  // (typically a view), else the write target `table`.
   const readTableOf = (mapping: TableMapping) => mapping.readRelation ?? mapping.table;
   // Whether a decoded row is a live row, not a tombstone: no mapping or no
   // declared predicate means every row is live.
@@ -552,7 +552,7 @@ export const make = (config: SqlBackendConfig): Backend.Backend => {
   // A subset's entries and total from the rows its `WHERE` selected (`where`
   // is the subset's predicate with its `Exists` nodes resolved). The
   // statement selects every matching row and the window is cut here, so the
-  // total (#210) is the live matching rows before the cut.
+  // total is the live matching rows before the cut.
   const countedOf = (
     subset: Subset.Subset,
     where: Predicate.Predicate,
@@ -562,7 +562,7 @@ export const make = (config: SqlBackendConfig): Backend.Backend => {
     // A tombstoned row is dropped here, before ordering/limit/cursor: it is
     // not a live row to page over, and its absence from the returned
     // entries is exactly what makes `Cvr.diff` report it as a delete
-    // (#204) — the same mechanism a row vanishing from the relation
+    // — the same mechanism a row vanishing from the relation
     // outright already relies on.
     const values = rows
       .map((row) => ({ id: String(row[idColumn]), value: decodeRow(subset.collection, row) }))
@@ -709,7 +709,7 @@ export const make = (config: SqlBackendConfig): Backend.Backend => {
       return Effect.logWarning(message, new InexactJsonNumber({ message, collection, column }));
     });
 
-  // One `UNION ALL` statement for every subset (#505): each arm selects its
+  // One `UNION ALL` statement for every subset: each arm selects its
   // subset's index and its row (`Dialect.unionRows`: its own columns by
   // position on SQLite, JSON on PostgreSQL), since mappings' columns differ per
   // collection. The arms' `WHERE`s are the ones `evaluate` compiles, numbered
@@ -748,7 +748,7 @@ export const make = (config: SqlBackendConfig): Backend.Backend => {
         // `JSON.parse` rounds, and an integer past ±(2^53 − 1) as a number where
         // the driver gives text, so such a row would read back differently from
         // `evaluate`'s. Such a pull is answered by `evaluate` per subset
-        // instead, with a warning naming each such column (#505). (A `Columns` arm
+        // instead, with a warning naming each such column. (A `Columns` arm
         // hands the driver its values as `evaluate`'s statement does.)
         const inexact = read.flatMap((row) =>
           row.inexact.map((column) => ({
@@ -774,7 +774,7 @@ export const make = (config: SqlBackendConfig): Backend.Backend => {
         );
       })) satisfies NonNullable<Backend.Backend["evaluateCounted"]>;
 
-  // The same statement, entries only (#505).
+  // The same statement, entries only.
   const evaluateMany = (union: Sql.UnionRows): NonNullable<Backend.Backend["evaluateMany"]> => {
     const counted = evaluateCounted(union);
     return (context, subsets) =>
@@ -783,7 +783,7 @@ export const make = (config: SqlBackendConfig): Backend.Backend => {
 
   // Fetch the raw rows for explicit ids (shared by getRows and hint
   // enrichment). Reads see the push transaction's own writes. A tombstoned
-  // row is omitted, exactly like an id no longer in the relation (#204).
+  // row is omitted, exactly like an id no longer in the relation.
   const queryRowsById = (
     collection: string,
     ids: ReadonlyArray<string>
@@ -849,7 +849,7 @@ export const make = (config: SqlBackendConfig): Backend.Backend => {
         )
       );
 
-  // The group's ledger rows with their rejection memory (#366). Every push reads
+  // The group's ledger rows with their rejection memory. Every push reads
   // it, so a ledger without the `rejections` column fails here, on the first
   // push after an upgrade, naming the migration instead of failing silently.
   const readLedger = (
@@ -901,7 +901,7 @@ export const make = (config: SqlBackendConfig): Backend.Backend => {
       params: [encodeRejections(rejections), clientGroupId, clientId],
     });
 
-  // Remember a permanent rejection in the client's ledger row (#366). It runs in
+  // Remember a permanent rejection in the client's ledger row. It runs in
   // the same transaction as the claim (or, without transactions, before the
   // bump), so a copy that reads the row afterwards sees the outcome with the id.
   // The row is created at 0 first if it does not exist yet: a D1 push records the
@@ -921,7 +921,7 @@ export const make = (config: SqlBackendConfig): Backend.Backend => {
     });
 
   // Forget the rejections a push has moved past: for each client in the push, the
-  // remembered rejections below its lowest id in the push (#355, as MemoryBackend).
+  // remembered rejections below its lowest id in the push (as MemoryBackend).
   const forgetRejections = (clientGroupId: string, floors: ReadonlyMap<string, number>) =>
     Effect.gen(function* () {
       if (floors.size === 0) return;
@@ -984,7 +984,7 @@ export const make = (config: SqlBackendConfig): Backend.Backend => {
   // Open `mutationId` claim-first: claim it before its handler runs. A won claim
   // opens the unit. A zero-row claim re-reads the ledger, which only ever rises,
   // so a stale claim cannot move the watermark back, and reports the watermark
-  // with the committed rejection, if there is one (#366): `Backend.transaction`
+  // with the committed rejection, if there is one: `Backend.transaction`
   // classifies it as a replay or a gap.
   const openClaimFirst = (
     batch: SqlBatch,
@@ -1031,8 +1031,7 @@ export const make = (config: SqlBackendConfig): Backend.Backend => {
   // The bump of the handler-then-bump order (executors without transactions).
   // It runs after the handler's writes, and it takes the larger of the stored and
   // the new id, so a call that parked before a later bump cannot move the
-  // watermark back when it finishes (#352). It is not atomic with those writes
-  // (#342).
+  // watermark back when it finishes. It is not atomic with those writes.
   const bumpLastId = (clientGroupId: string, clientId: string, mutationId: number) =>
     executor.run({
       text:
@@ -1042,7 +1041,7 @@ export const make = (config: SqlBackendConfig): Backend.Backend => {
         // reused index renders an extra placeholder with no matching param
         // (found by the commerce example's contract run over node:sqlite).
         // The stored row's column is qualified with the table name: PostgreSQL
-        // reads an unqualified name here as ambiguous with `excluded` (#390).
+        // reads an unqualified name here as ambiguous with `excluded`.
         `ON CONFLICT (${q("client_group_id")}, ${q("client_id")}) DO UPDATE SET ${q("last_mutation_id")} = ` +
         dialect.greatest(
           `${q(mutationsTable)}.${q("last_mutation_id")}`,
@@ -1086,10 +1085,10 @@ export const make = (config: SqlBackendConfig): Backend.Backend => {
 
   // Commit one mutation's outcome with its ledger write. An applied mutation
   // keeps its savepoint's writes; a rejected one rolls them back, and its
-  // rejection is remembered in the same transaction as the claim (#366), or,
+  // rejection is remembered in the same transaction as the claim, or,
   // without transactions, before the bump, so a copy that sees the id as covered
   // also sees its rejection. Without transactions the bump comes last and takes
-  // the larger id (`bumpLastId`); it is not atomic with the handler's writes (#342).
+  // the larger id (`bumpLastId`); it is not atomic with the handler's writes.
   const commitOutcome = (
     unit: SqlUnit,
     outcome: Backend.Outcome<ReadonlyArray<Backend.ChangeHint>>
@@ -1108,7 +1107,7 @@ export const make = (config: SqlBackendConfig): Backend.Backend => {
           // the id was never acknowledged and this copy applies it. The stale
           // rejection goes before the bump: a bump that then fails leaves the id
           // unacknowledged with no rejection to report, and a replay after the
-          // bump must not report one for an applied mutation (#425).
+          // bump must not report one for an applied mutation.
           const row = (yield* readLedger(clientGroupId)).get(clientId);
           const rejections = new Map(row?.rejections ?? []);
           rejections.delete(mutationId);
@@ -1120,7 +1119,7 @@ export const make = (config: SqlBackendConfig): Backend.Backend => {
     });
 
   // The transaction's isolation, set before any read so every read in it sees
-  // the snapshot SERIALIZABLE gives (#353). An executor without transactions has
+  // the snapshot SERIALIZABLE gives. An executor without transactions has
   // nothing to isolate, and SQLite has no such statement (its writers serialise).
   const serializable = transactional ? dialect.serializable : undefined;
 
@@ -1137,7 +1136,7 @@ export const make = (config: SqlBackendConfig): Backend.Backend => {
             // PostgreSQL refuses this statement inside a subtransaction (a nested
             // transaction, which the executor runs as a savepoint) or after another
             // statement. A refusal fails the batch: the batch must never run at READ
-            // COMMITTED without saying so (#353). The client retries it.
+            // COMMITTED without saying so. The client retries it.
             Effect.mapError(
               (cause) =>
                 new BackendError({
@@ -1152,7 +1151,7 @@ export const make = (config: SqlBackendConfig): Backend.Backend => {
           )
     );
 
-  // `Backend.transaction` owns the ledger rules (#177): order, replay and gap
+  // `Backend.transaction` owns the ledger rules: order, replay and gap
   // classification, the bump with each outcome, and reporting. This store
   // supplies the claim (or the read, on D1), the savepoint, and the commit.
   const applyMutations = Backend.transaction<
@@ -1168,7 +1167,7 @@ export const make = (config: SqlBackendConfig): Backend.Backend => {
     // The database isolates a batch (or, on D1, nothing does): a commit never
     // reports a conflict, so a handler runs once per opened unit.
     maxAttempts: 1,
-    // The rejections this push has moved past are forgotten first (#366).
+    // The rejections this push has moved past are forgotten first.
     begin: (context, floors) =>
       forgetRejections(context.clientGroupId, floors).pipe(
         Effect.as({ context, savepoints: { next: 0 } })
@@ -1194,7 +1193,7 @@ export const make = (config: SqlBackendConfig): Backend.Backend => {
       ),
   });
 
-  // The group's remembered rejections, from every client's ledger row (#365). A pull
+  // The group's remembered rejections, from every client's ledger row. A pull
   // reports the ones its watermark covers.
   const rememberedRejections = (
     clientGroupId: string

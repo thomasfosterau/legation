@@ -1,7 +1,7 @@
 /**
  * The root SSR load: the session user (Better Auth, resolved by hooks), the
  * browser's client group (read-or-mint cookie), and the app shell's SSR
- * snapshot (#146, `server/snapshot.ts`): the rows the shell keeps live and
+ * snapshot (`server/snapshot.ts`): the rows the shell keeps live and
  * the CVR cookie they were pulled at, under that group. The tab hands the
  * snapshot to the service worker's engine, which hydrates an empty replica
  * with it; the catalog page renders its first paint from it.

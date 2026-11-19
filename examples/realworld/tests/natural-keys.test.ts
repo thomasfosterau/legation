@@ -1,5 +1,5 @@
 /**
- * Conduit's natural keys end to end (#144).
+ * Conduit's natural keys end to end.
  *
  * The domain declares `users`' identity as `username` and `articles`' as
  * `slug`, so this exercises the consequences an isolated unit test cannot: the
@@ -48,7 +48,7 @@ const handlers = MemoryBackend.validatedHandlers([
   ),
 ]);
 
-/** Reads are public, and the node graph bounds what may be filtered (#154). */
+/** Reads are public, and the node graph bounds what may be filtered. */
 const authPolicy = Authorization.policy(
   {
     users: Authorization.allowAll,

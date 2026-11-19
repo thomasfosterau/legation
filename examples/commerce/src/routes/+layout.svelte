@@ -12,7 +12,7 @@
 
   // The tab's whole data layer is a Mirror over the service worker's
   // engine — boot broadcasts the config handshake, offers the worker the
-  // page's SSR snapshot (#146; the worker hydrates an empty replica with it)
+  // page's SSR snapshot (the worker hydrates an empty replica with it)
   // and registers the shell subsets. SSR renders come entirely from the
   // hooks' `initial` seeds (the catalog's from that snapshot), so the server
   // gets no Client: a hook that reached for one there would fail.

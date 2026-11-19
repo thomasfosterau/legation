@@ -1,5 +1,5 @@
 /**
- * JsonApiFacade tests (#166, ADR-0029): the fetch handler over a real
+ * JsonApiFacade tests (ADR-0029): the fetch handler over a real
  * replica — a `MemoryBackend` behind a `Server`, synced into an owned engine
  * over an in-memory transport, read through a `Client` whose ledger is the
  * façade's coverage source — with a routes-only `HttpApi` for reflection.
@@ -131,7 +131,7 @@ const GROUP = "group-a";
 /**
  * The seed behind a `Server`, synced into an owned engine read through a `Client`.
  * `arm` runs `race` once, before the second read of the products' root subset
- * returns (#426): a covered answer reads that root once, so the race lands only
+ * returns: a covered answer reads that root once, so the race lands only
  * where a second read would. `racePut` writes a row to the server and pulls it, as
  * another client's write does.
  */
@@ -255,7 +255,7 @@ const makeFacade = (
       { concurrency: 1, discard: true }
     );
     // A relational pin registers its edge windows once its rows are observed, and a pull marks
-    // them (#426): pull until the relational pin of the fixture is covered, so the replica holds
+    // them: pull until the relational pin of the fixture is covered, so the replica holds
     // the rows a covered read links to. Each pull is in memory, so no time passes between them.
     for (let attempt = 0; attempt < 20; attempt++) {
       yield* engine.pull;
@@ -317,7 +317,7 @@ describe("JsonApiFacade", () => {
         expect(cookie).not.toBeNull();
         expect(cookie ?? "").not.toBe("");
         // The unwindowed pin holds every product, so the total is the filter over the
-        // replica (#210): the two audio products.
+        // replica: the two audio products.
         const local = yield* docs.fromUrl(client.view, url, { total: 2 });
         expect(bytes(yield* body(defined(response)))).toBe(bytes(local));
         // The rows themselves: audio products by name descending, with linkage.
@@ -328,7 +328,7 @@ describe("JsonApiFacade", () => {
   );
 
   it.effect(
-    "a pull that lands mid-request cannot put an unpulled product into a covered document (#426)",
+    "a pull that lands mid-request cannot put an unpulled product into a covered document",
     () =>
       Effect.scoped(
         Effect.gen(function* () {
@@ -424,7 +424,7 @@ describe("JsonApiFacade", () => {
   );
 
   it.effect(
-    "covers an offset-paginated read by slicing a subsuming subscription (#209), byte-equal to the writer",
+    "covers an offset-paginated read by slicing a subsuming subscription, byte-equal to the writer",
     () =>
       Effect.scoped(
         Effect.gen(function* () {
@@ -436,7 +436,7 @@ describe("JsonApiFacade", () => {
           const response = Option.getOrUndefined(yield* handler.handle(jsonApi(url)));
           expect(defined(response).status).toBe(200);
           // The window holds 2 of the 3 products; `meta.total` is the collection's 3,
-          // the pull's total for the pinned subscription, not the window's 2 (#210).
+          // the pull's total for the pinned subscription, not the window's 2.
           // SAFETY: a 200 from the façade is a collection document.
           const served = (yield* body(defined(response))) as { meta?: { total: number } };
           expect(served.meta).toEqual({ total: 3 });
@@ -477,7 +477,7 @@ describe("JsonApiFacade", () => {
   );
 
   it.effect(
-    "a windowed listing carries the collection's total: the same document the derived REST handler writes (#210)",
+    "a windowed listing carries the collection's total: the same document the derived REST handler writes",
     () =>
       Effect.scoped(
         Effect.gen(function* () {
@@ -514,7 +514,7 @@ describe("JsonApiFacade", () => {
   );
 
   it.effect(
-    "without a pulled total, a read only a windowed subscription covers is not served (#210)",
+    "without a pulled total, a read only a windowed subscription covers is not served",
     () =>
       Effect.scoped(
         Effect.gen(function* () {
@@ -545,7 +545,7 @@ describe("JsonApiFacade", () => {
           const url = "/jsonapi/products?sort=name&page[offset]=1&page[limit]=1";
           const response = Option.getOrUndefined(yield* handler.handle(jsonApi(url)));
           expect(defined(response).status).toBe(200);
-          // Counted from the replica, which the unwindowed pin holds whole (#210).
+          // Counted from the replica, which the unwindowed pin holds whole.
           const local = yield* docs.fromUrl(client.view, url, { total: 3 });
           expect(bytes(yield* body(defined(response)))).toBe(bytes(local));
           const document = local as { data: ReadonlyArray<{ id: string }> };
@@ -583,7 +583,7 @@ describe("JsonApiFacade", () => {
     )
   );
 
-  it.effect("a registered but unpulled covered read is a 503 offline when offline (#426)", () =>
+  it.effect("a registered but unpulled covered read is a 503 offline when offline", () =>
     Effect.scoped(
       Effect.gen(function* () {
         const { handler, client, online } = yield* makeFacade(["/jsonapi/products"]);
@@ -760,7 +760,7 @@ describe("JsonApiFacade", () => {
           online: () => true,
         });
         // Registered, not yet pulled: nothing is covered, so the request goes
-        // to the network rather than being answered from an empty replica (#426).
+        // to the network rather than being answered from an empty replica.
         expect(yield* handler.handle(jsonApi("/jsonapi/categories"))).toEqual(Option.none());
         yield* engine.pull.pipe(Effect.orDie);
         const response = Option.getOrUndefined(
@@ -783,7 +783,7 @@ describe("JsonApiFacade", () => {
   // The unit reproduction of #422 (the commerce browser test's first page): the
   // products pin is pulled, then the variants pin is registered without a pull.
   // Before #426 the first page was answered from the replica with empty linkage.
-  it.effect("does not answer a first page before its variants pin has been pulled (#426)", () =>
+  it.effect("does not answer a first page before its variants pin has been pulled", () =>
     Effect.scoped(
       Effect.gen(function* () {
         const { client, engine, store } = yield* makeReplica;

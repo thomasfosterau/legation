@@ -125,7 +125,7 @@ describe("Node model", () => {
   });
 });
 
-// ─── Declared identity attributes (natural keys, #144) ──────────────────────
+// ─── Declared identity attributes (natural keys) ──────────────────────
 //
 // Conduit's shape: authors are identified by `username`, posts by `slug`, and
 // a node that declares nothing keeps today's synthetic `id` — so one graph
@@ -340,7 +340,7 @@ const makeNaturalKeyEngine = Effect.gen(function* () {
       Authorization.AuthPolicy,
       // With the registry attached, every subscription the joins register is
       // admitted against the declared identities — `authorName IN (…)` on the
-      // way out, `username IN (…)` on the way back (#144).
+      // way out, `username IN (…)` on the way back.
       Authorization.policy(
         { authors: Authorization.allowAll, posts: Authorization.allowAll },
         { collections: Node.registry([Author, Post]).collections }

@@ -1,9 +1,9 @@
 /**
- * Delta-maintained optimistic overlay property test (#109): the view an
+ * Delta-maintained optimistic overlay property test: the view an
  * observer sees — confirmed rows plus the overlay deltas `mutate`/push/pull
  * publish — must equal one materialized from scratch (confirmed rows with
  * the acknowledged-but-unpulled tail, then the pending journal, replayed on
- * top; #286), for every interleaving of mutate/push (ack or permanent
+ * top), for every interleaving of mutate/push (ack or permanent
  * rejection)/pull. `engine.query` reads the
  * same cache `mutate` now patches in place (rather than invalidates), so
  * comparing it against an independently-reimplemented "from scratch"
@@ -216,7 +216,7 @@ const sortRows = (rows: ReadonlyArray<{ readonly id: string; readonly value: unk
 const sortMap = (map: Map<string, unknown>) => [...map.entries()].toSorted(byId);
 
 /**
- * Run one step and track the acknowledged-but-unpulled tail (#286). A push
+ * Run one step and track the acknowledged-but-unpulled tail. A push
  * trims the entries the backend applied from the journal; those stay overlaid
  * until a pull reports them, so the oracle takes them from the journal's
  * trims (the store does not hold the tail). A permanent rejection was not
@@ -245,7 +245,7 @@ const SEEDS = 15;
 const STEPS_PER_SEED = 25;
 const IDS = ["a", "b", "c", "d"];
 
-describe("optimistic overlay delta-maintenance property (#109)", () => {
+describe("optimistic overlay delta-maintenance property", () => {
   it.effect(
     `the cache (via engine.query) matches a from-scratch materialization after every step, across ${SEEDS} randomized mutate/push/pull/reject interleavings`,
     () =>

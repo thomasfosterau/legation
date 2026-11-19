@@ -1,9 +1,9 @@
 /**
- * Unit tests for `CollectionIndex.ts` (issue #113): hash/ordered maintenance,
+ * Unit tests for `CollectionIndex.ts`: hash/ordered maintenance,
  * the And-conjunct planner, and the ClientEngine-level integration — declared
  * indexes, `autoIndex` discovery, the pending-journal fallback, Put/Del/
- * Clear consistency across a pull, a pull landing mid-build (#339), and the
- * confirmed-row writers that bypass a pull (`reset`, `hydrate`, `clearRows`, #350).
+ * Clear consistency across a pull, a pull landing mid-build, and the
+ * confirmed-row writers that bypass a pull (`reset`, `hydrate`, `clearRows`).
  */
 import { describe, expect, it } from "@effect/vitest";
 import { vi } from "vite-plus/test";
@@ -407,7 +407,7 @@ describe("ClientEngine + CollectionIndex", () => {
       })
   );
 
-  it.effect("#133: a pending mutation on collection A doesn't disable collection B's index", () =>
+  it.effect("a pending mutation on collection A doesn't disable collection B's index", () =>
     Effect.gen(function* () {
       const store = yield* ClientStoreModule.makeMemory;
       const transport = yield* makeInMemory(noopHandler, "g");
@@ -520,7 +520,7 @@ describe("ClientEngine + CollectionIndex", () => {
   );
 
   it.effect(
-    "#339: a pull that lands while an index build is reading rows is reflected by later queries",
+    "a pull that lands while an index build is reading rows is reflected by later queries",
     () =>
       Effect.gen(function* () {
         // The build holds the pre-patch snapshot while the pull below writes and reveals.
@@ -590,7 +590,7 @@ describe("ClientEngine + CollectionIndex", () => {
       })
   );
 
-  it.effect("#350: a hydrate that lands mid-build is not installed as a stale index", () =>
+  it.effect("a hydrate that lands mid-build is not installed as a stale index", () =>
     Effect.gen(function* () {
       const parking = yield* parkingStore;
       const engine = yield* ClientEngineModule.make({
@@ -634,7 +634,7 @@ describe("ClientEngine + CollectionIndex", () => {
     })
   );
 
-  it.effect("#350: reset leaves no built index entry for a row it dropped", () =>
+  it.effect("reset leaves no built index entry for a row it dropped", () =>
     Effect.gen(function* () {
       const store = yield* ClientStoreModule.makeMemory;
       const engine = yield* priorityEngine(store);
@@ -657,7 +657,7 @@ describe("ClientEngine + CollectionIndex", () => {
     })
   );
 
-  it.effect("#350: engine.clearRows empties the view and the built index together", () =>
+  it.effect("engine.clearRows empties the view and the built index together", () =>
     Effect.gen(function* () {
       const store = yield* ClientStoreModule.makeMemory;
       const engine = yield* priorityEngine(store);
@@ -682,7 +682,7 @@ describe("ClientEngine + CollectionIndex", () => {
     })
   );
 
-  it.effect("#350: Hydration.hydrate into a running engine re-reads its view and index", () =>
+  it.effect("Hydration.hydrate into a running engine re-reads its view and index", () =>
     Effect.gen(function* () {
       const store = yield* ClientStoreModule.makeMemory;
       const engine = yield* priorityEngine(store);
@@ -716,24 +716,22 @@ describe("ClientEngine + CollectionIndex", () => {
     })
   );
 
-  it.effect(
-    "#350: a hydrate with a cookie and no rows leaves a running engine's rows in place",
-    () =>
-      Effect.gen(function* () {
-        const store = yield* ClientStoreModule.makeMemory;
-        const engine = yield* priorityEngine(store);
-        yield* seedEngine(engine, [{ id: "i1", priority: 1, done: false }]);
-        expect((yield* engine.query(Subset.make({ collection: "items" }))).length).toBe(1);
+  it.effect("a hydrate with a cookie and no rows leaves a running engine's rows in place", () =>
+    Effect.gen(function* () {
+      const store = yield* ClientStoreModule.makeMemory;
+      const engine = yield* priorityEngine(store);
+      yield* seedEngine(engine, [{ id: "i1", priority: 1, done: false }]);
+      expect((yield* engine.query(Subset.make({ collection: "items" }))).length).toBe(1);
 
-        yield* Hydration.hydrate(store, { rows: [], cookie: "c-1", journal: [] });
-        expect(yield* store.getCookie).toBe("c-1");
-        expect(
-          (yield* engine.query(Subset.make({ collection: "items" }))).map((r) => r.id)
-        ).toEqual(["i1"]);
-      })
+      yield* Hydration.hydrate(store, { rows: [], cookie: "c-1", journal: [] });
+      expect(yield* store.getCookie).toBe("c-1");
+      expect((yield* engine.query(Subset.make({ collection: "items" }))).map((r) => r.id)).toEqual([
+        "i1",
+      ]);
+    })
   );
 
-  it.effect("#350: a hydrate that fails partway still re-reads a running engine's index", () =>
+  it.effect("a hydrate that fails partway still re-reads a running engine's index", () =>
     Effect.gen(function* () {
       const memory = yield* ClientStoreModule.makeMemory;
       // Refuses the write of i2 once armed, after i1 has been written.
@@ -791,7 +789,7 @@ describe("ClientEngine + CollectionIndex", () => {
     })
   );
 
-  it.effect("#350: an engine attached while a hydrate is writing is re-read afterwards", () =>
+  it.effect("an engine attached while a hydrate is writing is re-read afterwards", () =>
     Effect.gen(function* () {
       const memory = yield* ClientStoreModule.makeMemory;
       yield* memory.putRow("items", {
@@ -847,7 +845,7 @@ describe("ClientEngine + CollectionIndex", () => {
     })
   );
 
-  it.effect("#350: a closed engine is deregistered and is not re-read by a later hydrate", () =>
+  it.effect("a closed engine is deregistered and is not re-read by a later hydrate", () =>
     Effect.gen(function* () {
       const snapshot: Hydration.Snapshot = {
         rows: [

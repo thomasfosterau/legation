@@ -1,5 +1,5 @@
 /**
- * JsonApiFacade write tests (#510, ADR-0030 §1, §3, §5): the `202 Accepted`
+ * JsonApiFacade write tests (ADR-0030 §1, §3, §5): the `202 Accepted`
  * write receipt. A reflected `POST` / `PATCH` / `DELETE` is journaled as a
  * graph-derived CRUD mutation (`CrudMutation`) and answered before the
  * server has ruled — offline, after a forward that rejected at the
@@ -471,7 +471,7 @@ describe("JsonApiFacade writes: forwarded, journaling nothing", () => {
           expect(yield* handler.handle(createNoteWithoutId({ prefer: "respond-async" }))).toEqual(
             Option.none()
           );
-          // Offline, strict is refused rather than journaled (the 503 document is #512's to refine).
+          // Offline, strict is refused rather than journaled (the 503 document is provisional).
           online.current = false;
           yield* each(strictWrites(), (request) =>
             Effect.map(answer(handler, request), (response) => expect(response.status).toBe(503))

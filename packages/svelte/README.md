@@ -450,7 +450,7 @@ client does next.
 ### Form actions run Mutations
 
 A form action that can name the client group runs a named Mutation as one of
-that group's mutations (ADR-0030, amendment #215): the same definition the JS
+that group's mutations (ADR-0030): the same definition the JS
 path journals, so a write is authored once. The mechanism is core
 (`server.mutate` in `@thomasfosterau/legation`); `/kit` reads the
 group cookie and the form's hidden fields, and gives the enhanced submit.
@@ -539,8 +539,8 @@ export const actions = {
   host from a release that predates this answers the submit with a
   `TransportError` rather than leaving it waiting.
 
-**One path per write.** A form-action Mutation and a façade write (#169,
-`@thomasfosterau/legation-jsonapi`) are two interception points for the same
+**One path per write.** A form-action Mutation and a façade write
+(`@thomasfosterau/legation-jsonapi`) are two interception points for the same
 intent. Both name the mutation by id, neither fabricates a status the server
 did not give, and both release the optimistic effect only when a pull
 observes it. A façade write journals a plain `fetch` on the client and

@@ -2,7 +2,7 @@
  * Introspection
  *
  * A read-only view of a running {@link ClientEngine} and its
- * {@link ClientStore} (#45): the active subscriptions, the pending-mutation
+ * {@link ClientStore}: the active subscriptions, the pending-mutation
  * journal, the pull cookie, the materialised collections, and the unified
  * {@link ClientEngine.engineEvents} lifecycle stream. Built entirely over the
  * engine's public read accessors and the store's public reads — it never
@@ -20,7 +20,7 @@
  * });
  * ```
  *
- * The same view reaches across the mirror seam (#136): an engine host given
+ * The same view reaches across the mirror seam: an engine host given
  * its store (`EngineHost.run({ store })`) serves {@link requests}, the
  * host-request kinds that carry each member, and {@link fromMirror} builds an
  * `EngineIntrospection` over them in any tab holding a `Mirror`. Its members
@@ -56,7 +56,7 @@ export interface EngineIntrospection<E = never> {
   /**
    * The journal: pending (unacknowledged) mutations in causal order. It holds
    * pending entries only. A mutation the backend acknowledged but no pull has
-   * reported yet is in the engine's unpulled tail (#286), which this view does
+   * reported yet is in the engine's unpulled tail, which this view does
    * not show.
    */
   readonly journal: Effect.Effect<ReadonlyArray<Protocol.Mutation>, StoreError | E>;
@@ -97,7 +97,7 @@ export const fromServices: Effect.Effect<EngineIntrospection, never, ClientEngin
 export const layer: Layer.Layer<EngineIntrospection, never, ClientEngine | ClientStore> =
   Layer.effect(EngineIntrospection)(fromServices);
 
-// ─── Over the mirror seam (#136) ─────────────────────────────────────────────
+// ─── Over the mirror seam ─────────────────────────────────────────────
 
 /** Wire codec for one `ClientEngine.EngineEvent`. */
 export const EngineEvent: Schema.Codec<EngineEventType, unknown> = Schema.Union([
@@ -167,7 +167,7 @@ export type SyncFailure = typeof SyncFailure.Type;
  * `introspect/subscriptions`, `introspect/journal`, `introspect/cookie`,
  * `introspect/collections` and `introspect/syncFailures`, and streaming
  * `introspect/events`. Mutation states are not among them: a mirror follows
- * them through `Mirror.mutationStates` (#116).
+ * them through `Mirror.mutationStates`.
  */
 export const requests = {
   subscriptions: HostRequest.single("introspect/subscriptions", {
@@ -209,7 +209,7 @@ export const handlers = <E>(
 ];
 
 /**
- * Build the introspection view of the engine a mirror's host runs (#136), over
+ * Build the introspection view of the engine a mirror's host runs, over
  * {@link requests}. Each read is one host request; `events` follows the host's
  * stream for as long as it is consumed. A host that does not serve these kinds
  * (no `store` given to `EngineHost.run`) answers `UnknownKind`; one that

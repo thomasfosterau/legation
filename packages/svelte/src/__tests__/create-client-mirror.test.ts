@@ -1,5 +1,5 @@
 /**
- * `createClient` over a hosted engine (#146, #147): given a `channel`, the
+ * `createClient` over a hosted engine: given a `channel`, the
  * handle's Client is a mirror of the host's engine, and the page's snapshot is
  * offered to the host's store before anything is subscribed. The host owns
  * the empty-store gate: the first offer to an empty host hydrates it, a later
@@ -69,7 +69,7 @@ const idsOnce = (client: Client.Client, count: number) =>
     Effect.orDie
   );
 
-describe("createClient over a hosted engine (#146)", () => {
+describe("createClient over a hosted engine", () => {
   it.live(
     "hands the snapshot to an empty host, which hydrates once; a later snapshot is NotEmpty",
     () =>

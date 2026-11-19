@@ -4,7 +4,7 @@
  * Mirror updates arrive on background fibers, so assertions poll with real
  * timers (clock-independent under the test environment). The liveness cases
  * are the exception: they drive the host's sweep and the mirror's heartbeat
- * on the TestClock (#312).
+ * on the TestClock.
  */
 import { Defined } from "@thomasfosterau/legation/internal";
 import {
@@ -56,7 +56,7 @@ const TodoArgs = Schema.Struct({
 });
 type Todo = typeof TodoArgs.Type;
 
-// The node graph the URL-keyed tests (#159) compile against: a todo's
+// The node graph the URL-keyed tests compile against: a todo's
 // `author` edge is what a `SubscribeUrl` with `include=author` must pin.
 const nodes = Node.registry([
   Node.make("todos", {
@@ -91,7 +91,7 @@ const eventually = <A>(read: Effect.Effect<A>, until: (value: A) => boolean) =>
     return yield* Effect.die(new TestFailure({ message: "eventually: condition never held" }));
   });
 
-// The liveness cases (#312) step the TestClock with these.
+// The liveness cases step the TestClock with these.
 
 /**
  * Advance the TestClock (which starts at 0) 1 ms at a time to `millis`, so
@@ -293,7 +293,7 @@ describe("EngineHost liveness (heartbeat)", () => {
   // last-seen times, so virtual time only moves when a case advances it. The
   // loopback channel is a PubSub, so delivery needs fibre yields, never wall
   // time, and scheduler delay on a loaded machine cannot starve a heartbeat
-  // past the timeout (#312).
+  // past the timeout.
   const liveness = { mirrorTimeout: "60 millis", sweepInterval: "15 millis" } as const;
 
   /** The engine with its subscribe and unsubscribe calls counted. */
@@ -376,7 +376,7 @@ describe("EngineHost ↔ Mirror (BroadcastChannel)", () => {
   );
 });
 
-describe("Mirror: a forwarded request is never silently lost (#119)", () => {
+describe("Mirror: a forwarded request is never silently lost", () => {
   it.effect(
     "a mutation orphaned by a dead host fails visibly once a new host announces itself",
     () =>
@@ -459,7 +459,7 @@ describe("Mirror: a forwarded request is never silently lost (#119)", () => {
   );
 });
 
-// ─── URL-keyed subscriptions (#159, ADR-0029 section 2) ──────────────────────
+// ─── URL-keyed subscriptions (ADR-0029 section 2) ──────────────────────
 
 /**
  * A stand-in for `@thomasfosterau/legation-jsonapi`'s `JsonApiQuery.urlReads` (this package
@@ -509,7 +509,7 @@ const authorWindow = Subset.hash(
   Subset.make({ collection: "users", where: Predicate.isIn("id", ["u1"]) })
 );
 
-describe("URL-keyed subscriptions over the mirror channel (#159)", () => {
+describe("URL-keyed subscriptions over the mirror channel", () => {
   it.effect("a page with no Client registers by URL: SubscribeUrl pins root and edge windows", () =>
     Effect.gen(function* () {
       const { engine } = yield* makeEngine;
@@ -625,7 +625,7 @@ describe("URL-keyed subscriptions over the mirror channel (#159)", () => {
   );
 });
 
-// ─── The host's registrations as a coverage ledger (#166, ADR-0029 section 3) ─
+// ─── The host's registrations as a coverage ledger (ADR-0029 section 3) ─
 
 describe("EngineHost.Host.registrations", () => {
   it.effect(
@@ -665,7 +665,7 @@ describe("EngineHost.Host.registrations", () => {
           // identity of that pin lives in the Client's own ledger, not here.
           yield* client.subscribe("/todos?include=author");
           yield* eventually(hashes(engine), (current) => current.includes(todosRoot));
-          // Each is listed with its pulled summary; covered once a pull started after it has applied (#426).
+          // Each is listed with its pulled summary; covered once a pull started after it has applied.
           yield* engine.pull.pipe(Effect.orDie);
           const held = yield* eventually(host.registrations, (current) => current.length === 2);
           expect(held.map((entry) => Subset.hash(entry.root))).toEqual([todosRoot, todosRoot]);
@@ -812,7 +812,7 @@ describe("EngineHost.Host.registrations", () => {
     )
   );
 
-  it.effect("tells a mirror when the host's replica holds its registration (#426)", () =>
+  it.effect("tells a mirror when the host's replica holds its registration", () =>
     Effect.scoped(
       Effect.gen(function* () {
         const { engine } = yield* makeEngine;
@@ -911,7 +911,7 @@ const todosUpdates = (
       : []
   );
 
-describe("pulled marks follow their rows over a mirror (#672)", () => {
+describe("pulled marks follow their rows over a mirror", () => {
   it.live("the host posts a registration's pulled rows before the mark that calls it pulled", () =>
     Effect.scoped(
       Effect.gen(function* () {

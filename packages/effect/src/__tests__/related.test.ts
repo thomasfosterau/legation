@@ -298,7 +298,7 @@ describe("Related.query / observe", () => {
           );
           expect(settled).toEqual(["edited", "second"]);
           // ...and the observer re-emits it. Its emissions can lag the pull
-          // (and a push ack briefly re-emits the pre-edit join, #286), so wait
+          // (and a push ack briefly re-emits the pre-edit join), so wait
           // for the latest one to match rather than reading a snapshot.
           const emissions = yield* emitted(
             (acc) =>
@@ -439,7 +439,7 @@ describe("Related.resolveExistsLocally", () => {
   );
 });
 
-// ─── Delta-maintenance property test (issue #111) ────────────────────────────
+// ─── Delta-maintenance property test ────────────────────────────
 //
 // `Related.makeJoinEngine` maintains the join incrementally from base/foreign
 // row snapshots (put/delete-shaped deltas, including fk changes that move a
@@ -629,7 +629,7 @@ const sameJoinUnordered = (
     );
   });
 
-describe("Related delta-maintenance (issue #111)", () => {
+describe("Related delta-maintenance", () => {
   it("makeJoinEngine matches hydrateFromScratch after every prefix of randomized deltas", () => {
     const rngSeed = 0xc0ffee; // fixed: a failure is reproducible from this constant
     const rng = mulberry32(rngSeed);

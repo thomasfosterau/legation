@@ -2,7 +2,7 @@
  * JsonApiQuery
  *
  * The bridge between the filter grammar's URL form and the engine's plan
- * (ADR-0028 §5, issue #161) — a façade-boundary projection for one job
+ * (ADR-0028 §5) — a façade-boundary projection for one job
  * (ADR-0029 §6: a URL must mean the same thing answered from the replica as
  * answered by the network), not a general translation between two dialects
  * of one language. effect-jsonapi owns the grammar — its AST (`Filter.Ast`),
@@ -15,8 +15,8 @@
  *   {@link fromFilterAst} rejects a literal that is not a wire scalar
  *   (`string | number | boolean`) or a `Date` (encoded to its instant text —
  *   see below) with a typed `QueryError`, since a grammar AST is typed by
- *   the attribute's **decoded** schema and that type is open-ended (issue
- *   #218's design note). {@link toFilterAst} returns `None` for `Exists`
+ *   the attribute's **decoded** schema and that type is open-ended.
+ *   {@link toFilterAst} returns `None` for `Exists`
  *   (server-only, no URL form), an empty `In` / `NotIn` list, and a `null`
  *   literal (the grammar's lists are non-empty and `NULL` is never a
  *   literal — `isnull` names it); those callers fail closed.
@@ -53,12 +53,12 @@
  *   canonical encoder, so two reads with one plan have one string —
  *   subscription identity for `Client.subscribe(url)` (ADR-0029 §2).
  *   {@link urlReads} packages the parse and the canonical string as the
- *   `Client.UrlReads` seam a Client or an engine host is built with (#159).
+ *   `Client.UrlReads` seam a Client or an engine host is built with.
  *
  * The query codec is derived from the **node graph**, not from an
  * effect-jsonapi resource: {@link resourcesOf} synthesises one resource per
  * node whose filterable attributes carry the node's filterable set (the
- * operators and literal kinds of ADR-0028 rule d, #154) and whose
+ * operators and literal kinds of ADR-0028 rule d) and whose
  * relationships are the node's edges. A filter names the row field the
  * engine evaluates — a `one`-edge is filtered by its key field
  * (`filter[categoryId]=c-audio`, as in ADR-0029's worked examples), not by
@@ -105,7 +105,7 @@ import type { JsonApiRequestOptions, SortTerm } from "./types.js";
  * A grammar literal as a `Predicate` literal: scalars as they are, a `Date`
  * as its instant text (the load-bearing encode of ADR-0028 rule e), or a
  * typed `QueryError` for anything else — a grammar AST is typed by the
- * attribute's decoded schema (issue #218's design note), which is
+ * attribute's decoded schema, which is
  * open-ended, so this is the one place that type meets `Predicate.Literal`'s
  * closed wire-scalar union and can fail.
  */
@@ -339,7 +339,7 @@ const attributesOf = (node: Node.AnyNode): Record<string, Schema.Top> => {
 const RESOURCE_ID = "id";
 
 /**
- * The synthetic resource's `id` (#590): the node's filterable `id`, declared
+ * The synthetic resource's `id`: the node's filterable `id`, declared
  * through `Filter.able` on `Resource.make`'s `id` option (effect-jsonapi
  * 0.21), so `filter[id]` decodes through the same grammar as any attribute.
  * A node whose `id` is not filterable keeps effect-jsonapi's default id.
@@ -716,7 +716,7 @@ const checkFields = (
 
 /**
  * `page[offset]` and `page[after]` are different pagination idioms — one
- * request names one (#209). The schema alone cannot reject the
+ * request names one. The schema alone cannot reject the
  * combination (each key decodes fine on its own), so this runs before
  * decoding, the way {@link checkInclude} rejects a nested path.
  */
@@ -986,7 +986,7 @@ const filterOf = (
 /**
  * The decoded query a compiled read denotes. The page comes from the
  * **read**, not the compiled window: an offset read's `root.limit`
- * absorbs `offset` (`Query.plan`'s `rootLimit`, #209), so reconstructing
+ * absorbs `offset` (`Query.plan`'s `rootLimit`), so reconstructing
  * `page[limit]`/`page[after]` from `root` would leak the inflated fetch
  * size into the URL instead of the request the caller actually made.
  */
@@ -1086,7 +1086,7 @@ const tryCanonical = (
   });
 
 /**
- * The `Client.UrlReads` seam over this bridge (#159, ADR-0029 §2): pass as
+ * The `Client.UrlReads` seam over this bridge (ADR-0029 §2): pass as
  * `urls` to `Client.make` / `Client.connect` / `Client.fromView` so
  * `client.subscribe(url)` parses through {@link parseRead} and keys the pin
  * by {@link canonical}, and to an engine host (`ServiceWorkerHost.run`) so
@@ -1171,7 +1171,7 @@ const flatFilterCodecOf = (ast: Filter.Node): FlatFilterCodec => {
       scalarSchema(type as "string" | "number" | "boolean").pipe(Filter.able()),
     ]
   );
-  // An `id` filter is the resource id's (#590): JSON:API reserves the name for it.
+  // An `id` filter is the resource id's: JSON:API reserves the name for it.
   const id = types.has(RESOURCE_ID)
     ? Option.some(Schema.String.pipe(Filter.able()))
     : Option.none<Schema.Codec<string, string>>();

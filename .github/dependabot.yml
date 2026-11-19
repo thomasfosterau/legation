@@ -1,60 +1,5 @@
-# Dependabot version updates. Security updates are enabled separately in the
-# repository settings.
-#
-# The workspace is on pnpm: the `npm` ecosystem at `/` reads
-# pnpm-workspace.yaml and its catalogs, which cover every package and the
-# example apps (they are workspace members), and updates pnpm-lock.yaml.
-#
-# A group exists only where its members must move at the same time (one
-# release train with exact cross-pins, or a hard compatibility table);
-# everything else, each GitHub Action included, updates on its own PR.
-# Dependabot puts a dependency in the FIRST group that matches it, so
-# `exclude-patterns` keep `@effect/tsgo` out of `effect`. Each group takes
-# every update type, majors included, so a set that must move together
-# always arrives as one PR:
-#
-# - toolchain: vite-plus pins the `oxlint`, `oxfmt`, `oxlint-tsgolint` and
-#   `vitest` it carries (and `vite` is its aliased core), and `effect-tsgo
-#   patch` matches the native `tsc` and `oxlint` by gitHead / version and
-#   hard-errors (UnsupportedTargetPackageVersionError) on any pairing it has
-#   no artifact for. Before merging, check the `components` table in
-#   node_modules/@effect/tsgo/dist/effect-tsgo.cjs; when a vite-plus bump
-#   outruns it, pick the `@effect/tsgo` release that covers the new oxlint /
-#   tsgolint by hand on the PR's branch. The Effect lint preset
-#   (`@enfect/oxlint`) and `@effect/language-service` are not in it: neither
-#   pins an oxlint or TypeScript version, so each updates on its own.
-# - effect: the Effect release line is a lockstep singleton set (`effect`,
-#   the `@effect/*` runtime packages and the `@effect/platform-node-shared` /
-#   `@effect/sql-d1` catalog entries the `overrides` pins use). The published
-#   floors under `catalogs.peers` and `catalogs.*-peers` are hand-set; CI
-#   tests every PR at the pin (`ci.yml`), and the floors only by hand before
-#   1.0 (`vp run ci:floor`). Alchemy's packages range `effect`, so an effect bump needs no
-#   alchemy one.
-# - svelte: the compiler, SvelteKit, its adapters / Vite plugin and
-#   svelte-check peer on each other.
-# - alchemy: `alchemy` and the `@alchemy.run/*` provider packages are one
-#   release train (each provider release pins `alchemy` exactly).
-#   legation-alchemy-cloudflare peers on both exactly
-#   (`catalogs.alchemy-peers`), so a bump also moves that catalog by hand, with
-#   a `minor` changeset, to the release the apps pin.
-#
-# Hand moves Dependabot cannot make (do them on the matching group's PR):
-# - the npm-alias catalog entries: `vite` (`npm:@voidzero-dev/vite-plus-core`,
-#   always equal to `vite-plus`; `pnpm dlx --package=vite-plus@<v> vp migrate
-#   --no-interactive` re-pins it, then drop the `minimumReleaseAgeExclude`
-#   entries it adds), `typescript` (`npm:@typescript/typescript6`) and
-#   `@typescript/native` (`npm:typescript`, matching @effect/tsgo's gitHead);
-# - the `overrides` keys (`vite@*`, `vitest@*`, `effect`,
-#   `@effect/platform-node-shared`, `@effect/sql-d1`), which follow their
-#   catalog entries;
-# - `catalogs.peers` and `catalogs.*-peers`, the published floors (`^4.0.0`
-#   unless a dependency forces more; a `minor` changeset to raise), and the
-#   exact Alchemy peers in `catalogs.alchemy-peers`.
-#
-# `cooldown` is 1 day (Dependabot takes whole days only), with the same
-# first-party exemption as `minimumReleaseAgeExclude`. pnpm-workspace.yaml's
-# `minimumReleaseAge` is 480 minutes (8 hours), so a Dependabot PR never
-# proposes a version pnpm would still refuse to install.
+# Groups exist only for sets that must move together; the by-hand follow-ups
+# are in docs/CONTRIBUTING.md.
 version: 2
 updates:
   - package-ecosystem: "npm"
@@ -62,6 +7,8 @@ updates:
     schedule:
       interval: "daily"
     open-pull-requests-limit: 10
+    assignees:
+      - thomasfosterau
     labels:
       - "dependencies"
     commit-message:
@@ -71,21 +18,14 @@ updates:
       exclude:
         - "@thomasfosterau/*"
     groups:
-      # vite-plus pins vite / vitest / oxlint; the tsgo patch pairs with them.
       toolchain:
         applies-to: version-updates
         patterns:
           - "vite-plus"
-          - "vite"
+          - "@voidzero-dev/*"
           - "vitest"
           - "@vitest/*"
           - "@effect/tsgo"
-          - "@typescript/native"
-          - "typescript"
-          - "@typescript/typescript6"
-          - "@voidzero-dev/*"
-        update-types: ["major", "minor", "patch"]
-      # One release train: every Effect runtime package at one version.
       effect:
         applies-to: version-updates
         patterns:
@@ -93,51 +33,42 @@ updates:
           - "@effect/*"
         exclude-patterns:
           - "@effect/tsgo"
-          - "@effect/language-service"
-        update-types: ["major", "minor", "patch"]
-      # The Svelte packages peer on each other's releases.
       svelte:
         applies-to: version-updates
         patterns:
           - "svelte"
           - "@sveltejs/*"
           - "svelte-check"
-        update-types: ["major", "minor", "patch"]
-      # Alchemy's engine and its providers: one release train, exact pins.
       alchemy:
         applies-to: version-updates
         patterns:
           - "alchemy"
           - "@alchemy.run/*"
-        update-types: ["major", "minor", "patch"]
-    assignees:
-      - thomasfosterau
+
   - package-ecosystem: "github-actions"
     directory: "/"
     schedule:
       interval: "daily"
     open-pull-requests-limit: 5
+    assignees:
+      - thomasfosterau
     labels:
       - "dependencies"
     commit-message:
       prefix: "chore"
-    # No groups: each action updates on its own PR.
     cooldown:
       default-days: 1
-    assignees:
-      - thomasfosterau
-  # The .devcontainer/ features and their lockfile (the image tag moves with
-  # vite-plus by hand).
+
   - package-ecosystem: "devcontainers"
     directory: "/"
     schedule:
       interval: "daily"
     open-pull-requests-limit: 5
+    assignees:
+      - thomasfosterau
     labels:
       - "dependencies"
     commit-message:
       prefix: "chore"
     cooldown:
       default-days: 1
-    assignees:
-      - thomasfosterau

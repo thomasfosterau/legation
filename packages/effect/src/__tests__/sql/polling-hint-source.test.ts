@@ -1,5 +1,5 @@
 /**
- * PollingHintSource (#43): the polling source reads a cheap change-detector per
+ * PollingHintSource: the polling source reads a cheap change-detector per
  * table on an interval and publishes a value-less `ChangeHint` for a collection
  * whose detector moved between polls — the baseline poll never emits, and an
  * unchanged detector never emits. A final integration test proves the poke
@@ -50,7 +50,7 @@ const sleepReal = (millis: number) =>
 
 const todos = { todos: { table: "todos", versionColumn: "version" } };
 
-describe("PollingHintSource (#43)", () => {
+describe("PollingHintSource", () => {
   it.live("emits a value-less hint only when the version-detector moves", () =>
     Effect.gen(function* () {
       const bus = yield* InvalidationBus.makeInProcess;

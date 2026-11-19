@@ -5,8 +5,8 @@
  * read a single row only A was admitted to — not before B's first pull, not
  * after it, not through the façade.
  *
- * The device follows its cookie jar with legation-auth's `SignOut.follow`
- * (#212): the sign-out is a `Reset` (confirmed rows, cookie and pins
+ * The device follows its cookie jar with legation-auth's `SignOut.follow`:
+ * the sign-out is a `Reset` (confirmed rows, cookie and pins
  * dropped), and A's unpushed draft is quarantined under A's fingerprint —
  * never pushed under B's session, never discarded.
  */

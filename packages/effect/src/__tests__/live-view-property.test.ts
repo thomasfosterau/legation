@@ -1,5 +1,5 @@
 /**
- * Property test (issue #112 acceptance criteria): the order `LiveView`
+ * Property test: the order `LiveView`
  * maintains incrementally must equal `Subset.apply` recomputed from scratch
  * — after *every prefix* of a randomized delta sequence, not just the final
  * state, so a bug that self-corrects after enough churn can't hide. Runs

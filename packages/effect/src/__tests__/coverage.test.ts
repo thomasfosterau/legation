@@ -1,5 +1,5 @@
 /**
- * Coverage (ADR-0029 section 3, issue #162): the two worked tables of the
+ * Coverage (ADR-0029 section 3): the two worked tables of the
  * ADR as unit tests, then each rule on its own — canonical conjuncts under
  * structural equality, the strict window (a cursor alone included), the
  * include rule over a plan's edge selects — and the deliberate false
@@ -177,7 +177,7 @@ describe("rule 2: the window", () => {
   });
 });
 
-describe("offset pagination (#209): covered by the ordinary limit-prefix rule", () => {
+describe("offset pagination: covered by the ordinary limit-prefix rule", () => {
   // Option A of #209: an offset read compiles (`Query.plan`'s `rootLimit`)
   // to a plain limit-only window — `limit = offset + first`, no `cursor` —
   // so it is judged by exactly `coversWindow`/rule 2 above; no parallel

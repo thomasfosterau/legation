@@ -11,7 +11,7 @@
  * Boot also (1) broadcasts the config handshake that starts the worker's
  * engine (the worker can't read the client-group cookie), (2) offers the
  * page's SSR snapshot to the worker through the host-request envelope
- * (`createClient`'s `snapshot`, #146) — the worker owns the empty-store
+ * (`createClient`'s `snapshot`) — the worker owns the empty-store
  * gate, so a returning visitor's replica is never touched — and (3) pins
  * the shell's reads once the offer is settled (subscriptions are client
  * state, refcounted per mirror by the host; a registration makes the host
@@ -19,7 +19,7 @@
  *
  * `bootMainThread` is the dev-mode alternative (`?host=main`,
  * `+layout.svelte`): no service worker at all — `ElectedHost.run` owns the
- * engine on this tab directly (ADR-0010's no-service-worker fallback, #119),
+ * engine on this tab directly (ADR-0010's no-service-worker fallback),
  * so the topology actually runs somewhere in this repo (see `lib/host.ts`'s
  * `bootElected`).
  */
@@ -39,7 +39,7 @@ export type AppRuntime = ClientRuntime;
 
 /**
  * Build the tab's Client once (call from the root layout): a mirror of the
- * worker's engine, offered the page's SSR snapshot (#146) before the shell's
+ * worker's engine, offered the page's SSR snapshot before the shell's
  * pins are made. The worker hydrates its replica with it only when the
  * replica is empty and has not pulled; the handle's `hydration` says what it
  * answered, and no answer needs any action here.
@@ -84,10 +84,10 @@ export const boot = (options: {
 };
 
 /**
- * The dev-mode, no-service-worker alternative to {@link boot} (#133 item 6):
+ * The dev-mode, no-service-worker alternative to {@link boot}:
  * this tab elects itself leader (`navigator.locks`) and owns the engine
  * directly instead of joining the service worker's — the shipped fallback
- * topology for environments without service-worker support (ADR-0010, #119).
+ * topology for environments without service-worker support (ADR-0010).
  * Returns the `role` stream alongside the runtime purely for a debug badge;
  * `+layout.svelte` never branches application logic on it.
  */

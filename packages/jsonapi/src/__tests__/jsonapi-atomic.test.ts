@@ -537,7 +537,7 @@ describe("JsonApiBackend in atomic mode", () => {
 });
 
 /**
- * Change hints across the mutations of one push (#369, as #344 for
+ * Change hints across the mutations of one push (as for
  * MemoryBackend). A row a later mutation of the push deletes carries no value,
  * on both delivery paths: the atomic request and the per-resource writes.
  */
@@ -593,7 +593,7 @@ for (const mode of ["atomic", "per-resource"] as const) {
           mutation(2, "todos/delete", { type: "todos", id: "1" }),
         ]);
 
-        // The delete leaves no new value, and the old value is the row as the push found it (#372).
+        // The delete leaves no new value, and the old value is the row as the push found it.
         expect(result.hints).toEqual([
           {
             collection: "todos",
@@ -728,7 +728,7 @@ for (const mode of ["atomic", "per-resource"] as const) {
 }
 
 /**
- * Change hints carry each row's pre-push value as `oldValues` (#372, as
+ * Change hints carry each row's pre-push value as `oldValues` (as
  * MemoryBackend does). An update or delete reads its row before the push
  * writes it, once per row per push, on both delivery paths.
  */
@@ -1063,10 +1063,10 @@ for (const mode of ["atomic", "per-resource"] as const) {
 /**
  * A create the atomic path refuses (the row already exists, a conflict) leaves
  * its row in place, so a later update or delete of that row in the same batch
- * must still carry the pre-push value (#402). The batch reads that row before
+ * must still carry the pre-push value. The batch reads that row before
  * the resend, and only when such a write is still to be sent.
  */
-describe("JsonApiBackend atomic batch after a refused create (#402)", () => {
+describe("JsonApiBackend atomic batch after a refused create", () => {
   /** The first request is refused on its create; the resend and later requests apply. */
   const refusedCreate = (request: Recorded, index: number) =>
     index === 0 ? rejectionAt(0, "exists") : bareWrites("atomic")(request);
@@ -1451,7 +1451,7 @@ describe("JsonApiSync.layer atomic detection", () => {
 });
 
 /**
- * Rejection memory (#366, as MemoryBackend's #355): a replayed copy of a push
+ * Rejection memory (as for MemoryBackend): a replayed copy of a push
  * whose mutations were committed as rejected reports those rejections again,
  * with their reasons, and a push that starts past them forgets them. Both
  * delivery paths are covered. The server rejects the update of row 2 and the
@@ -1502,7 +1502,7 @@ const createFour = mutation(4, "todos/create", {
 });
 
 for (const mode of ["atomic", "per-resource"] as const) {
-  describe(`JsonApiBackend rejection memory, ${mode} path (#366)`, () => {
+  describe(`JsonApiBackend rejection memory, ${mode} path`, () => {
     it.effect(
       "a replayed push reports the committed rejections and their reasons, sending nothing",
       () =>
@@ -1574,10 +1574,10 @@ const listingServer = (mode: HintMode) =>
 
 /**
  * A listing caches its rows, and `getRows` serves a cached row without a read.
- * The backend's own writes must keep that cache current (#395): a row the push
+ * The backend's own writes must keep that cache current: a row the push
  * updates or deletes is not served at its pre-push value afterwards.
  */
-describe("JsonApiBackend getRows after its own writes (#395)", () => {
+describe("JsonApiBackend getRows after its own writes", () => {
   for (const mode of ["atomic", "per-resource"] as const) {
     it.effect(`getRows returns a row's post-update value without a re-list, ${mode} path`, () =>
       Effect.gen(function* () {
@@ -1648,11 +1648,11 @@ const titlesOf = (rows: ReadonlyArray<{ readonly id: string; readonly value: unk
   Object.fromEntries(rows.map((row) => [row.id, (row.value as { title?: string }).title]));
 
 /**
- * The cache is updated only by writes the server applied (#395): a rejected or
+ * The cache is updated only by writes the server applied: a rejected or
  * failed write leaves the row at its pre-push value, and a write that applied
  * before a failure keeps its new value.
  */
-describe("JsonApiBackend getRows after rejected and failed writes (#395)", () => {
+describe("JsonApiBackend getRows after rejected and failed writes", () => {
   it.effect(
     "a per-resource update the server rejects with 409 leaves getRows at the pre-push value",
     () =>

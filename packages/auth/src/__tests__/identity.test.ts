@@ -1,5 +1,5 @@
 /**
- * The identity resolver over an in-process effect-auth (#219 §1): a session
+ * The identity resolver over an in-process effect-auth: a session
  * cookie, a session bearer token and an API key each resolve to a typed
  * principal on `SyncContext.identity`, re-validated on every resolve, and
  * every failure — an unknown, revoked or disabled credential, a store fault, a

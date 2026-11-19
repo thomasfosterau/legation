@@ -1,5 +1,5 @@
 /**
- * The acknowledged-but-unpulled tail, durable in `ClientStore` (#336). A
+ * The acknowledged-but-unpulled tail, durable in `ClientStore`. A
  * restart between a push acknowledgement and the next pull keeps the
  * mutation's effect overlaid; the pull that reports it releases the tail from
  * the store; an identity reset clears it; hydration carries it. The crash
@@ -345,7 +345,7 @@ const stores = [
   ["key-value", ClientStoreModule.makeKeyValue()],
 ] as const;
 
-describe("ClientStore's unpulled tail (#336)", () => {
+describe("ClientStore's unpulled tail", () => {
   for (const [name, open] of stores) {
     layer(KeyValueStore.layerMemory)((scoped) => {
       scoped.effect(`${name}: parked entries leave the journal and stay readable in order`, () =>
@@ -546,7 +546,7 @@ describe("ClientStore's unpulled tail (#336)", () => {
   });
 });
 
-describe("the tail in an engine (#336)", () => {
+describe("the tail in an engine", () => {
   for (const limit of [0, -1, 1.5, Number.NaN]) {
     layer(KeyValueStore.layerMemory)((scoped) => {
       scoped.effect(
@@ -827,7 +827,7 @@ describe("the tail in an engine (#336)", () => {
   });
 });
 
-describe("the tail's crash windows and interleavings (#387)", () => {
+describe("the tail's crash windows and interleavings", () => {
   layer(KeyValueStore.layerMemory)((scoped) => {
     scoped.effect("a boot read of the tail that fails is repaired by the next push", () =>
       Effect.gen(function* () {
@@ -1029,7 +1029,7 @@ describe("the tail's crash windows and interleavings (#387)", () => {
   });
 });
 
-describe("a pull release that fails part-way (#387)", () => {
+describe("a pull release that fails part-way", () => {
   layer(KeyValueStore.layerMemory)((scoped) => {
     scoped.effect(
       "a pull whose second row write fails, then a hydration, keeps the snapshot across a reopen",
@@ -1147,7 +1147,7 @@ describe("a pull release that fails part-way (#387)", () => {
 });
 
 // A release that covers `lastMutationIds` and carries no rows: the atomic batch where the store has
-// one (#411), else the record path it stands for.
+// one, else the record path it stands for.
 const releaseCovering = (store: ClientStore, lastMutationIds: Readonly<Record<string, number>>) =>
   store.commitPull !== undefined
     ? store.commitPull({ lastMutationIds, patch: [] })
@@ -1182,9 +1182,9 @@ const releaseScenario = (store: ClientStore) =>
     };
   });
 
-// The release record's review follow-up (#387): the store-level guarantees, over both implementations
+// The release record's review follow-up: the store-level guarantees, over both implementations
 // where both can exhibit them.
-describe("a release record's guarantees across both stores (#387 review)", () => {
+describe("a release record's guarantees across both stores", () => {
   for (const [name, open] of stores) {
     layer(KeyValueStore.layerMemory)((scoped) => {
       scoped.effect(`${name}: clearUnpulled also ends a release in progress`, () =>
@@ -1467,7 +1467,7 @@ describe("a release record's guarantees across both stores (#387 review)", () =>
   });
 });
 
-// The same three steps through the atomic batch members (#411): the memory store takes them as the
+// The same three steps through the atomic batch members: the memory store takes them as the
 // engine does on a store that has them. The record-path counterpart runs the same steps on the
 // key-value store, which has no AtomicKeyValue here and so takes the record path.
 const stateOf = (store: ClientStore) =>
@@ -1534,7 +1534,7 @@ const recordMembersScenario = (store: ClientStore) =>
     };
   });
 
-describe("the memory store's atomic batch members (#411)", () => {
+describe("the memory store's atomic batch members", () => {
   layer(KeyValueStore.layerMemory)((scoped) => {
     scoped.effect("the batch members reach the state the key-value record path reaches", () =>
       Effect.gen(function* () {
@@ -1616,9 +1616,8 @@ describe("the memory store's atomic batch members (#411)", () => {
   });
 });
 
-// The engine's failure paths around the release record, and the locks its direct store writes take
-// (#387 review).
-describe("the engine's release failure paths (#387 review)", () => {
+// The engine's failure paths around the release record, and the locks its direct store writes take.
+describe("the engine's release failure paths", () => {
   layer(KeyValueStore.layerMemory)((scoped) => {
     scoped.effect(
       "a pull whose release record lands but reports failure is finished, so the next pull succeeds",
@@ -1832,9 +1831,9 @@ describe("the engine's release failure paths (#387 review)", () => {
   });
 });
 
-// The in-process finish's reads and its failure boundary (#387 review). Key-value only: the memory
+// The in-process finish's reads and its failure boundary. Key-value only: the memory
 // store's finish performs no I/O.
-describe("the in-process finish reads the record, and seals only after it writes (#387 review)", () => {
+describe("the in-process finish reads the record, and seals only after it writes", () => {
   layer(KeyValueStore.layerMemory)((scoped) => {
     scoped.effect(
       "a failed read of the release record fails that row write, and the next write succeeds",
@@ -1911,7 +1910,7 @@ describe("the in-process finish reads the record, and seals only after it writes
   });
 });
 
-describeWrapped("the engine's clears (#387 review)", (it) => {
+describeWrapped("the engine's clears", (it) => {
   it.effect("a clearRows waits for the overlay lock while it clears the confirmed rows", () =>
     Effect.gen(function* () {
       const inner = yield* ClientStoreModule.makeMemory;
@@ -1955,8 +1954,8 @@ describeWrapped("the engine's clears (#387 review)", (it) => {
 });
 
 /**
- * Yields until `condition` holds, and says whether it did. The explicit wait for a background pull
- * (#337): bounded, so a pull that never comes makes the caller's `expect` fail rather than hang the test.
+ * Yields until `condition` holds, and says whether it did. The explicit wait for a background pull:
+ * bounded, so a pull that never comes makes the caller's `expect` fail rather than hang the test.
  */
 const settles = <E>(condition: Effect.Effect<boolean, E>): Effect.Effect<boolean, E> =>
   Effect.gen(function* () {
@@ -2018,7 +2017,7 @@ const engineWith = (
 /**
  * Runs `body` with the warnings the engine logs, and the names of the spans it opens. A background pull
  * opens its `clientPull` span when its fibre starts, before it queues for the pull lock, so counting those
- * spans counts the pull fibres a burst forked, including the ones the pull lock makes skip (#337).
+ * spans counts the pull fibres a burst forked, including the ones the pull lock makes skip.
  */
 const observed = <A, E, R>(
   body: (warnings: Array<string>, spans: Array<string>) => Effect.Effect<A, E, R>
@@ -2040,10 +2039,10 @@ const observed = <A, E, R>(
   );
 };
 
-// Pull ahead of the bound (#337). With no pokes and no `pullInterval` nothing pulls on its own, so a
+// Pull ahead of the bound. With no pokes and no `pullInterval` nothing pulls on its own, so a
 // run of pushes used to reach the bound and overflow, reverting the view. A push that takes the tail
 // to half the bound now starts one pull in the background, which the push does not wait for.
-describeWrapped("a push that takes the tail to half the bound pulls ahead of it (#337)", (it) => {
+describeWrapped("a push that takes the tail to half the bound pulls ahead of it", (it) => {
   // The tail length at which a push starts the pull, as the engine sets it.
   const pullAheadAt = Math.ceil(SMALL_LIMIT / 2);
   // A bound large enough that a burst stays under it while one pull is held.
@@ -2183,7 +2182,7 @@ describeWrapped("a push that takes the tail to half the bound pulls ahead of it 
   );
 });
 
-describe("dehydrate reads one state of the store (#392)", () => {
+describe("dehydrate reads one state of the store", () => {
   // A KeyValueStore whose first read of `parkKey` after `armed` is set signals `reached` and waits on
   // `release`. Parking on the cookie leaves the snapshot's row reads behind and its journal and tail
   // reads ahead of whatever the test lands. Parking on the unpulled index leaves the journal read behind
@@ -2340,12 +2339,12 @@ describe("dehydrate reads one state of the store (#392)", () => {
   });
 });
 
-describeWrapped("a memory snapshot is one pull's state (#392)", (it) => {
+describeWrapped("a memory snapshot is one pull's state", (it) => {
   // A pull writes the rows, then the cookie, under the memory store's lock. A snapshot reads the rows
   // first and the cookie after them, so unlocked it can pair the rows of one pull with the cookie of a
   // later one, a pairing no serial order produces. `MaxOpsBeforeYield` of 5, the house value
   // (journal-append-gap.test.ts), makes the two fibers yield often enough that a pull lands between the
-  // snapshot's reads on the unlocked code (#392). A budget of 1 starves the pull and never finishes.
+  // snapshot's reads on the unlocked code. A budget of 1 starves the pull and never finishes.
   it.live("a memory snapshot never pairs one pull's rows with another pull's cookie", () =>
     Effect.gen(function* () {
       const store = yield* ClientStoreModule.makeMemory;

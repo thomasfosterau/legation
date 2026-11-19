@@ -3,7 +3,7 @@
  * from their SvelteKit loads alone, and the loads read the JSON:API at the
  * canonical URLs of the app's declarative reads. This runs the real `load`
  * functions of `src/routes/**\/+page.server.ts` — and the catalog's
- * universal `+page.ts` (#168), which the server runs for the first render
+ * universal `+page.ts`, which the server runs for the first render
  * exactly as it runs a server load — against the commerce server
  * in-process: `fetch`, global and the load event's alike, is pointed at
  * the api's web handler, so `SYNC_ORIGIN` is never dialled. It checks the

@@ -17,7 +17,7 @@
  *    while the first push is in flight): each mutation must still apply at most
  *    once, and `lastMutationId` must never move backwards, so a copy whose
  *    mutation a concurrent call already committed is skipped. Every copy
- *    reports the committed outcome (#355): a copy that is skipped, whether as
+ *    reports the committed outcome: a copy that is skipped, whether as
  *    a replay or because a concurrent call committed first, lists its mutation
  *    in `rejected` when that mutation was committed as rejected, with the same
  *    reason. So a client's outcome does not depend on which response reaches
@@ -25,7 +25,7 @@
  *    next push starts past it, since a client resends only ids it has not had
  *    acknowledged.
  *
- *    Mutations from different client groups are serialisable (#353): the
+ *    Mutations from different client groups are serialisable: the
  *    effects of all committed mutations are equivalent to some serial order,
  *    and a handler's reads see a state consistent with that order. So no
  *    committed write is lost to a concurrent call from another group that read
@@ -37,17 +37,17 @@
  *    conform to guarantee 1.
  * 2. `evaluate` returns the **current** (row id, row version) set for an
  *    authorized subset — versions change on every authoritative write. An
- *    optional `evaluateMany` evaluates several subsets at once (#505), so a
+ *    optional `evaluateMany` evaluates several subsets at once, so a
  *    backend can answer a pull's subsets in a bounded number of round trips;
  *    its result for each subset must equal `evaluate`'s for that subset, in
  *    the same order.
- *    An optional `evaluateCounted` (#210) returns the same entries with each
+ *    An optional `evaluateCounted` returns the same entries with each
  *    subset's **total**: the number of rows its `where` matches, whatever its
  *    window (`orderBy`, `limit`, `cursor`), so the total of a windowed
  *    subscription is the collection's, not the window's.
  * 3. `getRows` returns encoded row values for explicit ids.
  * 4. `rejections` lists the permanent rejections a client group still remembers,
- *    each with its reason (#365). A pull reports those its watermark covers, so
+ *    each with its reason. A pull reports those its watermark covers, so
  *    a client whose push response was lost settles the rejection as rejected
  *    rather than applied. A rejection is remembered from the commit until a
  *    later push moves past it (guarantee 1), so it is listed for as long as a
@@ -57,7 +57,7 @@
  * `BackendContract.verifyBackendContract` checks these guarantees against
  * any implementation. {@link transaction} builds an `applyMutations` that
  * keeps guarantee 1's ordering and bump rules by construction from a store's
- * steps (#177); `MemoryBackend` and `SqlBackend` use it, and a hand-assembled
+ * steps; `MemoryBackend` and `SqlBackend` use it, and a hand-assembled
  * backend remains possible.
  */
 
@@ -114,7 +114,7 @@ export interface SubsetEntry {
 }
 
 /**
- * A subset's entries with its total (#210): {@link Backend.evaluate}'s entries,
+ * A subset's entries with its total: {@link Backend.evaluate}'s entries,
  * and the number of rows its `where` matches before `cursor` and `limit` cut
  * the window, i.e. what `evaluate` returns for {@link Subset.unwindowed}.
  */
@@ -163,7 +163,7 @@ export interface Backend {
   /**
    * The permanent rejections the group's clients still remember, each with its
    * reason (guarantee 4). The sync server filters them by the pull's watermark
-   * and returns them in the pull response (#365). Each entry's `mutationId` is
+   * and returns them in the pull response. Each entry's `mutationId` is
    * covered by its client's `lastMutationIds`, since a rejection is committed
    * with its id's bump.
    */
@@ -182,7 +182,7 @@ export interface Backend {
   ) => Effect.Effect<ReadonlyArray<SubsetEntry>, BackendError>;
 
   /**
-   * Evaluate several **already-authorized** subsets at once (#505): one entry
+   * Evaluate several **already-authorized** subsets at once: one entry
    * list per subset, in the order of `subsets`, each equal to what
    * {@link Backend.evaluate} returns for that subset (guarantee 2). Optional:
    * a backend that can batch (one SQL statement for a pull's subsets) provides
@@ -198,7 +198,7 @@ export interface Backend {
     | undefined;
 
   /**
-   * Evaluate several **already-authorized** subsets with their totals (#210):
+   * Evaluate several **already-authorized** subsets with their totals:
    * one {@link CountedEntries} per subset, in the order of `subsets`, whose
    * `entries` equal {@link Backend.evaluate}'s for that subset and whose
    * `total` is the length of `evaluate`'s answer for the subset without its
@@ -270,8 +270,8 @@ export const evaluateAll = (
 };
 
 /**
- * Evaluate `subsets` with their totals where the backend can count them
- * (#210): through {@link Backend.evaluateCounted} when it provides one, every
+ * Evaluate `subsets` with their totals where the backend can count them:
+ * through {@link Backend.evaluateCounted} when it provides one, every
  * `total` set; else {@link evaluateAll}, every `total` `undefined`. Fails
  * with a `BackendError` when `evaluateCounted` returns a different number of
  * answers than it was given subsets.
@@ -303,7 +303,7 @@ export const evaluateCountedAll = (
 };
 
 /**
- * Each subset's total (#210): the number of rows its `where` matches,
+ * Each subset's total: the number of rows its `where` matches,
  * whatever its window. Through {@link Backend.evaluateCounted} when the
  * backend provides one; else by evaluating each subset without its window
  * ({@link Subset.unwindowed}) and counting, which reads every matching id.
@@ -352,7 +352,7 @@ export const buildChangeHints = (
       : { collection, ids: [...ids], values, oldValues };
   });
 
-// ─── The transactional combinator (#177) ────────────────────────────────────
+// ─── The transactional combinator ────────────────────────────────────
 
 /**
  * What a store found when {@link transaction} asked it to open a pushed
@@ -492,7 +492,7 @@ const fromWatermark = <Staged>(
       );
 
 /**
- * Build a backend's `applyMutations` from its storage steps (#177). The
+ * Build a backend's `applyMutations` from its storage steps. The
  * combinator owns the ledger rules, so a backend built through it gets them by
  * construction rather than by convention:
  *
@@ -504,7 +504,7 @@ const fromWatermark = <Staged>(
  *   handler's effects reach `commit` is with the bump, a `MutationRejected` is
  *   committed as a bump with its reason and no effects, and a transient
  *   failure commits nothing and releases the unit.
- * - **Every copy reports the committed outcome** (#355): a replay or a copy a
+ * - **Every copy reports the committed outcome**: a replay or a copy a
  *   concurrent call committed first lists the committed rejection.
  *
  * What stays with the store, and with the runtime `BackendContract` suite: that
@@ -530,8 +530,8 @@ const fromWatermark = <Staged>(
  *     const last = ledger.get(mutation.clientId) ?? 0;
  *     return Effect.succeed(
  *       mutation.mutationId === last + 1
- *         ? ({ _tag: "Opened", unit: mutation } as const)
- *         : ({ _tag: "Watermark", lastMutationId: last, rejection: Option.none() } as const)
+ *         ? ({ _tag: "Opened", unit: mutation } as const):
+ * ({ _tag: "Watermark", lastMutationId: last, rejection: Option.none() } as const)
  *     );
  *   },
  *   run: (_mutation, handler) => handler(),
@@ -651,13 +651,13 @@ export const withoutTransaction = <A>(
   effect: Effect.Effect<A, BackendError>
 ): Effect.Effect<A, BackendError> => effect;
 
-// ─── Per-request backends (#681) ────────────────────────────────────────────
+// ─── Per-request backends ────────────────────────────────────────────
 
 /** Each per-request backend's acquisition, keyed by the backend {@link perRequest} returned. */
 const acquisitions = new WeakMap<Backend, Effect.Effect<Backend, BackendError, Scope.Scope>>();
 
 /**
- * A backend acquired per request (#681): `acquire` builds the backend one
+ * A backend acquired per request: `acquire` builds the backend one
  * request runs against, in that request's `Scope`, and the scope's close
  * releases it. For a store whose connection is valid only within the current
  * invocation (Hyperdrive, whose credentials expire with it) or that must not
@@ -739,7 +739,7 @@ export const perRequest = <R = never>(
   });
 
 /**
- * The backend one request runs against (#681): for a {@link perRequest}
+ * The backend one request runs against: for a {@link perRequest}
  * backend, one acquisition in the caller's `Scope`, released when it closes;
  * for any other backend, the backend itself. The sync server calls it once per
  * push, pull and read, so every statement of the request, a push's

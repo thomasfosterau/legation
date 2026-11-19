@@ -1,5 +1,5 @@
 /**
- * Web Push as a poke carrier, the server side (#214): `PushPoke.sink` sends
+ * Web Push as a poke carrier, the server side: `PushPoke.sink` sends
  * the contentless marker to the targets the app's registry names, at most once
  * per coalescing window plus one trailing push, and never past the app's
  * budget. Time is the test clock.
@@ -49,7 +49,7 @@ const recording = (
     return { sink, sent };
   });
 
-describe("PushPoke.sink (#214)", () => {
+describe("PushPoke.sink", () => {
   it.effect("sends the contentless marker to every target the registry names", () =>
     Effect.gen(function* () {
       const { sink, sent } = yield* recording({ targets: [alice, bob, alice] });

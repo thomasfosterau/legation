@@ -61,7 +61,7 @@ export const packOptions = (entries: PackageConfigOptions["entries"]): PackUserC
   // bundler drops every module it doesn't reach, which it can't do inside one
   // chunk. A merged chunk tied the error classes to the whole MemoryBackend
   // graph, so the Cache API HTTP cache alone bundled PubSub, Metric and
-  // HashMap (#678).
+  // HashMap.
   unbundle: true,
 });
 

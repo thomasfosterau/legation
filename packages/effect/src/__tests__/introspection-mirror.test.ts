@@ -1,5 +1,5 @@
 /**
- * Introspection over the mirror seam (#136): a host given its store serves
+ * Introspection over the mirror seam: a host given its store serves
  * the `introspect/*` request kinds, and `Introspection.fromMirror` reads the
  * same subscriptions, journal, cookie, collections, sync failures and events
  * as `Introspection.make` over the host's engine and store. A host without a
@@ -95,7 +95,7 @@ const read = <E>(view: Introspection.EngineIntrospection<E>) =>
     { concurrency: 1 }
   );
 
-describe("Introspection.fromMirror (#136)", () => {
+describe("Introspection.fromMirror", () => {
   it.effect("reads what Introspection.make reads over the host's engine and store", () =>
     Effect.gen(function* () {
       const { engine, owned, remote } = yield* setup();

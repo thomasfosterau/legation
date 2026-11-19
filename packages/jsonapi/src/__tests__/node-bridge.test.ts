@@ -295,7 +295,7 @@ describe("a bridged registry over a real engine", () => {
   );
 });
 
-describe("NodeBridge filterable set (#154, #161)", () => {
+describe("NodeBridge filterable set", () => {
   it("reads the resource's own declaration; relationship filters land on the key field", () => {
     const Author = Resource.make("authors", { attributes: { name: Schema.String } });
     const Article = Resource.make("articles", {
@@ -397,7 +397,7 @@ const Comment: Comment = Resource.make("comments", {
 
 const cyclic = NodeBridge.registry([Post, Comment]);
 
-describe("sync metadata read off the resource (#220)", () => {
+describe("sync metadata read off the resource", () => {
   it("takes a paginated relationship's order from its declaration; an option still wins", () => {
     const Ordered = Resource.make("products", {
       attributes: { name: Schema.NonEmptyString },
@@ -469,7 +469,7 @@ describe("sync metadata read off the resource (#220)", () => {
     ).toEqual({ kind: "text", operators: ["gt"] });
   });
 
-  it("stores a to-one edge under the relationship's declared key; via still wins (#553)", () => {
+  it("stores a to-one edge under the relationship's declared key; via still wins", () => {
     const Profile = Resource.make("profiles", {
       attributes: { bio: Schema.String },
       relationships: {
@@ -491,7 +491,7 @@ describe("sync metadata read off the resource (#220)", () => {
     ).toMatchObject({ via: "categoryKey" });
   });
 
-  it("bridges a graph that declares its metadata on the resources with no options (#220)", () => {
+  it("bridges a graph that declares its metadata on the resources with no options", () => {
     const Article = Resource.make("articles", {
       attributes: { publishedAt: Schema.String.pipe(Filter.able(["gt", "lt"])) },
       relationships: {

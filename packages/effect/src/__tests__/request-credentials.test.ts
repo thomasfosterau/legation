@@ -1,5 +1,5 @@
 /**
- * Request credentials (ADR-0035, #219): the `IdentityResolver` resolves an
+ * Request credentials (ADR-0035): the `IdentityResolver` resolves an
  * identity from the transport request's credentials and client group. The
  * resolver receives them on push, pull and read; header lookup is
  * case-insensitive; a carrier with no request (the in-memory loopback) presents
@@ -214,7 +214,7 @@ describe("IdentityResolver sees the request's credentials", () => {
   );
 });
 
-describe("Transport.makeInMemory (#649)", () => {
+describe("Transport.makeInMemory", () => {
   it.effect("reads effectful credentials on every call, so a changed session is seen", () =>
     Effect.gen(function* () {
       const { handler, seen } = yield* makeServer();

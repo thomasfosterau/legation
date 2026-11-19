@@ -27,7 +27,7 @@ export * as SpecExport from "./SpecExport.js";
 // `Hydration` is public (`@thomasfosterau/legation`) — the SSR snapshot is app-facing.
 
 // ─── Durable store seams ─────────────────────────────────────────────────────
-// The optional atomic batch a durable ClientStore uses when a host supplies it (#393).
+// The optional atomic batch a durable ClientStore uses when a host supplies it.
 export * as AtomicKeyValue from "./AtomicKeyValue.js";
 
 // ─── Engine ──────────────────────────────────────────────────────────────────

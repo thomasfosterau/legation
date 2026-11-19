@@ -2,10 +2,10 @@
  * AtomicKeyValue
  *
  * An optional seam over a key-value store: a batch of `set` and `remove`
- * operations that commits all of its operations or none of them (#393). When
+ * operations that commits all of its operations or none of them. When
  * it is in context, {@link ClientStore.makeKeyValue} writes a pull's rows, its
  * cookie, its journal trim and its tail release as one batch, with no release
- * record; without it the store keeps the release-record path (#387), so a
+ * record; without it the store keeps the release-record path, so a
  * third-party `KeyValueStore` behaves exactly as before.
  *
  * Effect's `KeyValueStore` has no transactions and no multi-key writes, so the
@@ -47,14 +47,14 @@ export interface AtomicKeyValue {
   /**
    * Every string entry the backing store holds, read in one read transaction, so the
    * result is one state of the store: a batch committed by another connection is
-   * either wholly in it or wholly absent (#392). Optional: a store without it reads
+   * either wholly in it or wholly absent. Optional: a store without it reads
    * its keys one at a time, which a concurrent connection can straddle.
    */
   readonly readAll?: Effect.Effect<ReadonlyArray<KeyValueEntry>, StoreError> | undefined;
 }
 
 /**
- * The atomic batch seam (#393), optional: a `ClientStore` reads it with
+ * The atomic batch seam, optional: a `ClientStore` reads it with
  * `Effect.serviceOption` and falls back to its release-record path when absent.
  */
 export const AtomicKeyValue = Context.Service<AtomicKeyValue>(

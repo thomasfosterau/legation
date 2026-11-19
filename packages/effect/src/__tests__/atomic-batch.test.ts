@@ -1,5 +1,5 @@
 /**
- * The atomic batch on the key-value seam (#393). With an `AtomicKeyValue` in
+ * The atomic batch on the key-value seam. With an `AtomicKeyValue` in
  * context, a durable pull writes its rows, cookie, journal trim and tail release
  * as one batch with no release record, and a push acknowledgement parks and
  * trims as one batch. The tests drive the store over a recording
@@ -194,7 +194,7 @@ const acknowledgeOnRecordPath = (
 
 // ─── Store level ─────────────────────────────────────────────────────────────
 
-describe("the atomic batch on the key-value store (#393)", () => {
+describe("the atomic batch on the key-value store", () => {
   it.effect("the store takes the batch members only when the seam is in context", () =>
     Effect.gen(function* () {
       const plain = recordingKeyValue();

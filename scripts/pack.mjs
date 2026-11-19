@@ -7,22 +7,21 @@
  * The packages depend on each other as `workspace:^` and reference the
  * `pnpm-workspace.yaml` catalogs as `catalog:` / `catalog:peers`; `pnpm pack`
  * rewrites all three to real ranges, while `npm pack` would copy them
- * verbatim (#267). The checks, run on the packed tarball:
+ * verbatim. The checks, run on the packed tarball:
  *
  * - no `workspace:` / `catalog:` specifier is left anywhere in its
  *   `package.json`;
  * - every `workspace:` dependency on another `@thomasfosterau/legation-*`
  *   package was rewritten against that package's current version;
- * - no `effect` / `@effect/*` peer is an exact version (ADR-0003: the
- *   published floor is an open range, see CONTRIBUTING.md "Effect version
- *   upgrades");
+ * - no `effect` / `@effect/*` peer is an exact version (the published
+ *   floor is an open range, ADR-0003);
  * - every target under a `svelte` export condition is in the tarball, and a
  *   package that ships Svelte modules has one (publint checks only the
  *   JavaScript targets under a custom condition);
  * - `publint` (strict: warnings fail too) finds nothing wrong with
  *   `exports` / `main` / `types`, `files` or `sideEffects`;
  * - `attw` (arethetypeswrong) finds no type-resolution problem for the
- *   resolution modes an ESM-only package supports (#250).
+ *   resolution modes an ESM-only package supports.
  */
 import { execFileSync, spawnSync } from "node:child_process";
 import { readdirSync, readFileSync } from "node:fs";

@@ -179,7 +179,7 @@ const authPolicy = Authorization.policy(
     favorites: Authorization.allowAll,
     follows: Authorization.allowAll,
   },
-  // The nodes' filterable sets bound what a client may filter or sort by (#154).
+  // The nodes' filterable sets bound what a client may filter or sort by.
   { collections: nodes.collections }
 );
 
