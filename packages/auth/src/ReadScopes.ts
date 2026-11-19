@@ -611,7 +611,7 @@ const roleSlice = (principal: Principal.Principal, ref: Entity.EntityRef): Entit
  * ({@link principalRef}: `User::<id>`, `Anonymous::"anonymous"` when anonymous), the action,
  * and the principal's slice — from `entities` when given, else from the
  * session user's role. The anonymous principal's slice holds the action's
- * entities at most, never a user's: no resolver is asked who `User::""` is.
+ * entities at most, never a user's: no resolver is asked who it is.
  * A resolver that fails is an `AuthorizationError` (the filter narrows to
  * `Deny`), whose message names no principal.
  */
