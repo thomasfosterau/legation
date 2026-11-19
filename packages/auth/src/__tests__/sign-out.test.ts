@@ -6,7 +6,7 @@
  * now carries) nor discarded (they are the user's data); they are parked under
  * that user's fingerprint and become pushable again only if they sign back in.
  */
-import { describe, expect, it } from "@effect/vitest";
+import { assert, describe, expect, layer } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
@@ -14,6 +14,7 @@ import * as Ref from "effect/Ref";
 import * as Schema from "effect/Schema";
 import * as Digest from "effect/crypto/Digest";
 import { KeyValueStore } from "effect/persistence";
+import * as AtomRegistry from "effect/reactivity/AtomRegistry";
 import {
   Authorization,
   Backend,
@@ -33,6 +34,9 @@ import {
   Subset,
   SyncServer,
 } from "@thomasfosterau/legation/internal";
+import { createAuthClient } from "@thomasfosterau/effect-auth/client";
+import { makeSessionAtoms } from "@thomasfosterau/effect-auth/client/atoms";
+import { makeCookieJarFetch, makeServerFixture } from "@thomasfosterau/effect-auth/client/testing";
 import { SignOut } from "@thomasfosterau/legation-auth/client";
 import type { Protocol } from "@thomasfosterau/legation/internal";
 
@@ -92,125 +96,278 @@ const clientFor = (identity: Identity.Fingerprint) =>
 const testLayer = Layer.mergeAll(KeyValueStore.layerMemory, Digest.layerWebCrypto);
 
 describe("SignOut.fingerprintOf", () => {
-  it.effect("is a stable hash of the user, never the id itself", () =>
-    Effect.gen(function* () {
-      const a = yield* SignOut.fingerprintOf("user-alice");
-      expect(a).toBe(yield* SignOut.fingerprintOf("user-alice"));
-      expect(a).not.toBe(yield* SignOut.fingerprintOf("user-bob"));
-      expect(a).toMatch(/^legation-auth:sha256:[0-9a-f]{64}$/);
-      expect(a).not.toContain("alice");
-      expect(a.startsWith("@legation/")).toBe(false);
-    }).pipe(Effect.provide(testLayer))
-  );
+  layer(testLayer)((scoped) => {
+    scoped.effect("is a stable hash of the user, never the id itself", () =>
+      Effect.gen(function* () {
+        const a = yield* SignOut.fingerprintOf("user-alice");
+        expect(a).toBe(yield* SignOut.fingerprintOf("user-alice"));
+        expect(a).not.toBe(yield* SignOut.fingerprintOf("user-bob"));
+        expect(a).toMatch(/^legation-auth:sha256:[0-9a-f]{64}$/);
+        expect(a).not.toContain("alice");
+        expect(a.startsWith("@legation/")).toBe(false);
+      })
+    );
+  });
 });
 
 describe("SignOut.onSessionChange", () => {
-  it.effect("sign-out resets the replica and quarantines the pending journal", () =>
+  layer(testLayer)((scoped) => {
+    scoped.effect("sign-out resets the replica and quarantines the pending journal", () =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const aliceFp = yield* SignOut.fingerprintOf(alice.user.id);
+          const { client, engine, store, pushes } = yield* clientFor(aliceFp);
+          yield* engine.subscribe(Subset.make({ collection: "notes" }));
+          yield* engine.mutate("note/set", { id: "n1", body: "synced" });
+          yield* engine.push;
+          yield* engine.pull;
+          // An unpushed write: the pending journal at sign-out.
+          yield* engine.mutate("note/set", { id: "n2", body: "draft" });
+          expect(yield* store.listRows("notes")).toHaveLength(1);
+          expect(yield* store.pendingMutations).toHaveLength(1);
+          const pushedBefore = (yield* Ref.get(pushes)).length;
+
+          const onChange = SignOut.onSessionChange(client);
+          const outcome = yield* onChange(Option.some(alice), Option.none());
+
+          expect(outcome.transition).toBe("Reset");
+          expect(outcome.quarantinedUnder).toBe(aliceFp);
+          expect(outcome.quarantined).toBe(1);
+          expect(yield* client.identity).toBe(Identity.anonymous);
+          // The durable replica holds nothing of Alice's.
+          expect(yield* store.listRows("notes")).toEqual([]);
+          expect(yield* store.getCookie).toBeUndefined();
+          // Not flushed: the reset pushed nothing.
+          expect((yield* Ref.get(pushes)).length).toBe(pushedBefore);
+          // Not discarded: quarantined under Alice's fingerprint, out of push's reach.
+          expect(yield* store.pendingMutations).toEqual([]);
+          expect(yield* client.quarantines).toEqual([aliceFp]);
+          expect(yield* client.quarantinedMutations(aliceFp)).toHaveLength(1);
+          yield* engine.push;
+          expect(
+            (yield* Ref.get(pushes)).flatMap((push) => push.mutations).map((m) => m.args)
+          ).not.toContainEqual({
+            id: "n2",
+            body: "draft",
+          });
+        })
+      )
+    );
+  });
+
+  layer(testLayer)((scoped) => {
+    scoped.effect("an account switch resets too, and never hands A's journal to B", () =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const aliceFp = yield* SignOut.fingerprintOf(alice.user.id);
+          const { client, engine, store } = yield* clientFor(aliceFp);
+          yield* engine.mutate("note/set", { id: "n3", body: "alice's draft" });
+          const outcome = yield* SignOut.onSessionChange(client)(
+            Option.some(alice),
+            Option.some(bob)
+          );
+          expect(outcome.transition).toBe("Reset");
+          expect(yield* client.identity).toBe(yield* SignOut.fingerprintOf(bob.user.id));
+          expect(yield* store.pendingMutations).toEqual([]);
+          expect(yield* client.quarantinedMutations(aliceFp)).toHaveLength(1);
+        })
+      )
+    );
+  });
+
+  layer(testLayer)((scoped) => {
+    scoped.effect("signing back in releases the user's own quarantine", () =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const aliceFp = yield* SignOut.fingerprintOf(alice.user.id);
+          const { client, engine, store } = yield* clientFor(aliceFp);
+          yield* engine.mutate("note/set", { id: "n4", body: "alice's draft" });
+          const onChange = SignOut.onSessionChange(client);
+          yield* onChange(Option.some(alice), Option.none());
+          const back = yield* onChange(Option.none(), Option.some(alice));
+          expect(back.transition).toBe("Upgrade");
+          expect(back.released).toBe(1);
+          expect(yield* store.pendingMutations).toHaveLength(1);
+          expect(yield* client.quarantines).toEqual([]);
+        })
+      )
+    );
+  });
+
+  layer(testLayer)((scoped) => {
+    scoped.effect("the same user is unchanged, and the stamp, not `previous`, decides", () =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const aliceFp = yield* SignOut.fingerprintOf(alice.user.id);
+          const { client, store, engine } = yield* clientFor(aliceFp);
+          yield* engine.mutate("note/set", { id: "n5", body: "kept" });
+          const onChange = SignOut.onSessionChange(client);
+          expect((yield* onChange(Option.some(alice), Option.some(alice))).transition).toBe(
+            "Unchanged"
+          );
+          expect(yield* store.pendingMutations).toHaveLength(1);
+          // A listener told the wrong `previous` (a missed notification) still resets.
+          const missed = yield* onChange(Option.some(bob), Option.some(bob));
+          expect(missed.transition).toBe("Reset");
+          expect(yield* client.identity).toBe(yield* SignOut.fingerprintOf(bob.user.id));
+        })
+      )
+    );
+  });
+
+  layer(testLayer)((scoped) => {
+    scoped.effect("takes the app's own fingerprint when it is given one", () =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const { client } = yield* clientFor(Identity.anonymous);
+          const onChange = SignOut.onSessionChange(client, {
+            fingerprint: (subject) => Effect.succeed(`app:${subject.user.id.length}`),
+          });
+          expect((yield* onChange(Option.none(), Option.some(alice))).transition).toBe("Upgrade");
+          expect(yield* client.identity).toBe("app:10");
+        })
+      )
+    );
+  });
+});
+
+layer(testLayer)("SignOut.fingerprintOfSession", (it) => {
+  it.effect("is anonymous when signed out, and the user's fingerprint when signed in", () =>
+    Effect.gen(function* () {
+      expect(yield* SignOut.fingerprintOfSession(Option.none())).toBe(Identity.anonymous);
+      expect(yield* SignOut.fingerprintOfSession(Option.some(alice))).toBe(
+        yield* SignOut.fingerprintOf(alice.user.id)
+      );
+      expect(
+        yield* SignOut.fingerprintOfSession(Option.some(alice), {
+          fingerprint: (subject) => Effect.succeed(`app:${subject.user.id}`),
+        })
+      ).toBe("app:user-alice");
+    })
+  );
+});
+
+/** An effect-auth client over its in-memory server fixture, through a cookie-jar `fetch`. */
+const authClient = () =>
+  createAuthClient({
+    baseUrl: "http://localhost",
+    fetch: makeCookieJarFetch(makeServerFixture().handler),
+  });
+
+/** A store held in one state, counting its subscribers. */
+const heldStore = (state: ReturnType<SignOut.SessionStore["get"]>) => {
+  let subscribers = 0;
+  const store: SignOut.SessionStore = {
+    get: () => state,
+    subscribe: () => {
+      subscribers += 1;
+      return () => {
+        subscribers -= 1;
+      };
+    },
+  };
+  return { store, subscribers: () => subscribers };
+};
+
+/** A promise of the auth client's rejected. */
+class CallRejected extends Schema.TaggedError<CallRejected, { readonly brand: unique symbol }>()(
+  "CallRejected",
+  { cause: Schema.optional(Schema.Defect()) }
+) {}
+
+/** Run a promise of the auth client's; a rejection is a defect of the test. */
+const run = <A>(call: () => Promise<A>) =>
+  Effect.orDie(Effect.tryPromise({ try: call, catch: (cause) => new CallRejected({ cause }) }));
+
+/** The fingerprint `follow` stamps without a Digest in context: WebCrypto's. */
+const webCryptoFingerprint = (userId: string) =>
+  Effect.scoped(
+    Effect.flatMap(Layer.build(Digest.layerWebCrypto), (context) =>
+      Effect.provideContext(SignOut.fingerprintOf(userId), context)
+    )
+  );
+
+/** The change `settled` reports, or a failed assertion when none was adopted. */
+const adopted = (settled: Option.Option<SignOut.SessionChange>): SignOut.SessionChange =>
+  Option.getOrElse(settled, () => assert.fail("no session change was adopted"));
+
+layer(KeyValueStore.layerMemory)("SignOut.follow (no Digest in context)", (it) => {
+  it.effect("a store change resets the client: sign-in, sign-out, the next user", () =>
     Effect.scoped(
       Effect.gen(function* () {
-        const aliceFp = yield* SignOut.fingerprintOf(alice.user.id);
-        const { client, engine, store, pushes } = yield* clientFor(aliceFp);
+        const { client, engine, store } = yield* clientFor(Identity.anonymous);
+        const auth = authClient();
+        const registry = AtomRegistry.make();
+        const atoms = makeSessionAtoms(auth);
+        // No Digest in context: follow hashes with WebCrypto's.
+        const following = yield* SignOut.follow(
+          client,
+          SignOut.sessionStoreOf(registry, atoms.state)
+        );
+
+        const signedUp = yield* run(() =>
+          auth.signUp({ email: "alice@example.com", password: "correct horse battery" })
+        );
+        const aliceId = signedUp.user?.id ?? "";
+        expect(aliceId).not.toBe("");
+        expect(adopted(yield* following.settled).transition).toBe("Upgrade");
+        const aliceFp = yield* webCryptoFingerprint(aliceId);
+        expect(yield* client.identity).toBe(aliceFp);
+
         yield* engine.subscribe(Subset.make({ collection: "notes" }));
-        yield* engine.mutate("note/set", { id: "n1", body: "synced" });
-        yield* engine.push;
-        yield* engine.pull;
-        // An unpushed write: the pending journal at sign-out.
-        yield* engine.mutate("note/set", { id: "n2", body: "draft" });
-        expect(yield* store.listRows("notes")).toHaveLength(1);
-        expect(yield* store.pendingMutations).toHaveLength(1);
-        const pushedBefore = (yield* Ref.get(pushes)).length;
+        yield* engine.mutate("note/set", { id: "n6", body: "alice's draft" });
 
-        const onChange = SignOut.onSessionChange(client);
-        const outcome = yield* onChange(Option.some(alice), Option.none());
-
-        expect(outcome.transition).toBe("Reset");
-        expect(outcome.quarantinedUnder).toBe(aliceFp);
-        expect(outcome.quarantined).toBe(1);
+        yield* run(() => auth.signOut());
+        const signedOut = adopted(yield* following.settled);
+        expect(signedOut.transition).toBe("Reset");
+        expect(signedOut.quarantinedUnder).toBe(aliceFp);
+        expect(signedOut.quarantined).toBe(1);
         expect(yield* client.identity).toBe(Identity.anonymous);
-        // The durable replica holds nothing of Alice's.
+        expect(yield* store.pendingMutations).toEqual([]);
         expect(yield* store.listRows("notes")).toEqual([]);
-        expect(yield* store.getCookie).toBeUndefined();
-        // Not flushed: the reset pushed nothing.
-        expect((yield* Ref.get(pushes)).length).toBe(pushedBefore);
-        // Not discarded: quarantined under Alice's fingerprint, out of push's reach.
-        expect(yield* store.pendingMutations).toEqual([]);
-        expect(yield* client.quarantines).toEqual([aliceFp]);
-        expect(yield* client.quarantinedMutations(aliceFp)).toHaveLength(1);
-        yield* engine.push;
-        expect(
-          (yield* Ref.get(pushes)).flatMap((push) => push.mutations).map((m) => m.args)
-        ).not.toContainEqual({
-          id: "n2",
-          body: "draft",
-        });
-      })
-    ).pipe(Effect.provide(testLayer))
-  );
 
-  it.effect("an account switch resets too, and never hands A's journal to B", () =>
-    Effect.scoped(
-      Effect.gen(function* () {
-        const aliceFp = yield* SignOut.fingerprintOf(alice.user.id);
-        const { client, engine, store } = yield* clientFor(aliceFp);
-        yield* engine.mutate("note/set", { id: "n3", body: "alice's draft" });
-        const outcome = yield* SignOut.onSessionChange(client)(
-          Option.some(alice),
-          Option.some(bob)
+        const next = yield* run(() =>
+          auth.signUp({ email: "bob@example.com", password: "correct horse battery" })
         );
-        expect(outcome.transition).toBe("Reset");
-        expect(yield* client.identity).toBe(yield* SignOut.fingerprintOf(bob.user.id));
+        expect(adopted(yield* following.settled).transition).toBe("Upgrade");
+        expect(yield* client.identity).toBe(yield* webCryptoFingerprint(next.user?.id ?? ""));
+        // Bob's replica never sees Alice's journal.
         expect(yield* store.pendingMutations).toEqual([]);
         expect(yield* client.quarantinedMutations(aliceFp)).toHaveLength(1);
       })
-    ).pipe(Effect.provide(testLayer))
+    )
+  );
+});
+
+layer(testLayer)("SignOut.follow", (it) => {
+  it.effect("a pending store is not a sign-out", () =>
+    Effect.gen(function* () {
+      const aliceFp = yield* SignOut.fingerprintOf(alice.user.id);
+      const held = heldStore({ data: Option.none(), isPending: true });
+      yield* Effect.scoped(
+        Effect.gen(function* () {
+          const { client } = yield* clientFor(aliceFp);
+          const following = yield* SignOut.follow(client, held.store);
+          expect(held.subscribers()).toBe(1);
+          expect(yield* following.settled).toEqual(Option.none());
+          expect(yield* client.identity).toBe(aliceFp);
+        })
+      );
+      // Closing the scope unsubscribes.
+      expect(held.subscribers()).toBe(0);
+    })
   );
 
-  it.effect("signing back in releases the user's own quarantine", () =>
+  it.effect("adopts the store's settled state when it starts", () =>
     Effect.scoped(
       Effect.gen(function* () {
         const aliceFp = yield* SignOut.fingerprintOf(alice.user.id);
-        const { client, engine, store } = yield* clientFor(aliceFp);
-        yield* engine.mutate("note/set", { id: "n4", body: "alice's draft" });
-        const onChange = SignOut.onSessionChange(client);
-        yield* onChange(Option.some(alice), Option.none());
-        const back = yield* onChange(Option.none(), Option.some(alice));
-        expect(back.transition).toBe("Upgrade");
-        expect(back.released).toBe(1);
-        expect(yield* store.pendingMutations).toHaveLength(1);
-        expect(yield* client.quarantines).toEqual([]);
+        const { client } = yield* clientFor(aliceFp);
+        const held = heldStore({ data: Option.none(), isPending: false });
+        const following = yield* SignOut.follow(client, held.store);
+        expect(adopted(yield* following.settled).transition).toBe("Reset");
+        expect(yield* client.identity).toBe(Identity.anonymous);
       })
-    ).pipe(Effect.provide(testLayer))
-  );
-
-  it.effect("the same user is unchanged, and the stamp, not `previous`, decides", () =>
-    Effect.scoped(
-      Effect.gen(function* () {
-        const aliceFp = yield* SignOut.fingerprintOf(alice.user.id);
-        const { client, store, engine } = yield* clientFor(aliceFp);
-        yield* engine.mutate("note/set", { id: "n5", body: "kept" });
-        const onChange = SignOut.onSessionChange(client);
-        expect((yield* onChange(Option.some(alice), Option.some(alice))).transition).toBe(
-          "Unchanged"
-        );
-        expect(yield* store.pendingMutations).toHaveLength(1);
-        // A listener told the wrong `previous` (a missed notification) still resets.
-        const missed = yield* onChange(Option.some(bob), Option.some(bob));
-        expect(missed.transition).toBe("Reset");
-        expect(yield* client.identity).toBe(yield* SignOut.fingerprintOf(bob.user.id));
-      })
-    ).pipe(Effect.provide(testLayer))
-  );
-
-  it.effect("takes the app's own fingerprint when it is given one", () =>
-    Effect.scoped(
-      Effect.gen(function* () {
-        const { client } = yield* clientFor(Identity.anonymous);
-        const onChange = SignOut.onSessionChange(client, {
-          fingerprint: Option.some((subject) => Effect.succeed(`app:${subject.user.id.length}`)),
-        });
-        expect((yield* onChange(Option.none(), Option.some(alice))).transition).toBe("Upgrade");
-        expect(yield* client.identity).toBe("app:10");
-      })
-    ).pipe(Effect.provide(testLayer))
+    )
   );
 });

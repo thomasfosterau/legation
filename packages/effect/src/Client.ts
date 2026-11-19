@@ -38,8 +38,16 @@
  * server is unreachable (offline-first: local is always an answer).
  * `observe` never falls through: observing subscribes, which IS the
  * upgrade from a one-shot fallthrough to a live, replica-backed read.
+ *
+ * **An answer can say how complete it is** (#653): `answer` and
+ * `observeAnswers` are `query` and `observe` with each answer's
+ * {@link Completeness} beside its rows ({@link Answer}). A covered or
+ * server-answered read is `"complete"`; an uncovered one answered from the
+ * replica (offline, or over a transport without `read`) is `"partial"`: never
+ * wider than the policy, but possibly missing rows the server holds.
  */
 
+import * as Defined from "./Defined.js";
 import * as Arr from "effect/Array";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
@@ -59,38 +67,222 @@ import * as ClientView from "./ClientView.js";
 import * as Coverage from "./Coverage.js";
 import { QueryError, StoreError, TransportError } from "./Errors.js";
 import * as Identity from "./Identity.js";
+import type * as Edge from "./Edge.js";
 import type * as Mutator from "./Mutator.js";
 import type { Mutation } from "./Protocol.js";
 import type * as MutationState from "./MutationState.js";
 import type * as Node from "./Node.js";
 import * as Query from "./Query.js";
 import type * as QueryModule from "./Query.js";
-import type * as Related from "./Related.js";
+import * as Related from "./Related.js";
 import * as Subset from "./Subset.js";
 import type { MirrorChannel } from "./MirrorChannel.js";
 import * as Mirror from "./Mirror.js";
 import * as MirrorProtocol from "./MirrorProtocol.js";
 
-/** The rows a read resolves to: node values with their included edges. */
-export type ResolvedRow = Related.RelatedRow;
+// ─── Typed reads ─────────────────────────────────────────────────────────────
+
+/**
+ * The app's node graph, registered once by declaration merging so the
+ * surfaces that find the Client in context — the framework hooks
+ * (`@thomasfosterau/legation-svelte`'s `useQuery`, `useConnection`) — check
+ * reads against it and type their rows by it:
+ *
+ * ```ts
+ * declare module "@thomasfosterau/legation" {
+ *   interface Register {
+ *     readonly nodes: typeof nodes;
+ *   }
+ * }
+ * ```
+ *
+ * Unregistered, those surfaces accept any read and resolve it to untyped
+ * rows. A Client an app holds directly (`Client.make`, `Client.connect`,
+ * `Client.fromView`) is typed by the graph it was built over, registered or
+ * not; the {@link Client} service in context is a Client over any graph.
+ * Register the graph the app's Client is built over: the hooks trust that
+ * the rows the context Client emits are that graph's.
+ */
+export interface Register {}
+
+/** The graph an app {@link Register}ed, or an erased graph when it registered none. */
+export type Registered = Register extends { readonly nodes: infer Graph extends Node.NodeRegistry }
+  ? Graph
+  : Node.NodeRegistry;
+
+/** An included edge's resolved value: the target row or `null` for `one`, the target rows otherwise. */
+export type RelatedOf<Graph extends Node.NodeRegistry, E extends Edge.Edge> =
+  E extends Edge.One<infer Target>
+    ? Node.RowOf<Node.NodeOf<Graph, Target>> | null
+    : E extends Edge.Many<infer Target> | Edge.Paginated<infer Target>
+      ? ReadonlyArray<Node.RowOf<Node.NodeOf<Graph, Target>>>
+      : never;
+
+/** The edges a read includes: the literal keys of its `include`. */
+type IncludedOf<R> = R extends { readonly include: infer I }
+  ? string extends keyof I
+    ? never
+    : keyof I & string
+  : never;
+
+/** A row of a read of node `N`: its row value and the edges the read includes. */
+interface TypedRow<Graph extends Node.NodeRegistry, N extends Node.AnyNode, R> {
+  readonly id: string;
+  readonly value: Node.RowOf<N>;
+  readonly related: {
+    readonly [E in IncludedOf<R> & Node.EdgeOf<N>]: RelatedOf<Graph, N["edges"][E]>;
+  };
+}
+
+/**
+ * The rows a read resolves to: node values with their included edges.
+ *
+ * For a read whose `collection` is a literal node of `Graph` (a read declared
+ * `as const satisfies Query.Read`, or written inline), `value` is that node's
+ * row type ({@link Node.RowOf}) and `related` carries exactly the edges the
+ * read `include`s: a `one` edge's target row, or `null` when the row it
+ * references is absent; a `many` or `paginated` edge's target rows. An edge
+ * the read does not include is not on `related`, so reading one is a compile
+ * error. `Graph` defaults to the {@link Registered} graph.
+ *
+ * A read the graph cannot describe statically — `collection` typed `string`,
+ * or any read over an erased graph — resolves to the untyped row, `value:
+ * unknown` and `related` keyed by `string`; so does `ResolvedRow` with no
+ * arguments.
+ */
+export type ResolvedRow<
+  R extends QueryModule.Read = QueryModule.Read,
+  Graph extends Node.NodeRegistry = Registered,
+> =
+  Node.IsTyped<Graph> extends false
+    ? Related.RelatedRow
+    : R extends QueryModule.Read
+      ? string extends R["collection"]
+        ? Related.RelatedRow
+        : R["collection"] extends Node.TypeOf<Graph>
+          ? TypedRow<Graph, Node.NodeOf<Graph, R["collection"]>, R>
+          : Related.RelatedRow
+      : never;
+
+/**
+ * {@link Client.query} over a graph: generic in the read, its rows typed by
+ * the graph, for a graph that carries its types; over an erased graph, a read
+ * in and untyped rows out.
+ */
+export type QueryOf<Graph extends Node.NodeRegistry> =
+  Node.IsTyped<Graph> extends false
+    ? (
+        read: QueryModule.Read
+      ) => Effect.Effect<ReadonlyArray<Related.RelatedRow>, ClientView.ClientViewError>
+    : <const R extends QueryModule.Read>(
+        read: R & QueryModule.Validate<Graph, R>
+      ) => Effect.Effect<ReadonlyArray<ResolvedRow<R, Graph>>, ClientView.ClientViewError>;
+
+/** {@link Client.observe} over a graph: as {@link QueryOf}, streaming the rows. */
+export type ObserveOf<Graph extends Node.NodeRegistry> =
+  Node.IsTyped<Graph> extends false
+    ? (read: QueryModule.Read) => Stream.Stream<ReadonlyArray<Related.RelatedRow>>
+    : <const R extends QueryModule.Read>(
+        read: R & QueryModule.Validate<Graph, R>
+      ) => Stream.Stream<ReadonlyArray<ResolvedRow<R, Graph>>>;
+
+/**
+ * How completely an answer holds the rows its read selects: `"complete"` when
+ * a pulled subscription covered the read (ADR-0029) or the server answered it
+ * (ADR-0025); `"partial"` when an uncovered read was answered from the replica
+ * (offline, or no transport `read`), so the server may hold rows it lacks.
+ */
+export type Completeness = "complete" | "partial";
+
+/**
+ * A read's answer with its {@link Completeness}: the rows, typed as
+ * {@link ResolvedRow} types them, and whether they are all the rows the read
+ * selects (#653).
+ *
+ * `rows` is exactly what {@link Client.query} resolves to for the same read;
+ * `completeness` is a value beside it, so filtering or copying the rows never
+ * loses it. `Graph` defaults to the {@link Registered} graph, as
+ * {@link ResolvedRow}'s does.
+ */
+export interface Answer<
+  R extends QueryModule.Read = QueryModule.Read,
+  Graph extends Node.NodeRegistry = Registered,
+> {
+  /** The rows the read resolved to: node values with their included edges. */
+  readonly rows: ReadonlyArray<ResolvedRow<R, Graph>>;
+  /** Whether {@link rows} are all the rows the read selects, or possibly fewer. */
+  readonly completeness: Completeness;
+}
+
+/**
+ * {@link Client.answer} over a graph: as {@link QueryOf}, resolving to the
+ * rows with their completeness ({@link Answer}).
+ */
+export type AnswerOf<Graph extends Node.NodeRegistry> =
+  Node.IsTyped<Graph> extends false
+    ? (
+        read: QueryModule.Read
+      ) => Effect.Effect<Answer<QueryModule.Read, Graph>, ClientView.ClientViewError>
+    : <const R extends QueryModule.Read>(
+        read: R & QueryModule.Validate<Graph, R>
+      ) => Effect.Effect<Answer<R, Graph>, ClientView.ClientViewError>;
+
+/**
+ * {@link Client.observeAnswers} over a graph: as {@link ObserveOf}, streaming
+ * the rows with their completeness ({@link Answer}).
+ */
+export type ObserveAnswersOf<Graph extends Node.NodeRegistry> =
+  Node.IsTyped<Graph> extends false
+    ? (read: QueryModule.Read) => Stream.Stream<Answer<QueryModule.Read, Graph>>
+    : <const R extends QueryModule.Read>(
+        read: R & QueryModule.Validate<Graph, R>
+      ) => Stream.Stream<Answer<R, Graph>>;
 
 /**
  * The one-per-thread object an app reads and writes through (ADR-0022): queries, observed reads,
  * pins, mutations and the identity boundary, whether the engine is owned or hosted elsewhere.
+ *
+ * `Graph` is the node graph it reads: a Client built over a registry
+ * ({@link make}, {@link connect}, {@link fromView}) types each read's rows by
+ * it ({@link ResolvedRow}). `Client` alone is a Client over any graph, with
+ * untyped rows, and a typed Client is one.
  */
-export interface Client {
+export interface Client<Graph extends Node.NodeRegistry = Node.NodeRegistry> {
   /** The node graph this Client reads (bindings compile plans against it). */
-  readonly nodes: Node.NodeRegistry;
-  /** Run a read once against the local replica (no subscription). */
-  readonly query: (
-    read: QueryModule.Read
-  ) => Effect.Effect<ReadonlyArray<ResolvedRow>, ClientView.ClientViewError>;
+  readonly nodes: Graph;
+  /**
+   * Run a read once (no subscription), answered from the replica when a
+   * subscription covers it and from the server otherwise. The read is checked
+   * against the graph ({@link Query.Validate}) and its rows typed by it
+   * ({@link ResolvedRow}).
+   */
+  readonly query: QueryOf<Graph>;
   /**
    * Observe a read: current rows now, re-emitting as they change. The
    * read's windows are registered for the stream's lifetime — observing
-   * IS subscribing.
+   * IS subscribing. Checked and typed as {@link Client.query} is.
    */
-  readonly observe: (read: QueryModule.Read) => Stream.Stream<ReadonlyArray<ResolvedRow>>;
+  readonly observe: ObserveOf<Graph>;
+  /**
+   * Run a read once as {@link Client.query} does, resolving to its rows and
+   * their {@link Completeness} ({@link Answer}): `"complete"` when a pulled
+   * subscription covered the read or the server answered it, `"partial"` when
+   * an uncovered read was answered from the replica (offline, or over a
+   * transport without `read`). Checked and typed as {@link Client.query} is.
+   *
+   * A covered answer is complete only when its rows were read after the pull
+   * marks that cover them, so rows that predate the covering pull are never
+   * called complete.
+   */
+  readonly answer: AnswerOf<Graph>;
+  /**
+   * Observe a read as {@link Client.observe} does, emitting its rows with
+   * their {@link Completeness} ({@link Answer}): `"partial"` until a pull
+   * covers the read's windows, then the rows again as `"complete"`, and
+   * partial again if the cover is lost. Each emission's rows are read after
+   * the marks it is judged by. Checked and typed as {@link Client.query} is.
+   */
+  readonly observeAnswers: ObserveAnswersOf<Graph>;
   /**
    * Pin a read beyond any observer's lifetime: its root window and, for a
    * read with `include`, its edge windows — the same relational
@@ -127,6 +319,9 @@ export interface Client {
    * instead of a fresh read, so a caller that answers from the same rows judges
    * exactly what it answers (#426). A snapshot of any other subset is not used; the
    * verdict then reads its root as usual. Omit it to judge a fresh read.
+   *
+   * This judges a read before it is answered; {@link Client.answer} and
+   * {@link Client.observeAnswers} say how each answer was answered.
    */
   readonly coverageOf: (
     read: QueryModule.Read,
@@ -310,7 +505,7 @@ const oneFewerOn = (current: Interest, kind: Kind): Interest => {
     ...rest,
     observers: oneFewer(current.observers, kind, "observer"),
     pins,
-    ...(pins > 0 && url !== undefined ? { url } : {}),
+    ...Defined.fields({ url: pins > 0 && url !== undefined ? url : undefined }),
   };
 };
 
@@ -329,6 +524,26 @@ const keyOf = (registration: Coverage.Registration): string =>
         registration.edges
       );
 
+// ─── Answers (#653) ──────────────────────────────────────────────────────────
+
+/** An answer over the erased graph: the shape the Client builds before typing it. */
+interface UntypedAnswer {
+  readonly rows: ReadonlyArray<Related.RelatedRow>;
+  readonly completeness: Completeness;
+}
+
+/** Rows a pulled subscription covered or the server answered: a complete answer. */
+const complete = (rows: ReadonlyArray<Related.RelatedRow>): UntypedAnswer => ({
+  rows,
+  completeness: "complete",
+});
+
+/** Rows the replica answered an uncovered read with: a partial answer. */
+const partial = (rows: ReadonlyArray<Related.RelatedRow>): UntypedAnswer => ({
+  rows,
+  completeness: "partial",
+});
+
 const noUrlReads = (url: string): QueryError =>
   new QueryError({
     message:
@@ -343,11 +558,11 @@ const noUrlReads = (url: string): QueryError =>
  * Client speaks with one voice per window: subscribe on first interest,
  * unsubscribe when the last observer ends and no explicit pin remains.
  */
-export const fromView = (
-  nodes: Node.NodeRegistry,
+export const fromView = <Graph extends Node.NodeRegistry>(
+  nodes: Graph,
   view: ClientView.ClientView,
   options: ViewOptions = {}
-): Client => {
+): Client<Graph> => {
   const urls = options.urls;
   // One ledger per Client: registrations keyed by `keyOf`, each holding one
   // unit on its root window, whose view registration is made once however
@@ -441,7 +656,7 @@ export const fromView = (
         edges: registration.edges,
         observers: oneMore(current?.observers, kind, "observer"),
         pins: oneMore(current?.pins, kind, "explicit"),
-        ...(known === undefined ? {} : { url: known }),
+        ...Defined.fields({ url: known }),
       });
       return [current === undefined ? key : undefined, next] as const;
     }).pipe(
@@ -556,6 +771,25 @@ export const fromView = (
 
   // ─── Coverage ────────────────────────────────────────────────────────────
 
+  // The ledger's entries with their pulled summaries, the read's own
+  // registration beside them when the ledger does not hold it (a live read
+  // with `include` registers through the view's relational read).
+  const entriesOf = (own?: Coverage.Registration): Effect.Effect<ReadonlyArray<Coverage.Entry>> =>
+    Ref.get(ledger).pipe(
+      Effect.flatMap((interests) =>
+        Effect.forEach(
+          own === undefined || interests.has(keyOf(own))
+            ? [...interests.values()]
+            : [...interests.values(), own],
+          (interest) =>
+            view
+              .pulled(keyOf(interest))
+              .pipe(Effect.map((pulled): Coverage.Entry => ({ ...interest, pulled }))),
+          { concurrency: 1 }
+        )
+      )
+    );
+
   // One rule, one scan: the first pulled ledger entry (in registration order)
   // that covers the read, under `Coverage`. The read's root rows are read from
   // the view, so the edge windows it links to are the ones judged (#426). An
@@ -567,22 +801,101 @@ export const fromView = (
   ): Effect.Effect<Coverage.Verdict> =>
     Coverage.requestedOf(nodes.collections, plan, rowsOf).pipe(
       Effect.flatMap((requested) =>
-        Ref.get(ledger).pipe(
-          Effect.flatMap((interests) =>
-            Effect.forEach(
-              interests.values(),
-              (interest) =>
-                view
-                  .pulled(keyOf(interest))
-                  .pipe(Effect.map((pulled): Coverage.Entry => ({ ...interest, pulled }))),
-              { concurrency: 1 }
-            )
-          ),
-          Effect.map((entries) => Coverage.verdictOf(entries, requested))
-        )
+        entriesOf().pipe(Effect.map((entries) => Coverage.verdictOf(entries, requested)))
       ),
       Effect.catchTag(["MutatorError", "StoreError", "TransportError", "QueryError"], () =>
         Effect.succeed<Coverage.Verdict>({ _tag: "Uncovered" })
+      )
+    );
+
+  // The replica's answer to a read when a pulled subscription covers it
+  // (ADR-0029), which is complete (#653); `None` when nothing covers it. The
+  // marks are read first, then the rows: a pull marks its windows only after
+  // its rows are in the replica, so rows read after a mark says pulled are at
+  // least that pull's, and rows read before it are never called complete.
+  // The verdict is judged over those earlier marks and the root rows just
+  // read, which the answer is joined from, so a root row whose edge windows
+  // were not pulled when the marks were read uncovers the read (#426); edge
+  // rows `answerOf` reads come after the marks too. The root is read once,
+  // and a failed read of it is uncovered.
+  const coveredAnswer = <R extends ClientEngine.LocalRow>(
+    compiled: Query.Plan,
+    own: Option.Option<Coverage.Registration>,
+    rowsNow: Effect.Effect<ReadonlyArray<R>, ClientView.ClientViewError>,
+    answerOf: (rows: ReadonlyArray<R>) => Effect.Effect<ReadonlyArray<Related.RelatedRow>>
+  ): Effect.Effect<Option.Option<ReadonlyArray<Related.RelatedRow>>> =>
+    entriesOf(Option.getOrUndefined(own)).pipe(
+      Effect.flatMap((entries) =>
+        Effect.option(rowsNow).pipe(
+          Effect.flatMap(
+            Option.match({
+              onNone: () => Effect.succeedNone,
+              onSome: (rows) =>
+                Coverage.requestedOf(
+                  nodes.collections,
+                  compiled,
+                  Coverage.snapshotOf({ subset: compiled.root, rows }, view.query)
+                ).pipe(
+                  Effect.option,
+                  Effect.flatMap((requested) =>
+                    Option.exists(requested, (request) =>
+                      P.isTagged(Coverage.verdictOf(entries, request), "Covered")
+                    )
+                      ? answerOf(rows).pipe(Effect.asSome)
+                      : Effect.succeedNone
+                  )
+                ),
+            })
+          )
+        )
+      )
+    );
+
+  // A live read's answers (#653). An emitted array may predate the pull that
+  // covers the read, and a pull's tick may arrive before its rows, so no
+  // emitted array is called complete as it stands: on each emission and each
+  // `pulledChanges` tick the read is answered again by `covered`, and while
+  // that finds it uncovered the emitted rows go out as partial. A tick emits
+  // only when the completeness moved: a fresh complete answer, or the last
+  // complete answer's rows, out again as partial once they are uncovered.
+  const answersOf = (
+    sources: Stream.Stream<ReadonlyArray<Related.RelatedRow>>,
+    covered: Effect.Effect<Option.Option<ReadonlyArray<Related.RelatedRow>>>
+  ): Stream.Stream<UntypedAnswer> =>
+    Stream.merge(
+      sources.pipe(Stream.map(Option.some)),
+      (view.pulledChanges ?? Stream.empty).pipe(
+        Stream.as(Option.none<ReadonlyArray<Related.RelatedRow>>())
+      ),
+      { haltStrategy: "left" }
+    ).pipe(
+      Stream.mapAccumEffect(
+        (): Option.Option<UntypedAnswer> => Option.none(),
+        (last, event) =>
+          covered.pipe(
+            Effect.map((fresh) => {
+              const wasComplete = Option.exists(
+                last,
+                (answer) => answer.completeness === "complete"
+              );
+              const next = Option.match(fresh, {
+                onSome: (rows) =>
+                  Option.isSome(event) || !wasComplete
+                    ? Option.some(complete(rows))
+                    : Option.none(),
+                onNone: () =>
+                  Option.isSome(event)
+                    ? Option.some(partial(event.value))
+                    : wasComplete
+                      ? Option.map(last, (answer) => partial(answer.rows))
+                      : Option.none(),
+              });
+              return Option.match(next, {
+                onNone: () => [last, []] as const,
+                onSome: (answer) => [next, [answer]] as const,
+              });
+            })
+          )
       )
     );
 
@@ -592,38 +905,47 @@ export const fromView = (
   // the derived REST handlers run server-side — with the plan compiled once,
   // for the coverage verdict and the run); local again when fallthrough is
   // unavailable or fails (offline-first — local is always an answer).
-  // One snapshot of the root rows, read once: the verdict is judged over them
-  // and a covered answer is joined from them, so a pull between the judgment
-  // and the answer cannot add a root row whose edge windows are not pulled
-  // (#426). A failed read of the root is uncovered, as a failed read of the
-  // rows is.
-  const queryOnce = (
+  // A covered answer is `coveredAnswer`'s: judged before, and over, the one
+  // snapshot of the root rows it is joined from (#426, #653).
+  const answerOnce = (
     read: QueryModule.Read
-  ): Effect.Effect<ReadonlyArray<ResolvedRow>, ClientView.ClientViewError> => {
+  ): Effect.Effect<UntypedAnswer, ClientView.ClientViewError> => {
     const readThrough = view.read;
-    if (readThrough === undefined) return Query.run(view, nodes, read);
     const compiled = Query.plan(nodes, read);
-    const local = Effect.suspend(() => Query.run(view, nodes, read));
-    return view.query(compiled.root).pipe(
-      Effect.orElseSucceed(() => undefined),
-      Effect.flatMap((snapshot) =>
-        snapshot === undefined
-          ? Query.runPlanVia(readThrough, nodes, compiled).pipe(Effect.catch(() => local))
-          : verdictOf(
-              compiled,
-              Coverage.snapshotOf({ subset: compiled.root, rows: snapshot }, view.query)
-            ).pipe(
-              Effect.flatMap((verdict) =>
-                verdict._tag === "Covered"
-                  ? Query.runRows(view, nodes, read, snapshot)
-                  : Query.runPlanVia(readThrough, nodes, compiled).pipe(Effect.catch(() => local))
-              )
-            )
+    // Uncovered and answered from the replica: never wider than the policy,
+    // but possibly short of what the server holds (#653).
+    const local = Effect.suspend(() => Query.run(view, nodes, read)).pipe(Effect.map(partial));
+    const uncovered =
+      readThrough === undefined
+        ? local
+        : Query.runPlanVia(readThrough, nodes, compiled).pipe(
+            Effect.map(complete),
+            Effect.catch(() => local)
+          );
+    return coveredAnswer(compiled, Option.none(), view.query(compiled.root), (rows) =>
+      Query.runRows(view, nodes, read, rows)
+    ).pipe(
+      Effect.flatMap(
+        Option.match({ onNone: () => uncovered, onSome: (rows) => Effect.succeed(complete(rows)) })
       )
     );
   };
 
-  const observe = (read: QueryModule.Read): Stream.Stream<ReadonlyArray<ResolvedRow>> => {
+  const queryOnce = (
+    read: QueryModule.Read
+  ): Effect.Effect<ReadonlyArray<Related.RelatedRow>, ClientView.ClientViewError> =>
+    answerOnce(read).pipe(Effect.map((answer) => answer.rows));
+
+  // A live read: its windows registered for the stream's lifetime and its
+  // rows streamed, which `finish` turns into what the caller observes, given
+  // the read's covered answer now (`coveredAnswer` over the same rows).
+  const live = <A>(
+    read: QueryModule.Read,
+    finish: (
+      rows: Stream.Stream<ReadonlyArray<Related.RelatedRow>>,
+      covered: Effect.Effect<Option.Option<ReadonlyArray<Related.RelatedRow>>>
+    ) => Stream.Stream<A>
+  ): Stream.Stream<A> => {
     const compiled = Query.plan(nodes, read);
     if (Arr.isReadonlyArrayEmpty(compiled.edges)) {
       const registration = Coverage.ofPlan(compiled);
@@ -632,9 +954,17 @@ export const fromView = (
           release(registration, "observer")
         ).pipe(
           Effect.as(
-            view.observe(compiled.root).pipe(
-              Stream.orDie,
-              Stream.map((rows) => rows.map((row) => ({ ...row, related: {} })))
+            finish(
+              view.observe(compiled.root).pipe(
+                Stream.orDie,
+                Stream.map((rows) => rows.map((row) => ({ ...row, related: {} })))
+              ),
+              coveredAnswer(
+                compiled,
+                Option.some(registration),
+                view.query(compiled.root),
+                (rows) => Query.runRows(view, nodes, read, rows)
+              )
             )
           )
         )
@@ -642,21 +972,43 @@ export const fromView = (
     }
     // The view's relational read auto-subscribes root + narrowed foreign
     // windows itself (host-side on a connected engine), scoped to the stream.
+    // A fresh answer is the relational read's current rows, read where the
+    // view holds them (a mirror's are the host's), or joined locally.
+    const edges = Query.edgeSelects(compiled);
+    const relatedNow =
+      view.queryRelated?.(nodes.collections, read.collection, compiled.root, edges) ??
+      Related.query(view, nodes.collections, read.collection, compiled.root, edges);
     return Stream.unwrap(
-      view
-        .related(nodes.collections, read.collection, compiled.root, Query.edgeSelects(compiled))
-        .pipe(
-          Effect.map((stream) =>
-            stream.pipe(Stream.map((rows) => Query.applyWindows(compiled, rows)))
+      view.related(nodes.collections, read.collection, compiled.root, edges).pipe(
+        Effect.map((stream) =>
+          finish(
+            stream.pipe(Stream.map((rows) => Query.applyWindows(compiled, rows))),
+            coveredAnswer(compiled, Option.some(Coverage.ofPlan(compiled)), relatedNow, (rows) =>
+              Effect.succeed(Query.applyWindows(compiled, rows))
+            )
           )
         )
+      )
     );
   };
 
+  const observe = (read: QueryModule.Read): Stream.Stream<ReadonlyArray<Related.RelatedRow>> =>
+    live(read, (rows) => rows);
+
+  const observeAnswers = (read: QueryModule.Read): Stream.Stream<UntypedAnswer> =>
+    live(read, answersOf);
+
   return {
     nodes,
-    query: queryOnce,
-    observe,
+    // SAFETY: the rows are typed by the graph the reads are planned against,
+    // which is this Client's own `nodes`: the trust the engine's typed reads
+    // place in rows that passed the row schema on write (ADR-0014). The read
+    // itself is checked against the same graph at the call (`Query.Validate`).
+    query: queryOnce as QueryOf<Graph>,
+    // SAFETY: as `query`: the same plan over the same graph, streamed.
+    observe: observe as ObserveOf<Graph>,
+    answer: answerOnce,
+    observeAnswers,
     subscribe: (input) =>
       targetOf(input).pipe(
         Effect.flatMap(({ registration, url }) => acquire(registration, "explicit", url))
@@ -710,8 +1062,10 @@ export const fromView = (
 export const Client = Context.Service<Client>("@thomasfosterau/legation/Client");
 
 /** Options for a Client that owns its engine ({@link make}). */
-export interface MakeOptions extends ViewOptions {
-  readonly nodes: Node.NodeRegistry;
+export interface MakeOptions<
+  Graph extends Node.NodeRegistry = Node.NodeRegistry,
+> extends ViewOptions {
+  readonly nodes: Graph;
   readonly mutations: Mutator.MutatorRegistry;
   /**
    * The sync-protocol client identity. Defaults to a random id — fine with
@@ -800,9 +1154,9 @@ const declaredIndexes = (
  * Client joined to an engine hosted elsewhere ({@link connect}) owns neither,
  * so it has no such result.
  */
-export interface Made {
+export interface Made<Graph extends Node.NodeRegistry = Node.NodeRegistry> {
   /** The Client: the app's one object for reads and writes. */
-  readonly client: Client;
+  readonly client: Client<Graph>;
   /** The engine the Client owns, its sync loop already running when `sync` is on. */
   readonly engine: ClientEngine.ClientEngine;
   /** The store the engine runs over: the one passed, the one in context, or the in-memory default. */
@@ -820,7 +1174,9 @@ export interface Made {
  * an app that needs an engine-level capability (devtools) need not build the
  * engine by hand.
  */
-export const make = (options: MakeOptions): Effect.Effect<Made, never, Scope.Scope> =>
+export const make = <Graph extends Node.NodeRegistry>(
+  options: MakeOptions<Graph>
+): Effect.Effect<Made<Graph>, never, Scope.Scope> =>
   Effect.gen(function* () {
     const store =
       options.store ??
@@ -845,10 +1201,9 @@ export const make = (options: MakeOptions): Effect.Effect<Made, never, Scope.Sco
       clientId: options.clientId ?? `client-${crypto.randomUUID()}`,
       clientGroupId,
       mutators: options.mutations,
-      ...(options.queries === undefined ? {} : { queries: options.queries }),
-      ...(options.syncLoop === undefined ? {} : { syncLoop: options.syncLoop }),
-      ...(!R.isEmptyReadonlyRecord(indexes) ? { indexes } : {}),
-      ...(options.autoIndex === undefined ? {} : { autoIndex: options.autoIndex }),
+      ...Defined.fields({ queries: options.queries, syncLoop: options.syncLoop }),
+      ...Defined.fields({ indexes: !R.isEmptyReadonlyRecord(indexes) ? indexes : undefined }),
+      ...Defined.fields({ autoIndex: options.autoIndex }),
     }).pipe(
       Effect.provideService(ClientStore.ClientStore, store),
       Effect.provideService(Transport.ClientTransport, transport)
@@ -868,8 +1223,10 @@ export const make = (options: MakeOptions): Effect.Effect<Made, never, Scope.Sco
   });
 
 /** Options for a Client connected to an engine hosted elsewhere. */
-export interface ConnectOptions extends ViewOptions {
-  readonly nodes: Node.NodeRegistry;
+export interface ConnectOptions<
+  Graph extends Node.NodeRegistry = Node.NodeRegistry,
+> extends ViewOptions {
+  readonly nodes: Graph;
   readonly mutations: Mutator.MutatorRegistry;
   readonly channel: MirrorChannel;
 }
@@ -879,7 +1236,9 @@ export interface ConnectOptions extends ViewOptions {
  * a daemon), joined over a `MirrorChannel`. Reads and writes cross the
  * channel; relational reads resolve host-side.
  */
-export const connect = (options: ConnectOptions): Effect.Effect<Client, never, Scope.Scope> =>
+export const connect = <Graph extends Node.NodeRegistry>(
+  options: ConnectOptions<Graph>
+): Effect.Effect<Client<Graph>, never, Scope.Scope> =>
   Effect.gen(function* () {
     const mirror = yield* Mirror.make({ channel: options.channel, mutators: options.mutations });
     return fromView(options.nodes, mirror, viewOptions(options));

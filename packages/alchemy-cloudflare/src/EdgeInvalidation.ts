@@ -42,6 +42,14 @@ import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 import { HttpCache, type InvalidationSink } from "@thomasfosterau/legation/internal";
 
+/** A KV delete, cache purge or forwarded invalidation failed; logged where it is caught, never surfaced. */
+class EvictionFailed extends Schema.TaggedError<
+  EvictionFailed,
+  { readonly brand: unique symbol }
+>()("EvictionFailed", {
+  cause: Schema.optional(Schema.Defect()),
+}) {}
+
 /** The part of a Workers KV namespace binding the KV sink uses. Structural, so a test can pass a fake. */
 export interface KvNamespace {
   readonly delete: (key: string) => Promise<void>;
@@ -82,7 +90,10 @@ export const kv = (
       Effect.forEach(
         Arr.dedupe(touched.rows.map((row) => keyFor(row.collection, row.id))),
         (key) =>
-          Effect.tryPromise(() => namespace.delete(key)).pipe(
+          Effect.tryPromise({
+            try: () => namespace.delete(key),
+            catch: (cause) => new EvictionFailed({ cause }),
+          }).pipe(
             Effect.catch((error) =>
               Effect.logWarning(`EdgeInvalidation: KV delete of "${key}" failed`, error)
             )
@@ -117,7 +128,10 @@ export const cachePurge = (
       Effect.forEach(
         Arr.chunksOf(HttpCache.evictionTags(touched, options), size),
         (tags) =>
-          Effect.tryPromise(() => cache.purge({ tags: [...tags] })).pipe(
+          Effect.tryPromise({
+            try: () => cache.purge({ tags: [...tags] }),
+            catch: (cause) => new EvictionFailed({ cause }),
+          }).pipe(
             Effect.flatMap((result) =>
               result.success
                 ? Effect.void
@@ -165,7 +179,10 @@ export const encode = (touched: HttpCache.Touched): string =>
  */
 export const forward = (target: InvalidationTarget): InvalidationSink.InvalidationSink => ({
   invalidate: (touched) =>
-    Effect.tryPromise(() => target.invalidate(encode(touched))).pipe(
+    Effect.tryPromise({
+      try: () => target.invalidate(encode(touched)),
+      catch: (cause) => new EvictionFailed({ cause }),
+    }).pipe(
       Effect.catch((error) =>
         Effect.logWarning("EdgeInvalidation: forwarding an invalidation failed", error)
       )

@@ -20,12 +20,15 @@
  * {@link ClientUnavailable}.
  */
 import { createRuntimeContext } from "@thomasfosterau/effect-svelte";
+import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as ManagedRuntime from "effect/ManagedRuntime";
 import * as Option from "effect/Option";
+import type * as Scope from "effect/Scope";
 import { getContext, hasContext, setContext } from "svelte";
-import { Client } from "@thomasfosterau/legation";
+import { Client, Hydration } from "@thomasfosterau/legation";
+import { HostRequest, Mirror, type MirrorChannel } from "@thomasfosterau/legation/internal";
 import { unavailable } from "./unavailable.js";
 
 export { ClientUnavailable } from "./unavailable.js";
@@ -54,17 +57,160 @@ export interface ClientHandle {
 }
 
 /**
+ * Options for a Client joined to an engine hosted elsewhere (#146, #147): a
+ * service worker or an elected tab, reached over `channel`. `Client.connect`'s
+ * options, plus the page's server-rendered snapshot to offer the host.
+ */
+export interface ConnectClientOptions extends Omit<Client.ConnectOptions, "channel"> {
+  /**
+   * The channel to the host: a channel, or the effect that opens one in the
+   * Client's scope (`BroadcastMirrorChannel.make(name)` from
+   * `@thomasfosterau/legation-browser`), so the app builds no scope itself.
+   */
+  readonly channel:
+    | MirrorChannel.MirrorChannel
+    | Effect.Effect<MirrorChannel.MirrorChannel, never, Scope.Scope>;
+  /**
+   * The page's SSR snapshot (`loadSnapshot` on the server), offered to the
+   * host before anything is subscribed: the host hydrates its durable store
+   * with it only when that store is empty and has not pulled, so a returning
+   * visitor's rows, cookie and journalled mutations are never touched. Render
+   * from it meanwhile by seeding the hooks
+   * (`initial: Hydration.rowsFor(snapshot, nodes, read)`); a `false` answer
+   * needs no action.
+   */
+  readonly snapshot?: Hydration.Snapshot | undefined;
+  /**
+   * How long to keep offering the snapshot while no host answers (a service
+   * worker still installing, say): the offer is re-sent every half second
+   * until an answer arrives or this elapses. Defaults to 5 seconds. The
+   * Client is not handed to the hooks until then, so they render from their
+   * seeds meanwhile.
+   */
+  readonly hydrateTimeout?: Duration.Input | undefined;
+  /** Reads to pin for the Client's lifetime (the app shell's working set), made once the snapshot is settled. */
+  readonly subscribe?: ReadonlyArray<Parameters<Client.Client["subscribe"]>[0]> | undefined;
+}
+
+/** A {@link ClientHandle} over a hosted engine, with the host's answer to the snapshot. */
+export interface ConnectedClientHandle extends ClientHandle {
+  /**
+   * The host's answer to the snapshot, once the Client is built (on first
+   * use): `Some` with whether it hydrated (and why not), or `None` when there
+   * was no snapshot, no host answered within `hydrateTimeout`, the host does
+   * not serve hydration, or the handle was disposed first. Observational: no
+   * outcome needs any action from the app.
+   */
+  readonly hydration: Promise<Option.Option<Hydration.HydrateOutcome>>;
+}
+
+/** The hydration settler before the promise has handed over its own. */
+const unsettled = (_outcome: Option.Option<Hydration.HydrateOutcome>): void => {};
+
+/** How long one offer of the snapshot waits for an answer before it is re-sent. */
+const OFFER_ATTEMPT = Duration.millis(500);
+
+/**
+ * Offer the snapshot to the host until it answers, `Unanswered` offers re-sent
+ * (a host that is not up yet drops them), for at most `timeout`. Any other
+ * failure, or no answer, is `None`, logged.
+ */
+const offerSnapshot = (
+  mirror: Mirror.Mirror,
+  snapshot: Hydration.Snapshot,
+  timeout: Duration.Input
+): Effect.Effect<Option.Option<Hydration.HydrateOutcome>> =>
+  mirror.request(Hydration.requests.hydrate, snapshot).pipe(
+    Effect.timeoutOption(OFFER_ATTEMPT),
+    Effect.flatMap(
+      Option.match({
+        onNone: () =>
+          Effect.fail(HostRequest.unanswered("hydrate", "No answer to this offer of the snapshot")),
+        onSome: (outcome) => Effect.succeed(outcome),
+      })
+    ),
+    Effect.retry({ while: (error) => error.reason === "Unanswered" }),
+    Effect.timeoutOption(timeout),
+    Effect.catch((error) =>
+      Effect.logWarning("legation-svelte: the engine host did not take the snapshot", {
+        error,
+      }).pipe(Effect.as(Option.none<Hydration.HydrateOutcome>()))
+    )
+  );
+
+/** The connected Client's runtime: mirror → snapshot offered → Client → shell pins. */
+const connectRuntime = (
+  options: ConnectClientOptions,
+  settle: (outcome: Option.Option<Hydration.HydrateOutcome>) => void
+): ClientRuntime => {
+  const { snapshot, hydrateTimeout, subscribe, ...connect } = options;
+  return ManagedRuntime.make(
+    Layer.effect(Client.Client)(
+      Effect.gen(function* () {
+        const channel = Effect.isEffect(connect.channel) ? yield* connect.channel : connect.channel;
+        const mirror = yield* Mirror.make({ channel, mutators: connect.mutations });
+        // The offer goes before anything subscribes: a registration makes the
+        // host pull, and a pull that has started turns the snapshot away.
+        const outcome =
+          snapshot === undefined
+            ? Option.none<Hydration.HydrateOutcome>()
+            : yield* offerSnapshot(mirror, snapshot, hydrateTimeout ?? Duration.seconds(5));
+        settle(outcome);
+        const client = Client.fromView(
+          connect.nodes,
+          mirror,
+          connect.urls === undefined ? {} : { urls: connect.urls }
+        );
+        if (subscribe !== undefined) {
+          yield* Effect.forEach(subscribe, (read) => client.subscribe(read), {
+            concurrency: 1,
+            discard: true,
+          }).pipe(Effect.orDie);
+        }
+        return client;
+      })
+    )
+  );
+};
+
+/**
  * Build the Client a Svelte app boots with (#147): `Client.make`'s options in,
  * a {@link ClientHandle} out, with no Effect runtime for the app to build. The
  * Client is built on first use, so creating the handle does no work; with
  * `transport: { url }` it is the standard remote setup.
+ *
+ * Given a `channel` instead ({@link ConnectClientOptions}), the Client joins
+ * an engine hosted elsewhere (a service worker, an elected tab), and a
+ * `snapshot` is offered to that host's store first (#146): the host owns the
+ * empty-store gate, and the handle's `hydration` reports its answer.
  */
-export const createClient = (options: Client.MakeOptions): ClientHandle =>
-  fromRuntime(
-    ManagedRuntime.make(
-      Layer.effect(Client.Client)(Effect.map(Client.make(options), (made) => made.client))
-    )
-  );
+export function createClient(options: ConnectClientOptions): ConnectedClientHandle;
+/** The owned form: the Client builds its own engine (`Client.make`). */
+export function createClient(options: Client.MakeOptions): ClientHandle;
+export function createClient(
+  options: Client.MakeOptions | ConnectClientOptions
+): ClientHandle | ConnectedClientHandle {
+  if (!("channel" in options)) {
+    return fromRuntime(
+      ManagedRuntime.make(
+        Layer.effect(Client.Client)(Effect.map(Client.make(options), (made) => made.client))
+      )
+    );
+  }
+  let settle: (outcome: Option.Option<Hydration.HydrateOutcome>) => void = unsettled;
+  const hydration = new Promise<Option.Option<Hydration.HydrateOutcome>>((resolve) => {
+    settle = resolve;
+  });
+  const runtime = connectRuntime(options, (outcome) => settle(outcome));
+  return {
+    runtime,
+    hydration,
+    dispose: () => {
+      settle(Option.none());
+      return runtime.dispose();
+    },
+  };
+}
 
 /**
  * Wrap a runtime the app built itself, for the custom-layer path: an in-page

@@ -20,13 +20,27 @@ import * as HttpServerResponse from "effect/http/HttpServerResponse";
 import * as Scope from "effect/Scope";
 
 /**
+ * A partial fake of `T`: any subset of `T`'s members, each method with a
+ * simplified signature. The member names are checked against `T`, so a fake
+ * can't stub a member the binding doesn't have.
+ */
+export type Fake<T> = {
+  readonly [K in keyof T]?: T[K] extends (...args: never) => void
+    ? (...args: never) => void
+    : unknown;
+};
+
+/**
  * Type a partial fake as the binding it stands in for. A fake implements only
  * the members the code under test calls; the provider and workerd types carry
  * many more, so no fake satisfies them structurally.
  */
-export const fakeBinding = <T>(fake: unknown): T => fake as T;
+export const fakeBinding = <T>(fake: Fake<T>): T =>
+  // SAFETY: a test fake stands in for a third-party binding; the code under
+  // test calls only the members it stubs, whose names `Fake<T>` checks.
+  fake as T;
 
-/** Alchemy's runtime context, as a Durable Object event carries it. Nothing here reads it. */
+/** Alchemy's runtime context, as a Durable Object event carries it. */
 export const runtimeContext: RuntimeContext["Service"] = {
   Type: "Test",
   id: "test",
@@ -130,14 +144,8 @@ export const construct = <Surface>(
     return { object, sockets: raw.sockets, run };
   });
 
-/** One member of a Durable Object's surface, by name. */
-const member = (surface: Members, key: string | symbol): unknown => surface[key];
-
 /** A Durable Object's surface, read as its members by name. */
 type Members = Readonly<Record<string | symbol, unknown>>;
-
-// SAFETY: a surface is an object of named members (the bridge reads them by name too).
-const asMembers = <Surface extends object>(surface: Surface): Members => surface as Members;
 
 /**
  * An in-memory namespace over `instances`. `getByName` returns a stub whose
@@ -146,8 +154,10 @@ const asMembers = <Surface extends object>(surface: Surface): Members => surface
  */
 export const makeNamespace = <Surface extends object>(
   lookup: (name: string) => Effect.Effect<Instance<Surface>>
-): Workers.DurableObject<Surface> =>
-  fakeBinding<Workers.DurableObject<Surface>>({
+): Workers.DurableObject<Surface> => {
+  // SAFETY: a surface is an object of named members (the bridge reads them by name too).
+  const membersOf = (instance: Instance<Surface>): Members => instance.object as Members;
+  return fakeBinding<Workers.DurableObject<Surface>>({
     getByName: (name: string) =>
       new Proxy(
         {},
@@ -158,7 +168,7 @@ export const makeNamespace = <Surface extends object>(
                   Effect.flatMap(lookup(name), (instance) =>
                     instance.run(
                       // SAFETY: a Durable Object's `fetch` member is its HTTP handler.
-                      (member(asMembers(instance.object), "fetch") as Handler).pipe(
+                      (membersOf(instance)["fetch"] as Handler).pipe(
                         Effect.provideService(HttpServerRequest.HttpServerRequest, request),
                         Effect.orDie
                       )
@@ -169,7 +179,7 @@ export const makeNamespace = <Surface extends object>(
                     instance.run<unknown, never>(
                       // SAFETY: every other member of a Durable Object's surface is an RPC method.
                       (
-                        member(asMembers(instance.object), method) as (
+                        membersOf(instance)[method] as (
                           ...args: ReadonlyArray<unknown>
                         ) => Effect.Effect<unknown, never, RuntimeContext>
                       )(...args)
@@ -178,6 +188,7 @@ export const makeNamespace = <Surface extends object>(
         }
       ),
   });
+};
 
 /** A Durable Object's HTTP handler, as the bridge runs it. */
 type Handler = Effect.Effect<
@@ -189,17 +200,15 @@ type Handler = Effect.Effect<
 /** Run a Durable Object `fetch` handler on a web request and answer a web response. */
 export const fetchOf =
   (instance: Instance<{ readonly fetch: Handler }>) =>
-  (request: Request): Promise<Response> =>
-    Effect.runPromise(
-      instance
-        .run(
-          instance.object.fetch.pipe(
-            Effect.provideService(
-              HttpServerRequest.HttpServerRequest,
-              HttpServerRequest.fromWeb(request)
-            ),
-            Effect.orDie
-          )
+  (request: Request): Effect.Effect<Response> =>
+    instance
+      .run(
+        instance.object.fetch.pipe(
+          Effect.provideService(
+            HttpServerRequest.HttpServerRequest,
+            HttpServerRequest.fromWeb(request)
+          ),
+          Effect.orDie
         )
-        .pipe(Effect.map((response) => HttpServerResponse.toWeb(response)))
-    );
+      )
+      .pipe(Effect.map((response) => HttpServerResponse.toWeb(response)));

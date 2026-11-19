@@ -14,6 +14,7 @@
  * acquires without ever releasing.
  */
 
+import * as Defined from "./Defined.js";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
@@ -239,8 +240,7 @@ export const make = (
             Effect.andThen(
               Ref.update(currentRef, (current): Subset.Subset => ({
                 ...current,
-                ...(window.limit !== undefined ? { limit: window.limit } : {}),
-                ...(window.cursor !== undefined ? { cursor: window.cursor } : {}),
+                ...Defined.fields({ limit: window.limit, cursor: window.cursor }),
               }))
             )
           );

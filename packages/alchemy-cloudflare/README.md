@@ -10,12 +10,15 @@ are Alchemy Durable Objects, their state, storage and sockets are the provider's
 `Cloudflare.D1.QueryDatabase` client.
 
 - **`Room`** — the per-user Durable Object (`LegationRoom.make(Room.make(...))`).
-  It runs the sync `Server` for one user: push/pull/read over stateless HTTP
-  (each request wakes the object, is answered, and lets it hibernate), CVRs in
-  the object's transactional storage (`DurableCvrStore`, co-located with the
-  user), a `FanoutBus` over the topic shards, and hibernatable WebSockets
-  (`Cloudflare.upgrade`) that carry only contentless poke frames — so hibernated
-  sockets cost nothing between writes. Each shard call, room poke and lease
+  It runs the sync `Server` for one user: push/pull/read over stateless HTTP,
+  CVRs in the object's transactional storage (`DurableCvrStore`, co-located
+  with the user), a `FanoutBus` over the topic shards, and WebSockets accepted
+  under the hibernation API (`Cloudflare.upgrade`) that carry only contentless
+  poke frames. **A room does not hibernate**: the bus renews its shard leases
+  on a heartbeat (`heartbeat`, default 30 seconds), and a Durable Object with a
+  pending timer cannot hibernate, so a room stays in memory and is billed for
+  duration from its first request until the platform evicts it. Staying
+  resident is also what keeps its leases, and so its pokes, alive. Each shard call, room poke and lease
   registration is bounded by `publishTimeout` (default 5 seconds): a hung shard
   is dropped with its poke, so it cannot hold a push open, and a lost poke only
   delays the next pull.
@@ -27,7 +30,8 @@ are Alchemy Durable Objects, their state, storage and sockets are the provider's
   distributed cleanup.
 - **`Worker` (`routeSync`)** — the stateless entry, for an Alchemy Worker's
   `fetch`. It claims only the sync base path (default `/sync`), resolves the
-  caller's identity to their room, forwards the request to the room's stub
+  caller's identity to their room (or, opted in, an anonymous caller to a shared
+  anonymous room), forwards the request to the room's stub
   (WebSocket upgrades included), and answers `Option.none()` for everything
   else, so it composes inside any existing handler.
 - **`D1Executor`** — a `SqlBackend` executor over the `QueryDatabaseClient` of
@@ -51,11 +55,11 @@ are Alchemy Durable Objects, their state, storage and sockets are the provider's
 
 ```sh
 npm install @thomasfosterau/legation-alchemy-cloudflare @thomasfosterau/legation effect \
-  alchemy@2.0.0-beta.85 @alchemy.run/cloudflare@2.0.0-beta.85
+  alchemy@2.0.0-beta.87 @alchemy.run/cloudflare@2.0.0-beta.87
 npm install --save-dev @cloudflare/workers-types
 ```
 
-`alchemy` and `@alchemy.run/cloudflare` are peers at exactly 2.0.0-beta.85 (each
+`alchemy` and `@alchemy.run/cloudflare` are peers at exactly 2.0.0-beta.87 (each
 `@alchemy.run/*` release pins `alchemy` exactly). `@cloudflare/workers-types` is
 not a peer of this package: the provider's own declarations import it, so a
 Worker project type-checks with it installed.
@@ -82,7 +86,7 @@ export class LegationRoom extends Cloudflare.DurableObject<LegationRoom, Room.Ro
   "LegationRoom"
 ) {}
 
-export const LegationShardLive = LegationShard.make(FanoutShard.make());
+export const LegationShardLive = LegationShard.make(FanoutShard.make);
 
 export const LegationRoomLive = LegationRoom.make(
   Effect.gen(function* () {
@@ -124,6 +128,32 @@ the room's per-instance phase, where the object's state and Alchemy's
 is built there. A request reaches the room with its base path intact, and the
 room answers by the path's last segment (`/sync/push` is the `push` route).
 
+### Anonymous readers
+
+`roomIdOf` resolves the caller's room id as an `Effect<Option<string>>`;
+`Option.none()` is a 401 (`Option.fromNullishOr(session)` adapts a nullable
+lookup). To serve public collections to
+anonymous readers, give `routeSync` an `anonymousRoomOf`: it names the shared
+room an anonymous caller uses, under the reserved `Worker.anonymousRoomPrefix`,
+so an anonymous caller never reaches a user's room (and a `roomIdOf` id with
+that prefix is refused with a 500). `Worker.shardByClientGroup` spreads them
+over a fixed number of rooms by their client-group cookie, so one Durable
+Object is not their ceiling:
+
+```ts
+Worker.routeSync({
+  rooms,
+  roomIdOf: resolveSession,
+  anonymousRoomOf: Worker.shardByClientGroup({ shards: 16 }),
+});
+```
+
+A group always lands in the same room, so its CVRs stay there. A caller with
+no `legation-client-group` cookie (the SvelteKit adapter's `clientGroupId`
+sets it) gets a 401. Changing `shards` moves most groups, whose next pull is
+then a reset. The room's policy sees these callers as anonymous, so it must
+allow only the public collections to the anonymous identity.
+
 The room presents each push, pull and read request's headers to `identity` as
 its `Authorization.RequestCredentials` (ADR-0035), so a resolver can verify the
 session cookie or API key the request carried: `routeSync` forwards the request
@@ -142,6 +172,58 @@ identity: Effect.succeed({
 Only the resolver sees the headers; auth filters and mutators see the identity
 it returns on `SyncContext.identity`.
 
+## Writes that bypass the rooms
+
+A cron or queue Worker that writes rows itself, with no mutation, publishes
+the write's `ChangeHint`s with `DurableFanoutBroker.publishOutOfBand`, and
+every room leased on the derived topics is poked, as after a push:
+
+```ts
+const publish = DurableFanoutBroker.publishOutOfBand({
+  shards: yield * LegationShard,
+  rooms: yield * LegationRoom,
+  nodes,
+});
+// after the write commits
+yield * publish([{ collection: "results", ids, values }]);
+```
+
+Pass the written rows as `values` (and the previous ones as `oldValues` for a
+row that moved or was deleted): a hint without values derives only the
+collection's coarse topic, so a room whose window leased a fine topic (an
+equality on an edge or hint key) waits for its next interval pull. Each call is
+bounded by `timeout` (default 5 seconds) and fire-and-forget.
+
+`Room.make` also takes `hints`, a `HintSource` the room runs on its bus. A
+polling source (`PollingHintSource`) polls only while the instance is in
+memory, and every resident room polls and publishes the same change, so N
+rooms read the source N times per interval. Prefer publishing from the writer.
+
+## PostgreSQL inside a room
+
+A client built in `backend` outlives the request: the room builds its backend
+once per in-memory instance and serves every request with it until the
+instance is evicted; a wake builds a new one. `backend` runs in the instance's
+scope, so `Layer.build(PgClient.layer(...))` there holds a pool for the
+instance's life. That scope is never closed: on eviction the connections are
+dropped, not closed.
+
+- **Direct connection** (PostgreSQL or PgBouncer): build the pool in `backend`,
+  never as a layer on the room class or its Worker (Alchemy builds those once
+  per isolate and shares them across rooms). Keep it small (every awake room
+  holds one) and give it an idle timeout.
+- **Hyperdrive**: don't hold it across requests. Its credentials are valid
+  only within the invocation that read them, so return
+  `Backend.perRequest(acquire)` from `backend`: the room builds the client in
+  `acquire` once per push, pull and read, in that request's scope, and one
+  push's transaction stays on its connection (#681). Hyperdrive pools in
+  transaction mode, so the push stays atomic. Bind the room to a
+  configuration with **query caching disabled** (`--caching-disabled`):
+  Hyperdrive caches reads outside a transaction without invalidating them on
+  a write, and the pull's reads run outside one.
+
+Details: [`docs/alchemy-postgres.md`](../../docs/alchemy-postgres.md).
+
 ## What Alchemy does not cover
 
 - **Interactive transactions on D1.** The provider's client has `batch()`
@@ -156,10 +238,9 @@ it returns on `SyncContext.identity`.
 
 ## Effect version
 
-Peers `effect ^4.1.0`, the floor Alchemy requires (`alchemy` and
-`@alchemy.run/cloudflare` 2.0.0-beta.85 peer `effect ^4.1.0`). Tested against
-`4.1.2` (the version CI pins) and `4.1.0` (the floor; CI runs this package's
-tests against it on every PR); install one copy of `effect` in your app
+Peers `effect ^4.1.4`, the floor Alchemy requires (`alchemy` and
+`@alchemy.run/cloudflare` 2.0.0-beta.87 peer `effect ^4.1.4`). Tested against
+`4.1.4`, which is both the version CI pins and the floor; install one copy of `effect` in your app
 (ADR-0003). The rest of legation peers `effect ^4.0.0`.
 
 ## SSR from a separate Worker

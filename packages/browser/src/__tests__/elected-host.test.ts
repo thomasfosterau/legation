@@ -32,6 +32,7 @@ import * as Scope from "effect/Scope";
 import * as Stream from "effect/Stream";
 import * as ElectedHost from "../ElectedHost.js";
 import type { Role } from "../ElectedHost.js";
+import { TestFailure } from "./test-failure.js";
 
 interface Todo {
   readonly id: string;
@@ -50,7 +51,10 @@ const nodes = Node.registry([Todo]);
 
 /** Real timers, independent of the test clock. */
 const sleepReal = (millis: number) =>
-  Effect.promise(() => new Promise<void>((resolve) => setTimeout(resolve, millis)));
+  Effect.callback<void>((resume) => {
+    const timer = setTimeout(() => resume(Effect.void), millis);
+    return Effect.sync(() => clearTimeout(timer));
+  });
 
 /** Poll until `read` passes `until`, with a bounded number of attempts. */
 const eventually = <A>(read: Effect.Effect<A>, until: (value: A) => boolean) =>
@@ -60,7 +64,7 @@ const eventually = <A>(read: Effect.Effect<A>, until: (value: A) => boolean) =>
       if (until(value)) return value;
       yield* sleepReal(10);
     }
-    return yield* Effect.die(new Error("eventually: condition never held"));
+    return yield* Effect.die(new TestFailure({ message: "eventually: condition never held" }));
   });
 
 /** Every `role` stream's current value (re-reads live — see `SubscriptionRef.changes`). */
@@ -146,7 +150,7 @@ const makeFakeLockManager = (): LockManager => {
             name,
             queue.filter((fn) => fn !== attempt)
           );
-        reject(new Error("aborted"));
+        reject(new TestFailure({ message: "aborted" }));
       });
       attempt();
     });

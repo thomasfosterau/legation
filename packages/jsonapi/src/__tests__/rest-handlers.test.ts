@@ -11,8 +11,13 @@
  * for a paginated node edge under either declaration, and never for a
  * collection the resource does not declare.
  */
+import { Defined } from "@thomasfosterau/legation/internal";
 import { describe, expect, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
+import * as Option from "effect/Option";
+import * as Ref from "effect/Ref";
+import { awaitPromise } from "./await-promise.js";
+import { defined } from "./defined.js";
 import * as Layer from "effect/Layer";
 import * as P from "effect/Predicate";
 import * as R from "effect/Record";
@@ -31,6 +36,7 @@ import {
 } from "@thomasfosterau/effect-jsonapi";
 import {
   Authorization,
+  AuthorizationError,
   type Backend,
   Edge,
   MemoryBackend,
@@ -38,6 +44,12 @@ import {
   Predicate,
 } from "@thomasfosterau/legation";
 import * as JsonApiQuery from "../JsonApiQuery.js";
+import {
+  decodeDocument,
+  type JsonApiDocument,
+  ResourceIdentifier,
+  ResourceObject,
+} from "../schema.js";
 import * as RestHandlers from "../RestHandlers.js";
 
 // ─── The node graph ──────────────────────────────────────────────────────────
@@ -255,7 +267,22 @@ const seeds: ReadonlyArray<Seed> = [
   { collection: "contracts", id: "k-1", value: { id: "k-1", sellerId: "s-1", terms: "net 30" } },
 ];
 
-const makeWorld = (policy: Authorization.AuthPolicy = fullPolicy) =>
+/** How the world's handlers find a request's identity: a hand-written `context`, or a resolver. */
+type IdentitySeam =
+  | Pick<RestHandlers.ContextOptions, "context">
+  | Pick<RestHandlers.IdentityOptions, "identity" | "clientGroupId">;
+
+/** The identity seam: a header the app trusts (a test stand-in for a verified session). */
+const byHeader: IdentitySeam = {
+  context: (request) => {
+    const user = request.headers["x-user"];
+    return Effect.succeed(
+      P.isString(user) ? { clientGroupId: "http", identity: user } : { clientGroupId: "http" }
+    );
+  },
+};
+
+const makeWorld = (policy: Authorization.AuthPolicy = fullPolicy, seam: IdentitySeam = byHeader) =>
   Effect.gen(function* () {
     const memory = yield* MemoryBackend.make({
       "seed/put": (args, writer) => {
@@ -290,12 +317,7 @@ const makeWorld = (policy: Authorization.AuthPolicy = fullPolicy) =>
       nodes,
       backend,
       policy,
-      // The identity seam: a header the app trusts (a test stand-in for a verified session).
-      context: (request) =>
-        Effect.succeed({
-          clientGroupId: "http",
-          ...(P.isString(request.headers["x-user"]) ? { identity: request.headers["x-user"] } : {}),
-        }),
+      ...seam,
       prefix: "/api",
     });
     const groups = Layer.mergeAll(
@@ -321,26 +343,67 @@ const makeWorld = (policy: Authorization.AuthPolicy = fullPolicy) =>
     ) as Layer.Layer<never, never, HttpRouter.HttpRouter>;
     const { handler } = yield* Effect.acquireRelease(
       Effect.sync(() => HttpRouter.toWebHandler(app, { disableLogger: true })),
-      ({ dispose }) => Effect.promise(dispose)
+      ({ dispose }) => awaitPromise(dispose).pipe(Effect.orDie)
     );
-    const getDocument = (path: string, user?: string) =>
-      Effect.promise(async () => {
+    // Every served body is decoded as a JSON:API document, so a malformed one fails the test.
+    const getDocument = (path: string, user?: string, headers?: Record<string, string>) =>
+      awaitPromise(async () => {
         const response = await handler(
           new Request(`http://shop.test${path}`, {
             headers: {
               accept: "application/vnd.api+json",
-              ...(user === undefined ? {} : { "x-user": user }),
+              ...Defined.fields({ "x-user": user }),
+              ...headers,
             },
           })
         );
-        // oxlint-disable-next-line effect/avoid-any -- the tests read the served JSON:API documents structurally (`data` a list or one resource, `errors`, `included`, `links.next`) across ~40 assertions; typing the body would mean rewriting each assertion, and the endpoint's own encoder already checks the document shape
-        return { status: response.status, body: (await response.json()) as any };
-      });
+        const json: unknown = await response.json();
+        return { status: response.status, json };
+      }).pipe(
+        Effect.flatMap(({ status, json }) =>
+          Effect.map(decodeDocument(json), (body) => ({ status, body }))
+        )
+      );
     return { rest, getDocument, calls: () => calls };
   });
 
 const ids = (resources: ReadonlyArray<{ readonly id: string }>) =>
   resources.map((resource) => resource.id);
+
+// Each narrowing below decodes the variant it expects and throws on any other,
+// which fails the test.
+const decodeResources = Schema.decodeUnknownSync(Schema.Array(ResourceObject));
+const decodeResource = Schema.decodeUnknownSync(ResourceObject);
+const decodeIdentifier = Schema.decodeUnknownSync(ResourceIdentifier);
+const decodeLink = Schema.decodeUnknownSync(Schema.String);
+
+/** The document's primary data as a list of resources. */
+const many = (document: JsonApiDocument): ReadonlyArray<ResourceObject> =>
+  decodeResources(document.data);
+
+/** The document's primary data as one resource. */
+const one = (document: JsonApiDocument): ResourceObject => decodeResource(document.data);
+
+/** The document's compound `included` resources. */
+const included = (document: JsonApiDocument): ReadonlyArray<ResourceObject> =>
+  defined(document.included);
+
+/** The document's first error. */
+const firstError = (document: JsonApiDocument) => defined(document.errors?.[0]);
+
+/** The document's `links.next`, as a URL. */
+const nextLink = (document: JsonApiDocument): string => decodeLink(document.links?.["next"]);
+
+/** A resource's relationship by name. */
+const relationship = (resource: ResourceObject, name: string) =>
+  defined(resource.relationships?.[name]);
+
+/** The identifier a resource's to-one relationship links to. */
+const toOne = (resource: ResourceObject, name: string) =>
+  decodeIdentifier(relationship(resource, name).data);
+
+/** A resource's attributes. */
+const attributesOf = (resource: ResourceObject) => defined(resource.attributes);
 
 const reviewLinks = (id: string) => ({
   self: `/api/products/${id}/relationships/reviews`,
@@ -356,8 +419,8 @@ describe("RestHandlers over the read path", () => {
           const { getDocument } = yield* makeWorld();
           const { status, body } = yield* getDocument("/api/products?sort=name");
           expect(status).toBe(200);
-          expect(ids(body.data)).toEqual(["p-3", "p-1", "p-2"]);
-          expect(body.data[1]).toEqual({
+          expect(ids(many(body))).toEqual(["p-3", "p-1", "p-2"]);
+          expect(many(body)[1]).toEqual({
             type: "products",
             id: "p-1",
             attributes: { name: "Desk", priceCents: 300 },
@@ -395,8 +458,8 @@ describe("RestHandlers over the read path", () => {
           "/api/products?include=variants,category&filter[priceCents][gt]=150&sort=-priceCents"
         );
         expect(status).toBe(200);
-        expect(ids(body.data)).toEqual(["p-1", "p-3"]);
-        expect(body.included.map((r: any) => `${r.type}/${r.id}`)).toEqual([
+        expect(ids(many(body))).toEqual(["p-1", "p-3"]);
+        expect(included(body).map((r) => `${r.type}/${r.id}`)).toEqual([
           "categories/c-audio",
           "variants/v-1",
           "variants/v-2",
@@ -433,7 +496,7 @@ describe("RestHandlers over the read path", () => {
         // A parent with no edge rows still carries the relationship, empty.
         const bare = yield* getDocument("/api/products/p-2?include=variants");
         expect(bare.status).toBe(200);
-        expect(bare.body.included[0].relationships.offers).toEqual({ data: [] });
+        expect(relationship(defined(included(bare.body)[0]), "offers")).toEqual({ data: [] });
       })
     )
   );
@@ -443,29 +506,29 @@ describe("RestHandlers over the read path", () => {
       Effect.gen(function* () {
         const { getDocument } = yield* makeWorld();
         // `Relationship.many`: included in the edge's order, linkage beside the links.
-        const many = yield* getDocument("/api/products/p-1?include=reviews");
-        expect(many.status).toBe(200);
-        expect(many.body.data.relationships.reviews).toEqual({
+        const asMany = yield* getDocument("/api/products/p-1?include=reviews");
+        expect(asMany.status).toBe(200);
+        expect(relationship(one(asMany.body), "reviews")).toEqual({
           links: reviewLinks("p-1"),
           data: [
             { type: "reviews", id: "r-2" },
             { type: "reviews", id: "r-1" },
           ],
         });
-        expect(ids(many.body.included)).toEqual(["r-2", "r-1"]);
+        expect(ids(included(asMany.body))).toEqual(["r-2", "r-1"]);
         // `Relationship.paginated`: links only on a plain list and get...
         const paged = yield* getDocument("/api/paged/products");
         expect(paged.status).toBe(200);
-        expect(paged.body.data.map((r: any) => r.relationships.reviews)).toEqual(
+        expect(many(paged.body).map((r) => relationship(r, "reviews"))).toEqual(
           ["p-1", "p-2", "p-3"].map((id) => ({ links: reviewLinks(id) }))
         );
-        const one = yield* getDocument("/api/paged/products/p-1");
-        expect(one.status).toBe(200);
-        expect(one.body.data.relationships.reviews).toEqual({ links: reviewLinks("p-1") });
+        const single = yield* getDocument("/api/paged/products/p-1");
+        expect(single.status).toBe(200);
+        expect(relationship(one(single.body), "reviews")).toEqual({ links: reviewLinks("p-1") });
         // ...and `include=` refused by the endpoint's own codec.
         const refused = yield* getDocument("/api/paged/products?include=reviews");
         expect(refused.status).toBe(400);
-        expect(refused.body.errors[0].source).toEqual({ parameter: "include" });
+        expect(firstError(refused.body).source).toEqual({ parameter: "include" });
       })
     )
   );
@@ -487,10 +550,10 @@ describe("RestHandlers over the read path", () => {
         // on `categories` costs nothing until a request names it.
         const linked = yield* getDocument("/api/products");
         expect(linked.status).toBe(200);
-        expect(linked.body.data[0].relationships.category.data.id).toBe("c-audio");
+        expect(toOne(defined(many(linked.body)[0]), "category").id).toBe("c-audio");
         const named = yield* getDocument("/api/products?include=category");
         expect(named.status).toBe(403);
-        expect(named.body.errors[0].detail).toContain('"categories"');
+        expect(firstError(named.body).detail).toContain('"categories"');
       })
     )
   );
@@ -517,12 +580,12 @@ describe("RestHandlers over the read path", () => {
         Effect.gen(function* () {
           const { getDocument } = yield* makeWorld();
           const first = yield* getDocument("/api/products?sort=name&page[limit]=2");
-          expect(ids(first.body.data)).toEqual(["p-3", "p-1"]);
-          expect(first.body.links.next).toBe(
+          expect(ids(many(first.body))).toEqual(["p-3", "p-1"]);
+          expect(nextLink(first.body)).toBe(
             "/api/products?sort=name&page[limit]=2&page[after]=p-1"
           );
-          const second = yield* getDocument(first.body.links.next);
-          expect(ids(second.body.data)).toEqual(["p-2"]);
+          const second = yield* getDocument(nextLink(first.body));
+          expect(ids(many(second.body))).toEqual(["p-2"]);
           expect(second.body.links).toEqual({
             self: "/api/products?sort=name&page[limit]=2&page[after]=p-1",
           });
@@ -537,13 +600,13 @@ describe("RestHandlers over the read path", () => {
         Effect.gen(function* () {
           const { getDocument } = yield* makeWorld();
           const first = yield* getDocument("/api/products?sort=name&page[offset]=0&page[limit]=2");
-          expect(ids(first.body.data)).toEqual(["p-3", "p-1"]);
+          expect(ids(many(first.body))).toEqual(["p-3", "p-1"]);
           expect(first.body.links).toEqual({
             self: "/api/products?sort=name&page[limit]=2&page[offset]=0",
             next: "/api/products?sort=name&page[limit]=2&page[offset]=2",
           });
-          const second = yield* getDocument(first.body.links.next);
-          expect(ids(second.body.data)).toEqual(["p-2"]);
+          const second = yield* getDocument(nextLink(first.body));
+          expect(ids(many(second.body))).toEqual(["p-2"]);
           expect(second.body.links).toEqual({
             self: "/api/products?sort=name&page[limit]=2&page[offset]=2",
             prev: "/api/products?sort=name&page[limit]=2&page[offset]=0",
@@ -563,7 +626,7 @@ describe("RestHandlers over the read path", () => {
         const { getDocument } = yield* makeWorld();
         const { status, body } = yield* getDocument("/api/products?page[offset]=1&page[after]=p-1");
         expect(status).toBe(400);
-        expect(body.errors[0].source).toEqual({ parameter: "page[offset]" });
+        expect(firstError(body).source).toEqual({ parameter: "page[offset]" });
       })
     )
   );
@@ -578,12 +641,12 @@ describe("RestHandlers over the read path", () => {
             "/api/products?fields[products]=name&include=variants&fields[variants]="
           );
           expect(status).toBe(200);
-          expect(body.data.every((r: any) => Object.keys(r.attributes).join() === "name")).toBe(
+          expect(many(body).every((r) => Object.keys(attributesOf(r)).join() === "name")).toBe(
             true
           );
           // Linkage survives the projection; the rows behind it were full.
-          expect(body.data[0].relationships.category.data.id).toBe("c-audio");
-          expect(body.included.every((r: any) => R.isEmptyReadonlyRecord(r.attributes))).toBe(true);
+          expect(toOne(defined(many(body)[0]), "category").id).toBe("c-audio");
+          expect(included(body).every((r) => R.isEmptyReadonlyRecord(attributesOf(r)))).toBe(true);
         })
       )
   );
@@ -596,14 +659,14 @@ describe("RestHandlers over the read path", () => {
           const { getDocument } = yield* makeWorld();
           const found = yield* getDocument("/api/products/p-2?include=variants");
           expect(found.status).toBe(200);
-          expect(found.body.data.id).toBe("p-2");
-          expect(ids(found.body.included)).toEqual(["v-3"]);
+          expect(one(found.body).id).toBe("p-2");
+          expect(ids(included(found.body))).toEqual(["v-3"]);
           expect(found.body.links).toEqual({
             self: "/api/products?include=variants&filter[id]=p-2&page[limit]=1",
           });
           const missing = yield* getDocument("/api/products/p-9");
           expect(missing.status).toBe(404);
-          expect(missing.body.errors[0]).toMatchObject({ status: "404", code: "not_found" });
+          expect(firstError(missing.body)).toMatchObject({ status: "404", code: "not_found" });
         })
       )
   );
@@ -618,8 +681,8 @@ describe("RestHandlers over the read path", () => {
           expect(anonymous.status).toBe(200);
           expect(anonymous.body.data).toEqual([]);
           const mine = yield* getDocument("/api/cartItems?include=variant", "u1");
-          expect(ids(mine.body.data)).toEqual(["ci-1"]);
-          expect(ids(mine.body.included)).toEqual(["v-1"]);
+          expect(ids(many(mine.body))).toEqual(["ci-1"]);
+          expect(ids(included(mine.body))).toEqual(["v-1"]);
           // A filter for someone else's rows only narrows what the policy allows.
           const theirs = yield* getDocument("/api/cartItems?filter[userId]=u2", "u1");
           expect(theirs.body.data).toEqual([]);
@@ -636,7 +699,7 @@ describe("RestHandlers over the read path", () => {
           const before = calls();
           const { status, body } = yield* getDocument("/api/products?filter[name]=Desk");
           expect(status).toBe(400);
-          expect(body.errors[0]).toMatchObject({
+          expect(firstError(body)).toMatchObject({
             status: "400",
             source: { parameter: "filter[name]" },
           });
@@ -644,10 +707,10 @@ describe("RestHandlers over the read path", () => {
           // The graph checks before decoding name their parameter too.
           const include = yield* getDocument("/api/products?include=owner");
           expect(include.status).toBe(400);
-          expect(include.body.errors[0].source).toEqual({ parameter: "include" });
+          expect(firstError(include.body).source).toEqual({ parameter: "include" });
           const sorted = yield* getDocument("/api/products/p-1?sort=name");
           expect(sorted.status).toBe(400);
-          expect(sorted.body.errors[0].source).toEqual({ parameter: "sort" });
+          expect(firstError(sorted.body).source).toEqual({ parameter: "sort" });
           expect(calls()).toBe(before);
         })
       )
@@ -671,6 +734,84 @@ describe("RestHandlers over the read path", () => {
         expect(() => rest.list(Miskinded)).toThrow(
           /"contracts".*"one" but the node edge is "many"/
         );
+      })
+    )
+  );
+});
+
+/** A resolver that verifies a `session=<user>` cookie and records every request it sees. */
+const cookieResolver = (
+  seen: Ref.Ref<ReadonlyArray<Authorization.IdentityRequest>>
+): Authorization.IdentityResolver => ({
+  resolve: (request: Authorization.IdentityRequest) =>
+    Ref.update(seen, (requests) => [...requests, request]).pipe(
+      Effect.as(
+        Option.getOrUndefined(
+          Option.flatMap(request.credentials.header("cookie"), (cookie) =>
+            Option.fromNullishOr(/(?:^|; )session=([^;]+)/.exec(cookie)?.[1])
+          )
+        )
+      )
+    ),
+});
+
+describe("RestHandlers identity through the IdentityResolver (#645)", () => {
+  it.effect("presents the request's cookie to the resolver, under the client group http", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const seen = yield* Ref.make<ReadonlyArray<Authorization.IdentityRequest>>([]);
+        const { getDocument } = yield* makeWorld(fullPolicy, { identity: cookieResolver(seen) });
+        const signedIn = yield* getDocument("/api/cartItems", undefined, {
+          cookie: "theme=dark; session=u1",
+        });
+        expect(signedIn.status).toBe(200);
+        expect(ids(many(signedIn.body))).toEqual(["ci-1"]);
+        const [request] = yield* Ref.get(seen);
+        expect(request?.clientGroupId).toBe("http");
+        expect(request?.credentials.header("Cookie")).toEqual(
+          Option.some("theme=dark; session=u1")
+        );
+        // No cookie: the resolver sees no credentials and the policy's empty allow-set answers.
+        const anonymous = yield* getDocument("/api/cartItems");
+        expect(anonymous.status).toBe(200);
+        expect(anonymous.body.data).toEqual([]);
+        expect((yield* Ref.get(seen))[1]?.credentials.header("cookie")).toEqual(Option.none());
+      })
+    )
+  );
+
+  it.effect("names the configured client group and fails a refusing resolver with a 403", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const seen = yield* Ref.make<ReadonlyArray<Authorization.IdentityRequest>>([]);
+        const named = yield* makeWorld(fullPolicy, {
+          identity: cookieResolver(seen),
+          clientGroupId: "rest",
+        });
+        yield* named.getDocument("/api/cartItems", undefined, { cookie: "session=u2" });
+        expect((yield* Ref.get(seen)).map((request) => request.clientGroupId)).toEqual(["rest"]);
+
+        const refusing = yield* makeWorld(fullPolicy, {
+          identity: {
+            resolve: () => Effect.fail(new AuthorizationError({ message: "session revoked" })),
+          },
+        });
+        const refused = yield* refusing.getDocument("/api/cartItems");
+        expect(refused.status).toBe(403);
+        expect(firstError(refused.body).detail).toBe("session revoked");
+      })
+    )
+  );
+
+  it.effect("leaves every request anonymous without a resolver", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const { getDocument } = yield* makeWorld(fullPolicy, {});
+        const { status, body } = yield* getDocument("/api/cartItems", "u1", {
+          cookie: "session=u1",
+        });
+        expect(status).toBe(200);
+        expect(body.data).toEqual([]);
       })
     )
   );

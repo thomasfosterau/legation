@@ -13,8 +13,16 @@ import * as Stream from "effect/Stream";
 import * as SubscriptionRef from "effect/SubscriptionRef";
 import * as TestClock from "effect/testing/TestClock";
 import { TransportError, VersionNotSupportedError } from "../Errors.js";
-import type { PullRequest, PullResponse, PushResponse } from "../Protocol.js";
+import type {
+  PullRequest,
+  PullResponse,
+  PushResponse,
+  ReadRequest,
+  ReadResponse,
+} from "../Protocol.js";
 import * as Transport from "../Transport.js";
+import { defined } from "./defined.js";
+import { TestFailure } from "./test-failure.js";
 
 const pullResponse: PullResponse = { cookie: "next", patch: [], lastMutationIds: {} };
 const pushResponse: PushResponse = { lastMutationIds: {} };
@@ -22,22 +30,32 @@ const pullRequest: PullRequest = {
   clientGroupId: "g",
   subscriptions: [],
 };
+const readRequest: ReadRequest = { clientGroupId: "g", subsets: [] };
+const readResponse = (from: string): ReadResponse => ({
+  rows: [{ collection: "todos", id: from, version: 1, value: {} }],
+});
 
 interface Fake {
   readonly transport: Transport.ClientTransport;
   readonly failing: Ref.Ref<boolean>;
   readonly pulls: Ref.Ref<number>;
+  readonly reads: Ref.Ref<number>;
 }
 
-/** A fake carrier with a failure switch, a pull counter, and given pokes. */
+/**
+ * A fake carrier with a failure switch, pull and read counters, and given
+ * pokes. Its fallthrough read answers one row named `name`.
+ */
 const makeFake = (
   pokes: Stream.Stream<{ readonly reason?: string }, TransportError> = Stream.empty,
   error: () => TransportError | VersionNotSupportedError = () =>
-    new TransportError({ message: "carrier down" })
+    new TransportError({ message: "carrier down" }),
+  name = "fake"
 ): Effect.Effect<Fake> =>
   Effect.gen(function* () {
     const failing = yield* Ref.make(false);
     const pulls = yield* Ref.make(0);
+    const reads = yield* Ref.make(0);
     const attempt = <A>(value: A): Effect.Effect<A, TransportError | VersionNotSupportedError> =>
       Effect.flatMap(Ref.get(failing), (down) =>
         down ? Effect.fail(error()) : Effect.succeed(value)
@@ -45,9 +63,12 @@ const makeFake = (
     return {
       failing,
       pulls,
+      reads,
       transport: {
         push: () => attempt(pushResponse),
         pull: () => Ref.update(pulls, (n) => n + 1).pipe(Effect.andThen(attempt(pullResponse))),
+        read: () =>
+          Ref.update(reads, (n) => n + 1).pipe(Effect.andThen(attempt(readResponse(name)))),
         pokes,
         status: Effect.succeed("connected" as const),
         statusChanges: Stream.succeed("connected" as const),
@@ -77,6 +98,36 @@ describe("Transport.withInferredStatus", () => {
         yield* Ref.set(fake.failing, false);
         yield* wrapped.push({} as never);
         expect(yield* wrapped.status).toBe("connected");
+      })
+    )
+  );
+
+  it.effect("forwards the fallthrough read and infers status from it", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const fake = yield* makeFake();
+        const wrapped = yield* Transport.withInferredStatus(fake.transport);
+        const read = defined(wrapped.read);
+
+        expect(yield* read(readRequest)).toEqual(readResponse("fake"));
+        expect(yield* Ref.get(fake.reads)).toBe(1);
+        expect(yield* wrapped.status).toBe("connected");
+
+        yield* Ref.set(fake.failing, true);
+        const failed = yield* Effect.flip(read(readRequest));
+        expect(failed._tag).toBe("TransportError");
+        expect(yield* wrapped.status).toBe("disconnected");
+      })
+    )
+  );
+
+  it.effect("leaves read off when the wrapped carrier has none", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const fake = yield* makeFake();
+        const { read: _read, ...withoutRead } = fake.transport;
+        const wrapped = yield* Transport.withInferredStatus(withoutRead);
+        expect(wrapped.read).toBeUndefined();
       })
     )
   );
@@ -187,6 +238,60 @@ describe("Transport.withFallback", () => {
     )
   );
 
+  it.effect("forwards read through the same sideline and fallback as pull (#632)", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const primary = yield* makeFake(Stream.empty, undefined, "primary");
+        const fallback = yield* makeFake(Stream.empty, undefined, "fallback");
+        const combined = yield* Transport.withFallback(primary.transport, fallback.transport, {
+          restoreAfter: "30 seconds",
+        });
+        const read = defined(combined.read);
+
+        expect(yield* read(readRequest)).toEqual(readResponse("primary"));
+
+        yield* Ref.set(primary.failing, true);
+        expect(yield* read(readRequest)).toEqual(readResponse("fallback"));
+        expect(yield* Ref.get(primary.reads)).toBe(2);
+        // Sidelined by the failed read: push, pull and read all skip it.
+        yield* combined.pull(pullRequest);
+        expect(yield* Ref.get(primary.pulls)).toBe(0);
+        expect(yield* read(readRequest)).toEqual(readResponse("fallback"));
+        expect(yield* Ref.get(primary.reads)).toBe(2);
+
+        yield* Ref.set(fallback.failing, true);
+        expect((yield* Effect.flip(read(readRequest)))._tag).toBe("TransportError");
+        expect(yield* combined.status).toBe("disconnected");
+
+        // After the cooldown the recovered primary serves the read again.
+        yield* TestClock.adjust("31 seconds");
+        yield* Ref.set(primary.failing, false);
+        expect(yield* read(readRequest)).toEqual(readResponse("primary"));
+        expect(yield* combined.status).toBe("connected");
+      })
+    )
+  );
+
+  it.effect("serves read from the one leg that has it, and offers none when neither does", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const primary = yield* makeFake(Stream.empty, undefined, "primary");
+        const fallback = yield* makeFake(Stream.empty, undefined, "fallback");
+        const { read: _primaryRead, ...primaryOnlyPush } = primary.transport;
+        const { read: _fallbackRead, ...fallbackOnlyPush } = fallback.transport;
+
+        const fallbackReads = yield* Transport.withFallback(primaryOnlyPush, fallback.transport);
+        expect(yield* defined(fallbackReads.read)(readRequest)).toEqual(readResponse("fallback"));
+
+        const primaryReads = yield* Transport.withFallback(primary.transport, fallbackOnlyPush);
+        expect(yield* defined(primaryReads.read)(readRequest)).toEqual(readResponse("primary"));
+
+        const neither = yield* Transport.withFallback(primaryOnlyPush, fallbackOnlyPush);
+        expect(neither.read).toBeUndefined();
+      })
+    )
+  );
+
   it.effect("merges pokes and survives a failing primary poke stream", () =>
     Effect.scoped(
       Effect.gen(function* () {
@@ -228,9 +333,9 @@ const awaitSeen = (
     const all = yield* Ref.get(seen);
     if (all.length >= count) return;
     return yield* Effect.die(
-      new Error(
-        `awaitSeen: ${count} statuses never arrived in ${maxTurns} turns; saw ${all.join()}`
-      )
+      new TestFailure({
+        message: `awaitSeen: ${count} statuses never arrived in ${maxTurns} turns; saw ${all.join()}`,
+      })
     );
   });
 

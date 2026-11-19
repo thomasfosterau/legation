@@ -7,8 +7,8 @@
  * - a stateless Worker router ({@link Worker.routeSync}) forwarding the
  *   sync routes to the caller's per-user room;
  * - the **room** Durable Object ({@link Room.make}): the sync `Server` for
- *   one user — HTTP push/pull/read, CVRs in DO storage, hibernation-friendly
- *   WebSockets carrying contentless pokes;
+ *   one user — HTTP push/pull/read, CVRs in DO storage, WebSockets carrying
+ *   contentless pokes; its lease heartbeat keeps it in memory (no hibernation);
  * - the **fan-out shard** Durable Object ({@link FanoutShard.make}): one
  *   object per topic, holding leased room registrations — ADR-0023's broker,
  *   platform-sharded;
@@ -22,7 +22,7 @@
  *
  * The app declares its Durable Object classes and binds this package's
  * implementations to them (`LegationRoom.make(Room.make(...))`,
- * `LegationShard.make(FanoutShard.make())`).
+ * `LegationShard.make(FanoutShard.make)`).
  */
 
 export * as BindingTransport from "./BindingTransport.js";

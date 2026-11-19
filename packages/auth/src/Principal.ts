@@ -10,8 +10,8 @@
  *   that effect-auth's `SessionService.validateSession` accepted.
  * - `ApiKey` — an API key that effect-auth's `ApiKeyService.verify` accepted.
  *
- * A principal never carries a credential: not the session token (effect-auth
- * reports a validated session's `id` as the raw token, so it is left out), not
+ * A principal never carries a credential: not the session token (a validated
+ * session's `id` is its stored digest, and is left out too), not
  * the API key, not its hash.
  */
 
@@ -59,6 +59,10 @@ export const anonymous: Principal = { _tag: "Anonymous" };
 /** Whether a principal is the anonymous one. */
 export const isAnonymous = (principal: Principal): principal is Anonymous =>
   P.isTagged(principal, "Anonymous");
+
+/** Whether a principal is a validated session's. */
+export const isSession = (principal: Principal): principal is Session =>
+  P.isTagged(principal, "Session");
 
 /** The user a principal acts for: `None` for the anonymous principal. */
 export const userId = (principal: Principal): Option.Option<string> =>

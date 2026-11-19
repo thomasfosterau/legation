@@ -38,6 +38,13 @@ import * as Option from "effect/Option";
 import * as Random from "effect/Random";
 import * as Predicate from "./Predicate.js";
 import type * as Subset from "./Subset.js";
+import * as Schema from "effect/Schema";
+
+/** Thrown for a corpus seed or row count the generator cannot honour. */
+class InvalidCorpusInput extends Schema.TaggedError<
+  InvalidCorpusInput,
+  { readonly brand: unique symbol }
+>()("InvalidCorpusInput", { message: Schema.String }) {}
 
 // ─── Draws over the Random service ───────────────────────────────────────────
 
@@ -62,7 +69,9 @@ export const resolveSeed = (override: string | undefined): number => {
   if (override === undefined || override.trim() === "") return DEFAULT_SEED;
   const seed = Number(override);
   if (!Number.isInteger(seed)) {
-    throw new Error(`LEGATION_CORPUS_SEED must be an integer, got ${JSON.stringify(override)}`);
+    throw new InvalidCorpusInput({
+      message: `LEGATION_CORPUS_SEED must be an integer, got ${JSON.stringify(override)}`,
+    });
   }
   return seed;
 };
@@ -326,9 +335,9 @@ export const generateRows = (
   const plan = planRows(columns, resolveOptions(options));
   const minimum = plan.pinned + plan.sweep;
   if (count < minimum) {
-    throw new Error(
-      `generateRows needs at least ${minimum} rows for these columns (the pinned rows plus the pool sweep), got ${count}`
-    );
+    throw new InvalidCorpusInput({
+      message: `generateRows needs at least ${minimum} rows for these columns (the pinned rows plus the pool sweep), got ${count}`,
+    });
   }
   return Effect.forEach(
     Array.from({ length: count }, (_, index) => index),

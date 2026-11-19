@@ -34,17 +34,20 @@ import * as Arr from "effect/Array";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
+import * as ManagedRuntime from "effect/ManagedRuntime";
 import * as Order from "effect/Order";
 import * as P from "effect/Predicate";
 import type * as Ordering from "effect/Ordering";
 import { KeyValueStore } from "effect/persistence";
 import { IndexedDb } from "@effect/platform-browser";
 import { ClientStore, Predicate } from "@thomasfosterau/legation";
-import { CollectionIndex, Subset } from "@thomasfosterau/legation/internal";
+import { CollectionIndex, Subset, Defined } from "@thomasfosterau/legation/internal";
 import type { Protocol } from "@thomasfosterau/legation/internal";
 import { IDBFactory, IDBKeyRange } from "fake-indexeddb";
 import * as IndexedDbClientStore from "../IndexedDbClientStore.js";
 import { defined } from "./defined.js";
+import { TestFailure } from "./test-failure.js";
+import { withLayer } from "./with-layer.js";
 
 // ─── Deterministic data ──────────────────────────────────────────────────────
 
@@ -192,11 +195,14 @@ const countingStore = () => {
   return { store, data, reset, summarise };
 };
 
+// The script's own runtime, made once at module load: every section's effects run on it.
+const runtime = ManagedRuntime.make(Layer.empty);
+
 const withCounting = <A, E>(
   counting: ReturnType<typeof countingStore>,
   effect: Effect.Effect<A, E, KeyValueStore.KeyValueStore>
 ) =>
-  Effect.runPromise(
+  runtime.runPromise(
     effect.pipe(Effect.provideService(KeyValueStore.KeyValueStore, counting.store))
   );
 
@@ -342,7 +348,8 @@ const sectionB = async () => {
     for (let i = 0; i < 9; i++) {
       const [a, ta] = await timed(() => fullScan(where));
       const [b, tb] = await timed(() => CollectionIndex.evaluate(index, rowsById, where));
-      if (b === undefined || a.length !== b.length) throw new Error(`mismatch for ${label}`);
+      if (b === undefined || a.length !== b.length)
+        throw new TestFailure({ message: `mismatch for ${label}` });
       hits = a.length;
       scan.push(ta);
       indexed.push(tb);
@@ -409,7 +416,7 @@ const sectionC = async () => {
   const table: Array<Record<string, number | string>> = [];
   const row = (what: string, duration: Duration.Duration) =>
     table.push({ what, transactions: counted.count(), ms: ms(Duration.toMillis(duration)) });
-  await Effect.runPromise(
+  await runtime.runPromise(
     Effect.gen(function* () {
       const store = yield* ClientStore.ClientStore;
       counted.reset();
@@ -438,7 +445,7 @@ const sectionC = async () => {
       counted.reset();
       const [loadTime, loaded] = yield* Effect.timed(store.listRows(COLLECTION));
       row(`cold load listRows (${loaded.length} rows)`, loadTime);
-    }).pipe(Effect.provide(layer))
+    }).pipe(withLayer(layer))
   );
   // eslint-disable-next-line no-console
   console.log("C. IndexedDbClientStore (KV layout) over fake-indexeddb");
@@ -465,7 +472,9 @@ const toRecord = (row: Item): NativeRecord => ({
   value: row,
   k_name: keyBytes(row.name),
   k_qty: row.qty,
-  ...(row.note === null || row.note === undefined ? {} : { k_note: keyBytes(row.note) }),
+  ...Defined.fields({
+    k_note: row.note === null || row.note === undefined ? undefined : keyBytes(row.note),
+  }),
 });
 
 const request = <A>(r: IDBRequest<A>): Promise<A> =>

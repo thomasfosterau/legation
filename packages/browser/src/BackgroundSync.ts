@@ -101,10 +101,13 @@
  * listener.
  */
 
+import { Defined } from "@thomasfosterau/legation/internal";
 import type { Identity, StoreError, TransportError } from "@thomasfosterau/legation";
 import type { ClientEngine } from "@thomasfosterau/legation/internal";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
+import * as Layer from "effect/Layer";
+import * as ManagedRuntime from "effect/ManagedRuntime";
 import * as Option from "effect/Option";
 import * as P from "effect/Predicate";
 import * as Schema from "effect/Schema";
@@ -204,14 +207,23 @@ export interface RegisterOptions {
   readonly registration?: Effect.Effect<SyncRegistration | undefined>;
 }
 
+/** Reading the service-worker registration or registering the sync tag rejected; handled where it is caught. */
+class SyncRegistrationFailed extends Schema.TaggedError<
+  SyncRegistrationFailed,
+  { readonly brand: unique symbol }
+>()("SyncRegistrationFailed", {
+  cause: Schema.optional(Schema.Defect()),
+}) {}
+
 /** The page's service-worker registration, or `undefined` where there is none. */
 const pageRegistration: Effect.Effect<SyncRegistration | undefined> = Effect.suspend(() => {
   const container: ServiceWorkerContainer | undefined = globalThis.navigator?.serviceWorker;
   return container === undefined
     ? Effect.undefined
-    : Effect.tryPromise(() => container.getRegistration()).pipe(
-        Effect.orElseSucceed(() => undefined)
-      );
+    : Effect.tryPromise({
+        try: () => container.getRegistration(),
+        catch: (cause) => new SyncRegistrationFailed({ cause }),
+      }).pipe(Effect.orElseSucceed(() => undefined));
 });
 
 /**
@@ -235,7 +247,10 @@ export const register = (options: RegisterOptions = {}): Effect.Effect<RegisterO
       );
       return "Unsupported" as const;
     }
-    return yield* Effect.tryPromise(() => sync.register(tag)).pipe(
+    return yield* Effect.tryPromise({
+      try: () => sync.register(tag),
+      catch: (cause) => new SyncRegistrationFailed({ cause }),
+    }).pipe(
       Effect.as("Registered" as const),
       Effect.catch((cause) =>
         Effect.logDebug("Background Sync registration refused", cause).pipe(
@@ -247,7 +262,7 @@ export const register = (options: RegisterOptions = {}): Effect.Effect<RegisterO
 
 /** Whether the worker's own view says the network is down. */
 const navigatorOffline: Effect.Effect<boolean> = Effect.sync(
-  () => globalThis.navigator?.onLine === false
+  () => !(globalThis.navigator?.onLine ?? true)
 );
 
 /** Options for {@link registerOnJournal}. */
@@ -458,6 +473,12 @@ interface Attached {
 }
 
 /**
+ * The worker's own runtime for the listener's two runs (the host-ready ref and each flush): they close
+ * over the attached host's services, so the runtime itself supplies none.
+ */
+const edge = ManagedRuntime.make(Layer.empty);
+
+/**
  * Install the `sync` listener on the worker's scope — **synchronously, at the
  * top level of the worker script** (see the module docs for why). Deliberately
  * a plain function rather than an Effect for that reason.
@@ -473,7 +494,7 @@ export const listen = (options: ListenOptions): Listener => {
   const tag = options.tag ?? defaultTag;
   const scope: Partial<SyncScope> = options.scope ?? globalThis;
   const readyTimeout = options.readyTimeout ?? defaultReadyTimeout;
-  const attached = Effect.runSync(SubscriptionRef.make(Option.none<Attached>()));
+  const attached = edge.runSync(SubscriptionRef.make(Option.none<Attached>()));
 
   // The first attached host, however long it takes to arrive (bounded).
   // `changes` emits the current value first and never ends, so the head
@@ -498,7 +519,7 @@ export const listen = (options: ListenOptions): Listener => {
   );
 
   const handle = (event: SyncEvent): Promise<FlushOutcome> =>
-    Effect.runPromise(
+    edge.runPromise(
       whenAttached.pipe(
         Effect.tapError((error) =>
           Effect.logDebug(
@@ -549,7 +570,7 @@ export const listen = (options: ListenOptions): Listener => {
         yield* registerOnJournal(engine, {
           tag,
           registration,
-          ...(options.offline === undefined ? {} : { offline: options.offline }),
+          ...Defined.fields({ offline: options.offline }),
         });
       }
     });

@@ -743,7 +743,7 @@ describe("ClientEngine + CollectionIndex", () => {
         putRow: (collection, stored) =>
           Effect.gen(function* () {
             if (stored.id === "i2" && (yield* Ref.get(armed))) {
-              return yield* Effect.fail(new StoreError({ message: "write refused" }));
+              return yield* new StoreError({ message: "write refused" });
             }
             yield* memory.putRow(collection, stored);
           }),

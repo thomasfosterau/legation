@@ -9,9 +9,13 @@
  * rendering.
  *
  * Boot also (1) broadcasts the config handshake that starts the worker's
- * engine (the worker can't read the client-group cookie) and (2) pins the
- * shell's reads — subscriptions are client state, refcounted per mirror
- * by the host.
+ * engine (the worker can't read the client-group cookie), (2) offers the
+ * page's SSR snapshot to the worker through the host-request envelope
+ * (`createClient`'s `snapshot`, #146) — the worker owns the empty-store
+ * gate, so a returning visitor's replica is never touched — and (3) pins
+ * the shell's reads once the offer is settled (subscriptions are client
+ * state, refcounted per mirror by the host; a registration makes the host
+ * pull, which would turn the snapshot away).
  *
  * `bootMainThread` is the dev-mode alternative (`?host=main`,
  * `+layout.svelte`): no service worker at all — `ElectedHost.run` owns the
@@ -20,42 +24,48 @@
  * `bootElected`).
  */
 import * as Effect from "effect/Effect";
-import * as Layer from "effect/Layer";
-import * as ManagedRuntime from "effect/ManagedRuntime";
 import type * as Stream from "effect/Stream";
-import { Client } from "@thomasfosterau/legation";
-import { BroadcastMirrorChannel, ElectedHost, ServiceWorkerHost } from "@thomasfosterau/legation-browser";
-import type { ClientRuntime } from "@thomasfosterau/legation-svelte";
+import type { Hydration } from "@thomasfosterau/legation";
+import { BroadcastMirrorChannel, type ElectedHost, ServiceWorkerHost } from "@thomasfosterau/legation-browser";
+import {
+  type ClientRuntime,
+  type ConnectedClientHandle,
+  createClient,
+} from "@thomasfosterau/legation-svelte";
 import { mutators, nodes, shellReads } from "./domain.js";
 import { bootElected } from "./host.js";
 
 export type AppRuntime = ClientRuntime;
 
-/** Build the tab's Client runtime once (call from the root layout). */
+/**
+ * Build the tab's Client once (call from the root layout): a mirror of the
+ * worker's engine, offered the page's SSR snapshot (#146) before the shell's
+ * pins are made. The worker hydrates its replica with it only when the
+ * replica is empty and has not pulled; the handle's `hydration` says what it
+ * answered, and no answer needs any action here.
+ */
 export const boot = (options: {
   readonly clientGroupId: string;
   readonly userId: string | undefined;
-}): AppRuntime => {
+  readonly snapshot: Hydration.Snapshot | undefined;
+}): ConnectedClientHandle => {
   // Surface engine-host failures relayed by the worker (see service-worker.ts).
   navigator.serviceWorker?.addEventListener("message", (event) => {
     const info = (event.data as { legationInfo?: string } | undefined)?.legationInfo;
     if (info !== undefined) console.warn(`[legation-sw] ${info}`);
   });
-  const runtime = ManagedRuntime.make(
-    Layer.effect(Client.Client)(
-      Effect.gen(function* () {
-        const channel = yield* BroadcastMirrorChannel.make(
-          ServiceWorkerHost.defaultChannelName
-        );
-        const client = yield* Client.connect({ nodes, mutations: mutators, channel });
-        // Boot-time shell pins; a failure here is a bug, not app state.
-        yield* Effect.forEach(shellReads(options.userId), (read) => client.subscribe(read), {
-          discard: true,
-        }).pipe(Effect.orDie);
-        return client;
-      })
-    )
-  );
+  const client = createClient({
+    nodes,
+    mutations: mutators,
+    channel: BroadcastMirrorChannel.make(ServiceWorkerHost.defaultChannelName),
+    snapshot: options.snapshot,
+    // A first visit's worker is still installing when this tab boots: keep
+    // offering the snapshot until it answers (it holds its first pull for
+    // it, `lib/host.ts`). The hooks render from their seeds meanwhile.
+    hydrateTimeout: "15 seconds",
+    // Boot-time shell pins, made once the snapshot is settled.
+    subscribe: shellReads(options.userId),
+  });
   // Wake the worker's engine (idempotent — the first handshake wins, and a
   // worker that activates AFTER this tab still hears a later repeat; its
   // HostReady answer replays this tab's registrations).
@@ -67,10 +77,10 @@ export const boot = (options: {
     clearInterval(timer);
     config.close();
   }, 20_000);
-  // Touch the runtime so the Client (and its shell subscriptions) boot now.
-  void runtime.runPromise(Effect.asVoid(Client.Client)).catch(() => undefined);
-  if (import.meta.env.DEV) (globalThis as Record<string, unknown>).__legation = runtime;
-  return runtime;
+  // Touch the runtime so the Client (the snapshot offer, then the shell pins) boots now.
+  void client.runtime.runPromise(Effect.void).catch(() => undefined);
+  if (import.meta.env.DEV) (globalThis as Record<string, unknown>).__legation = client.runtime;
+  return client;
 };
 
 /**

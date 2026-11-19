@@ -26,6 +26,7 @@ import type { Backend } from "@thomasfosterau/legation";
 import * as Sql from "../../sql/Sql.js";
 import * as SqlBackend from "../../sql/SqlBackend.js";
 import { defined } from "../defined.js";
+import { TestFailure } from "../test-failure.js";
 
 interface Mock {
   readonly executor: SqlBackend.SqlExecutor;
@@ -42,7 +43,7 @@ const isLedger = (text: string): boolean => text.includes(`"sync_mutations"`);
 const MONOTONIC_BUMP =
   /DO UPDATE SET "last_mutation_id" = MAX\("sync_mutations"\."last_mutation_id", excluded\."last_mutation_id"\)$/;
 const unmodelled = (fragment: Sql.SqlFragment): never => {
-  throw new Error(`mock ledger: unmodelled statement: ${fragment.text}`);
+  throw new TestFailure({ message: `mock ledger: unmodelled statement: ${fragment.text}` });
 };
 
 /**

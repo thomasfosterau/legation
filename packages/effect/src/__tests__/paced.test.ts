@@ -427,8 +427,8 @@ describe("paced compaction renumbers the journal (#249)", () => {
       expect(idsOf(pending)).toEqual(pending.map((_, i) => i + 1));
       yield* engine.push;
       expect(yield* store.pendingMutations).toEqual([]);
-      expect(applied.filter((t) => t.startsWith("d")).at(-1)).toBe("d5");
-      expect(applied.filter((t) => t.startsWith("t")).at(-1)).toBe("t5");
+      expect(applied.findLast((t) => t.startsWith("d"))).toBe("d5");
+      expect(applied.findLast((t) => t.startsWith("t"))).toBe("t5");
     }).pipe(Effect.scoped)
   );
 
@@ -705,7 +705,7 @@ describe("paced compaction renumbers the journal (#249)", () => {
         // Nothing lost: the last value called for every key is the last the
         // server applied for it, and nothing was applied twice in a row.
         Arr.forEach(lastCall, ([key, title]) => {
-          expect(applied.filter((t) => t.startsWith(`${key}-`)).at(-1)).toBe(title);
+          expect(applied.findLast((t) => t.startsWith(`${key}-`))).toBe(title);
         });
         expect(new Set(applied).size).toBe(applied.length);
       }).pipe(Effect.scoped),

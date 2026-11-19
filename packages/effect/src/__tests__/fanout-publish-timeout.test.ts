@@ -14,6 +14,7 @@ import * as Schema from "effect/Schema";
 import * as TestClock from "effect/testing/TestClock";
 import { Node } from "../index.js";
 import { FanoutBroker, FanoutBus } from "../internal.js";
+import { TestFailure } from "./test-failure.js";
 
 const Product = Node.make("products", { attributes: { name: Schema.String } });
 const nodes = Node.registry([Product]);
@@ -28,7 +29,7 @@ describe("FanoutBus broker timeouts (#356)", () => {
           register: () => Ref.update(registrations, (count) => count + 1),
           // Never returns: only the bound can finish this publish.
           publish: () => Effect.never,
-          pokes: () => Effect.die(new Error("unused")),
+          pokes: () => Effect.die(new TestFailure({ message: "unused" })),
         };
         const bus = yield* FanoutBus.make({
           roomId: "room-a",
@@ -56,7 +57,7 @@ describe("FanoutBus broker timeouts (#356)", () => {
       const broker: FanoutBroker.FanoutBroker = {
         register: () => Effect.void,
         publish: () => Effect.never,
-        pokes: () => Effect.die(new Error("unused")),
+        pokes: () => Effect.die(new TestFailure({ message: "unused" })),
       };
       const bus = yield* FanoutBus.make({
         roomId: "room-a",
@@ -87,7 +88,7 @@ describe("FanoutBus broker timeouts (#356)", () => {
       const broker: FanoutBroker.FanoutBroker = {
         register: () => Effect.never,
         publish: () => Effect.void,
-        pokes: () => Effect.die(new Error("unused")),
+        pokes: () => Effect.die(new TestFailure({ message: "unused" })),
       };
       const made = yield* Ref.make(false);
       yield* Effect.forkScoped(
@@ -120,7 +121,7 @@ describe("FanoutBus broker timeouts (#356)", () => {
               if (attempt > 1) return yield* Effect.never;
             }),
           publish: () => Effect.void,
-          pokes: () => Effect.die(new Error("unused")),
+          pokes: () => Effect.die(new TestFailure({ message: "unused" })),
         };
         yield* FanoutBus.make({
           roomId: "room-a",

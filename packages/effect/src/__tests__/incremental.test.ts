@@ -4,7 +4,7 @@
  * different collection changes. A read-only client (empty journal) pulls
  * collection-scoped changes; we count emissions per query.
  */
-import { describe, expect, it } from "vite-plus/test";
+import { describe, expect, it } from "@effect/vitest";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Ref from "effect/Ref";
@@ -73,8 +73,9 @@ const users = Subset.make({ collection: "users" });
 const settle = Effect.sleep(Duration.millis(50));
 
 describe("selective live-query re-evaluation", () => {
-  it("re-evaluates a query only when its collection changes", async () => {
-    await Effect.runPromise(
+  it.live(
+    "re-evaluates a query only when its collection changes",
+    () =>
       Effect.gen(function* () {
         const handler = yield* makeServer;
         const writer = yield* makeClient(handler, "writer");
@@ -114,20 +115,21 @@ describe("selective live-query re-evaluation", () => {
         yield* settle;
         expect(yield* Ref.get(usersCount)).toBe(2);
         expect(yield* Ref.get(todosCount)).toBe(2);
-      }).pipe(Effect.scoped)
-    );
-  }, 10000);
+      }),
+    10000
+  );
 
-  it("maintains a paginated live query incrementally", async () => {
-    const top2 = Subset.make({
-      collection: "todos",
-      orderBy: [{ field: "rank", direction: "asc" }],
-      limit: 2,
-    });
-    const page = (rows: ReadonlyArray<{ readonly id: string }>) => rows.map((r) => r.id);
-
-    await Effect.runPromise(
+  it.live(
+    "maintains a paginated live query incrementally",
+    () =>
       Effect.gen(function* () {
+        const top2 = Subset.make({
+          collection: "todos",
+          orderBy: [{ field: "rank", direction: "asc" }],
+          limit: 2,
+        });
+        const page = (rows: ReadonlyArray<{ readonly id: string }>) => rows.map((r) => r.id);
+
         const handler = yield* makeServer;
         const writer = yield* makeClient(handler, "writer");
         const reader = yield* makeClient(handler, "reader");
@@ -162,7 +164,7 @@ describe("selective live-query re-evaluation", () => {
           ["t1", "t3"],
           ["t1", "t2"],
         ]);
-      }).pipe(Effect.scoped)
-    );
-  }, 10000);
+      }),
+    10000
+  );
 });

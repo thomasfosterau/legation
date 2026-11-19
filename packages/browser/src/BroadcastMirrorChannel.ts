@@ -24,7 +24,6 @@ export const make = (
     return {
       post: (message) =>
         Effect.try({
-          // oxlint-disable-next-line unicorn/require-post-message-target-origin -- BroadcastChannel.postMessage takes no targetOrigin
           try: () => channel.postMessage(message),
           catch: (cause) => new TransportError({ message: `BroadcastChannel post failed`, cause }),
         }),

@@ -2,16 +2,15 @@
   import { page as kitPage } from "$app/state";
   import { useAggregateGrouped, useQuery } from "@thomasfosterau/legation-svelte";
   import { AsyncResult } from "effect/reactivity";
-  import { Aggregate } from "@thomasfosterau/legation";
+  import { Aggregate, type Client, Hydration, type Query } from "@thomasfosterau/legation";
   import {
     allCategories,
     allVariants,
     CATALOG_PAGE_SIZE,
+    nodes,
     productPage,
-    type Category,
-    type Product,
   } from "../lib/domain.js";
-  import { productRows, toRow, variantRows } from "../lib/rows.js";
+  import { categoryRows, productRows, variantRows } from "../lib/rows.js";
 
   const { data } = $props();
 
@@ -33,24 +32,39 @@
   };
   const PAGE = CATALOG_PAGE_SIZE;
 
+  // First paint from the layout's SSR snapshot (#146) when there is one: the
+  // shell's rows, projected onto each read locally (`Hydration.rowsFor`), the
+  // same rows the worker's replica is hydrated with — so the server markup,
+  // the first client render and the replica agree. Without one (the sync
+  // server could not render it), the universal load's JSON:API documents
+  // seed instead; the load stays either way, as the no-JS tier's cursor and
+  // the façade's plain-`fetch` demonstration (ADR-0029).
+  // svelte-ignore state_referenced_locally
+  const snapshot = data.snapshot;
+  const seededFrom = snapshot === undefined ? "jsonapi" : "snapshot";
+  // A seed is typed by its read, as the hook that takes it types its rows.
+  const seed = <const R extends Query.Read>(
+    read: R & Query.Validate<typeof nodes, R>,
+    fallback: ReadonlyArray<Hydration.SeedRow<Client.ResolvedRow<R, typeof nodes>["value"]>>
+  ) =>
+    snapshot === undefined ? fallback : Hydration.rowsFor<typeof nodes, R>(snapshot, nodes, read);
+
   // svelte-ignore state_referenced_locally
   const productsQuery = useQuery(() => productPage({ categoryId, cursor, limit: PAGE }), {
     // The load fetched exactly this read (the first page, at its canonical
     // URL), so the seed is the window.
-    initial: productRows(data.products),
+    initial: seed(productPage({ categoryId, cursor, limit: PAGE }), productRows(data.products)),
   });
   // svelte-ignore state_referenced_locally
   const categoriesQuery = useQuery(() => allCategories, {
-    initial: data.categories.map((category) => toRow(category)),
+    initial: seed(allCategories, categoryRows(data.categories)),
   });
   // Grouped live aggregate: per-product stock from the variants the engine
   // has synced — the "out of stock" badges update as orders decrement stock.
   // svelte-ignore state_referenced_locally
   const stock = useAggregateGrouped(() => allVariants, Aggregate.sum("stock"), "productId", {
-    initial: variantRows(data.variants).reduce<Record<string, number>>((sums, row) => {
-      const value = row.value as { productId?: string; stock?: number };
-      const key = value.productId ?? "";
-      sums[key] = (sums[key] ?? 0) + (value.stock ?? 0);
+    initial: seed(allVariants, variantRows(data.variants)).reduce<Record<string, number>>((sums, row) => {
+      sums[row.value.productId] = (sums[row.value.productId] ?? 0) + row.value.stock;
       return sums;
     }, {}),
   });
@@ -60,7 +74,7 @@
     const needle = search.trim().toLowerCase();
     const rows = await productsQuery.promise;
     return rows
-      .map((row) => row.value as Product)
+      .map((row) => row.value)
       .filter((product) => needle === "" || product.name.toLowerCase().includes(needle));
   });
   const stockOf = $derived(AsyncResult.getOrElse(stock.current, () => ({})) as Record<string, number>);
@@ -72,13 +86,13 @@
   <p>
     <a href="/">All</a>
     {#each await categoriesQuery.promise as row (row.id)}
-      {@const category = row.value as Category}
+      {@const category = row.value}
       <a href={`/?category=${category.id}`}>{category.name}</a>
     {/each}
     <input placeholder="Search…" bind:value={search} />
   </p>
 
-  <ul>
+  <ul data-seed={seededFrom}>
     {#each await products as product (product.id)}
       <li>
         <a href={`/product/${product.id}`}>{product.name}</a>

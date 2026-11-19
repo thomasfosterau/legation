@@ -12,6 +12,7 @@ import { KeyValueStore } from "effect/persistence";
 import { IDBKeyRange, indexedDB } from "fake-indexeddb";
 import * as IndexedDbClientStore from "../IndexedDbClientStore.js";
 import { keyValueLayer } from "../internal/IndexedDbKeyValue.js";
+import { withLayer } from "./with-layer.js";
 
 const fakeIndexedDb = Layer.succeed(IndexedDb.IndexedDb)(
   IndexedDb.make({ indexedDB, IDBKeyRange })
@@ -49,7 +50,7 @@ describe("IndexedDbClientStore round trips with the platform store (#393)", () =
           expect(yield* kv.has("rt/gone")).toBe(false);
           expect(yield* kv.size).toBe(2);
           expect((yield* kv.keys).toSorted()).toEqual(["rt/bytes", "rt/string"]);
-        }).pipe(Effect.provide(newKeyValue(database)));
+        }).pipe(withLayer(newKeyValue(database)));
 
         // The platform's store reads those back, writes one of its own, and removes one of theirs.
         yield* Effect.gen(function* () {
@@ -60,7 +61,7 @@ describe("IndexedDbClientStore round trips with the platform store (#393)", () =
           expect(yield* kv.size).toBe(2);
           yield* kv.set("rt/platform", "p");
           yield* kv.remove("rt/string");
-        }).pipe(Effect.provide(platformKeyValue(database)));
+        }).pipe(withLayer(platformKeyValue(database)));
 
         // The new store reads the platform's write, and its removal, then clears everything.
         yield* Effect.gen(function* () {
@@ -72,14 +73,14 @@ describe("IndexedDbClientStore round trips with the platform store (#393)", () =
           yield* kv.clear;
           expect(yield* kv.size).toBe(0);
           expect(yield* kv.keys).toEqual([]);
-        }).pipe(Effect.provide(newKeyValue(database)));
+        }).pipe(withLayer(newKeyValue(database)));
 
         // The clear is visible to the platform's store too.
         yield* Effect.gen(function* () {
           const kv = yield* KeyValueStore.KeyValueStore;
           expect(yield* kv.size).toBe(0);
           expect(yield* kv.get("rt/platform")).toBeUndefined();
-        }).pipe(Effect.provide(platformKeyValue(database)));
+        }).pipe(withLayer(platformKeyValue(database)));
       })
   );
 
@@ -90,7 +91,7 @@ describe("IndexedDbClientStore round trips with the platform store (#393)", () =
         const store = yield* ClientStore.ClientStore;
         yield* store.putRow("counters", { id: "a", version: 1, value: { id: "a", n: 5 } });
         yield* store.setCookie("cookie-rt2");
-      }).pipe(Effect.provide(clientStore(database)));
+      }).pipe(withLayer(clientStore(database)));
 
       yield* Effect.gen(function* () {
         const kv = yield* KeyValueStore.KeyValueStore;
@@ -101,7 +102,7 @@ describe("IndexedDbClientStore round trips with the platform store (#393)", () =
         });
         expect(yield* kv.get("legation/rowIndex/counters")).toBe('["a"]');
         expect(yield* kv.get("legation/cookie")).toBe("cookie-rt2");
-      }).pipe(Effect.provide(platformKeyValue(database)));
+      }).pipe(withLayer(platformKeyValue(database)));
     })
   );
 });

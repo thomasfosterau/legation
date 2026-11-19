@@ -10,8 +10,9 @@
  * under one store-wide lock, so a count-up update cannot interleave with another
  * write. A `GET` or `DELETE` has no yield point, so it runs whole without it.
  */
-import { describe, expect, it } from "@effect/vitest";
+import { describeWrapped, expect, layer, describe } from "@effect/vitest";
 import * as Effect from "effect/Effect";
+import { awaitPromise } from "./await-promise.js";
 import * as Exit from "effect/Exit";
 import * as Option from "effect/Option";
 import * as Ref from "effect/Ref";
@@ -21,7 +22,7 @@ import * as HttpClient from "effect/http/HttpClient";
 import * as HttpClientRequest from "effect/http/HttpClientRequest";
 import * as HttpClientResponse from "effect/http/HttpClientResponse";
 import { BackendError, type Mutator } from "@thomasfosterau/legation";
-import { BackendContract } from "@thomasfosterau/legation/internal";
+import { BackendContract, Defined } from "@thomasfosterau/legation/internal";
 import type { EndpointRef, ResourceEndpoints, ResourceMap } from "../Convention.js";
 import * as JsonApiBackend from "../JsonApiBackend.js";
 import * as Ledger from "../Ledger.js";
@@ -43,11 +44,11 @@ const ref = (groupId: string, name: string, method: string, path: string): Endpo
 /** The CRUD routes of one collection, as the reflected api would name them. */
 const endpointsOf = (type: string): ResourceEndpoints => ({
   type,
-  list: ref(type, "list", "GET", `/${type}`),
-  getOne: ref(type, "getOne", "GET", `/${type}/:id`),
-  create: ref(type, "create", "POST", `/${type}`),
-  update: ref(type, "update", "PATCH", `/${type}/:id`),
-  delete: ref(type, "delete", "DELETE", `/${type}/:id`),
+  list: Option.some(ref(type, "list", "GET", `/${type}`)),
+  getOne: Option.some(ref(type, "getOne", "GET", `/${type}/:id`)),
+  create: Option.some(ref(type, "create", "POST", `/${type}`)),
+  update: Option.some(ref(type, "update", "PATCH", `/${type}/:id`)),
+  delete: Option.some(ref(type, "delete", "DELETE", `/${type}/:id`)),
 });
 
 const resources: ResourceMap = new Map([
@@ -87,10 +88,10 @@ const respond = (status: number, document?: unknown) =>
 interface ServerRequest {
   readonly method: string;
   readonly type: string;
-  readonly id: string | undefined;
-  readonly body:
-    | { readonly data?: { readonly id?: string; readonly attributes?: Record<string, unknown> } }
-    | undefined;
+  readonly id: Option.Option<string>;
+  readonly body: Option.Option<{
+    readonly data?: { readonly id?: string; readonly attributes?: Record<string, unknown> };
+  }>;
 }
 
 /** A row the server refuses to store (a permanent rejection, 422). */
@@ -99,18 +100,19 @@ const POISON = "poison";
 const CRASH = "crash";
 
 /** A GET: the collection, or one row (404 when absent). Reads never wait. */
-const answerGet = (table: Table, id: string | undefined): Response => {
-  if (id === undefined) {
+const answerGet = (table: Table, id: Option.Option<string>): Response => {
+  if (Option.isNone(id)) {
     return respond(200, { data: [...table.values()].map((row) => documentOf(row).data) });
   }
-  const row = table.get(id);
+  const row = table.get(id.value);
   return row === undefined ? respond(404) : respond(200, documentOf(row));
 };
 
 /** A POST: an upsert of the row the body names, or the rejection or fault its marker asks for. */
 const answerPost = (table: Table, request: ServerRequest): Response => {
-  const id = request.body?.data?.id ?? "";
-  const attributes = request.body?.data?.attributes ?? {};
+  const data = Option.getOrUndefined(request.body)?.data;
+  const id = data?.id ?? "";
+  const attributes = data?.attributes ?? {};
   if (attributes[POISON] === true)
     return respond(422, { errors: [{ status: "422", title: "Poison row refused" }] });
   if (attributes[CRASH] === true) return respond(500);
@@ -126,7 +128,7 @@ const answerPost = (table: Table, request: ServerRequest): Response => {
  */
 const answerPatch = (table: Table, row: Stored, request: ServerRequest): Effect.Effect<Response> =>
   Effect.gen(function* () {
-    const attributes = request.body?.data?.attributes ?? {};
+    const attributes = Option.getOrUndefined(request.body)?.data?.attributes ?? {};
     const { increment, ...merge } = attributes;
     if (increment === undefined) {
       const updated: Stored = { ...row, attributes: { ...row.attributes, ...merge } };
@@ -145,7 +147,7 @@ const serve = (store: Store, request: ServerRequest): Effect.Effect<Response> =>
     const table = tableOf(store, request.type);
     if (request.method === "GET") return answerGet(table, request.id);
     if (request.method === "POST") return answerPost(table, request);
-    const id = request.id ?? "";
+    const id = Option.getOrElse(request.id, () => "");
     const row = table.get(id);
     if (row === undefined) return respond(404);
     if (request.method === "DELETE") {
@@ -164,10 +166,12 @@ const makeInProcessClient = (store: Store) =>
       Effect.gen(function* () {
         requests.push({ method: request.method, path: url.pathname });
         const [, type = "", rawId] = url.pathname.split("/");
-        const id = rawId === undefined ? undefined : decodeURIComponent(rawId);
+        const id = Option.map(Option.fromUndefinedOr(rawId), decodeURIComponent);
         const isWrite = request.method === "POST" || request.method === "PATCH";
         const web = yield* HttpClientRequest.toWeb(request).pipe(Effect.orDie);
-        const body = isWrite ? yield* Effect.promise(() => web.json()) : undefined;
+        const body = isWrite
+          ? Option.some(yield* awaitPromise(() => web.json()).pipe(Effect.orDie))
+          : Option.none();
         const served = serve(store, { method: request.method, type, id, body });
         const response =
           request.method === "GET" || request.method === "DELETE"
@@ -269,16 +273,16 @@ const makeBackend = (
       resources,
       mutators,
       operations: new Map(),
-      writes,
+      writes: writes,
       // The server declares no filter or sort parameters, and the backend
       // re-applies the subset locally, so an empty query is exact over it.
-      query: { encode: () => Effect.succeed(Option.some("")) },
-      ...(options.ledger !== undefined ? { ledger: options.ledger } : {}),
+      query: { encode: () => Effect.succeedSome("") },
+      ...Defined.fields({ ledger: options.ledger }),
     }).pipe(Effect.provideService(HttpClient.HttpClient, client));
     return { backend, requests };
   });
 
-describe("JsonApiBackend in per-resource mode", () => {
+describeWrapped("JsonApiBackend in per-resource mode", (it) => {
   it.effect("satisfies verifyBackendContract", () =>
     Effect.gen(function* () {
       const { backend, requests } = yield* makeBackend();
@@ -315,129 +319,137 @@ const restartPush = () => [
 ];
 
 describe("JsonApiBackend ledger store (#468), per-resource mode", () => {
-  it.effect("satisfies verifyBackendContract over a durable ledger store", () =>
-    Effect.gen(function* () {
-      const ledger = Ledger.keyValue(yield* KeyValueStore.KeyValueStore);
-      const { backend } = yield* makeBackend({ ledger });
-      yield* BackendContract.verifyBackendContract(backend, { collection: COLLECTION });
-    }).pipe(Effect.scoped, Effect.provide(KeyValueStore.layerMemory))
-  );
+  layer(KeyValueStore.layerMemory)((scoped) => {
+    scoped.effect("satisfies verifyBackendContract over a durable ledger store", () =>
+      Effect.gen(function* () {
+        const ledger = Ledger.keyValue(yield* KeyValueStore.KeyValueStore);
+        const { backend } = yield* makeBackend({ ledger });
+        yield* BackendContract.verifyBackendContract(backend, { collection: COLLECTION });
+      })
+    );
+  });
 
-  it.effect("keeps lastMutationIds and a committed rejection across a restart", () =>
-    Effect.gen(function* () {
-      const ledger = Ledger.keyValue(yield* KeyValueStore.KeyValueStore);
-      const server: Store = new Map();
-      const first = yield* makeBackend({ ledger, store: server });
-      const pushed = yield* first.backend.applyMutations(restartContext, restartPush());
-      const rejected = pushed.rejected ?? [];
-      expect(rejected.map((entry) => entry.mutationId)).toEqual([2]);
+  layer(KeyValueStore.layerMemory)((scoped) => {
+    scoped.effect("keeps lastMutationIds and a committed rejection across a restart", () =>
+      Effect.gen(function* () {
+        const ledger = Ledger.keyValue(yield* KeyValueStore.KeyValueStore);
+        const server: Store = new Map();
+        const first = yield* makeBackend({ ledger, store: server });
+        const pushed = yield* first.backend.applyMutations(restartContext, restartPush());
+        const rejected = pushed.rejected ?? [];
+        expect(rejected.map((entry) => entry.mutationId)).toEqual([2]);
 
-      // A restart: a new backend over the same ledger store and the same server.
-      const second = yield* makeBackend({ ledger, store: server });
-      expect(yield* second.backend.lastMutationIds(restartContext)).toEqual({
-        [restartClient]: 2,
-      });
-      expect(yield* second.backend.rejections(restartContext)).toEqual(rejected);
+        // A restart: a new backend over the same ledger store and the same server.
+        const second = yield* makeBackend({ ledger, store: server });
+        expect(yield* second.backend.lastMutationIds(restartContext)).toEqual({
+          [restartClient]: 2,
+        });
+        expect(yield* second.backend.rejections(restartContext)).toEqual(rejected);
 
-      // A replayed copy is acknowledged: nothing is sent, and the stored rejection is reported.
-      const replay = yield* second.backend.applyMutations(restartContext, restartPush());
-      expect(replay.rejected).toEqual(rejected);
-      expect(second.requests.filter((request) => request.method !== "GET")).toEqual([]);
-      expect(replay.lastMutationIds).toEqual({ [restartClient]: 2 });
-    }).pipe(Effect.scoped, Effect.provide(KeyValueStore.layerMemory))
-  );
+        // A replayed copy is acknowledged: nothing is sent, and the stored rejection is reported.
+        const replay = yield* second.backend.applyMutations(restartContext, restartPush());
+        expect(replay.rejected).toEqual(rejected);
+        expect(second.requests.filter((request) => request.method !== "GET")).toEqual([]);
+        expect(replay.lastMutationIds).toEqual({ [restartClient]: 2 });
+      })
+    );
+  });
 });
 
 describe("JsonApiBackend ledger store failures (#468), per-resource mode", () => {
-  it.effect(
-    "a ledger write that fails after the second write keeps the first acknowledged, and the resend re-applies the second",
-    () =>
-      Effect.gen(function* () {
-        const durable = Ledger.keyValue(yield* KeyValueStore.KeyValueStore);
-        // Each mutation's write applies on the server and is then acknowledged by one
-        // ledger write. The first ledger write goes through, and the second fails.
-        const ledgerWrites = yield* Ref.make(0);
-        const ledger: Ledger.LedgerStore = {
-          read: durable.read,
-          write: (clientGroupId, group) =>
-            Ref.updateAndGet(ledgerWrites, (n) => n + 1).pipe(
-              Effect.flatMap((n) =>
-                n === 2
-                  ? Effect.fail(new BackendError({ message: "Ledger write failed" }))
-                  : durable.write(clientGroupId, group)
-              )
-            ),
-        };
-        const server: Store = new Map();
-        const { backend, requests } = yield* makeBackend({ ledger, store: server });
-        const push = [1, 2].map((mutationId) => ({
-          clientId: restartClient,
-          mutationId,
-          mutator: BackendContract.putRow.name,
-          args: {
-            collection: COLLECTION,
-            id: mutationId === 1 ? "first" : "second",
-            value: { n: mutationId },
-          },
-          createdAt: 0,
-        }));
+  layer(KeyValueStore.layerMemory)((scoped) => {
+    scoped.effect(
+      "a ledger write that fails after the second write keeps the first acknowledged, and the resend re-applies the second",
+      () =>
+        Effect.gen(function* () {
+          const durable = Ledger.keyValue(yield* KeyValueStore.KeyValueStore);
+          // Each mutation's write applies on the server and is then acknowledged by one
+          // ledger write. The first ledger write goes through, and the second fails.
+          const ledgerWrites = yield* Ref.make(0);
+          const ledger: Ledger.LedgerStore = {
+            read: durable.read,
+            write: (clientGroupId, group) =>
+              Ref.updateAndGet(ledgerWrites, (n) => n + 1).pipe(
+                Effect.flatMap((n) =>
+                  n === 2
+                    ? Effect.fail(new BackendError({ message: "Ledger write failed" }))
+                    : durable.write(clientGroupId, group)
+                )
+              ),
+          };
+          const server: Store = new Map();
+          const { backend, requests } = yield* makeBackend({ ledger, store: server });
+          const push = [1, 2].map((mutationId) => ({
+            clientId: restartClient,
+            mutationId,
+            mutator: BackendContract.putRow.name,
+            args: {
+              collection: COLLECTION,
+              id: mutationId === 1 ? "first" : "second",
+              value: { n: mutationId },
+            },
+            createdAt: 0,
+          }));
 
-        const failure = yield* Effect.flip(backend.applyMutations(restartContext, push));
-        expect(failure).toBeInstanceOf(BackendError);
-        // Both writes reached the server. Mutation 1 is acknowledged in the cache and the
-        // store; mutation 2 is not, because its acknowledgement write failed.
-        expect(server.get(COLLECTION)?.has("second")).toBe(true);
-        expect(yield* backend.lastMutationIds(restartContext)).toEqual({ [restartClient]: 1 });
-        expect(yield* durable.read(restartContext.clientGroupId)).toEqual({
-          lastMutationIds: { [restartClient]: 1 },
-          rejections: [],
-        });
+          const failure = yield* Effect.flip(backend.applyMutations(restartContext, push));
+          expect(failure).toBeInstanceOf(BackendError);
+          // Both writes reached the server. Mutation 1 is acknowledged in the cache and the
+          // store; mutation 2 is not, because its acknowledgement write failed.
+          expect(server.get(COLLECTION)?.has("second")).toBe(true);
+          expect(yield* backend.lastMutationIds(restartContext)).toEqual({ [restartClient]: 1 });
+          expect(yield* durable.read(restartContext.clientGroupId)).toEqual({
+            lastMutationIds: { [restartClient]: 1 },
+            rejections: [],
+          });
 
-        // The resend skips mutation 1, re-applies mutation 2 (one write), and acknowledges both.
-        const sentBefore = requests.filter((request) => request.method !== "GET").length;
-        const retried = yield* backend.applyMutations(restartContext, push);
-        const sentAfter = requests.filter((request) => request.method !== "GET").length;
-        expect(sentAfter - sentBefore).toBe(1);
-        expect(retried.lastMutationIds).toEqual({ [restartClient]: 2 });
-        expect(yield* durable.read(restartContext.clientGroupId)).toEqual({
-          lastMutationIds: { [restartClient]: 2 },
-          rejections: [],
-        });
-      }).pipe(Effect.scoped, Effect.provide(KeyValueStore.layerMemory))
-  );
+          // The resend skips mutation 1, re-applies mutation 2 (one write), and acknowledges both.
+          const sentBefore = requests.filter((request) => request.method !== "GET").length;
+          const retried = yield* backend.applyMutations(restartContext, push);
+          const sentAfter = requests.filter((request) => request.method !== "GET").length;
+          expect(sentAfter - sentBefore).toBe(1);
+          expect(retried.lastMutationIds).toEqual({ [restartClient]: 2 });
+          expect(yield* durable.read(restartContext.clientGroupId)).toEqual({
+            lastMutationIds: { [restartClient]: 2 },
+            rejections: [],
+          });
+        })
+    );
+  });
 
-  it.effect(
-    "a ledger write that fails after the server write fails the push, the store and cache agree, and a retry acknowledges",
-    () =>
-      Effect.gen(function* () {
-        const kv = yield* KeyValueStore.KeyValueStore;
-        const failWrites = yield* Ref.make(0);
-        const ledger = flakyLedger(Ledger.keyValue(kv), {
-          failWrites,
-          failReads: yield* Ref.make(0),
-        });
-        const server: Store = new Map();
-        const { backend } = yield* makeBackend({ ledger, store: server });
+  layer(KeyValueStore.layerMemory)((scoped) => {
+    scoped.effect(
+      "a ledger write that fails after the server write fails the push, the store and cache agree, and a retry acknowledges",
+      () =>
+        Effect.gen(function* () {
+          const kv = yield* KeyValueStore.KeyValueStore;
+          const failWrites = yield* Ref.make(0);
+          const ledger = flakyLedger(Ledger.keyValue(kv), {
+            failWrites,
+            failReads: yield* Ref.make(0),
+          });
+          const server: Store = new Map();
+          const { backend } = yield* makeBackend({ ledger, store: server });
 
-        // The first mutation's write applies on the server; the ledger write that
-        // acknowledges it fails, so the push fails before the second mutation is sent.
-        yield* Ref.set(failWrites, 1);
-        const failure = yield* Effect.flip(backend.applyMutations(restartContext, restartPush()));
-        expect(failure).toBeInstanceOf(BackendError);
-        expect(server.get(COLLECTION)?.has("kept")).toBe(true);
+          // The first mutation's write applies on the server; the ledger write that
+          // acknowledges it fails, so the push fails before the second mutation is sent.
+          yield* Ref.set(failWrites, 1);
+          const failure = yield* Effect.flip(backend.applyMutations(restartContext, restartPush()));
+          expect(failure).toBeInstanceOf(BackendError);
+          expect(server.get(COLLECTION)?.has("kept")).toBe(true);
 
-        // Nothing is acknowledged: the cache and the store both hold the group as it was.
-        expect(yield* backend.lastMutationIds(restartContext)).toEqual({});
-        expect(yield* Ledger.keyValue(kv).read(restartContext.clientGroupId)).toEqual(
-          Ledger.emptyGroup
-        );
+          // Nothing is acknowledged: the cache and the store both hold the group as it was.
+          expect(yield* backend.lastMutationIds(restartContext)).toEqual({});
+          expect(yield* Ledger.keyValue(kv).read(restartContext.clientGroupId)).toEqual(
+            Ledger.emptyGroup
+          );
 
-        // The resend re-applies the create (an upsert) and acknowledges both mutations.
-        const retried = yield* backend.applyMutations(restartContext, restartPush());
-        expect((retried.rejected ?? []).map((entry) => entry.mutationId)).toEqual([2]);
-        expect(retried.lastMutationIds).toEqual({ [restartClient]: 2 });
-      }).pipe(Effect.scoped, Effect.provide(KeyValueStore.layerMemory))
-  );
+          // The resend re-applies the create (an upsert) and acknowledges both mutations.
+          const retried = yield* backend.applyMutations(restartContext, restartPush());
+          expect((retried.rejected ?? []).map((entry) => entry.mutationId)).toEqual([2]);
+          expect(retried.lastMutationIds).toEqual({ [restartClient]: 2 });
+        })
+    );
+  });
 });
 
 // ─── The contract across a restart in the same client group (#477, #483) ───
@@ -481,31 +493,37 @@ const restartInSameGroup = (restartWith: (ledger: Ledger.LedgerStore) => Ledger.
       })
     );
     return { acknowledged, rejected, restartedLedger, restartedRejected, outcome };
-  }).pipe(Effect.scoped, Effect.provide(KeyValueStore.layerMemory));
+  });
 
 describe("JsonApiBackend restarted on the same ledger in the same group (#477, #483), per-resource mode", () => {
-  it.effect("runs the full contract over a backend restarted on the same durable ledger", () =>
-    Effect.gen(function* () {
-      const run = yield* restartInSameGroup((ledger) => ledger);
-      expect(run.restartedLedger).toEqual(run.acknowledged);
-      expect(run.restartedRejected).toEqual(run.rejected);
-      expect(Exit.isSuccess(run.outcome)).toBe(true);
-    })
-  );
+  layer(KeyValueStore.layerMemory)((scoped) => {
+    scoped.effect(
+      "runs the full contract over a backend restarted on the same durable ledger",
+      () =>
+        Effect.gen(function* () {
+          const run = yield* restartInSameGroup((ledger) => ledger);
+          expect(run.restartedLedger).toEqual(run.acknowledged);
+          expect(run.restartedRejected).toEqual(run.rejected);
+          expect(Exit.isSuccess(run.outcome)).toBe(true);
+        })
+    );
+  });
 
-  it.effect(
-    "fails a backend that forgets its ledger on restart through the restored-ledger rule",
-    () =>
-      Effect.gen(function* () {
-        // Ledger.memory reads an empty group: the restarted backend reports {} where the
-        // restored run expects the ids the first run acknowledged, so the contract fails
-        // its first rule and never reaches the mutations.
-        const run = yield* restartInSameGroup(() => Ledger.memory);
-        expect(run.restartedLedger).toEqual({});
-        const violation = Option.getOrUndefined(Exit.findErrorOption(run.outcome));
-        expect(violation).toBeInstanceOf(BackendContract.ContractViolation);
-        expect(violation?.rule).toBe("reports the ledger the run expects");
-        expect(violation?.message).toContain("the backend forgot its ledger on restart");
-      })
-  );
+  layer(KeyValueStore.layerMemory)((scoped) => {
+    scoped.effect(
+      "fails a backend that forgets its ledger on restart through the restored-ledger rule",
+      () =>
+        Effect.gen(function* () {
+          // Ledger.memory reads an empty group: the restarted backend reports {} where the
+          // restored run expects the ids the first run acknowledged, so the contract fails
+          // its first rule and never reaches the mutations.
+          const run = yield* restartInSameGroup(() => Ledger.memory);
+          expect(run.restartedLedger).toEqual({});
+          const violation = Option.getOrUndefined(Exit.findErrorOption(run.outcome));
+          expect(violation).toBeInstanceOf(BackendContract.ContractViolation);
+          expect(violation?.rule).toBe("reports the ledger the run expects");
+          expect(violation?.message).toContain("the backend forgot its ledger on restart");
+        })
+    );
+  });
 });

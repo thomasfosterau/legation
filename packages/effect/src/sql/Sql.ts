@@ -84,7 +84,7 @@ export interface Dialect {
   /** The code-point collation name, emitted as `COLLATE <name>` after a declared-text operand. */
   readonly textCollation: string;
   /** How a boolean literal binds (Postgres has booleans; SQLite stores `0`/`1`). */
-  readonly boolean: (value: boolean) => unknown;
+  readonly boolean: (value: boolean) => boolean | number;
   /** The larger of two SQL expressions: `MAX` on SQLite, `GREATEST` on PostgreSQL. */
   readonly greatest: (left: string, right: string) => string;
   /**
@@ -202,18 +202,18 @@ interface Compilation {
   readonly foreignKinds: Readonly<Record<string, Kinds>> | undefined;
 }
 
-/** The JS type a literal of each kind has. */
-const jsTypeOf: Record<Predicate.LiteralKind, "string" | "number" | "boolean"> = {
-  text: "string",
-  instant: "string",
-  integer: "number",
-  double: "number",
-  boolean: "boolean",
+/** The JS type check a literal of each kind passes. */
+const hasJsTypeOf: Record<Predicate.LiteralKind, (value: Predicate.Literal) => boolean> = {
+  text: P.isString,
+  instant: P.isString,
+  integer: P.isNumber,
+  double: P.isNumber,
+  boolean: P.isBoolean,
 };
 
 /** Whether a literal can bind as the declared kind: `null` always, else by JS type. */
 const conforms = (kind: Predicate.LiteralKind | undefined, value: Predicate.Literal): boolean =>
-  value === null || kind === undefined || typeof value === jsTypeOf[kind];
+  value === null || kind === undefined || hasJsTypeOf[kind](value);
 
 /** The column operand: quoted, with the collation clause when declared `text`. */
 const operand = (compilation: Compilation, field: string): string => {

@@ -76,18 +76,21 @@ export const mutations = Mutation.registry([
 ]);
 
 // ─── Reads ───────────────────────────────────────────────────────────────────
+//
+// Plain literals declared `as const satisfies Query.Read`: the shape is checked
+// here, and the literal collection types the rows a typed Client answers.
 
 /** Every post the viewer may read: the one pin each test's replica holds. */
-export const feed: Query.Read = { collection: "posts" };
+export const feed = { collection: "posts" } as const satisfies Query.Read;
 
 /** One author's posts, as far as the viewer may read them. */
-export const byOwner = (ownerId: string): Query.Read => ({
+export const byOwner = (ownerId: string) => ({
   collection: "posts",
   where: { ownerId },
-});
+}) as const satisfies Query.Read;
 
 /** The posts of one visibility, as far as the viewer may read them. */
-export const byVisibility = (visibility: Visibility): Query.Read => ({
+export const byVisibility = (visibility: Visibility) => ({
   collection: "posts",
   where: { visibility },
-});
+}) as const satisfies Query.Read;

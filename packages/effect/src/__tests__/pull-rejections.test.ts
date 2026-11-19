@@ -24,7 +24,7 @@ import { MutationRejected, TransportError } from "../Errors.js";
 import * as InvalidationBus from "../InvalidationBus.js";
 import * as MemoryBackend from "../MemoryBackend.js";
 import * as Mutator from "../Mutator.js";
-import type { PullResponse, PushRequest, PushResponse } from "../Protocol.js";
+import type { PullResponse, PushRequest } from "../Protocol.js";
 import * as Subset from "../Subset.js";
 import * as SyncServer from "../SyncServer.js";
 import { ClientTransport, makeInMemory, type ServerHandler } from "../Transport.js";
@@ -167,7 +167,7 @@ describe("ClientEngine settles a pull-carried rejection (#365)", () => {
 });
 
 const push = (handler: ServerHandler, group: string, mutations: PushRequest["mutations"]) =>
-  handler.handlePush({ clientGroupId: group, mutations }) as Effect.Effect<PushResponse>;
+  handler.handlePush({ clientGroupId: group, mutations });
 
 describe("SyncServer pull carries the rejections its watermark covers (#365)", () => {
   it.effect("lists each rejection the watermark covers, with its reason", () =>

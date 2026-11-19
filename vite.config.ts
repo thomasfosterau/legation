@@ -42,6 +42,7 @@ const alias = {
   "@thomasfosterau/legation/internal": source("packages/effect/src/internal.ts"),
   "@thomasfosterau/legation/sql": source("packages/effect/src/sql/index.ts"),
   "@thomasfosterau/legation": source("packages/effect/src/index.ts"),
+  "@thomasfosterau/legation-browser/http-cache": source("packages/browser/src/http-cache.ts"),
   "@thomasfosterau/legation-browser": source("packages/browser/src/index.ts"),
   "@thomasfosterau/legation-alchemy-cloudflare": source("packages/alchemy-cloudflare/src/index.ts"),
   "@thomasfosterau/legation-auth/client": source("packages/auth/src/client.ts"),
@@ -63,13 +64,15 @@ export default defineConfig({
   // lint without: with type-aware lint on, `vp check --fix` would apply the
   // autofixes of type-aware rules (even ones at `warn`) to staged files at
   // commit time, so the commit would differ from the tree that was verified.
-  // Oxfmt cannot format `.svelte`, so Svelte goes through lint alone.
+  // Oxfmt cannot format `.svelte`, so Svelte goes through lint alone; the
+  // example apps' `.svelte` files are outside lint's patterns, so a commit
+  // touching only those must not fail on "no files found".
   staged: {
     "*.{js,mjs,ts,json,md,yml,yaml}": [
       "vp check --fix --no-lint",
       "vp check --no-fmt --no-error-on-unmatched-pattern",
     ],
-    "*.svelte": "vp lint",
+    "*.svelte": "vp lint --no-error-on-unmatched-pattern",
   },
   // Oxfmt, the formatter of record. The options keep the style the
   // repository was written in under Prettier, so the migration reformatted
@@ -120,24 +123,31 @@ export default defineConfig({
       "effect/casting-awareness": "warn",
 
       // ---- Effect preset: rules this workspace's conventions cut across ----
-      // `prefer-option-over-null` also fires on `?: T | undefined`, which is
-      // the ONLY spelling of an optional member `exactOptionalPropertyTypes`
-      // lets a caller forward an optional of its own into (AGENTS.md), and on
-      // the `undefined`-returning lookups the engine's public API is written
-      // in. A bare `null` in a return type is still a finding to read.
+      // `prefer-option-over-null` goes to `error` once every surface is
+      // converted (owner decision, #562): an option-bag member is
+      // `readonly x?: T` (no `| undefined`: a caller holding `undefined` omits
+      // the key), `x?: Option.Option<T>` only where "no value" is itself an
+      // answer, and an absent return or result field is an `Option`. Optional
+      // parameters stay `x?: T`; wire shapes keep their native optionals.
+      // legation-jsonapi is converted (its can't-applies are file-scoped
+      // overrides below); the other packages still have sites.
       "effect/prefer-option-over-null": "warn",
       // `unknown` is the honest type at the boundaries this engine sits on:
       // a row value before its collection's schema decodes it, a mutator's
       // encoded args, a caught failure. Parsing them earlier would decode
       // twice or change the wire shape.
       "effect/no-unknown-parameters": "warn",
-      // The same boundary on the way out: exported combinators over untyped
-      // row values (`Incremental`, `Derive`, `Predicate.fieldValue`) and a
-      // dialect's driver-specific bind value return what the caller's
-      // projection or driver produces.
-      "effect/no-unknown-returns": "warn",
+      // The same boundary on the way out is at `error` (#562): the one site
+      // that returns an untyped row value (`Predicate.fieldValue`) lives in a
+      // module of its own with a file-scoped override below. The derived
+      // combinators (`Incremental`,
+      // `Derive`) are typed by their row, so they return the caller's types.
+      "effect/no-unknown-returns": "error",
       "effect/no-unsafe-dictionary-type": "warn",
-      "effect/no-runtime-typeof": "warn",
+      // At 0 sites (#562): narrow through `effect/Predicate` (`P.isString`),
+      // which measured no slower than a `typeof` switch on the per-row
+      // `Predicate.compareLiterals` path.
+      "effect/no-runtime-typeof": "error",
 
       // ---- Effect preset: ported-code allowances ---------------------------
       // The engine predates the Effect oxlint preset. The rules below sit at
@@ -153,12 +163,8 @@ export default defineConfig({
       "effect/yield-in-for-loop": "warn", // 535 sites
       "effect/avoid-direct-tag-checks": "warn", // 164 sites
       "effect/avoid-direct-json": "warn", // 161 sites
-      "effect/no-conditional-empty-object-spread": "warn", // 144 sites
-      "effect/effect-run-in-body": "warn", // 123 sites
       "effect/prefer-effect-fn": "warn", // 124 sites
       "effect/no-known-value-widening": "warn", // 98 sites
-      "effect/avoid-untagged-errors": "warn", // 76 sites
-      "effect/effect-promise-vs-trypromise": "warn", // 66 sites
 
       // ---- Type-aware rules (oxlint-tsgolint) -------------------------------
       // Turned on in #561. Each rule below is relaxed for a stated reason; a
@@ -174,8 +180,6 @@ export default defineConfig({
       // boundary `effect/no-unknown-parameters` names), as do test helpers
       // that fail with whatever a backend raised. 54 sites (21 in src).
       "effecttsgo/any-unknown-in-error-context": "warn",
-      // Two tests narrow a handler's channels to the shape they assert on.
-      "effecttsgo/unsafe-effect-type-assertion": "warn", // 2 sites
       // `String(value)` on an untyped row value (a foreign key, a SQL
       // detector's COUNT/MAX column, the comparator's last-resort text form)
       // is the intended string form at that boundary. 7 sites (2 in tests).
@@ -184,10 +188,132 @@ export default defineConfig({
       // purpose: TypeScript collapses the union, but the reader learns the
       // value may be absent. The rule fires on exactly that spelling.
       "typescript/no-redundant-type-constituents": "off",
-      // A test's Clock double spreads the real Clock to override one member.
-      "typescript/no-misused-spread": "warn", // 1 site
+
+      // ---- paid down (#562): at error -------------------------------------
+      // Rules whose last sites #562 fixed, pinned at `error` so a new site
+      // fails the gate while their category is still at `warn`.
+      "typescript/no-misused-spread": "error",
+      "unicorn/no-array-reverse": "error",
+      "oxc/no-map-spread": "error",
+      // Tests run effects through `@effect/vitest` (`it.effect`, `it.live`, `layer(...)`), and the
+      // shipped edges that run an effect do it with explicit services (`Effect.runForkWith`).
+      "effecttsgo/strict-effect-provide": "error",
+      "unicorn/prefer-array-find": "error",
+      "typescript/no-unnecessary-boolean-literal-compare": "error",
+      "effecttsgo/unnecessary-fail-yieldable-error": "error",
+      "effecttsgo/flat-map-identity-to-flatten": "error",
+      "effecttsgo/error-payload-shadows-name": "error",
+      "effecttsgo/multiple-catch-tag": "error",
+      "effecttsgo/unsafe-effect-type-assertion": "error",
+      "effecttsgo/unnecessary-pipe-chain": "error",
+      "effecttsgo/prefer-unsafe-constructor": "error",
+      "effecttsgo/provide-layer-succeed-to-provide-service": "error",
+      "effecttsgo/prefer-succeed-some-or-none": "error",
+      "effecttsgo/return-effect-in-gen": "error",
+      "effecttsgo/catch-to-or-else-succeed": "error",
+      "effecttsgo/lazy-effect": "error",
+      "effecttsgo/catch-to-ignore": "error",
+      "effect/avoid-process-env": "error",
+      "effecttsgo/run-effect-inside-effect": "error",
+      "typescript/no-unnecessary-type-parameters": "error",
     },
     overrides: [
+      // ---- Genuine can't-applies (#562) ------------------------------------
+      // No inline disable comments: a site a rule cannot apply to lives in a
+      // small private module named for the reason, and the rule is off for
+      // that module alone. Each module's header repeats the reason.
+      //
+      // The measured tag dispatches stay `switch` statements: a hoisted
+      // `Match` measured slower on each path (ns per call, median, node).
+      // Per row: `addNumber` (`Aggregate.addToBucket`'s fold) `Match.type`
+      // 4.3x, a Record table 1.8x (#667); `removeNumber`, its mirror, not
+      // measured apart; `deltaFromChanges` `Match.type` 2.2x, `typeTags` 2.1x,
+      // a table 1.2x (#667); `holds` `Match.when` ~7x, a table ~5x (#667).
+      // Per emission or state (#562): `foldNumeric` `typeTags` 1.21x on a
+      // 10-row `compute` (133 -> 160 ns); `emptyBucket` `typeTags` 1.47x on
+      // an empty `initState` (44 -> 65 ns); `bucketValue` `Match.type` 2.3x on
+      // `stateValue` (10 -> 23 ns) and +13% per emission over 10k groups,
+      // `typeTags` 4.2x and +52%.
+      {
+        files: ["packages/effect/src/internal/RowDispatch.ts"],
+        rules: {
+          "effect/prefer-match-over-switch": "off",
+        },
+      },
+      // Boolean fields a published wire names: `hydrated` (the `hydrate`
+      // host-request kind's answer, ADR-0021 amendment §6; wire schemas stay
+      // literal, so no `Schema.encodeKeys` rename) and `pulled` (a mirror
+      // protocol coverage window, posted as its decoded value with no schema
+      // encode, so the schema's type is the wire).
+      {
+        files: ["packages/effect/src/internal/WireFlags.ts"],
+        rules: {
+          "effect/require-is-prefix-for-boolean-schema-field": "off",
+        },
+      },
+      // `Node.make`'s `Edges` default: `{}` is the only object type whose
+      // `keyof` is `never` (`Record<string, never>` makes it `string`), and
+      // `Record<never, Edge>` is the same `{}` under another spelling. The
+      // `Edges extends Record<string, Edge>` bound rules out the hazard the
+      // rule names.
+      {
+        files: ["packages/effect/src/internal/NoEdges.ts"],
+        rules: {
+          "effect/avoid-object-type": "off",
+        },
+      },
+      // A node's row codec asserted service-free for `Collection.make`.
+      // `AnyNode` could state it, but `NodeBridge` builds nodes from
+      // effect-jsonapi's open `Resource.Any`, so a bridged node is not
+      // service-free by its type; the fix is upstream (#695).
+      {
+        files: ["packages/effect/src/internal/NodeRowCodec.ts"],
+        rules: {
+          "effect/avoid-any": "off",
+          "effect/no-chained-type-assertions": "off",
+        },
+      },
+      // `Predicate.fieldValue`: a field of an encoded row value, which nothing
+      // decodes on read (ADR-0014); evaluation compares it as a raw literal
+      // (ADR-0028). Typed rows are #696.
+      {
+        files: ["packages/effect/src/internal/EncodedField.ts"],
+        rules: {
+          "effect/no-unknown-returns": "off",
+        },
+      },
+      // `FanoutShard.ShardObject.publish` is a Durable Object RPC method:
+      // Alchemy's stub turns every member access into a call, so the broker
+      // can only call `publish()`, and the shard, named by its topic, has no
+      // argument to take.
+      {
+        files: ["packages/alchemy-cloudflare/src/internal/ShardRpc.ts"],
+        rules: {
+          "effecttsgo/lazy-effect": "off",
+        },
+      },
+      // legation-jsonapi's `null`s:
+      // - `StoredLinkage`: a row value's linkage as stored. The engine never
+      //   decodes a stored row on read (ADR-0014), so the type is the stored
+      //   JSON, whose empty to-one is `null`.
+      // - `JsonApiWire`: JSON:API wire shapes serialised as is, an empty
+      //   to-one linkage `data: null` and a single-resource read that matched
+      //   nothing `data: null` (effect-jsonapi's `Handlers.data`).
+      // - `ResolvedRelation`: follows the core's `Related.RelatedValue`
+      //   (`null` empty, `undefined` not in the mirror), which the core's
+      //   join compares by reference and the mirror protocol carries raw. It
+      //   becomes an `Option` with the core's `Related` (Option-everywhere,
+      //   owner decision on #562), the wire unchanged.
+      {
+        files: [
+          "packages/jsonapi/src/internal/StoredLinkage.ts",
+          "packages/jsonapi/src/internal/JsonApiWire.ts",
+          "packages/jsonapi/src/internal/ResolvedRelation.ts",
+        ],
+        rules: {
+          "effect/prefer-option-over-null": "off",
+        },
+      },
       // A benchmark's console output is its product: it prints the numbers
       // it measured, outside any Effect runtime.
       {
@@ -202,18 +328,22 @@ export default defineConfig({
         files: [
           "packages/effect/src/__tests__/typed-query.test.ts",
           "packages/effect/src/__tests__/node.test.ts",
+          "packages/effect/src/__tests__/typed-reads.test.ts",
         ],
         rules: {
           "effect/avoid-ts-ignore": "off",
         },
       },
-      // Test fixtures read the environment at collection time, before any
-      // Effect runtime exists: `DATABASE_URL` selects the PostgreSQL suite and
-      // `CI` turns its skip into a failure. Stays visible as a warning.
+      // The tests read the environment at collection time, before any Effect
+      // runtime exists: `DATABASE_URL` selects the PostgreSQL suites, `CI`
+      // turns their skip into a failure and `LEGATION_CORPUS_SEED` seeds the
+      // corpora Vitest builds while it collects the file. There is no `Config`
+      // provider to read them through yet, so this one module reads
+      // `process.env` and every test imports it from there.
       {
-        files: ["packages/*/src/**/__tests__/**"],
+        files: ["packages/effect/src/__tests__/env.ts"],
         rules: {
-          "effect/avoid-process-env": "warn",
+          "effect/avoid-process-env": "off",
         },
       },
       // Build/test configs and the release scripts are evaluated by Vite,
@@ -244,7 +374,6 @@ export default defineConfig({
           "effect/avoid-direct-json": "off",
           "effect/avoid-native-fetch": "off",
           "effect/effect-promise-vs-trypromise": "off",
-          "effect/no-conditional-empty-object-spread": "off",
         },
       },
       {
@@ -350,6 +479,53 @@ export default defineConfig({
         command: "vp test bench --run --reporter=verbose",
         cache: false,
       },
+      // What CI runs (.github/workflows/ci.yml, on Node.js lts and latest):
+      // AGENTS.md "Verification", in its order. The PostgreSQL overlap test
+      // reads `DATABASE_URL` (the workflow's service sets it; it skips when
+      // unset), and `fallow audit` reads the coverage map `test:coverage`
+      // writes, against `origin/trunk` (fetch it first).
+      ci: {
+        command: [
+          "vp check",
+          "vp run build",
+          "vp run pack:check",
+          "vp run check",
+          "vp run check:examples",
+          "vp run ci:chromium",
+          "vp run test:coverage",
+          "pnpm audit --audit-level high",
+          "fallow audit --ci --base origin/trunk",
+        ],
+        cache: false,
+      },
+      // The tests of one published `effect` floor (`FLOOR`: core,
+      // alchemy-cloudflare, auth or jsonapi), after `scripts/effect-floor.mjs
+      // point` has pointed the catalog at it and installed (scripts/effect-floor.mjs).
+      "ci:floor": {
+        command: "node scripts/effect-floor.mjs test",
+        cache: false,
+      },
+      // The repository's GitHub configuration (`stacks/github.ts`): an
+      // owner-run stack on its own fixed `github` stage. It needs an
+      // admin-scoped GitHub token and the Cloudflare credentials of the state
+      // store, so it never runs in CI or an agent session.
+      "github:plan": {
+        command:
+          "node --no-warnings=ExperimentalWarning node_modules/alchemy/bin/alchemy.js plan ./stacks/github.ts --stage github",
+        cache: false,
+      },
+      "github:deploy": {
+        command:
+          "node --no-warnings=ExperimentalWarning node_modules/alchemy/bin/alchemy.js deploy ./stacks/github.ts --stage github",
+        cache: false,
+      },
+      // Chromium for the commerce façade's browser test (`test:coverage`),
+      // with its system libraries (`--with-deps`: apt on Linux, via sudo when
+      // not root). A no-op download when it is already installed.
+      "ci:chromium": {
+        command: "playwright-core install --with-deps chromium",
+        cache: false,
+      },
     },
   },
   resolve: {
@@ -363,29 +539,44 @@ export default defineConfig({
         test: {
           name: "node",
           environment: "node",
-          // Materializes the example app's generated tsconfig on fresh clones.
-          globalSetup: ["./vitest.global-setup.ts"],
-          include: [
-            "packages/*/src/**/*.test.ts",
-            "examples/commerce/tests/**/*.test.ts",
-            "examples/realworld/tests/**/*.test.ts",
-          ],
+          include: ["packages/*/src/**/*.test.ts", "examples/realworld/tests/**/*.test.ts"],
           // The binding tests mount components and need the `svelte`
-          // project below; the /kit tests are plain node. The commerce
-          // browser test runs in `commerce-browser`, after its build.
+          // project below; the /kit tests are plain node. The packages with
+          // an `effect` floor of their own have projects of their own below.
           exclude: [
             "**/node_modules/**",
             "packages/svelte/src/__tests__/**",
             "packages/alchemy-cloudflare/src/__tests__/**",
             "packages/auth/src/__tests__/**",
+            "packages/jsonapi/src/__tests__/**",
+          ],
+        },
+      },
+      {
+        // legation-jsonapi's suite, apart for the same reason as the two
+        // below: its `effect` floor is `catalogs.jsonapi-peers` (4.1.0, which
+        // effect-jsonapi 0.22 requires), so the core floor (4.0.0) must not
+        // select it. The commerce example drives the façade over
+        // effect-jsonapi, so its tests share the floor and the project (its
+        // browser tests run in `commerce-browser`, after its build).
+        extends: true,
+        test: {
+          name: "jsonapi",
+          environment: "node",
+          // Materializes the example app's generated tsconfig on fresh clones.
+          globalSetup: ["./vitest.global-setup.ts"],
+          include: ["packages/jsonapi/src/**/*.test.ts", "examples/commerce/tests/**/*.test.ts"],
+          exclude: [
+            "**/node_modules/**",
             "examples/commerce/tests/facade-browser.test.ts",
+            "examples/commerce/tests/snapshot-browser.test.ts",
           ],
         },
       },
       {
         // The Alchemy adapter's suite, apart because it has its own `effect`
-        // floor (`catalogs.alchemy-peers`, 4.1.0, which Alchemy requires):
-        // CI's "Tests (effect floor)" runs it at that floor and every other
+        // floor (`catalogs.alchemy-peers`, 4.1.4, which Alchemy requires):
+        // `vp run ci:floor` runs it at that floor and every other
         // project at the core's.
         extends: true,
         test: {
@@ -397,7 +588,7 @@ export default defineConfig({
       {
         // The effect-auth bridge's suite, apart for the same reason: its
         // `effect` floor is `catalogs.auth-peers` (4.1.0, which effect-auth
-        // requires), so CI's "Tests (effect floor)" runs it at that floor.
+        // requires), so `vp run ci:floor` runs it at that floor.
         // The audience example (#221) composes effect-auth with the engine
         // and the façade, so its tests share the floor and the project.
         extends: true,
@@ -422,7 +613,10 @@ export default defineConfig({
             "./vitest.global-setup.ts",
             "./examples/commerce/tests/support/global-setup.ts",
           ],
-          include: ["examples/commerce/tests/facade-browser.test.ts"],
+          include: [
+            "examples/commerce/tests/facade-browser.test.ts",
+            "examples/commerce/tests/snapshot-browser.test.ts",
+          ],
           server: {
             deps: {
               // The test's `beforeAll` imports the app's built server

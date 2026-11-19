@@ -32,6 +32,7 @@ import type { Predicate } from "@thomasfosterau/legation";
 import { FilterCorpus, type Subset } from "@thomasfosterau/legation/internal";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
+import { awaitPromise } from "../../await-promise.js";
 import * as Layer from "effect/Layer";
 import * as P from "effect/Predicate";
 import type * as Scope from "effect/Scope";
@@ -215,17 +216,18 @@ export const makeSqlite: Effect.Effect<Engine, never, Scope.Scope> = Effect.gen(
 /** Postgres in-process via PGlite: text `COLLATE "C"`, instants `timestamptz`. */
 export const makePostgres: Effect.Effect<Engine, never, Scope.Scope> = Effect.gen(function* () {
   const db = yield* Effect.acquireRelease(
-    Effect.promise(async () => {
+    awaitPromise(async () => {
       const instance = new PGlite();
       await instance.waitReady;
       return instance;
-    }),
-    (instance) => Effect.promise(() => instance.close())
+    }).pipe(Effect.orDie),
+    (instance) => awaitPromise(() => instance.close()).pipe(Effect.orDie)
   );
   const runner: Runner = {
-    exec: (text) => Effect.promise(() => db.exec(text)).pipe(Effect.asVoid),
+    exec: (text) => awaitPromise(() => db.exec(text)).pipe(Effect.orDie, Effect.asVoid),
     query: <Row extends IdRow>(text: string, params: ReadonlyArray<unknown>) =>
-      Effect.promise(() => db.query<Row>(text, [...params])).pipe(
+      awaitPromise(() => db.query<Row>(text, [...params])).pipe(
+        Effect.orDie,
         Effect.map((result) => result.rows)
       ),
   };

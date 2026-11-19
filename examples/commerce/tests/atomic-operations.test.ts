@@ -25,6 +25,7 @@ import { describe, expect, it } from "@effect/vitest";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
+import * as Option from "effect/Option";
 import * as HttpClient from "effect/http/HttpClient";
 import * as HttpClientRequest from "effect/http/HttpClientRequest";
 import * as HttpClientResponse from "effect/http/HttpClientResponse";
@@ -412,19 +413,21 @@ const makeBackend = (client: HttpClient.HttpClient, atomic = true) => {
     resources: inspected.resources,
     mutators: inspected.registry.mutators,
     operations: inspected.operations,
-    ...(atomic ? { atomic: { path: inspected.atomic!.path } } : {}),
+    ...(atomic ? { atomic: { path: Option.getOrUndefined(inspected.atomic)!.path } } : {}),
   }).pipe(Effect.provideService(HttpClient.HttpClient, client));
 };
 
 describe("JsonApiBackend pushing through the commerce operations endpoint", () => {
   it("is detected as the api's atomic endpoint by JsonApiSync.inspect", () => {
     const inspected = JsonApiSync.inspect(api);
-    expect(inspected.atomic).toEqual({
-      groupId: "operations",
-      name: "operations",
-      method: "POST",
-      path: OPERATIONS_PATH,
-    });
+    expect(inspected.atomic).toEqual(
+      Option.some({
+        groupId: "operations",
+        name: "operations",
+        method: "POST",
+        path: OPERATIONS_PATH,
+      })
+    );
     // No phantom `operations` resource; the writable resources keep their mutators.
     expect(inspected.resources.has("operations")).toBe(false);
     expect(inspected.registry.mutators.has("reviews/create")).toBe(true);

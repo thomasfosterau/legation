@@ -6,7 +6,7 @@ Browser-runtime adapters. Read the root [AGENTS.md](../../AGENTS.md) first.
 
 - Everything that touches browser globals (`WebSocket`, `indexedDB`, `BroadcastChannel`, `navigator`, the Cache API, service-worker and Background Sync APIs) lives here, never in `packages/effect` (ADR-0006). Imports from the workspace: `@thomasfosterau/legation` only.
 - Peers: `effect`, `@effect/platform-browser` (both `catalog:peers`).
-- One entry (`src/index.ts`); `src/internal/` is private implementation, not exported.
+- Two entries: `src/index.ts` (`.`, every adapter) and `src/http-cache.ts` (`./http-cache`: `CacheApiHttpCache` and core's `HttpCache` alone, for a service worker without the engine, #678). Nothing reachable from `./http-cache` imports the engine or `HttpCacheInvalidation`; `src/__tests__/http-cache-size.test.ts` holds its bundle-size budget. `src/internal/` is private implementation, not exported.
 
 ## Invariants
 
@@ -15,4 +15,4 @@ Browser-runtime adapters. Read the root [AGENTS.md](../../AGENTS.md) first.
 
 ## Tests
 
-`src/__tests__/` (Vitest project `node`, over `fake-indexeddb` and in-memory channels); `native-store.bench.ts` is a benchmark (`vp run bench`).
+`src/__tests__/` (Vitest project `node`, over `fake-indexeddb` and in-memory channels); `native-store.bench.ts` is a benchmark (`vp run bench`). `bundle-size.ts` measures what a consumer's bundler ships for an import (minified, gzipped): it packs the packages in memory with `packOptions` from `vite.package.ts`, so it needs no build.

@@ -13,7 +13,7 @@
     "build": "vp build",
     "preview": "vp preview",
     "check": "svelte-check --tsconfig ./tsconfig.json && tsc -p tsconfig.server.json",
-    "test": "vp test run --root ../.. --project node --project commerce-browser examples/commerce",
+    "test": "vp test run --root ../.. --project jsonapi --project commerce-browser examples/commerce",
     "prepare": "svelte-kit sync"
   },
   "dependencies": {

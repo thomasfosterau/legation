@@ -5,13 +5,14 @@
  * read a single row only A was admitted to — not before B's first pull, not
  * after it, not through the façade.
  *
- * The listener is legation-auth's `SignOut.onSessionChange` over the Client
+ * The device follows its cookie jar with legation-auth's `SignOut.follow`
  * (#212): the sign-out is a `Reset` (confirmed rows, cookie and pins
  * dropped), and A's unpushed draft is quarantined under A's fingerprint —
  * never pushed under B's session, never discarded.
  */
 import { describe, expect, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
+import * as Option from "effect/Option";
 import { Identity } from "@thomasfosterau/legation";
 import { SignOut } from "@thomasfosterau/legation-auth/client";
 import * as Digest from "effect/crypto/Digest";
@@ -75,7 +76,7 @@ describe("sign-out clears the replica before the next viewer reads", () => {
         const aPrivate = new Request("http://audience.test/jsonapi/posts/a-private", {
           headers: { accept: "application/vnd.api+json" },
         });
-        expect(yield* device.facade.handle(aPrivate)).toBeUndefined();
+        expect(yield* device.facade.handle(aPrivate)).toEqual(Option.none());
         yield* device.client.subscribe(feed);
         yield* device.engine.pull;
         // After it, exactly B's rows: A's private and followers-only posts are not among them.

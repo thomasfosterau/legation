@@ -124,10 +124,7 @@ export const make = (config: PollingHintSourceConfig): HintSource.HintSource => 
         yield* Effect.forkScoped(
           // A transient query error just skips this tick — the next poll (and
           // the interval pull) recovers; poke is never a correctness path.
-          tick(bus, state).pipe(
-            Effect.catch(() => Effect.void),
-            Effect.repeat(Schedule.spaced(config.interval))
-          )
+          tick(bus, state).pipe(Effect.ignore, Effect.repeat(Schedule.spaced(config.interval)))
         );
       })
     ),

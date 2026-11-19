@@ -23,7 +23,7 @@
  *   FanoutShard.ShardObject
  * >()("LegationShard") {}
  *
- * export const LegationShardLive = LegationShard.make(FanoutShard.make());
+ * export const LegationShardLive = LegationShard.make(FanoutShard.make);
  * ```
  */
 
@@ -32,22 +32,12 @@ import type { RuntimeContext } from "alchemy/RuntimeContext";
 import * as Arr from "effect/Array";
 import * as Clock from "effect/Clock";
 import * as Effect from "effect/Effect";
+import type { ShardObject } from "./internal/ShardRpc.js";
 
 const LEASE_PREFIX = "legation:lease:";
 
 /** The shard's RPC surface, as the room-side broker calls it through a stub. */
-export interface ShardObject {
-  /** Lease (or renew) `roomId` on this shard's topic for `ttlMillis`. */
-  readonly register: (
-    roomId: string,
-    ttlMillis: number
-  ) => Effect.Effect<void, never, RuntimeContext>;
-  /**
-   * A publish to this shard's topic: the rooms whose lease is still live, to be
-   * poked by the publisher. Expired leases are deleted as a side effect.
-   */
-  readonly publish: () => Effect.Effect<ReadonlyArray<string>, never, RuntimeContext>;
-}
+export type { ShardObject };
 
 /** The lease operations, storage-backed (exported for direct testing). */
 export const leases = {
@@ -77,19 +67,21 @@ export const leases = {
  * The shard's Durable Object implementation, for `LegationShard.make(...)`:
  * its state is resolved at init, its leases read and written per call.
  */
-export const make = (): Effect.Effect<
+export const make: Effect.Effect<
   Effect.Effect<ShardObject>,
   never,
   Workers.DurableObjectState
-> =>
-  Effect.gen(function* () {
-    const state = yield* Workers.DurableObjectState;
-    return Effect.succeed({
+> = Effect.map(
+  Workers.DurableObjectState,
+  // Alchemy's two-phase Durable Object contract: init resolves the state, and
+  // its result is the per-instance Effect the provider runs for each instance.
+  (state): Effect.Effect<ShardObject> =>
+    Effect.succeed({
       register: (roomId, ttlMillis) =>
         Effect.flatMap(Clock.currentTimeMillis, (now) =>
           leases.register(state.storage, roomId, ttlMillis, now)
         ),
       publish: () =>
         Effect.flatMap(Clock.currentTimeMillis, (now) => leases.live(state.storage, now)),
-    });
-  });
+    })
+);

@@ -21,6 +21,7 @@ import type { ChangeHint } from "../Backend.js";
 import * as BusBrokers from "../BusBrokers.js";
 import * as InvalidationBus from "../InvalidationBus.js";
 import { defined } from "./defined.js";
+import { TestFailure } from "./test-failure.js";
 
 const hint: ChangeHint = { collection: "todos", ids: ["1"] };
 
@@ -178,7 +179,9 @@ const makeFakeRedis = Effect.gen(function* () {
           Effect.tap((now) => Ref.update(refusedAt, (times) => [...times, now])),
           Effect.andThen(Queue.offer(events, "refused")),
           Effect.andThen(
-            Effect.fail(new Redis.RedisError({ cause: new Error("connection refused") }))
+            Effect.fail(
+              new Redis.RedisError({ cause: new TestFailure({ message: "connection refused" }) })
+            )
           )
         );
       }
@@ -188,7 +191,7 @@ const makeFakeRedis = Effect.gen(function* () {
           ? xrevrange()
           : command === "XREAD"
             ? xread(defined(args[3]), Number(args[1]), defined(args[4]))
-            : Effect.die(new Error(`fake Redis: unhandled ${command}`));
+            : Effect.die(new TestFailure({ message: `fake Redis: unhandled ${command}` }));
     }) as Effect.Effect<A, Redis.RedisError>) as Redis.Redis["Service"]["send"];
 
   // Makes every command fail (until `setDown(false)`), as if Redis were unreachable.
@@ -203,10 +206,13 @@ const makeFakeRedis = Effect.gen(function* () {
 
   // `Redis.make` requires pub/sub too; the Streams broker only ever sends
   // commands, so a subscribe here is a test bug, not a code path.
-  const subscribe = () => Effect.die(new Error("the Streams broker never subscribes"));
+  const subscribe = () =>
+    Effect.die(new TestFailure({ message: "the Streams broker never subscribes" }));
 
   // Nor does it reserve a dedicated connection (`connect`, Effect 4.1).
-  const connect = Effect.die(new Error("the Streams broker never reserves a connection"));
+  const connect = Effect.die(
+    new TestFailure({ message: "the Streams broker never reserves a connection" })
+  );
 
   return {
     redis: yield* Redis.make({ send, subscribe, connect }),
@@ -673,8 +679,11 @@ describe("makeRedisBroker (Redis Streams)", () => {
     Effect.gen(function* () {
       const redis = yield* Redis.make({
         send: (() => Effect.never) as Redis.Redis["Service"]["send"],
-        subscribe: () => Effect.die(new Error("the Streams broker never subscribes")),
-        connect: Effect.die(new Error("the Streams broker never reserves a connection")),
+        subscribe: () =>
+          Effect.die(new TestFailure({ message: "the Streams broker never subscribes" })),
+        connect: Effect.die(
+          new TestFailure({ message: "the Streams broker never reserves a connection" })
+        ),
       });
       const broker = yield* BusBrokers.makeRedisBroker({ timeout: "2 seconds" }).pipe(
         Effect.provideService(Redis.Redis, redis)

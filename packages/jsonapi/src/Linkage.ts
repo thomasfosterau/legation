@@ -43,6 +43,13 @@ import type { Relationship, Resource } from "@thomasfosterau/effect-jsonapi";
 import { Collection, type Node, Predicate, Query } from "@thomasfosterau/legation";
 import { type Related, Subset } from "@thomasfosterau/legation/internal";
 import * as DocumentWriter from "./DocumentWriter.js";
+import * as Schema from "effect/Schema";
+
+/** Thrown when a resource's relationship disagrees with its node's edge: a definition defect. */
+class LinkageMismatch extends Schema.TaggedError<
+  LinkageMismatch,
+  { readonly brand: unique symbol }
+>()("LinkageMismatch", { message: Schema.String }) {}
 
 /** A batch of subsets evaluated to rows — the row source a read runs over. */
 export type Fetch<E> = (
@@ -85,18 +92,20 @@ const checkDeclaration = (
 ): void => {
   const edge = node.edges[name];
   if (edge === undefined) {
-    throw new Error(`${declared(resource, name)} is not an edge of the "${node.type}" node`);
+    throw new LinkageMismatch({
+      message: `${declared(resource, name)} is not an edge of the "${node.type}" node`,
+    });
   }
   const toMany = descriptor.kind === "many" || descriptor.kind === "paginated";
   if (toMany === (edge.kind === "one")) {
-    throw new Error(
-      `${declared(resource, name)} is "${descriptor.kind}" but the node edge is "${edge.kind}"`
-    );
+    throw new LinkageMismatch({
+      message: `${declared(resource, name)} is "${descriptor.kind}" but the node edge is "${edge.kind}"`,
+    });
   }
   if (descriptor.ref().type !== edge.target) {
-    throw new Error(
-      `${declared(resource, name)} targets "${descriptor.ref().type}" but the node edge targets "${edge.target}"`
-    );
+    throw new LinkageMismatch({
+      message: `${declared(resource, name)} targets "${descriptor.ref().type}" but the node edge targets "${edge.target}"`,
+    });
   }
 };
 

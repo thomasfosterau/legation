@@ -1,5 +1,63 @@
 # @thomasfosterau/legation-svelte
 
+## 0.2.2
+
+### Patch Changes
+
+- Updated dependencies [a7d5a09]
+  - @thomasfosterau/legation@0.6.0
+
+## 0.2.1
+
+### Patch Changes
+
+- 1ce8b2b: Effects that must run at a callback edge run on a runtime the adapter owns (#562). Background Sync's listener, the Svelte undo hooks and the devtools panel use a module-level `ManagedRuntime.make(Layer.empty)` in place of the implicit-runtime `Effect.runPromise` / `runFork` / `runSync`, and the room transport's poke socket offers to its queue with `Queue.offerUnsafe`. No behaviour changes.
+- dc243b9: `dist/` is one ESM module per source module instead of merged shared chunks (#678), so a consumer's bundler can tree-shake with `sideEffects: false`. The entries and their exports are unchanged.
+- Updated dependencies [f1f0092]
+- Updated dependencies [515a427]
+- Updated dependencies [584ea1c]
+- Updated dependencies [87e83f9]
+  - @thomasfosterau/legation@0.5.0
+
+## 0.2.0
+
+### Minor Changes
+
+- da04d41: `createClient` boots a Client over an engine hosted elsewhere, and hands it the page's SSR snapshot (#146, #147).
+
+  - `createClient({ nodes, mutations, channel, snapshot?, subscribe?, hydrateTimeout? })` (`ConnectClientOptions`) returns a `ConnectedClientHandle`: the Client is a mirror of the engine on `channel` (a `MirrorChannel`, or the effect that opens one, such as `BroadcastMirrorChannel.make(name)`). The snapshot is offered to the host before anything is subscribed, re-sent every half second while no host answers, for at most `hydrateTimeout` (default 5 seconds); the host hydrates its store only when it is empty and has not pulled. `handle.hydration` is the host's answer (`Option` of `Hydration.HydrateOutcome`).
+  - The README says when to reach for a snapshot and when for `initial` seeding.
+
+- 82eb11e: The SvelteKit surface (`./kit`) passes the request's credentials to the server's `IdentityResolver` (ADR-0035, #219): **`requestCredentials(event)`** (new) reads a `RequestEvent`'s headers into `Option.some(Authorization.RequestCredentials)`; `loadSnapshot`'s options take `credentials` (from `Hydration.SnapshotOptions`), and `runFormMutation` takes a fifth argument, **`RunFormMutationOptions`** (`{ credentials? }`). Without them the render or mutation is anonymous to a credential-reading resolver, as before.
+- 8a60f29: `useQuery` and `useConnection` type their rows from the read and the app's registered graph (#140). Register the graph once beside it (`declare module "@thomasfosterau/legation" { interface Register { readonly nodes: typeof nodes } }`), declare reads `as const satisfies Query.Read`, and `useQuery(() => allProducts)` yields rows whose `value` is the products row and whose `related` carries exactly the included edges, with no cast and no type argument. A read that names a collection, edge or field the graph does not declare fails to compile at the hook (`useAggregate` and `useAggregateGrouped` check their reads too). With no graph registered, or for a dynamic read, rows are untyped, as before.
+
+  **Breaking** (types only): `useQuery`, `useConnection`, `useAggregate` and `useAggregateGrouped` are generic in the read (`const R extends Query.Read`); `ResolvedRows<R>`, `Connection<R>` and `ConnectionOptions<R>` gained a defaulted type parameter; with a graph registered, an `initial` seed must have the typed row shape (`Hydration.rowsFor` produces it).
+
+- 9441aa0: Add `useAnswer(() => read)`, a live `Client.Answer` (`{ rows, completeness }`, from `Client.observeAnswers`): `useQuery`'s rows with whether they are complete or, while the read's windows are not pulled yet, partial (#653). The read is checked and its rows typed against the registered graph as `useQuery`'s are, and it opts out the same way.
+
+### Patch Changes
+
+- Updated dependencies [da296dc]
+- Updated dependencies [9441aa0]
+- Updated dependencies [520e1c8]
+- Updated dependencies [9b22e38]
+- Updated dependencies [20d9793]
+- Updated dependencies [da04d41]
+- Updated dependencies [82eb11e]
+- Updated dependencies [b0f51d9]
+- Updated dependencies [ed8dd92]
+- Updated dependencies [3c83004]
+- Updated dependencies [e8e3419]
+- Updated dependencies [0e102c0]
+- Updated dependencies [aab6099]
+- Updated dependencies [3ca13de]
+- Updated dependencies [d5b8f8b]
+- Updated dependencies [8a60f29]
+- Updated dependencies [20d9793]
+- Updated dependencies [89eef12]
+- Updated dependencies [2afcd9f]
+  - @thomasfosterau/legation@0.4.0
+
 ## 0.1.3
 
 ### Patch Changes

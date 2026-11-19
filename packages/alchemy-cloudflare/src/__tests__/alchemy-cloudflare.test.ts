@@ -21,17 +21,24 @@ import { PreparedStatement, type QueryDatabaseClient } from "@alchemy.run/cloudf
 import * as Workers from "@alchemy.run/cloudflare/Workers";
 import { RuntimeContext } from "alchemy/RuntimeContext";
 import * as Arr from "effect/Array";
+import * as Clock from "effect/Clock";
+import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
+import * as Fiber from "effect/Fiber";
+import { awaitPromise } from "./await-promise.js";
 import * as Exit from "effect/Exit";
 import * as HttpServerRequest from "effect/http/HttpServerRequest";
 import * as HttpServerResponse from "effect/http/HttpServerResponse";
 import * as Option from "effect/Option";
+import * as Order from "effect/Order";
+import * as Queue from "effect/Queue";
 import * as Schema from "effect/Schema";
-import * as Scope from "effect/Scope";
 import * as Stream from "effect/Stream";
+import * as SubscriptionRef from "effect/SubscriptionRef";
 import * as TestClock from "effect/testing/TestClock";
 import {
   Authorization,
+  Backend,
   Client,
   ClientStore,
   Edge,
@@ -41,13 +48,26 @@ import {
   Query,
   Transport,
 } from "@thomasfosterau/legation";
-import { ClientEngine, ClientView, Cvr } from "@thomasfosterau/legation/internal";
+import {
+  ClientEngine,
+  ClientView,
+  Cvr,
+  Defined,
+  HintSource,
+  Subset,
+} from "@thomasfosterau/legation/internal";
 import * as D1Executor from "../D1Executor.js";
+import * as DurableFanoutBroker from "../DurableFanoutBroker.js";
 import * as DurableCvrStore from "../DurableCvrStore.js";
 import * as FanoutShard from "../FanoutShard.js";
 import * as Room from "../Room.js";
 import { routes } from "../RoomProtocol.js";
-import { routeSync } from "../Worker.js";
+import {
+  anonymousRoomPrefix,
+  type RouterConfig,
+  routeSync,
+  shardByClientGroup,
+} from "../Worker.js";
 import { defined } from "./defined.js";
 import {
   construct,
@@ -60,52 +80,59 @@ import {
   makeStorage,
   runtimeContext,
 } from "./harness.js";
+import { TestFailure } from "./test-failure.js";
 
 /** Run an effect that needs the runtime context, as inside a Durable Object event. */
 const inRuntime = <A, E>(effect: Effect.Effect<A, E, RuntimeContext>) =>
-  Effect.runPromise(effect.pipe(Effect.provideService(RuntimeContext, runtimeContext)));
+  effect.pipe(Effect.provideService(RuntimeContext, runtimeContext));
 
 // ─── Units ───────────────────────────────────────────────────────────────────
 
 describe("DurableCvrStore", () => {
-  it("round-trips CVRs through DO storage", async () => {
-    const store = await inRuntime(DurableCvrStore.make(makeStorage()));
-    const cvr: Cvr.Cvr = { rows: new Map([["products", new Map([["p-1", 3]])]]) };
-    await inRuntime(store.set("cookie-1", cvr));
-    const loaded = await inRuntime(store.get("cookie-1"));
-    expect(loaded?.rows.get("products")?.get("p-1")).toBe(3);
-    await inRuntime(store.remove("cookie-1"));
-    expect(await inRuntime(store.get("cookie-1"))).toBeUndefined();
-  });
+  it.effect("round-trips CVRs through DO storage", () =>
+    Effect.gen(function* () {
+      const store = yield* inRuntime(DurableCvrStore.make(makeStorage()));
+      const cvr: Cvr.Cvr = { rows: new Map([["products", new Map([["p-1", 3]])]]) };
+      yield* inRuntime(store.set("cookie-1", cvr));
+      const loaded = yield* inRuntime(store.get("cookie-1"));
+      expect(loaded?.rows.get("products")?.get("p-1")).toBe(3);
+      yield* inRuntime(store.remove("cookie-1"));
+      expect(yield* inRuntime(store.get("cookie-1"))).toBeUndefined();
+    })
+  );
 
-  it("surfaces a failed storage call as a StoreError", async () => {
-    const raw = makeRawStorage();
-    raw.get = () => Promise.reject(new Error("storage unavailable"));
-    const store = await inRuntime(DurableCvrStore.make(Workers.fromDurableObjectStorage(raw)));
-    const exit = await Effect.runPromiseExit(store.get("cookie-1"));
-    expect(Exit.findErrorOption(exit).pipe(Option.map((error) => error._tag))).toEqual(
-      Option.some("StoreError")
-    );
-  });
+  it.effect("surfaces a failed storage call as a StoreError", () =>
+    Effect.gen(function* () {
+      const raw = makeRawStorage();
+      raw.get = () => Promise.reject(new TestFailure({ message: "storage unavailable" }));
+      const store = yield* inRuntime(DurableCvrStore.make(Workers.fromDurableObjectStorage(raw)));
+      const exit = yield* Effect.exit(store.get("cookie-1"));
+      expect(Exit.findErrorOption(exit).pipe(Option.map((error) => error._tag))).toEqual(
+        Option.some("StoreError")
+      );
+    })
+  );
 });
 
 describe("FanoutShard", () => {
-  it("leases: keeps live rooms and drops expired ones", async () => {
-    const storage = makeStorage();
-    await inRuntime(FanoutShard.leases.register(storage, "room-a", 1000, 0));
-    await inRuntime(FanoutShard.leases.register(storage, "room-b", 1000, 500));
-    expect(await inRuntime(FanoutShard.leases.live(storage, 900))).toEqual(["room-a", "room-b"]);
-    // room-a expired at 1000; room-b at 1500.
-    expect(await inRuntime(FanoutShard.leases.live(storage, 1200))).toEqual(["room-b"]);
-    // The expired entry was deleted as a side effect.
-    expect(await inRuntime(FanoutShard.leases.live(storage, 900))).toEqual(["room-b"]);
-  });
+  it.effect("leases: keeps live rooms and drops expired ones", () =>
+    Effect.gen(function* () {
+      const storage = makeStorage();
+      yield* inRuntime(FanoutShard.leases.register(storage, "room-a", 1000, 0));
+      yield* inRuntime(FanoutShard.leases.register(storage, "room-b", 1000, 500));
+      expect(yield* inRuntime(FanoutShard.leases.live(storage, 900))).toEqual(["room-a", "room-b"]);
+      // room-a expired at 1000; room-b at 1500.
+      expect(yield* inRuntime(FanoutShard.leases.live(storage, 1200))).toEqual(["room-b"]);
+      // The expired entry was deleted as a side effect.
+      expect(yield* inRuntime(FanoutShard.leases.live(storage, 900))).toEqual(["room-b"]);
+    })
+  );
 
   it.effect("answers a publish with the rooms registered on its topic", () =>
     Effect.gen(function* () {
       const shard = yield* construct(
         "reviews",
-        FanoutShard.make(),
+        FanoutShard.make,
         fakeBinding<Workers.DurableObject>({})
       );
       yield* shard.run(shard.object.register("room-a", 60_000));
@@ -124,12 +151,12 @@ const makeRawD1 = (rows: ReadonlyArray<Record<string, unknown>>, fail = false) =
         bind: (...values: ReadonlyArray<unknown>) => statement(values),
         all: async () => {
           statements.push({ sql, params });
-          if (fail) throw new Error("D1_ERROR: no such table");
+          if (fail) throw new TestFailure({ message: "D1_ERROR: no such table" });
           return { results: rows, success: true, meta: {} };
         },
         run: async () => {
           statements.push({ sql, params });
-          if (fail) throw new Error("D1_ERROR: no such table");
+          if (fail) throw new TestFailure({ message: "D1_ERROR: no such table" });
           return { results: [], success: true, meta: {} };
         },
       });
@@ -146,35 +173,42 @@ const makeRawD1 = (rows: ReadonlyArray<Record<string, unknown>>, fail = false) =
 };
 
 describe("D1Executor", () => {
-  it("declares no transactions, so SqlBackend keeps the handler-then-bump order (#342, #359)", async () => {
-    // A claim committed on its own would be skipped by a retry after a crash.
-    const executor = await inRuntime(D1Executor.make(makeRawD1([]).client));
-    expect(executor.transactional).toBe(false);
-  });
+  it.effect(
+    "declares no transactions, so SqlBackend keeps the handler-then-bump order (#342, #359)",
+    () =>
+      Effect.gen(function* () {
+        // A claim committed on its own would be skipped by a retry after a crash.
+        const executor = yield* inRuntime(D1Executor.make(makeRawD1([]).client));
+        expect(executor.transactional).toBe(false);
+      })
+  );
 
-  it("runs queries and statements through the client's prepared statements", async () => {
-    const d1 = makeRawD1([{ id: "p-1", name: "Mug" }]);
-    const executor = await inRuntime(D1Executor.make(d1.client));
-    const rows = await Effect.runPromise(
-      executor.query({ text: "SELECT * FROM products WHERE id = ?", params: ["p-1"] })
-    );
-    expect(rows).toEqual([{ id: "p-1", name: "Mug" }]);
-    await Effect.runPromise(
-      executor.run({ text: "DELETE FROM products WHERE id = ?", params: ["p-2"] })
-    );
-    expect(d1.statements).toEqual([
-      { sql: "SELECT * FROM products WHERE id = ?", params: ["p-1"] },
-      { sql: "DELETE FROM products WHERE id = ?", params: ["p-2"] },
-    ]);
-  });
+  it.effect("runs queries and statements through the client's prepared statements", () =>
+    Effect.gen(function* () {
+      const d1 = makeRawD1([{ id: "p-1", name: "Mug" }]);
+      const executor = yield* inRuntime(D1Executor.make(d1.client));
+      const rows = yield* executor.query({
+        text: "SELECT * FROM products WHERE id = ?",
+        params: ["p-1"],
+      });
+      expect(rows).toEqual([{ id: "p-1", name: "Mug" }]);
+      yield* executor.run({ text: "DELETE FROM products WHERE id = ?", params: ["p-2"] });
+      expect(d1.statements).toEqual([
+        { sql: "SELECT * FROM products WHERE id = ?", params: ["p-1"] },
+        { sql: "DELETE FROM products WHERE id = ?", params: ["p-2"] },
+      ]);
+    })
+  );
 
-  it("surfaces a failed statement as a BackendError", async () => {
-    const executor = await inRuntime(D1Executor.make(makeRawD1([], true).client));
-    const exit = await Effect.runPromiseExit(executor.query({ text: "SELECT 1", params: [] }));
-    expect(Exit.findErrorOption(exit).pipe(Option.map((error) => error._tag))).toEqual(
-      Option.some("BackendError")
-    );
-  });
+  it.effect("surfaces a failed statement as a BackendError", () =>
+    Effect.gen(function* () {
+      const executor = yield* inRuntime(D1Executor.make(makeRawD1([], true).client));
+      const exit = yield* Effect.exit(executor.query({ text: "SELECT 1", params: [] }));
+      expect(Exit.findErrorOption(exit).pipe(Option.map((error) => error._tag))).toEqual(
+        Option.some("BackendError")
+      );
+    })
+  );
 });
 
 describe("routeSync", () => {
@@ -186,48 +220,169 @@ describe("routeSync", () => {
     }),
   });
   const roomIdOf = (request: HttpServerRequest.HttpServerRequest) =>
-    Effect.succeed(new URL(request.url, "https://app").searchParams.get("user") ?? undefined);
+    Effect.succeed(
+      Option.fromNullishOr(new URL(request.url, "https://app").searchParams.get("user"))
+    );
   const route = (path: string, basePath?: string) =>
-    Effect.runPromise(
-      routeSync({ rooms: stubRooms, roomIdOf, basePath }).pipe(
-        Effect.provideService(
-          HttpServerRequest.HttpServerRequest,
-          HttpServerRequest.fromWeb(new Request(`https://app.example.com${path}`))
-        ),
-        Effect.map(Option.map((response) => HttpServerResponse.toWeb(response))),
-        Effect.orDie
-      )
+    routeSync({ rooms: stubRooms, roomIdOf, basePath }).pipe(
+      Effect.provideService(
+        HttpServerRequest.HttpServerRequest,
+        HttpServerRequest.fromWeb(new Request(`https://app.example.com${path}`))
+      ),
+      Effect.map(Option.map((response) => HttpServerResponse.toWeb(response))),
+      Effect.orDie
     );
 
-  it("ignores paths outside the base so the app handler runs", async () => {
-    expect(Option.isNone(await route("/api/products"))).toBe(true);
-    expect(Option.isNone(await route("/"))).toBe(true);
-  });
+  it.effect("ignores paths outside the base so the app handler runs", () =>
+    Effect.gen(function* () {
+      expect(Option.isNone(yield* route("/api/products"))).toBe(true);
+      expect(Option.isNone(yield* route("/"))).toBe(true);
+    })
+  );
 
-  it("404s an unknown route under the base", async () => {
-    expect(defined(Option.getOrUndefined(await route("/sync/nonsense?user=u-1"))).status).toBe(404);
-    expect(
-      defined(Option.getOrUndefined(await route(`/sync/deeper${routes.pull}?user=u-1`))).status
-    ).toBe(404);
-  });
+  it.effect("404s an unknown route under the base", () =>
+    Effect.gen(function* () {
+      expect(defined(Option.getOrUndefined(yield* route("/sync/nonsense?user=u-1"))).status).toBe(
+        404
+      );
+      expect(
+        defined(Option.getOrUndefined(yield* route(`/sync/deeper${routes.pull}?user=u-1`))).status
+      ).toBe(404);
+    })
+  );
 
-  it("401s an anonymous caller (no resolved room)", async () => {
-    expect(defined(Option.getOrUndefined(await route(`/sync${routes.pull}`))).status).toBe(401);
-  });
+  it.effect("401s an anonymous caller (no resolved room)", () =>
+    Effect.gen(function* () {
+      expect(defined(Option.getOrUndefined(yield* route(`/sync${routes.pull}`))).status).toBe(401);
+    })
+  );
 
-  it("forwards a sync route to the caller's room, unchanged", async () => {
-    const response = defined(Option.getOrUndefined(await route(`/sync${routes.pull}?user=u-1`)));
-    expect(await response.json()).toEqual({ room: "u-1", path: `/sync${routes.pull}?user=u-1` });
-  });
+  it.effect("forwards a sync route to the caller's room, unchanged", () =>
+    Effect.gen(function* () {
+      const response = defined(Option.getOrUndefined(yield* route(`/sync${routes.pull}?user=u-1`)));
+      expect(yield* awaitPromise(() => response.json())).toEqual({
+        room: "u-1",
+        path: `/sync${routes.pull}?user=u-1`,
+      });
+    })
+  );
 
-  it("honours a custom base path", async () => {
-    const routed = await route(`/legation${routes.push}?user=u-2`, "/legation");
-    const response = defined(Option.getOrUndefined(routed));
-    expect(await response.json()).toEqual({
-      room: "u-2",
-      path: `/legation${routes.push}?user=u-2`,
-    });
-  });
+  /** Route `path` with `cookie` (if any) through `anonymousRoomOf`: the room addressed, or the status. */
+  const routeAnonymous = (
+    path: string,
+    cookie: Option.Option<string>,
+    anonymousRoomOf?: RouterConfig["anonymousRoomOf"]
+  ) =>
+    routeSync({
+      rooms: stubRooms,
+      roomIdOf,
+      ...Defined.fields({ anonymousRoomOf }),
+    }).pipe(
+      Effect.provideService(
+        HttpServerRequest.HttpServerRequest,
+        HttpServerRequest.fromWeb(
+          new Request(
+            `https://app.example.com${path}`,
+            Option.match(cookie, {
+              onNone: () => ({}),
+              onSome: (value) => ({ headers: { cookie: value } }),
+            })
+          )
+        )
+      ),
+      Effect.orDie,
+      Effect.map((routed) => HttpServerResponse.toWeb(defined(Option.getOrUndefined(routed)))),
+      Effect.flatMap((response): Effect.Effect<string | number> =>
+        response.ok
+          ? awaitPromise(() => response.json()).pipe(
+              Effect.flatMap(Schema.decodeUnknownEffect(Schema.Struct({ room: Schema.String }))),
+              Effect.map(({ room }) => room),
+              Effect.orDie
+            )
+          : Effect.succeed(response.status)
+      )
+    );
+  const anonymousShards = shardByClientGroup({ shards: 4 });
+
+  it.effect("spreads anonymous callers over the anonymous rooms by their client-group cookie", () =>
+    Effect.gen(function* () {
+      const groups = Arr.makeBy(64, (n) => `group-${n}`);
+      const rooms = yield* Effect.forEach(
+        groups,
+        (group) =>
+          routeAnonymous(
+            `/sync${routes.pull}`,
+            Option.some(`legation-client-group=${group}`),
+            anonymousShards
+          ),
+        { concurrency: 1 }
+      );
+      // Every room is one of the four anonymous shards, and all four are used.
+      expect(Arr.sort(Arr.dedupe(rooms), Order.mapInput(Order.String, String))).toEqual(
+        Arr.makeBy(4, (n) => `${anonymousRoomPrefix}${n}`)
+      );
+      // Deterministic: a group lands in the same room on every request, its socket included.
+      const again = yield* Effect.forEach(
+        groups,
+        (group) =>
+          routeAnonymous(
+            `/sync${routes.socket}`,
+            Option.some(`legation-client-group=${group}`),
+            anonymousShards
+          ),
+        { concurrency: 1 }
+      );
+      expect(again).toEqual(rooms);
+    })
+  );
+
+  it.effect(
+    "leaves identified callers in their own room and refuses an unroutable anonymous one",
+    () =>
+      Effect.gen(function* () {
+        const cookie = Option.some("legation-client-group=group-1");
+        expect(yield* routeAnonymous(`/sync${routes.pull}?user=u-1`, cookie, anonymousShards)).toBe(
+          "u-1"
+        );
+        // No client-group cookie: nothing to shard by, so a 401.
+        expect(yield* routeAnonymous(`/sync${routes.pull}`, Option.none(), anonymousShards)).toBe(
+          401
+        );
+        // No anonymous routing: every anonymous caller gets a 401, cookie or not.
+        expect(yield* routeAnonymous(`/sync${routes.pull}`, cookie)).toBe(401);
+        // A custom cookie name.
+        expect(
+          yield* routeAnonymous(
+            `/sync${routes.pull}`,
+            Option.some("visitor=v-1"),
+            shardByClientGroup({ shards: 1, cookie: "visitor" })
+          )
+        ).toBe(`${anonymousRoomPrefix}0`);
+      })
+  );
+
+  it.effect("refuses an identified room id inside the anonymous namespace", () =>
+    Effect.gen(function* () {
+      expect(
+        yield* routeAnonymous(
+          `/sync${routes.pull}?user=${encodeURIComponent(`${anonymousRoomPrefix}0`)}`,
+          Option.some("legation-client-group=group-1"),
+          anonymousShards
+        )
+      ).toBe(500);
+    })
+  );
+
+  it.effect("honours a custom base path", () =>
+    Effect.gen(function* () {
+      const routed = yield* route(`/legation${routes.push}?user=u-2`, "/legation");
+      const response = defined(Option.getOrUndefined(routed));
+      expect(yield* awaitPromise(() => response.json())).toEqual({
+        room: "u-2",
+        path: `/legation${routes.push}?user=u-2`,
+      });
+    })
+  );
 });
 
 // ─── The topology, end to end ────────────────────────────────────────────────
@@ -258,50 +413,57 @@ interface ShardCall {
 }
 
 /**
- * Every shard call, recorded once the shard has answered it, and a way to
- * wait for one. A publish's pokes follow its answer, so the tests wait for the
- * poke itself where they need it (`pokes` below).
+ * Every call, recorded once it has been answered, and a way to wait for one.
+ * A publish's pokes follow its answer, so the tests wait for the poke itself
+ * where they need it (`pokes` below).
  */
-const makeCalls = <Call>() => {
-  const calls: Array<Call> = [];
-  const waiters: Array<{ readonly match: (call: Call) => boolean; readonly done: () => void }> = [];
-  return {
-    record: (call: Call) => {
-      calls.push(call);
-      Arr.forEach(
-        waiters.filter((w) => w.match(call)),
-        (waiter) => {
-          waiters.splice(waiters.indexOf(waiter), 1);
-          waiter.done();
-        }
-      );
-    },
-    /** How many calls have completed so far: a mark to pass to `next`. */
-    count: () => calls.length,
-    /**
-     * Resolve once a matching call has completed, counting only calls after
-     * the `since` mark (at once if one already has).
-     */
-    next: (match: (call: Call) => boolean, since = 0): Promise<void> =>
-      calls.slice(since).some(match)
-        ? Promise.resolve()
-        : new Promise<void>((done) => waiters.push({ match, done })),
-  };
+const makeCalls = <Call>() =>
+  Effect.gen(function* () {
+    const calls = yield* SubscriptionRef.make<ReadonlyArray<Call>>([]);
+    return {
+      record: (call: Call) => SubscriptionRef.update(calls, (all) => [...all, call]),
+      /** How many calls have completed so far: a mark to pass to `next`. */
+      count: SubscriptionRef.get(calls).pipe(Effect.map((all) => all.length)),
+      /**
+       * Wait for a matching call to have completed, counting only calls after
+       * the `since` mark (at once if one already has).
+       */
+      next: (match: (call: Call) => boolean, since = 0) =>
+        SubscriptionRef.changes(calls).pipe(
+          Stream.filter((all) => all.slice(since).some(match)),
+          Stream.take(1),
+          Stream.runDrain
+        ),
+    };
+  });
+
+/** Build one value per name, once, however many fibers ask for it first. */
+const memoByName = <A>(build: (name: string) => Effect.Effect<A>) => {
+  const pending = new Map<string, Deferred.Deferred<A>>();
+  return (name: string): Effect.Effect<A> =>
+    Effect.suspend(() => {
+      const existing = pending.get(name);
+      if (existing !== undefined) return Deferred.await(existing);
+      const deferred = Deferred.makeUnsafe<A>();
+      pending.set(name, deferred);
+      return build(name).pipe(Effect.tap((value) => Deferred.succeed(deferred, value)));
+    });
 };
 
 /** A ClientTransport calling a room instance's fetch directly. */
-const roomTransport = (send: (request: Request) => Promise<Response>) => {
+const roomTransport = (send: (request: Request) => Effect.Effect<Response>) => {
   const post = (route: string) => (body: unknown) =>
-    Effect.promise(async () => {
-      const response = await send(
-        new Request(`https://room${route}`, {
-          method: "POST",
-          body: JSON.stringify(body),
-          headers: { "content-type": "application/json" },
-        })
-      );
-      return (await response.json()) as never;
-    });
+    send(
+      new Request(`https://room${route}`, {
+        method: "POST",
+        body: JSON.stringify(body),
+        headers: { "content-type": "application/json" },
+      })
+    ).pipe(
+      Effect.flatMap((response) => awaitPromise(() => response.json())),
+      Effect.map((json) => json as never),
+      Effect.orDie
+    );
   return {
     push: post(routes.push),
     pull: post(routes.pull),
@@ -332,216 +494,182 @@ const backendOf = () =>
  * A room namespace whose instances are built on first address from `config`.
  * The rooms poke each other through it, as through their own namespace.
  */
-const makeRooms = (config: Room.RoomConfig) => {
-  const instances = new Map<string, Promise<Instance<Room.RoomObject>>>();
-  const pokes = makeCalls<{ readonly room: string; readonly topics: ReadonlyArray<string> }>();
-  const namespace: Workers.DurableObject<Room.RoomObject> = makeNamespace<Room.RoomObject>((name) =>
-    Effect.promise(() => room(name))
-  );
-  const room = (name: string): Promise<Instance<Room.RoomObject>> => {
-    let instance = instances.get(name);
-    if (instance === undefined) {
-      instance = Effect.runPromise(
-        construct(name, Room.make(config), namespace).pipe(
-          Effect.map((built): Instance<Room.RoomObject> => ({
-            ...built,
-            object: {
-              ...built.object,
-              // Record each poke once the room has delivered it.
-              poke: (topics) =>
-                Effect.tap(built.object.poke(topics), () =>
-                  Effect.sync(() => pokes.record({ room: name, topics }))
-                ),
-            },
-          }))
-        )
-      );
-      instances.set(name, instance);
-    }
-    return instance;
-  };
-  return { room, pokes };
-};
+const makeRooms = (config: Room.RoomConfig) =>
+  Effect.gen(function* () {
+    const pokes = yield* makeCalls<{
+      readonly room: string;
+      readonly topics: ReadonlyArray<string>;
+    }>();
+    const room = memoByName((name) =>
+      construct(name, Room.make(config), namespace).pipe(
+        Effect.map((built): Instance<Room.RoomObject> => ({
+          ...built,
+          object: {
+            ...built.object,
+            // Record each poke once the room has delivered it.
+            poke: (topics) =>
+              Effect.tap(built.object.poke(topics), () => pokes.record({ room: name, topics })),
+          },
+        }))
+      )
+    );
+    const namespace: Workers.DurableObject<Room.RoomObject> = makeNamespace<Room.RoomObject>(room);
+    return { room, pokes, namespace };
+  });
+
+/** A shard namespace of real `FanoutShard` instances, built on first address, recording each answered call. */
+const makeShards = () =>
+  Effect.gen(function* () {
+    const calls = yield* makeCalls<ShardCall>();
+    const noSelf = fakeBinding<Workers.DurableObject>({});
+    const shardNamed = memoByName((name) =>
+      construct(name, FanoutShard.make, noSelf).pipe(
+        Effect.map((built): Instance<FanoutShard.ShardObject> => ({
+          ...built,
+          object: {
+            register: (roomId, ttlMillis) =>
+              Effect.tap(built.object.register(roomId, ttlMillis), () =>
+                calls.record({ shard: name, method: "register", roomId })
+              ),
+            publish: () =>
+              Effect.tap(built.object.publish(), () =>
+                calls.record({ shard: name, method: "publish" })
+              ),
+          },
+        }))
+      )
+    );
+    const shards = makeNamespace<FanoutShard.ShardObject>(shardNamed);
+    return { shards, calls };
+  });
+
+/** A client engine on the live clock, talking to `room` over the room transport. */
+const makeClient = (
+  room: Instance<Room.RoomObject>,
+  clientId: string,
+  clientGroupId: string,
+  syncLoop?: ClientEngine.SyncLoopOptions
+) =>
+  Effect.gen(function* () {
+    const store = yield* ClientStore.makeMemory;
+    const options = { clientId, clientGroupId, mutators: mutations };
+    return yield* ClientEngine.make(
+      syncLoop === undefined ? options : { ...options, syncLoop }
+    ).pipe(
+      Effect.provideService(ClientStore.ClientStore, store),
+      Effect.provideService(Transport.ClientTransport, roomTransport(fetchOf(room)))
+    );
+  });
 
 describe("rooms + shards, end to end", () => {
   it.live(
     "a cross-room write pokes the fine-registered room's sockets and window",
     () =>
-      Effect.acquireUseRelease(
-        Scope.make(),
-        (scope) =>
-          Effect.promise(async () => {
-            // The room's heartbeat sleeps on this clock, so it beats only when the test
-            // advances time. Shards stamp leases with the real wall clock; a 10 minute
-            // beat gives a 30 minute TTL, which no run of this test can outlive. (A
-            // 150 ms TTL on real time expired under event-loop starvation; expiry has
-            // its own unit test above.)
-            const clock = await Effect.runPromise(TestClock.make().pipe(Scope.provide(scope)));
-            const backend = await Effect.runPromise(backendOf().pipe(Scope.provide(scope)));
+      Effect.gen(function* () {
+        // The room's heartbeat sleeps on this clock, so it beats only when the test
+        // advances time. Shards stamp leases with the real wall clock; a 10 minute
+        // beat gives a 30 minute TTL, which no run of this test can outlive. (A
+        // 150 ms TTL on real time expired under event-loop starvation; expiry has
+        // its own unit test above.)
+        const clock = yield* TestClock.make();
+        const backend = yield* backendOf();
 
-            const shardCalls = makeCalls<ShardCall>();
-            const shardInstances = new Map<string, Promise<Instance<FanoutShard.ShardObject>>>();
-            const noSelf = fakeBinding<Workers.DurableObject>({});
-            const shardNamed = (name: string) => {
-              let shard = shardInstances.get(name);
-              if (shard === undefined) {
-                shard = Effect.runPromise(
-                  construct(name, FanoutShard.make(), noSelf).pipe(
-                    Effect.map((built): Instance<FanoutShard.ShardObject> => ({
-                      ...built,
-                      object: {
-                        register: (roomId, ttlMillis) =>
-                          Effect.tap(built.object.register(roomId, ttlMillis), () =>
-                            Effect.sync(() =>
-                              shardCalls.record({ shard: name, method: "register", roomId })
-                            )
-                          ),
-                        publish: () =>
-                          Effect.tap(built.object.publish(), () =>
-                            Effect.sync(() => shardCalls.record({ shard: name, method: "publish" }))
-                          ),
-                      },
-                    }))
-                  )
-                );
-                shardInstances.set(name, shard);
-              }
-              return shard;
-            };
-            const shards = makeNamespace<FanoutShard.ShardObject>((name) =>
-              Effect.promise(() => shardNamed(name))
-            );
-            const { room, pokes } = makeRooms({
-              nodes,
-              backend: Effect.succeed(backend),
-              policy: publishPolicy,
-              shards: Effect.succeed(shards),
-              heartbeat: "10 minutes",
-              clock,
-            });
+        const { shards, calls: shardCalls } = yield* makeShards();
+        const { room, pokes } = yield* makeRooms({
+          nodes,
+          backend: Effect.succeed(backend),
+          policy: publishPolicy,
+          shards: Effect.succeed(shards),
+          heartbeat: "10 minutes",
+          clock,
+        });
 
-            const roomA = await room("room-a");
-            const roomB = await room("room-b");
+        const roomA = yield* room("room-a");
+        const roomB = yield* room("room-b");
 
-            // Room A gets a hibernation-style socket (poke frames land here).
-            // The `/socket` upgrade itself needs Workers globals (WebSocketPair,
-            // 101 responses) that Node lacks, so the fake is accepted directly.
-            const socketA = makeSocket();
-            roomA.sockets.push(socketA);
+        // Room A gets a hibernation-style socket (poke frames land here).
+        // The `/socket` upgrade itself needs Workers globals (WebSocketPair,
+        // 101 responses) that Node lacks, so the fake is accepted directly.
+        const socketA = makeSocket();
+        roomA.sockets.push(socketA);
 
-            // A real client engine on room A observes p-1's reviews (fine window).
-            const readerScope = Effect.runSync(Scope.make());
-            const reader = await Effect.runPromise(
+        // A real client engine on room A observes p-1's reviews (fine window).
+        const reader = yield* makeClient(roomA, "client-a", "group-a", {
+          pullInterval: "10 minutes",
+          pushDebounce: "10 millis",
+        });
+        const readerClient = Client.fromView(nodes, ClientView.fromEngine(reader));
+        const latest: Array<ReadonlyArray<unknown>> = [[]];
+        // Done on the observer's first emission (its window is subscribed by
+        // then), and on the first emission holding one row.
+        const isSubscribed = yield* Deferred.make<void>();
+        const hasConverged = yield* Deferred.make<void>();
+        yield* Effect.forkScoped(
+          Stream.runForEach(
+            readerClient.observe({ collection: "reviews", where: { productId: "p-1" } }),
+            (rows) =>
               Effect.gen(function* () {
-                const store = yield* ClientStore.makeMemory;
-                return yield* ClientEngine.make({
-                  clientId: "client-a",
-                  clientGroupId: "group-a",
-                  mutators: mutations,
-                  syncLoop: { pullInterval: "10 minutes", pushDebounce: "10 millis" },
-                }).pipe(
-                  Effect.provideService(ClientStore.ClientStore, store),
-                  Effect.provideService(Transport.ClientTransport, roomTransport(fetchOf(roomA)))
-                );
-              }).pipe(Scope.provide(readerScope))
-            );
-            const readerClient = Client.fromView(nodes, ClientView.fromEngine(reader));
-            const latest: Array<ReadonlyArray<unknown>> = [[]];
-            // Resolves on the observer's first emission (its window is subscribed by
-            // then), and on the first emission holding one row.
-            let subscribed!: () => void;
-            const isSubscribed = new Promise<void>((resolve) => (subscribed = resolve));
-            let converged!: () => void;
-            const hasConverged = new Promise<void>((resolve) => (converged = resolve));
-            const observing = Effect.runPromise(
-              Stream.runForEach(
-                readerClient.observe({ collection: "reviews", where: { productId: "p-1" } }),
-                (rows) =>
-                  Effect.sync(() => {
-                    latest[0] = rows;
-                    subscribed();
-                    if (rows.length === 1) converged();
-                  })
-              ).pipe(Scope.provide(readerScope), Effect.ignore)
-            );
-            void observing;
-            await isSubscribed;
-            await Effect.runPromise(reader.pull.pipe(Effect.orDie));
-            // One beat (on the room's clock) leases the fine topic at its shard.
-            await Effect.runPromise(clock.adjust("10 minutes"));
-            await shardCalls.next(
-              (call) =>
-                call.shard === "reviews/productId=p-1" &&
-                call.method === "register" &&
-                call.roomId === "room-a"
-            );
-
-            // Room B's client writes a p-1 review and pushes.
-            const writerScope = Effect.runSync(Scope.make());
-            const writer = await Effect.runPromise(
-              Effect.gen(function* () {
-                const store = yield* ClientStore.makeMemory;
-                return yield* ClientEngine.make({
-                  clientId: "client-b",
-                  clientGroupId: "group-b",
-                  mutators: mutations,
-                }).pipe(
-                  Effect.provideService(ClientStore.ClientStore, store),
-                  Effect.provideService(Transport.ClientTransport, roomTransport(fetchOf(roomB)))
-                );
-              }).pipe(Scope.provide(writerScope))
-            );
-            await Effect.runPromise(
-              writer.mutate("review/set", {
-                id: "r-1",
-                body: "cross-room",
-                createdAt: "2026-01-01",
-                productId: "p-1",
+                latest[0] = rows;
+                yield* Deferred.succeed(isSubscribed, undefined);
+                if (rows.length === 1) yield* Deferred.succeed(hasConverged, undefined);
               })
-            );
-            await Effect.runPromise(writer.push.pipe(Effect.orDie));
+          ).pipe(Effect.ignore)
+        );
+        yield* Deferred.await(isSubscribed);
+        yield* reader.pull.pipe(Effect.orDie);
+        // One beat (on the room's clock) leases the fine topic at its shard.
+        yield* clock.adjust("10 minutes");
+        yield* shardCalls.next(
+          (call) =>
+            call.shard === "reviews/productId=p-1" &&
+            call.method === "register" &&
+            call.roomId === "room-a"
+        );
 
-            // Room B poked room A over RPC with the fine topic its lease matched: room A's
-            // socket has a contentless frame…
-            await pokes.next(
-              (poke) => poke.room === "room-a" && poke.topics.includes("reviews/productId=p-1")
-            );
-            expect(socketA.sent.length).toBeGreaterThan(0);
-            expect(JSON.parse(defined(socketA.sent[0]))).toEqual({ type: "poke" });
-            // …and (a client honouring the poke pulls) the window converges.
-            await Effect.runPromise(reader.pull.pipe(Effect.orDie));
-            await hasConverged;
-            expect(latest[0]).toHaveLength(1);
+        // Room B's client writes a p-1 review and pushes.
+        const writer = yield* makeClient(roomB, "client-b", "group-b");
+        yield* writer.mutate("review/set", {
+          id: "r-1",
+          body: "cross-room",
+          createdAt: "2026-01-01",
+          productId: "p-1",
+        });
+        yield* writer.push.pipe(Effect.orDie);
 
-            // A write to a DIFFERENT parent leaves room A's socket silent.
-            const sends = socketA.sent.length;
-            const before = shardCalls.count();
-            await Effect.runPromise(
-              writer.mutate("review/set", {
-                id: "r-2",
-                body: "other parent",
-                createdAt: "2026-01-02",
-                productId: "p-9",
-              })
-            );
-            await Effect.runPromise(writer.push.pipe(Effect.orDie));
-            // Both of the write's topics are published: the coarse one and the p-9 one.
-            // The push returns after its publish, pokes included, so nothing is in flight.
-            await shardCalls.next(
-              (call) => call.shard === "reviews" && call.method === "publish",
-              before
-            );
-            await shardCalls.next(
-              (call) => call.shard === "reviews/productId=p-9" && call.method === "publish",
-              before
-            );
-            expect(socketA.sent.length).toBe(sends);
+        // Room B poked room A over RPC with the fine topic its lease matched: room A's
+        // socket has a contentless frame…
+        yield* pokes.next(
+          (poke) => poke.room === "room-a" && poke.topics.includes("reviews/productId=p-1")
+        );
+        expect(socketA.sent.length).toBeGreaterThan(0);
+        expect(JSON.parse(defined(socketA.sent[0]))).toEqual({ type: "poke" });
+        // …and (a client honouring the poke pulls) the window converges.
+        yield* reader.pull.pipe(Effect.orDie);
+        yield* Deferred.await(hasConverged);
+        expect(latest[0]).toHaveLength(1);
 
-            await Effect.runPromise(Scope.close(writerScope, Exit.void));
-            await Effect.runPromise(Scope.close(readerScope, Exit.void));
-          }),
-        (scope) => Scope.close(scope, Exit.void)
-      ),
+        // A write to a DIFFERENT parent leaves room A's socket silent.
+        const sends = socketA.sent.length;
+        const before = yield* shardCalls.count;
+        yield* writer.mutate("review/set", {
+          id: "r-2",
+          body: "other parent",
+          createdAt: "2026-01-02",
+          productId: "p-9",
+        });
+        yield* writer.push.pipe(Effect.orDie);
+        // Both of the write's topics are published: the coarse one and the p-9 one.
+        // The push returns after its publish, pokes included, so nothing is in flight.
+        yield* shardCalls.next(
+          (call) => call.shard === "reviews" && call.method === "publish",
+          before
+        );
+        yield* shardCalls.next(
+          (call) => call.shard === "reviews/productId=p-9" && call.method === "publish",
+          before
+        );
+        expect(socketA.sent.length).toBe(sends);
+      }),
     20_000
   );
 });
@@ -549,55 +677,33 @@ describe("rooms + shards, end to end", () => {
 // The room's boot, heartbeat and request handling run on the TestClock (the
 // `clock` seam), so the bound is crossed by advancing virtual time. The writer
 // and reader engines stay on the real clock. The hung shards record each
-// call, and `arrived` resolves once the room has made that many.
-const makeHungShards = () => {
-  const received: Array<{ readonly shard: string; readonly method: string }> = [];
-  const waiters: Array<{ readonly count: number; readonly done: () => void }> = [];
-  const hang = (shard: string, method: string) =>
-    Effect.suspend(() => {
-      received.push({ shard, method });
-      Arr.forEach(
-        waiters.filter((w) => received.length >= w.count),
-        (waiter) => waiter.done()
+// call, and `arrived` completes once the room has made that many.
+const makeHungShards = () =>
+  Effect.gen(function* () {
+    const received = yield* SubscriptionRef.make<
+      ReadonlyArray<{ readonly shard: string; readonly method: string }>
+    >([]);
+    const hang = (shard: string, method: string) =>
+      SubscriptionRef.update(received, (all) => [...all, { shard, method }]).pipe(
+        Effect.andThen(Effect.never)
       );
-      return Effect.never;
+    const namespace = fakeBinding<Workers.DurableObject<FanoutShard.ShardObject>>({
+      getByName: (shard: string) => ({
+        register: () => hang(shard, "register"),
+        publish: () => hang(shard, "publish"),
+      }),
     });
-  const namespace = fakeBinding<Workers.DurableObject<FanoutShard.ShardObject>>({
-    getByName: (shard: string) => ({
-      register: () => hang(shard, "register"),
-      publish: () => hang(shard, "publish"),
-    }),
+    return {
+      namespace,
+      received: SubscriptionRef.get(received),
+      arrived: (count: number) =>
+        SubscriptionRef.changes(received).pipe(
+          Stream.filter((all) => all.length >= count),
+          Stream.take(1),
+          Stream.runDrain
+        ),
+    };
   });
-  return {
-    namespace,
-    received,
-    arrived: (count: number): Promise<void> =>
-      received.length >= count
-        ? Promise.resolve()
-        : new Promise<void>((done) => waiters.push({ count, done })),
-  };
-};
-
-/** A client engine on the real clock, talking to `room` over the room transport. */
-const makeClient = (
-  room: Instance<Room.RoomObject>,
-  scope: Scope.Scope,
-  clientId: string,
-  clientGroupId: string,
-  syncLoop?: ClientEngine.SyncLoopOptions
-) =>
-  Effect.runPromise(
-    Effect.gen(function* () {
-      const store = yield* ClientStore.makeMemory;
-      const options = { clientId, clientGroupId, mutators: mutations };
-      return yield* ClientEngine.make(
-        syncLoop === undefined ? options : { ...options, syncLoop }
-      ).pipe(
-        Effect.provideService(ClientStore.ClientStore, store),
-        Effect.provideService(Transport.ClientTransport, roomTransport(fetchOf(room)))
-      );
-    }).pipe(Scope.provide(scope))
-  );
 
 /** A room over hung shards, on `clock`, with `options` on top of the defaults. */
 const hungRoom = (
@@ -608,168 +714,163 @@ const hungRoom = (
 ) =>
   Effect.gen(function* () {
     const backend = yield* backendOf();
-    return yield* Effect.promise(() =>
-      makeRooms({
-        nodes,
-        backend: Effect.succeed(backend),
-        policy: publishPolicy,
-        shards: Effect.succeed(shards),
-        clock,
-        ...options,
-      }).room(name)
-    );
+    const rooms = yield* makeRooms({
+      nodes,
+      backend: Effect.succeed(backend),
+      policy: publishPolicy,
+      shards: Effect.succeed(shards),
+      clock,
+      ...options,
+    });
+    return yield* rooms.room(name);
   });
 
 /** Mutate one review through `writer`. */
 const writeReview = (writer: ClientEngine.ClientEngine, id: string, productId: string) =>
-  Effect.promise(() =>
-    Effect.runPromise(
-      writer.mutate("review/set", { id, body: "hung shard", createdAt: "2026-01-01", productId })
-    )
-  );
+  writer.mutate("review/set", { id, body: "hung shard", createdAt: "2026-01-01", productId });
 
+/** Fork a push and report whether it has finished: the push waits on the hung shards. */
+const forkPush = (writer: ClientEngine.ClientEngine) =>
+  Effect.gen(function* () {
+    const state = { pushed: false };
+    const fiber = yield* Effect.forkScoped(
+      writer.push.pipe(
+        Effect.orDie,
+        Effect.tap(() =>
+          Effect.sync(() => {
+            state.pushed = true;
+          })
+        )
+      )
+    );
+    return { state, fiber };
+  });
+
+// The engines run on the live clock, the room on its TestClock seam.
 describe("Room publishTimeout", () => {
-  it.effect(
+  it.live(
     "a hung shard call is dropped at publishTimeout, not at the 5 second default",
     () =>
       Effect.gen(function* () {
-        const clock = yield* TestClock.testClockWith(Effect.succeed);
-        const scope = yield* Scope.Scope;
-        const hung = makeHungShards();
+        const clock = yield* TestClock.make();
+        const hung = yield* makeHungShards();
         const room = yield* hungRoom("room-hung", clock, hung.namespace, {
           publishTimeout: "200 millis",
         });
-        const writer = yield* Effect.promise(() =>
-          makeClient(room, scope, "client-hung", "group-hung")
-        );
+        const writer = yield* makeClient(room, "client-hung", "group-hung");
         yield* writeReview(writer, "r-1", "p-1");
 
         // The push's change hint publishes to the hung shards, so it cannot finish
         // until the bound drops them.
-        let pushed = false;
-        const push = Effect.runPromise(writer.push.pipe(Effect.orDie)).then(() => {
-          pushed = true;
-        });
-        yield* Effect.promise(() => hung.arrived(1));
+        const { state, fiber } = yield* forkPush(writer);
+        yield* hung.arrived(1);
         yield* clock.adjust("199 millis");
-        expect(pushed).toBe(false);
+        expect(state.pushed).toBe(false);
         yield* clock.adjust("1 millis");
-        yield* Effect.promise(() => push);
-        expect(hung.received.map((call) => call.method)).toEqual(["publish", "publish"]);
-      }).pipe(Effect.scoped),
+        yield* Fiber.join(fiber);
+        expect((yield* hung.received).map((call) => call.method)).toEqual(["publish", "publish"]);
+      }),
     20_000
   );
 
-  it.effect(
+  it.live(
     "a publish fanning out past the shard concurrency is bounded as a whole, not per wave",
     () =>
       Effect.gen(function* () {
-        const clock = yield* TestClock.testClockWith(Effect.succeed);
-        const scope = yield* Scope.Scope;
-        const hung = makeHungShards();
+        const clock = yield* TestClock.make();
+        const hung = yield* makeHungShards();
         const room = yield* hungRoom("room-wide", clock, hung.namespace, {
           publishTimeout: "200 millis",
         });
-        const writer = yield* Effect.promise(() =>
-          makeClient(room, scope, "client-wide", "group-wide")
-        );
+        const writer = yield* makeClient(room, "client-wide", "group-wide");
         // Nine products in one push: the coarse topic plus nine fine ones, ten shard
         // calls. The broker runs eight at a time, so a second wave waits on the first.
-        for (let product = 1; product <= 9; product++) {
-          yield* writeReview(writer, `r-${product}`, `p-${product}`);
-        }
+        yield* Effect.forEach(
+          Arr.range(1, 9),
+          (product) => writeReview(writer, `r-${product}`, `p-${product}`),
+          { concurrency: 1, discard: true }
+        );
 
-        let pushed = false;
-        const push = Effect.runPromise(writer.push.pipe(Effect.orDie)).then(() => {
-          pushed = true;
-        });
-        yield* Effect.promise(() => hung.arrived(8));
+        const { state, fiber } = yield* forkPush(writer);
+        yield* hung.arrived(8);
         yield* clock.adjust("199 millis");
-        expect(pushed).toBe(false);
+        expect(state.pushed).toBe(false);
         // One bound covers the whole publish: the second wave is dropped with the first.
         yield* clock.adjust("1 millis");
-        yield* Effect.promise(() => push);
-      }).pipe(Effect.scoped),
+        yield* Fiber.join(fiber);
+      }),
     20_000
   );
 
-  it.effect(
+  it.live(
     "a hung lease registration at a heartbeat is dropped at publishTimeout, and the heartbeat goes on",
     () =>
       Effect.gen(function* () {
-        const clock = yield* TestClock.testClockWith(Effect.succeed);
-        const scope = yield* Scope.Scope;
-        const hung = makeHungShards();
+        const clock = yield* TestClock.make();
+        const hung = yield* makeHungShards();
         const room = yield* hungRoom("room-lease", clock, hung.namespace, {
           heartbeat: "1 second",
           publishTimeout: "200 millis",
         });
-        const reader = yield* Effect.promise(() =>
-          makeClient(room, scope, "client-lease", "group-lease", {
-            pullInterval: "10 minutes",
-            pushDebounce: "10 millis",
-          })
-        );
+        const reader = yield* makeClient(room, "client-lease", "group-lease", {
+          pullInterval: "10 minutes",
+          pushDebounce: "10 millis",
+        });
         // A client observing p-1's reviews gives the room a window to lease.
         const readerClient = Client.fromView(nodes, ClientView.fromEngine(reader));
-        let subscribed!: () => void;
-        const isSubscribed = new Promise<void>((resolve) => (subscribed = resolve));
-        const observing = Effect.runPromise(
+        const isSubscribed = yield* Deferred.make<void>();
+        yield* Effect.forkScoped(
           Stream.runForEach(
             readerClient.observe({ collection: "reviews", where: { productId: "p-1" } }),
-            () => Effect.sync(() => subscribed())
-          ).pipe(Scope.provide(scope), Effect.ignore)
+            () => Deferred.succeed(isSubscribed, undefined)
+          ).pipe(Effect.ignore)
         );
-        void observing;
-        yield* Effect.promise(() => isSubscribed);
-        yield* Effect.promise(() => Effect.runPromise(reader.pull.pipe(Effect.orDie)));
+        yield* Deferred.await(isSubscribed);
+        yield* reader.pull.pipe(Effect.orDie);
 
         // t = 1 s: the first heartbeat registers the window and hangs.
         yield* clock.adjust("1 second");
-        yield* Effect.promise(() => hung.arrived(1));
-        expect(hung.received[0]).toEqual({ shard: "reviews/productId=p-1", method: "register" });
+        yield* hung.arrived(1);
+        expect((yield* hung.received)[0]).toEqual({
+          shard: "reviews/productId=p-1",
+          method: "register",
+        });
         // The bound drops it at t = 1.2 s; the next heartbeat is one interval later, at
         // t = 2.2 s. With the 5 second default that second registration would not start
         // until t = 6 s.
         yield* clock.adjust("199 millis");
         yield* clock.adjust("1 millis");
         yield* clock.adjust("1 second");
-        yield* Effect.promise(() => hung.arrived(2));
-        expect(hung.received.map((call) => call.method)).toEqual(["register", "register"]);
-      }).pipe(Effect.scoped),
+        yield* hung.arrived(2);
+        expect((yield* hung.received).map((call) => call.method)).toEqual(["register", "register"]);
+      }),
     20_000
   );
 
-  it.effect(
+  it.live(
     "a publishTimeout above the broker's 5 second default bounds a hung shard call at publishTimeout",
     () =>
       Effect.gen(function* () {
-        const clock = yield* TestClock.testClockWith(Effect.succeed);
-        const scope = yield* Scope.Scope;
-        const hung = makeHungShards();
+        const clock = yield* TestClock.make();
+        const hung = yield* makeHungShards();
         const room = yield* hungRoom("room-long", clock, hung.namespace, {
           publishTimeout: "8 seconds",
         });
-        const writer = yield* Effect.promise(() =>
-          makeClient(room, scope, "client-long", "group-long")
-        );
+        const writer = yield* makeClient(room, "client-long", "group-long");
         yield* writeReview(writer, "r-1", "p-1");
 
-        let pushed = false;
-        const push = Effect.runPromise(writer.push.pipe(Effect.orDie)).then(() => {
-          pushed = true;
-        });
-        yield* Effect.promise(() => hung.arrived(2));
+        const { state, fiber } = yield* forkPush(writer);
+        yield* hung.arrived(2);
         // Past the broker's 5 second default the hung calls are still pending: were the broker
         // bounded at its default, the push would have finished here.
         yield* clock.adjust("5 seconds");
-        expect(pushed).toBe(false);
+        expect(state.pushed).toBe(false);
         yield* clock.adjust("2999 millis");
-        expect(pushed).toBe(false);
+        expect(state.pushed).toBe(false);
         yield* clock.adjust("1 millis");
-        yield* Effect.promise(() => push);
-        expect(hung.received.map((call) => call.method)).toEqual(["publish", "publish"]);
-      }).pipe(Effect.scoped),
+        yield* Fiber.join(fiber);
+        expect((yield* hung.received).map((call) => call.method)).toEqual(["publish", "publish"]);
+      }),
     20_000
   );
 });
@@ -777,25 +878,130 @@ describe("Room publishTimeout", () => {
 /** A protocol body as the room's routes read it. */
 const encodeBody = Schema.encodeSync(Schema.fromJsonString(Schema.Unknown));
 
+describe("Room backend lifetime", () => {
+  it.effect(
+    "a backend's scoped resource is acquired once per instance and outlives each request",
+    () =>
+      Effect.gen(function* () {
+        const clock = yield* TestClock.testClockWith(Effect.succeed);
+        const backend = yield* backendOf();
+        // Stands in for a connection pool built in the instance's scope.
+        const pool = { acquired: 0, released: 0 };
+        const room = yield* hungRoom("room-pool", clock, (yield* makeHungShards()).namespace, {
+          backend: Effect.acquireRelease(
+            Effect.sync(() => {
+              pool.acquired += 1;
+              return backend;
+            }),
+            () => Effect.sync(() => void (pool.released += 1))
+          ),
+        });
+        const send = fetchOf(room);
+        const pull = send(
+          new Request(`https://room/sync${routes.pull}`, {
+            method: "POST",
+            body: encodeBody({ clientGroupId: "group-pool", subscriptions: [] }),
+            headers: { "content-type": "application/json" },
+          })
+        );
+        expect((yield* pull).status).toBe(200);
+        expect((yield* pull).status).toBe(200);
+        expect(pool).toEqual({ acquired: 1, released: 0 });
+      }).pipe(Effect.scoped)
+  );
+});
+
+describe("Room per-request backend (#681)", () => {
+  it.live("acquires the backend once per request and releases it when the request ends", () =>
+    Effect.gen(function* () {
+      const clock = yield* TestClock.make();
+      const backend = yield* backendOf();
+      // Stands in for a Hyperdrive-backed client: built per request from a binding that
+      // needs the room's `RuntimeContext`, as `Hyperdrive.ConnectClient`'s accessors do.
+      const client = { acquired: 0, released: 0 };
+      const runtimes: Array<string> = [];
+      const hung = yield* makeHungShards();
+      const room = yield* hungRoom("room-per-request", clock, hung.namespace, {
+        publishTimeout: "200 millis",
+        backend: Backend.perRequest(
+          Effect.acquireRelease(
+            Effect.map(Effect.service(RuntimeContext), (runtime) => {
+              client.acquired += 1;
+              runtimes.push(runtime.id);
+              return backend;
+            }),
+            () => Effect.sync(() => void (client.released += 1))
+          )
+        ),
+      });
+      const send = fetchOf(room);
+      const post = (path: string, body: string) =>
+        send(
+          new Request(`https://room/sync${path}`, {
+            method: "POST",
+            body,
+            headers: { "content-type": "application/json" },
+          })
+        );
+      // The push's hint publishes to the hung shards, so it answers once the bound drops them;
+      // its acquisition is held until then.
+      const push = yield* Effect.forkScoped(
+        post(
+          routes.push,
+          encodeBody({
+            clientGroupId: "group-request",
+            mutations: [
+              {
+                clientId: "c1",
+                mutationId: 1,
+                mutator: reviewSet.name,
+                args: { id: "r-1", body: "per request", createdAt: "2026-01-01", productId: "p-1" },
+                createdAt: 0,
+              },
+            ],
+          })
+        )
+      );
+      yield* hung.arrived(1);
+      expect(client).toMatchObject({ acquired: 1, released: 0 });
+      yield* clock.adjust("200 millis");
+      expect((yield* Fiber.join(push)).status).toBe(200);
+      expect(client).toMatchObject({ acquired: 1, released: 1 });
+      const pulled = yield* post(
+        routes.pull,
+        encodeBody({
+          clientGroupId: "group-request",
+          subscriptions: [Subset.make({ collection: "reviews" })],
+        })
+      );
+      expect(pulled.status).toBe(200);
+      expect(client).toMatchObject({ acquired: 2, released: 2 });
+      expect(runtimes).toEqual([runtimeContext.id, runtimeContext.id]);
+      // The write went through the acquired backend.
+      expect(
+        yield* backend.lastMutationIds({ clientGroupId: "group-request" }).pipe(Effect.orDie)
+      ).toEqual({ c1: 1 });
+    })
+  );
+});
+
 describe("Room HTTP routes", () => {
   it.effect("answers a route by its last path segment, and 404s anything else", () =>
     Effect.gen(function* () {
       const clock = yield* TestClock.testClockWith(Effect.succeed);
       // With the optional services too, so each is provided to the server.
-      const room = yield* hungRoom("room-routes", clock, makeHungShards().namespace, {
+      const room = yield* hungRoom("room-routes", clock, (yield* makeHungShards()).namespace, {
         identity: Effect.succeed({ resolve: () => Effect.succeed("user-1") }),
         queries: Effect.succeed(Query.resolver([])),
       });
       const send = fetchOf(room);
       const post = (path: string) =>
-        Effect.promise(() =>
-          send(
-            new Request(`https://room${path}`, {
-              method: "POST",
-              body: JSON.stringify({ not: "a request" }),
-              headers: { "content-type": "application/json" },
-            })
-          )
+        send(
+          new Request(`https://room${path}`, {
+            method: "POST",
+            body: JSON.stringify({ not: "a request" }),
+            headers: { "content-type": "application/json" },
+          })
         );
       // An undecodable body reaches the route and is a 400, base path or not.
       expect((yield* post(routes.pull)).status).toBe(400);
@@ -810,7 +1016,7 @@ describe("Room HTTP routes", () => {
     Effect.gen(function* () {
       const clock = yield* TestClock.testClockWith(Effect.succeed);
       const seen: Array<Option.Option<string>> = [];
-      const room = yield* hungRoom("room-credentials", clock, makeHungShards().namespace, {
+      const room = yield* hungRoom("room-credentials", clock, (yield* makeHungShards()).namespace, {
         identity: Effect.succeed({
           resolve: ({ credentials }) =>
             Effect.sync(() => {
@@ -821,18 +1027,16 @@ describe("Room HTTP routes", () => {
       const send = fetchOf(room);
       const json = { "content-type": "application/json" };
       const post = (path: string, body: Schema.Json, cookie: Option.Option<string>) =>
-        Effect.tryPromise(() =>
-          send(
-            new Request(`https://room/sync${path}`, {
-              method: "POST",
-              body: encodeBody(body),
-              headers: Option.match(cookie, {
-                onNone: () => json,
-                onSome: (value) => ({ ...json, cookie: value }),
-              }),
-            })
-          )
-        ).pipe(Effect.orDie);
+        send(
+          new Request(`https://room/sync${path}`, {
+            method: "POST",
+            body: encodeBody(body),
+            headers: Option.match(cookie, {
+              onNone: () => json,
+              onSome: (value) => ({ ...json, cookie: value }),
+            }),
+          })
+        );
       const session = Option.some("sid=room-session");
       expect(
         (yield* post(routes.push, { clientGroupId: "group-c", mutations: [] }, session)).status
@@ -845,5 +1049,155 @@ describe("Room HTTP routes", () => {
       ).toBe(200);
       expect(seen).toEqual([session, session, Option.none()]);
     }).pipe(Effect.scoped)
+  );
+});
+
+/**
+ * Observe p-1's reviews through `reader`, returning once the window is subscribed; the deferred
+ * it answers completes with the first emission holding `rows` rows.
+ */
+const observeP1 = (reader: ClientEngine.ClientEngine, rows: number) =>
+  Effect.gen(function* () {
+    const subscribed = yield* Deferred.make<void>();
+    const converged = yield* Deferred.make<ReadonlyArray<unknown>>();
+    const client = Client.fromView(nodes, ClientView.fromEngine(reader));
+    yield* Effect.forkScoped(
+      Stream.runForEach(
+        client.observe({ collection: "reviews", where: { productId: "p-1" } }),
+        (latest) =>
+          Deferred.succeed(subscribed, undefined).pipe(
+            Effect.andThen(
+              latest.length === rows ? Deferred.succeed(converged, latest) : Effect.void
+            )
+          )
+      ).pipe(Effect.ignore)
+    );
+    yield* Deferred.await(subscribed);
+    return converged;
+  });
+
+/** One p-1 review, as a cron job writes it straight to the backend: no room sees the write. */
+const review = { id: "r-oob", body: "out of band", createdAt: "2026-01-01", productId: "p-1" };
+
+describe("out-of-band writes", () => {
+  it.live(
+    "publishOutOfBand pokes the room leased on the write's topic, and its client pulls the new row",
+    () =>
+      Effect.gen(function* () {
+        // The room's heartbeat beats only when the test advances this clock; the shards stamp
+        // leases on the real clock with a 30 minute TTL, which no run outlives.
+        const clock = yield* TestClock.make();
+        const backend = yield* backendOf();
+        const { shards, calls } = yield* makeShards();
+        const { room, pokes, namespace } = yield* makeRooms({
+          nodes,
+          backend: Effect.succeed(backend),
+          policy: publishPolicy,
+          shards: Effect.succeed(shards),
+          heartbeat: "10 minutes",
+          clock,
+        });
+        const roomA = yield* room("room-a");
+        const socket = makeSocket();
+        roomA.sockets.push(socket);
+        const reader = yield* makeClient(roomA, "client-a", "group-a", {
+          pullInterval: "10 minutes",
+          pushDebounce: "10 millis",
+        });
+        const converged = yield* observeP1(reader, 1);
+        yield* Effect.orDie(reader.pull);
+        yield* clock.adjust("10 minutes");
+        yield* calls.next(
+          (call) =>
+            call.shard === "reviews/productId=p-1" &&
+            call.method === "register" &&
+            call.roomId === "room-a"
+        );
+
+        // The cron job writes straight to the backend, then publishes the write's hint.
+        yield* Effect.orDie(
+          backend.applyMutations({ clientGroupId: "cron" }, [
+            { clientId: "cron", mutationId: 1, mutator: "review/set", args: review, createdAt: 0 },
+          ])
+        );
+        expect(socket.sent).toEqual([]);
+        const publish = DurableFanoutBroker.publishOutOfBand({ shards, rooms: namespace, nodes });
+        yield* publish([
+          { collection: "reviews", ids: [review.id], values: [{ id: review.id, value: review }] },
+        ]).pipe(
+          Effect.provideService(RuntimeContext, runtimeContext),
+          // The harness runs a stub's call on its caller's fiber, so the shard reads the lease
+          // against the writer's clock: the room's, as on Cloudflare both are wall time.
+          Effect.provideService(Clock.Clock, clock)
+        );
+
+        yield* pokes.next(
+          (poke) => poke.room === "room-a" && poke.topics.includes("reviews/productId=p-1")
+        );
+        expect(socket.sent.length).toBeGreaterThan(0);
+        // The client honours the poke and pulls the row the cron job wrote.
+        yield* Effect.orDie(reader.pull);
+        expect(yield* Deferred.await(converged)).toEqual([
+          expect.objectContaining({ id: review.id }),
+        ]);
+      }).pipe(Effect.scoped),
+    20_000
+  );
+
+  it.live(
+    "a room's hints source publishes like a push, poking the rooms leased on its topics",
+    () =>
+      Effect.gen(function* () {
+        const clock = yield* TestClock.make();
+        const backend = yield* backendOf();
+        const { shards, calls } = yield* makeShards();
+        // A HintSource fed by this queue, as a CDC listener would be. Every room runs it, and
+        // whichever room takes a batch publishes it.
+        const feed = yield* Queue.unbounded<ReadonlyArray<Backend.ChangeHint>>();
+        const { room } = yield* makeRooms({
+          nodes,
+          backend: Effect.succeed(backend),
+          policy: publishPolicy,
+          shards: Effect.succeed(shards),
+          heartbeat: "10 minutes",
+          clock,
+          hints: Effect.succeed(HintSource.fromStream(Stream.fromQueue(feed))),
+        });
+        const roomA = yield* room("room-a");
+        yield* room("room-cdc");
+        // Room A's socket signals its first poke frame: over RPC when room-cdc published, or
+        // delivered locally when room A took the batch itself.
+        const framed = yield* Deferred.make<void>();
+        roomA.sockets.push({
+          sent: [],
+          send(data) {
+            this.sent.push(data);
+            Deferred.doneUnsafe(framed, Exit.void);
+          },
+        });
+        const reader = yield* makeClient(roomA, "client-a", "group-a", {
+          pullInterval: "10 minutes",
+          pushDebounce: "10 millis",
+        });
+        const converged = yield* observeP1(reader, 1);
+        yield* Effect.orDie(reader.pull);
+        yield* clock.adjust("10 minutes");
+        yield* calls.next((call) => call.method === "register" && call.roomId === "room-a");
+
+        yield* Effect.orDie(
+          backend.applyMutations({ clientGroupId: "cdc" }, [
+            { clientId: "cdc", mutationId: 1, mutator: "review/set", args: review, createdAt: 0 },
+          ])
+        );
+        yield* Queue.offer(feed, [
+          { collection: "reviews", ids: [review.id], values: [{ id: review.id, value: review }] },
+        ]);
+        yield* Deferred.await(framed);
+        yield* Effect.orDie(reader.pull);
+        expect(yield* Deferred.await(converged)).toEqual([
+          expect.objectContaining({ id: review.id }),
+        ]);
+      }).pipe(Effect.scoped),
+    20_000
   );
 });

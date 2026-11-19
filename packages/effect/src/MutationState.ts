@@ -22,6 +22,7 @@
  * keeps every fold `O(log N)` regardless of how many mutations are pending.
  */
 
+import * as Defined from "./Defined.js";
 import * as Arr from "effect/Array";
 import * as HashMap from "effect/HashMap";
 import * as Option from "effect/Option";
@@ -184,7 +185,7 @@ const transition = (
     ...current.value,
     phase,
     settledAt,
-    ...(reason !== undefined ? { reason } : {}),
+    ...Defined.fields({ reason }),
   });
 };
 

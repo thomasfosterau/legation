@@ -19,11 +19,12 @@ import * as HttpApiEndpoint from "effect/http-api/HttpApiEndpoint";
 import * as HttpApiGroup from "effect/http-api/HttpApiGroup";
 import * as HttpClient from "effect/http/HttpClient";
 import * as HttpClientResponse from "effect/http/HttpClientResponse";
-import { ClientEngine, Subset } from "@thomasfosterau/legation/internal";
+import { ClientEngine, Subset, Defined } from "@thomasfosterau/legation/internal";
 import type { JsonApiRow } from "../Derive.js";
 import * as Relationships from "../Relationships.js";
 import * as JsonApiSync from "../JsonApiSync.js";
 import { defined } from "./defined.js";
+import { withLayer } from "./with-layer.js";
 
 const idParam = { params: Schema.Struct({ id: Schema.String }) };
 const body = { payload: Schema.Unknown, success: Schema.Unknown };
@@ -58,7 +59,7 @@ const makeServer = (seed: ReadonlyArray<Stored>) => {
   };
 
   const links = (rel: unknown): ReadonlyArray<{ type: string; id: string }> => {
-    const data = (rel as { data?: unknown } | undefined)?.data;
+    const data = P.isObject(rel) ? (rel as { data?: unknown }).data : undefined;
     return (data == null ? [] : Array.isArray(data) ? data : [data]) as ReadonlyArray<{
       type: string;
       id: string;
@@ -146,22 +147,20 @@ const provide = <E>(
   options?: { readonly includes?: Readonly<Record<string, ReadonlyArray<string>>> }
 ) =>
   program.pipe(
-    Effect.provide(
+    withLayer(
       JsonApiSync.layer(api, {
         baseUrl: "http://api.test",
         clientId: "c1",
         clientGroupId: "g1",
-        ...(options?.includes !== undefined ? { includes: options.includes } : {}),
+        ...Defined.fields({ includes: options?.includes }),
       }).pipe(Layer.provide(server.layer))
     ),
     Effect.scoped
   );
 
-/** A row's string attribute; `undefined` when the row or the attribute is absent, or the attribute is not a string. */
-const attr = (value: JsonApiRow | undefined, key: string): string | undefined => {
-  const field = value?.[key];
-  return P.isString(field) ? field : undefined;
-};
+/** A row's string attribute; `None` when the attribute is absent or not a string. */
+const attr = (value: JsonApiRow, key: string): Option.Option<string> =>
+  Option.liftPredicate(value[key], P.isString);
 
 describe("Relationships", () => {
   const issues = Subset.make({ collection: "issues" });
@@ -204,9 +203,12 @@ describe("Relationships", () => {
         const rows = yield* Relationships.query(engine, issues, ["author", "comments"]);
         expect(rows).toHaveLength(1);
         const issue = defined(rows[0]);
-        expect(attr(issue.related.author as JsonApiRow, "name")).toBe("Ada");
+        expect(attr(issue.related.author as JsonApiRow, "name")).toEqual(Option.some("Ada"));
         const comments = issue.related.comments as ReadonlyArray<JsonApiRow>;
-        expect(comments.map((c) => attr(c, "body"))).toEqual(["first", "second"]);
+        expect(comments.map((c) => attr(c, "body"))).toEqual([
+          Option.some("first"),
+          Option.some("second"),
+        ]);
       }),
       server
     );
@@ -224,7 +226,7 @@ describe("Relationships", () => {
         const initial = defined((first._tag === "Some" ? first.value : [])[0]);
         expect(
           (initial.related.comments as ReadonlyArray<JsonApiRow>).map((c) => attr(c, "body"))
-        ).toEqual(["first", "second"]);
+        ).toEqual([Option.some("first"), Option.some("second")]);
 
         // Editing a referenced comment is reflected in the resolved join.
         yield* engine.mutate("comments/update", {
@@ -240,7 +242,7 @@ describe("Relationships", () => {
           (defined(rows[0]).related.comments as ReadonlyArray<JsonApiRow>).map((c) =>
             attr(c, "body")
           )
-        ).toEqual(["edited", "second"]);
+        ).toEqual([Option.some("edited"), Option.some("second")]);
       }),
       server
     );
@@ -249,10 +251,11 @@ describe("Relationships", () => {
   // Real-clock test: a forked observer collects the join's emissions while a
   // referenced (not base) row is edited, proving the live join re-emits
   // incrementally without the base subset changing.
-  it("re-emits the join incrementally when a referenced row changes", async () => {
-    const server = makeServer(seed);
-    await Effect.runPromise(
-      provide(
+  it.live(
+    "re-emits the join incrementally when a referenced row changes",
+    () => {
+      const server = makeServer(seed);
+      return provide(
         Effect.gen(function* () {
           const engine = yield* ClientEngine.ClientEngine;
           yield* syncAll(engine);
@@ -282,7 +285,7 @@ describe("Relationships", () => {
           yield* engine.pull;
           // The pulled (authoritative) join carries the edit...
           const settled = bodiesOf(yield* Relationships.query(engine, issues, ["comments"]));
-          expect(settled).toEqual(["edited", "second"]);
+          expect(settled).toEqual([Option.some("edited"), Option.some("second")]);
           // ...and the observer re-emits it. Its emissions can lag the pull
           // (and a push ack briefly re-emits the pre-edit join, #286), so wait
           // for the latest one to match rather than reading a snapshot.
@@ -291,14 +294,18 @@ describe("Relationships", () => {
           );
           assert(Option.isSome(latest));
           const emissions = latest.value;
-          expect(emissions[0]).toEqual(["first", "second"]);
-          expect(emissions[emissions.length - 1]).toEqual(["edited", "second"]);
+          expect(emissions[0]).toEqual([Option.some("first"), Option.some("second")]);
+          expect(emissions[emissions.length - 1]).toEqual([
+            Option.some("edited"),
+            Option.some("second"),
+          ]);
           expect(emissions.length).toBeGreaterThanOrEqual(2);
         }),
         server
-      )
-    );
-  }, 10000);
+      );
+    },
+    10000
+  );
 
   it.effect("auto-subscribes the referenced collections (narrowed by id)", () => {
     const server = makeServer(seed);
@@ -310,10 +317,10 @@ describe("Relationships", () => {
         const head = yield* Stream.runHead(stream);
         const issue = defined((head._tag === "Some" ? head.value : [])[0]);
 
-        expect(attr(issue.related.author as JsonApiRow, "name")).toBe("Ada");
+        expect(attr(issue.related.author as JsonApiRow, "name")).toEqual(Option.some("Ada"));
         expect(
           (issue.related.comments as ReadonlyArray<JsonApiRow>).map((c) => attr(c, "body"))
-        ).toEqual(["first", "second"]);
+        ).toEqual([Option.some("first"), Option.some("second")]);
         // The referenced collections were fetched narrowed to the linked ids,
         // in the grammar's canonical form (`in` over a list; a one-id list
         // takes the operator form so it decodes back as `in`, not `eq`).
@@ -335,8 +342,8 @@ describe("Relationships", () => {
 
         expect(
           (issue.related.comments as ReadonlyArray<JsonApiRow>).map((c) => attr(c, "body"))
-        ).toEqual(["first", "second"]);
-        expect(attr(issue.related.author as JsonApiRow, "name")).toBe("Ada");
+        ).toEqual([Option.some("first"), Option.some("second")]);
+        expect(attr(issue.related.author as JsonApiRow, "name")).toEqual(Option.some("Ada"));
 
         // Parent listing carried `include`; the related collections were served
         // from the harvested compound document, never fetched on their own.

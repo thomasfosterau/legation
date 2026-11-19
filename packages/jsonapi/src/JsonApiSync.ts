@@ -21,6 +21,7 @@
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
+import * as Option from "effect/Option";
 import * as Scope from "effect/Scope";
 import * as HttpClient from "effect/http/HttpClient";
 import type * as HttpApi from "effect/http-api/HttpApi";
@@ -56,12 +57,12 @@ export interface JsonApiSyncOptions {
   /** The client group this client belongs to (shared journal scope). */
   readonly clientGroupId: string;
   /** Override the Subset → JSON:API query encoding (e.g. your own package). */
-  readonly queryEncoder?: QueryEncoder | undefined;
+  readonly queryEncoder?: QueryEncoder;
   /**
    * Relationship names to compound-load per collection (`?include=...`), so
    * `Relationships.related` resolves them without extra round trips.
    */
-  readonly includes?: Readonly<Record<string, ReadonlyArray<string>>> | undefined;
+  readonly includes?: Readonly<Record<string, ReadonlyArray<string>>>;
   /**
    * Where the backend keeps its ledger (acknowledged mutation ids and remembered
    * rejections) across restarts (#468). Unset, it is `Ledger.keyValue` over
@@ -71,7 +72,7 @@ export interface JsonApiSyncOptions {
    * client's mutation ids at 1, the ledger already acknowledges them, and the
    * backend skips the new writes as already applied, with no error.
    */
-  readonly ledger?: Ledger.LedgerStore | undefined;
+  readonly ledger?: Ledger.LedgerStore;
   /**
    * The durable Effect `KeyValueStore` the client store is built over (#468). When
    * it is set, the client store defaults to `ClientStore.layerKeyValue()` over it
@@ -80,7 +81,7 @@ export interface JsonApiSyncOptions {
    * ledger across a reload. A `store` given with it must be built over this same
    * key/value store: `store` is an opaque layer, so the layer cannot check that.
    */
-  readonly keyValueStore?: KeyValueStore.KeyValueStore | undefined;
+  readonly keyValueStore?: KeyValueStore.KeyValueStore;
   /**
    * Atomic operations. When the api advertises the JSON:API Atomic Operations
    * extension (an endpoint taking an `atomic:operations` document, e.g.
@@ -90,18 +91,19 @@ export interface JsonApiSyncOptions {
    * endpoint explicitly (an api that serves it outside the reflected
    * `HttpApi`).
    */
-  readonly atomic?: false | { readonly path: string } | undefined;
+  readonly atomic?: false | { readonly path: string };
   /**
    * Periodic pull interval — the correctness backstop that picks up changes
    * made elsewhere ("realtime" is periodic pull for client-direct deployment).
-   * Defaults to 5 seconds; set to `null` to disable interval pulling.
+   * Absent, it defaults to 5 seconds; `Option.some(interval)` sets it, and
+   * `Option.none()` disables interval pulling (no interval is itself an answer).
    */
-  readonly pullInterval?: Duration.Input | null | undefined;
+  readonly pullInterval?: Option.Option<Duration.Input>;
   /**
    * Auto-push debounce window. When set, mutations are pushed automatically
    * (coalesced) without an app-level `push` call.
    */
-  readonly pushDebounce?: Duration.Input | undefined;
+  readonly pushDebounce?: Duration.Input;
   /**
    * The client store backing the engine. Defaults to `ClientStore.layerKeyValue()`
    * over `keyValueStore` when that is given, and otherwise to the in-memory store.
@@ -113,19 +115,18 @@ export interface JsonApiSyncOptions {
    * acknowledged ids, and the backend refuses every later push with a
    * mutation-id gap.
    */
-  readonly store?: Layer.Layer<ClientStore.ClientStore> | undefined;
+  readonly store?: Layer.Layer<ClientStore.ClientStore>;
 }
 
 /**
  * Reflect + derive an api's resources, collections, mutators, operations —
- * and its atomic operations endpoint, when it declares one.
+ * and its atomic operations endpoint (`None` when it declares none).
  */
 export const inspect = <Id extends string, Groups extends HttpApiGroup.Constraint>(
   api: HttpApi.HttpApi<Id, Groups>
-): { readonly resources: ResourceMap; readonly atomic?: EndpointRef } & Derived => {
+): { readonly resources: ResourceMap; readonly atomic: Option.Option<EndpointRef> } & Derived => {
   const resources = reflectResources(api);
-  const atomic = reflectAtomic(api);
-  return { resources, ...(atomic !== undefined ? { atomic } : {}), ...derive(resources) };
+  return { resources, atomic: reflectAtomic(api), ...derive(resources) };
 };
 
 /** Every resource collection is readable; the REST API enforces real auth. */
@@ -148,20 +149,27 @@ export const layer = <Id extends string, Groups extends HttpApiGroup.Constraint>
   const { resources, registry, operations, atomic } = inspect(api);
   // Atomic pushes when the api advertises the extension, unless opted out;
   // an explicit path overrides what reflection found.
-  const atomicPath = options.atomic === false ? undefined : (options.atomic?.path ?? atomic?.path);
+  const atomicPath = Option.match(Option.fromUndefinedOr(options.atomic), {
+    onNone: () => Option.map(atomic, (ref) => ref.path),
+    onSome: (setting) => (setting === false ? Option.none() : Option.some(setting.path)),
+  });
+  const keyValueStore = Option.fromUndefinedOr(options.keyValueStore);
 
   // A durable key/value store makes the ledger durable too, unless the app names one.
-  const ledger =
-    options.ledger ??
-    (options.keyValueStore !== undefined ? Ledger.keyValue(options.keyValueStore) : undefined);
+  const ledger = Option.orElse(Option.fromUndefinedOr(options.ledger), () =>
+    Option.map(keyValueStore, (store) => Ledger.keyValue(store))
+  );
   // The durable client store over the same key/value store, unless the app names one.
-  const clientStore =
-    options.store ??
-    (options.keyValueStore !== undefined
-      ? ClientStore.layerKeyValue().pipe(
-          Layer.provide(Layer.succeed(KeyValueStore.KeyValueStore)(options.keyValueStore))
+  const clientStore = Option.getOrElse(
+    Option.orElse(Option.fromUndefinedOr(options.store), () =>
+      Option.map(keyValueStore, (store) =>
+        ClientStore.layerKeyValue().pipe(
+          Layer.provide(Layer.succeed(KeyValueStore.KeyValueStore)(store))
         )
-      : ClientStore.layerMemory);
+      )
+    ),
+    () => ClientStore.layerMemory
+  );
 
   const backendLayer = Layer.effect(Backend.Backend)(
     JsonApiBackend.make({
@@ -169,10 +177,16 @@ export const layer = <Id extends string, Groups extends HttpApiGroup.Constraint>
       resources,
       mutators: registry.mutators,
       operations,
-      ...(atomicPath !== undefined ? { atomic: { path: atomicPath } } : {}),
-      ...(options.queryEncoder !== undefined ? { query: options.queryEncoder } : {}),
-      ...(options.includes !== undefined ? { includes: options.includes } : {}),
-      ...(ledger !== undefined ? { ledger } : {}),
+      ...Option.match(atomicPath, { onNone: () => ({}), onSome: (path) => ({ atomic: { path } }) }),
+      ...Option.match(Option.fromUndefinedOr(options.queryEncoder), {
+        onNone: () => ({}),
+        onSome: (query) => ({ query }),
+      }),
+      ...Option.match(Option.fromUndefinedOr(options.includes), {
+        onNone: () => ({}),
+        onSome: (includes) => ({ includes }),
+      }),
+      ...Option.match(ledger, { onNone: () => ({}), onSome: (store) => ({ ledger: store }) }),
     })
   );
   const authLayer = Layer.succeed(Authorization.AuthPolicy)(authPolicy(resources));
@@ -183,12 +197,18 @@ export const layer = <Id extends string, Groups extends HttpApiGroup.Constraint>
   );
 
   // Interval pull is now a core sync-loop concern (default 5s, opt-out with
-  // `null`); no bespoke poll loop in `start`.
-  const pullInterval =
-    options.pullInterval === null ? undefined : (options.pullInterval ?? Duration.seconds(5));
+  // `Option.none()`); no bespoke poll loop in `start`.
+  const pullInterval = options.pullInterval ?? Option.some<Duration.Input>(Duration.seconds(5));
+  const pushDebounce = Option.fromUndefinedOr(options.pushDebounce);
   const syncLoop: ClientEngine.SyncLoopOptions = {
-    ...(pullInterval !== undefined ? { pullInterval } : {}),
-    ...(options.pushDebounce !== undefined ? { pushDebounce: options.pushDebounce } : {}),
+    ...Option.match(pullInterval, {
+      onNone: () => ({}),
+      onSome: (every) => ({ pullInterval: every }),
+    }),
+    ...Option.match(pushDebounce, {
+      onNone: () => ({}),
+      onSome: (window) => ({ pushDebounce: window }),
+    }),
   };
 
   return ClientEngine.layer({

@@ -6,7 +6,6 @@
  */
 import { afterEach, describe, expect, it } from "vite-plus/test";
 import { mount, unmount } from "svelte";
-import * as Effect from "effect/Effect";
 import { Subset, Undo } from "@thomasfosterau/legation/internal";
 import UndoHarness from "./fixtures/UndoHarness.svelte";
 import { buttonByLabel, makeClientRuntime, run, until } from "./world.js";
@@ -27,7 +26,7 @@ describe("useUndo", () => {
     // The runes seed false and re-emit from the manager's change streams.
     await until(() => text().includes("canUndo:false") && text().includes("canRedo:false"));
 
-    await Effect.runPromise(
+    await run(runtime, () =>
       manager.run({
         execute: { mutator: "todo/set", args: { id: "1", title: "after" } },
         undo: { mutator: "todo/set", args: { id: "1", title: "before" } },

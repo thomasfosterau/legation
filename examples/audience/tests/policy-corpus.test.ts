@@ -36,7 +36,7 @@ import {
   follow,
   type Visibility,
 } from "../src/domain.js";
-import { binding, MODERATOR, policies, readAction, scopeRequest } from "../src/policy.js";
+import { binding, MODERATOR, policies, readAction, readRequest } from "../src/policy.js";
 import { cookieHeader, type Session } from "../src/server.js";
 import { type Device, makeDevice } from "../src/device.js";
 import { idsOf, makeWorld, seed, type World } from "./support/world.js";
@@ -103,51 +103,55 @@ const oracles = (
   principal: Principal.Principal,
   posts: ReadonlyArray<Post>,
   edges: ReadonlyArray<Follow>
-) => {
-  const request = scopeRequest(principal);
-  const viewer = request.principal.id;
-  const followees = new Set(
-    edges.filter((edge) => edge.followerId === viewer).map((edge) => edge.followeeId)
-  );
-  const compiled = AuthScope.compile(policies, binding, request);
-  if (compiled._tag !== "Exact") throw new Error(`inexact: ${compiled.reasons.join("; ")}`);
-  const matches = posts
-    .filter((post) =>
-      AuthScope.matches(
-        compiled.scope,
-        { owner: post.ownerId, visibility: post.visibility },
-        (set, value) => set === "following" && typeof value === "string" && followees.has(value)
+) =>
+  Effect.gen(function* () {
+    const request = yield* readRequest(principal, {
+      clientGroupId: "corpus",
+      identity: principal,
+    }).pipe(Effect.orDie);
+    const viewer = request.principal.id;
+    const followees = new Set(
+      edges.filter((edge) => edge.followerId === viewer).map((edge) => edge.followeeId)
+    );
+    const compiled = AuthScope.compile(policies, binding, request);
+    if (compiled._tag !== "Exact") throw new Error(`inexact: ${compiled.reasons.join("; ")}`);
+    const matches = posts
+      .filter((post) =>
+        AuthScope.matches(
+          compiled.scope,
+          { owner: post.ownerId, visibility: post.visibility },
+          (set, value) => set === "following" && typeof value === "string" && followees.has(value)
+        )
       )
-    )
-    .map((post) => post.id);
-  const decided = posts
-    .filter((post) => {
-      const resource = Entity.ref("Post", post.id);
-      const slice = Entity.slice([
-        ...(request.slice === undefined
-          ? []
-          : [...request.slice.entities].map(([, entity]) => entity)),
-        Entity.entity(resource, {
-          attributes: {
-            owner: Entity.entityValue(Entity.ref("User", post.ownerId)),
-            visibility: post.visibility,
-          },
-        }),
-      ]);
-      return Policy.decidePure(
-        policies,
-        Policy.request({
-          principal: request.principal,
-          action: readAction,
-          resource,
-          context: { followsOwner: followees.has(post.ownerId) },
-        }),
-        slice
-      ).allowed;
-    })
-    .map((post) => post.id);
-  return { scope: compiled.scope._tag, matches: matches.toSorted(), decided: decided.toSorted() };
-};
+      .map((post) => post.id);
+    const decided = posts
+      .filter((post) => {
+        const resource = Entity.ref("Post", post.id);
+        const slice = Entity.slice([
+          ...(request.slice === undefined
+            ? []
+            : [...request.slice.entities].map(([, entity]) => entity)),
+          Entity.entity(resource, {
+            attributes: {
+              owner: Entity.entityValue(Entity.ref("User", post.ownerId)),
+              visibility: post.visibility,
+            },
+          }),
+        ]);
+        return Policy.decidePure(
+          policies,
+          Policy.request({
+            principal: request.principal,
+            action: readAction,
+            resource,
+            context: { followsOwner: followees.has(post.ownerId) },
+          }),
+          slice
+        ).allowed;
+      })
+      .map((post) => post.id);
+    return { scope: compiled.scope._tag, matches: matches.toSorted(), decided: decided.toSorted() };
+  });
 
 /** The principal the server resolves a session's cookie to (anonymous for none). */
 const principalOf = (world: World, session: Session | undefined) =>
@@ -194,7 +198,7 @@ const compare = (
       Effect.gen(function* () {
         yield* viewer.device.engine.pull.pipe(Effect.orDie);
         const replica = idsOf(yield* viewer.device.stored);
-        const { scope, matches, decided } = oracles(
+        const { scope, matches, decided } = yield* oracles(
           yield* principalOf(world, viewer.session),
           posts,
           edges

@@ -48,7 +48,7 @@ app is a SvelteKit **SPA**: `ssr = false` in the root layout and
   +layout.svelte: setClientRuntime(runtime)   runtime = ManagedRuntime whose
         │  useQuery / useAggregate            layer provides the Client
         ▼
-  Client ──(loopback transport + simulated-offline gate)──▶ Server
+  Client ──(loopback transport, setOnline)──▶ Server
      │                                                        │
   durable ClientStore (localStorage)                    MemoryBackend
      │                                                  + CVR diffing

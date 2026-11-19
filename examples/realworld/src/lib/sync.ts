@@ -4,7 +4,7 @@
  * The whole sync stack wired up in the page: `Server` (the one server-side
  * object — protocol handler plus `broadcast`, with in-memory CVR storage and an
  * in-process fan-out bus by default) over a `MemoryBackend`, reached through a
- * loopback transport behind a simulated-offline gate, with a durable
+ * loopback transport that can be taken offline, with a durable
  * `localStorage` client store.
  *
  * The client is `Client.make` — the zero-wiring entry point. It resolves its
@@ -212,9 +212,9 @@ const seed = (backend: Backend.Backend): Effect.Effect<void> =>
 // ─── The rig: the demo server and the knobs the shell drives ─────────────────
 
 interface Rig {
-  /** The loopback transport, behind the simulated-offline gate. */
+  /** The loopback transport: offline, its calls fail as a real network's would. */
   readonly transport: Transport.ClientTransport;
-  readonly setOffline: (offline: boolean) => Effect.Effect<void>;
+  readonly setOnline: (online: boolean) => Effect.Effect<void>;
   readonly setIdentity: (username: string | null) => Effect.Effect<void>;
   readonly connection: Stream.Stream<Transport.ConnectionStatus>;
 }
@@ -232,12 +232,11 @@ const rigLayer = Layer.effect(Rig)(
     });
     yield* seed(backend);
 
-    const loopback = yield* Transport.makeInMemory(server.handler, CLIENT_GROUP_ID);
-    const { transport, setOffline } = yield* Transport.simulateOffline(loopback);
+    const transport = yield* Transport.makeInMemory(server.handler, CLIENT_GROUP_ID);
 
     return {
       transport,
-      setOffline,
+      setOnline: transport.setOnline,
       setIdentity: (username) => Ref.set(identity, username ?? undefined),
       connection: Stream.concat(Stream.fromEffect(transport.status), transport.statusChanges),
     };
@@ -290,7 +289,7 @@ export const createWorld = async (): Promise<World> => {
   return {
     runtime,
     setIdentity: (username) => void runtime.runPromise(rig.setIdentity(username)),
-    setOnline: (next) => runtime.runPromise(rig.setOffline(!next)),
+    setOnline: (next) => runtime.runPromise(rig.setOnline(next)),
     connection: rig.connection,
   };
 };

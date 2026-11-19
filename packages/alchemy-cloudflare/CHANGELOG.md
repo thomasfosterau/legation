@@ -1,5 +1,67 @@
 # @thomasfosterau/legation-alchemy-cloudflare
 
+## 0.3.1
+
+### Patch Changes
+
+- f04f4de: `RoomTransport.make` now sends its push, pull and read requests through Effect's Fetch `HttpClient` instead of calling `fetch` directly. The request is unchanged: a JSON `POST` with your `headers`, and no `b3` or `traceparent` trace headers, so a cross-origin room needs no extra CORS allowance. Each answer is now decoded through the protocol's response schema, and an answer that doesn't match it fails with `TransportError`. Interrupting a request now aborts it. `make` still returns a `ClientTransport` with no requirements.
+
+  `FanoutShard.ShardObject` is now declared in a private module and re-exported from `FanoutShard`. Its name and shape are unchanged.
+
+- Updated dependencies [a7d5a09]
+  - @thomasfosterau/legation@0.6.0
+
+## 0.3.0
+
+### Minor Changes
+
+- f1f0092: A room can use a per-request backend (#681): return `Backend.perRequest(acquire)` from `Room.make`'s `backend`, and the room builds the store in `acquire` once per push, pull and read, in that request's scope, so a Hyperdrive-backed `PgClient` is built from the current invocation's credentials and one push's transaction stays on its connection. The `backend` doc comment, the README and `docs/alchemy-postgres.md` (its Hyperdrive section, with an example over `Hyperdrive.ConnectClient`) say how.
+- 486b0ef: **Breaking:** `Worker.RouterConfig.roomIdOf` returns `Effect<Option<string>, never, R>` instead of `Effect<string | undefined, never, R>` (#683), matching `anonymousRoomOf`. `Option.none()` is the anonymous caller (a 401, unless `anonymousRoomOf` routes it). Migrate by wrapping the result: `Option.fromNullishOr(id)` for a nullable lookup, or `Effect.succeed(Option.some(id))` for a constant id.
+
+### Patch Changes
+
+- 1ce8b2b: Effects that must run at a callback edge run on a runtime the adapter owns (#562). Background Sync's listener, the Svelte undo hooks and the devtools panel use a module-level `ManagedRuntime.make(Layer.empty)` in place of the implicit-runtime `Effect.runPromise` / `runFork` / `runSync`, and the room transport's poke socket offers to its queue with `Queue.offerUnsafe`. No behaviour changes.
+- 2478811: Name the failures of the promises these packages await. A rejected KV delete, cache purge or forwarded invalidation (`EdgeInvalidation`), a rejected Background Sync registration lookup or registration (`BackgroundSync`) and an unreadable write-request body (`JsonApiFacade`) now carry a module-private tagged error with the rejection as its `cause`, where they were the generic `UnknownError`. Behaviour is unchanged; only the error a log line shows differs.
+- dc243b9: `dist/` is one ESM module per source module instead of merged shared chunks (#678), so a consumer's bundler can tree-shake with `sideEffects: false`. The entries and their exports are unchanged.
+- Updated dependencies [f1f0092]
+- Updated dependencies [515a427]
+- Updated dependencies [584ea1c]
+- Updated dependencies [87e83f9]
+  - @thomasfosterau/legation@0.5.0
+
+## 0.2.0
+
+### Minor Changes
+
+- 85b11f6: Anonymous readers can be sharded over rooms (#679). `Worker.routeSync` takes `anonymousRoomOf`, which routes a caller `roomIdOf` left anonymous to a shared room named under the reserved `Worker.anonymousRoomPrefix` (`Option.none()` keeps the 401), so an anonymous caller never reaches a user's room; a `roomIdOf` id inside that namespace is refused with a 500. `Worker.shardByClientGroup({ shards, cookie? })` spreads anonymous callers over `shards` rooms by a stable hash of their client-group cookie. Without `anonymousRoomOf`, anonymous callers still get a 401.
+- da296dc: Out-of-band hints for the Cloudflare rooms (#679). `DurableFanoutBroker.publishOutOfBand({ shards, rooms, nodes, timeout? })` lets a cron or queue Worker that writes rows without a mutation poke every room leased on the write's topics, with each shard and room call bounded and fire-and-forget as in a room's own publish. `Room.make` takes a `hints` option, a `HintSource` the room runs on its bus; its doc comment and the README say that a polling source keeps the room from hibernating. `RoomObject` now extends `DurableFanoutBroker.PokeSurface`. In `@thomasfosterau/legation/internal`, `FanoutTopics.topicsForHints` derives the topics of a batch of change hints, the derivation `FanoutBus` publishes with.
+- ea344a3: `Room.make`'s `backend` and `hints` run with the room instance's `Scope` (#679), so a backend can hold a resource for the instance's life, such as a PostgreSQL pool built with `Layer.build(PgClient.layer(...))`. The README and the `backend` doc comment say what that lifetime is against hibernation and eviction, and that a Hyperdrive client must not be held across requests (#506).
+- 82eb11e: The room (`Room.make`) presents each push, pull and read request's headers to its `identity` resolver as `Authorization.RequestCredentials` (ADR-0035, #219), so a resolver can verify the session cookie or API key the request carried. A resolver now has the core's new signature, `({ clientGroupId, credentials }) => …`.
+- 0a725be: **Breaking:** `FanoutShard.make` is now an Effect value, not a function: write `LegationShard.make(FanoutShard.make)` instead of `FanoutShard.make()`. `Room.RoomObject`'s `webSocketMessage` and `webSocketClose` now declare the parameters Alchemy's Durable Object handler signature passes; nothing changes at runtime.
+
+### Patch Changes
+
+- Updated dependencies [da296dc]
+- Updated dependencies [9441aa0]
+- Updated dependencies [520e1c8]
+- Updated dependencies [9b22e38]
+- Updated dependencies [20d9793]
+- Updated dependencies [da04d41]
+- Updated dependencies [82eb11e]
+- Updated dependencies [b0f51d9]
+- Updated dependencies [ed8dd92]
+- Updated dependencies [3c83004]
+- Updated dependencies [e8e3419]
+- Updated dependencies [0e102c0]
+- Updated dependencies [aab6099]
+- Updated dependencies [3ca13de]
+- Updated dependencies [d5b8f8b]
+- Updated dependencies [8a60f29]
+- Updated dependencies [20d9793]
+- Updated dependencies [89eef12]
+- Updated dependencies [2afcd9f]
+  - @thomasfosterau/legation@0.4.0
+
 ## 0.1.2
 
 ### Patch Changes
@@ -22,8 +84,8 @@
 - 604ffd3: New package `@thomasfosterau/legation-alchemy-cloudflare` (ADR-0034): the reference deployment of ADR-0022's topology on Cloudflare, built on the Effect-native services of Alchemy's Cloudflare provider. It replaces `@thomasfosterau/legation-cloudflare`, which was never published.
 
   - `Room.make(config)` is the per-user room's Alchemy Durable Object implementation: the sync server over stateless HTTP push/pull/read, CVRs in the object's storage (`DurableCvrStore`), a `FanoutBus` over the topic shards, and hibernatable sockets (`Cloudflare.upgrade`) that carry only contentless pokes. `backend`, `policy`, `identity` and `queries` are effects built in the object's per-instance phase; `shards` is the app's shard class. Every shard call, room poke and lease registration is bounded by `publishTimeout`.
-  - `FanoutShard.make()` is the topic shard's implementation, with a typed RPC surface (`register`, `publish`): a shard answers its leased rooms and the publishing room pokes each once, over the `poke` RPC, with every topic it matched.
-  - The app declares the classes (`class LegationRoom extends Cloudflare.DurableObject<LegationRoom, Room.RoomObject>()("LegationRoom") {}`) and binds the implementations (`LegationRoom.make(Room.make(...))`, `LegationShard.make(FanoutShard.make())`).
+  - `FanoutShard.make` is the topic shard's implementation, with a typed RPC surface (`register`, `publish`): a shard answers its leased rooms and the publishing room pokes each once, over the `poke` RPC, with every topic it matched.
+  - The app declares the classes (`class LegationRoom extends Cloudflare.DurableObject<LegationRoom, Room.RoomObject>()("LegationRoom") {}`) and binds the implementations (`LegationRoom.make(Room.make(...))`, `LegationShard.make(FanoutShard.make)`).
   - `Worker.routeSync` routes an Alchemy Worker's `/sync` requests to the caller's room through the namespace's stub, answering `Option.none()` outside the base path. A room answers a route by the path's last segment.
   - `D1Executor.make(db)` is `SqlBackend`'s executor over `Cloudflare.D1.QueryDatabase`'s client; D1 has no interactive transactions, so it reports `transactional: false` and does not meet Backend guarantee 1 (#342, #353).
   - `RoomTransport`, `BindingTransport` and `EdgeInvalidation` are unchanged from the package this one replaces.

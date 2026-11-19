@@ -44,6 +44,8 @@ import {
 import * as PgExecutor from "../../sql/PgExecutor.js";
 import * as Sql from "../../sql/Sql.js";
 import * as SqlBackend from "../../sql/SqlBackend.js";
+import * as Env from "../env.js";
+import { TestFailure } from "../test-failure.js";
 
 /** `SqlExecutor` over the Effect SQL sqlite client (fragments → unsafe statements). */
 const makeExecutor = (sql: SqlClient): SqlBackend.SqlExecutor => {
@@ -142,9 +144,7 @@ const handlers: Record<string, SqlBackend.SqlHandler> = {
         text: `INSERT OR REPLACE INTO ${table} (id, n) VALUES (?, 99)`,
         params: [args.id],
       });
-      return yield* Effect.fail(
-        new BackendError({ message: "contract/write-then-fail fails after writing" })
-      );
+      return yield* new BackendError({ message: "contract/write-then-fail fails after writing" });
     }),
   [BackendContract.countUp.name]: (raw, tx) =>
     Effect.gen(function* () {
@@ -179,22 +179,40 @@ const handlers: Record<string, SqlBackend.SqlHandler> = {
     }),
 };
 
+/** A fresh SQLite database with the contract tables; needs a scope. */
+const makeContractDatabase = Effect.fn("makeContractDatabase")(function* () {
+  const context = yield* Layer.build(SqliteClient.layer({ filename: ":memory:" }));
+  const sql = Context.get(context, SqlClient);
+  yield* Effect.forEach(
+    CONTRACT_DDL,
+    (statement) =>
+      Effect.gen(function* () {
+        yield* sql.unsafe(statement).unprepared;
+      }),
+    { concurrency: 1, discard: true }
+  );
+  return sql;
+});
+
+/** The contract SqlBackend over `executor`, with the contract mutators and handlers. */
+const contractBackendOver = (executor: SqlBackend.SqlExecutor) =>
+  SqlBackend.make({
+    executor,
+    tables: {
+      __contract: { table: "__contract" },
+      __contract_eval: { table: "__contract_eval" },
+    },
+    mutators: contractMutators,
+    handlers,
+  });
+
 /** A SqlBackend over a fresh SQLite database with the contract tables; needs a scope. */
 const makeContractBackend = (
   registeredHandlers: Record<string, SqlBackend.SqlHandler>,
   registeredMutators: Map<string, Mutator.AnyMutator>
 ) =>
   Effect.gen(function* () {
-    const context = yield* Layer.build(SqliteClient.layer({ filename: ":memory:" }));
-    const sql = Context.get(context, SqlClient);
-    yield* Effect.forEach(
-      CONTRACT_DDL,
-      (statement) =>
-        Effect.gen(function* () {
-          yield* sql.unsafe(statement).unprepared;
-        }),
-      { concurrency: 1, discard: true }
-    );
+    const sql = yield* makeContractDatabase();
     return SqlBackend.make({
       executor: makeExecutor(sql),
       tables: {
@@ -231,6 +249,95 @@ describe("SqlBackend", () => {
         const failure = yield* Effect.flip(BackendContract.verifyBackendContract(backend));
         expect(failure.rule).toContain("discards");
         expect(failure.message).toContain("not registered");
+      })
+    )
+  );
+});
+
+/** An executor over `sql` that records each statement and transaction under the acquisition that ran it. */
+const recordingExecutor = (
+  sql: SqlClient,
+  acquisition: number,
+  log: Ref.Ref<ReadonlyArray<readonly [number, string]>>
+): SqlBackend.SqlExecutor => {
+  const inner = makeExecutor(sql);
+  const record = (what: string) => Ref.update(log, (all) => [...all, [acquisition, what] as const]);
+  return {
+    query: (fragment) => Effect.andThen(record(fragment.text), inner.query(fragment)),
+    run: (fragment) => Effect.andThen(record(fragment.text), inner.run(fragment)),
+    transaction: (effect) => Effect.andThen(record("transaction"), inner.transaction(effect)),
+  };
+};
+
+/**
+ * A per-request contract SqlBackend over one SQLite database (#681): each acquisition builds
+ * `SqlBackend.make` over its own recording executor, numbered from 1, and counts its release.
+ */
+const makePerRequestContractBackend = Effect.fn("makePerRequestContractBackend")(function* () {
+  const sql = yield* makeContractDatabase();
+  const opened = yield* Ref.make(0);
+  const released = yield* Ref.make(0);
+  const log = yield* Ref.make<ReadonlyArray<readonly [number, string]>>([]);
+  const backend = yield* Backend.perRequest(
+    Effect.acquireRelease(
+      Ref.updateAndGet(opened, (n) => n + 1).pipe(
+        Effect.map((acquisition) => contractBackendOver(recordingExecutor(sql, acquisition, log)))
+      ),
+      () => Ref.update(released, (n) => n + 1)
+    )
+  );
+  return { backend, opened, released, log };
+});
+
+/** Client c1's `mutationId`th mutation: a contract write of row `id`. */
+const putContractRow = (mutationId: number, id: string) => ({
+  clientId: "c1",
+  mutationId,
+  mutator: BackendContract.putRow.name,
+  args: { collection: "__contract", id, value: { n: mutationId } },
+  createdAt: 0,
+});
+
+describe("Backend.perRequest over SqlBackend (#681)", () => {
+  it.effect("passes verifyBackendContract over a real SQLite executor", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const { backend, opened, released } = yield* makePerRequestContractBackend();
+        yield* BackendContract.verifyBackendContract(backend);
+        expect(yield* Ref.get(released)).toBe(yield* Ref.get(opened));
+      })
+    )
+  );
+
+  it.effect("runs one push's transaction and every statement in it on one acquisition", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const { backend, opened, released, log } = yield* makePerRequestContractBackend();
+        const server = yield* Server.make({
+          backend,
+          auth: { policy: Authorization.policy({ __contract: Authorization.allowAll }) },
+        });
+        const pushed = yield* server.handler.handlePush({
+          clientGroupId: "g",
+          mutations: [putContractRow(1, "a"), putContractRow(2, "b"), putContractRow(3, "c")],
+        });
+        expect(pushed.lastMutationIds).toEqual({ c1: 3 });
+        expect([yield* Ref.get(opened), yield* Ref.get(released)]).toEqual([1, 1]);
+        const pushLog = yield* Ref.get(log);
+        // The push is one transaction, and its claims, writes and reads all ran on
+        // the acquisition that opened it.
+        expect(pushLog.filter(([, what]) => what === "transaction")).toEqual([[1, "transaction"]]);
+        expect(pushLog.length).toBeGreaterThan(3);
+        expect(pushLog.every(([acquisition]) => acquisition === 1)).toBe(true);
+
+        const pulled = yield* server.handler.handlePull({
+          clientGroupId: "g",
+          subscriptions: [Subset.make({ collection: "__contract" })],
+        });
+        expect(pulled.patch).toHaveLength(3);
+        expect([yield* Ref.get(opened), yield* Ref.get(released)]).toEqual([2, 2]);
+        const pullLog = (yield* Ref.get(log)).slice(pushLog.length);
+        expect(pullLog.every(([acquisition]) => acquisition === 2)).toBe(true);
       })
     )
   );
@@ -442,7 +549,7 @@ describe("paced compaction against SqlBackend (#249)", () => {
  * overlap suite (`sql-backend-postgres.test.ts`) on one database. Without the
  * variable the suite is skipped locally; in CI that file's guard fails instead.
  */
-const databaseUrl = process.env.DATABASE_URL;
+const databaseUrl = Env.databaseUrl;
 
 const PG_TABLES = `DROP TABLE IF EXISTS __contract, __contract_eval, contract_sync_mutations`;
 
@@ -518,9 +625,7 @@ const pgHandlers: Record<string, SqlBackend.SqlHandler> = {
         text: `INSERT INTO ${table} (id, n) VALUES ($1, 99) ON CONFLICT (id) DO UPDATE SET n = EXCLUDED.n`,
         params: [args.id],
       });
-      return yield* Effect.fail(
-        new BackendError({ message: "contract/write-then-fail fails after writing" })
-      );
+      return yield* new BackendError({ message: "contract/write-then-fail fails after writing" });
     }),
 };
 
@@ -552,7 +657,7 @@ const describePostgres = databaseUrl === undefined ? describe.skip : describe;
 // Always runs, so a CI job without the service fails here instead of skipping the
 // suite below in silence (the same guard as sql-backend-postgres.test.ts).
 it("has DATABASE_URL in CI, so the PostgreSQL contract run cannot skip silently", () => {
-  const ciWithoutDatabase = process.env.CI !== undefined && databaseUrl === undefined;
+  const ciWithoutDatabase = Env.inCi && databaseUrl === undefined;
   expect(
     ciWithoutDatabase,
     "DATABASE_URL is not set in CI: the PostgreSQL contract run (#353) needs the PostgreSQL service container in .github/workflows/ci.yml"
@@ -734,7 +839,9 @@ describePostgres("SqlBackend on PostgreSQL: verifyBackendContract (#353)", () =>
             Effect.timeoutOrElse({
               duration: "20 seconds",
               orElse: () =>
-                Effect.die(new Error("awaitPeer did not return on the peer's lock wait")),
+                Effect.die(
+                  new TestFailure({ message: "awaitPeer did not return on the peer's lock wait" })
+                ),
             })
           );
           expect(

@@ -8,6 +8,7 @@
 import { describe, expect, it } from "@effect/vitest";
 import type { Cookies } from "@sveltejs/kit";
 import * as Effect from "effect/Effect";
+import { awaitPromise } from "./await-promise.js";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Schedule from "effect/Schedule";
@@ -49,6 +50,7 @@ import {
   requestCredentials,
   runFormMutation,
 } from "../index.js";
+import { TestFailure } from "../../__tests__/test-failure.js";
 
 interface Todo {
   readonly id: string;
@@ -100,7 +102,7 @@ const fakeCookies = (): { cookies: Cookies; sets: Array<{ name: string; value: s
     serialize: () => "",
     // Nothing under test parses a `Set-Cookie` header.
     parse: () => {
-      throw new Error("fakeCookies: parse is not faked");
+      throw new TestFailure({ message: "fakeCookies: parse is not faked" });
     },
   };
   return { cookies, sets };
@@ -170,7 +172,7 @@ describe("loadSnapshot + clientRuntime", () => {
         subscribe: [allTodos],
       });
 
-      const rows = yield* Effect.promise(() =>
+      const rows = yield* awaitPromise(() =>
         runtime.runPromise(Effect.flatMap(Client.Client, (client) => client.query(allTodos)))
       );
       expect(rows.map((row) => row.id)).toEqual(["1"]);
@@ -180,7 +182,7 @@ describe("loadSnapshot + clientRuntime", () => {
       // hand-driven pull.
       yield* writer.mutate("todo/set", { id: "2", title: "second" });
       yield* writer.push;
-      const after = yield* Effect.promise(() =>
+      const after = yield* awaitPromise(() =>
         runtime.runPromise(
           Effect.flatMap(Client.Client, (client) =>
             Effect.andThen(
@@ -197,7 +199,7 @@ describe("loadSnapshot + clientRuntime", () => {
       );
       expect(after.map((row) => row.id).toSorted()).toEqual(["1", "2"]);
 
-      yield* Effect.promise(() => runtime.dispose());
+      yield* awaitPromise(() => runtime.dispose());
     })
   );
 
@@ -407,7 +409,7 @@ describe("form-action Mutations (ADR-0030 #215)", () => {
           ),
           subscribe: [allTallies],
         });
-        const query = Effect.tryPromise(() =>
+        const query = awaitPromise(() =>
           runtime.runPromise(
             Effect.flatMap(Client.Client, (client) => client.query(allTallies)).pipe(
               Effect.map((rows) => rows.map((row) => row.value))
@@ -438,7 +440,7 @@ describe("form-action Mutations (ADR-0030 #215)", () => {
         const receipt = yield* runFormMutation(server, target, tallyUp, tallyArgsOf(data));
 
         const updates: Array<unknown> = [];
-        yield* Effect.tryPromise(() =>
+        yield* awaitPromise(() =>
           settle({
             result: { type: "success", data: { [RECEIPT_KEY]: receipt } },
             update: (options) => {
@@ -454,7 +456,7 @@ describe("form-action Mutations (ADR-0030 #215)", () => {
         // Shown from the tail, then from the confirmed rows: applied once.
         expect(yield* query).toEqual([{ id: "t2", n: 1 }]);
 
-        yield* Effect.tryPromise(() => runtime.dispose());
+        yield* awaitPromise(() => runtime.dispose());
       })
     )
   );
@@ -481,7 +483,7 @@ describe("form-action Mutations (ADR-0030 #215)", () => {
           args: tallyArgsOf,
           onReceipt: (receipt) => void receipts.push(receipt),
         })({ formData: postedForm({ clientId: "", mutationId: 1 }, "t3") });
-        const query = Effect.tryPromise(() =>
+        const query = awaitPromise(() =>
           runtime.runPromise(Effect.flatMap(Client.Client, (client) => client.query(allTallies)))
         );
         const target = formMutationTarget(
@@ -490,7 +492,7 @@ describe("form-action Mutations (ADR-0030 #215)", () => {
         );
         if (target === undefined) return yield* Effect.die("unroutable");
         const receipt = yield* runFormMutation(server, target, tallyLocked, { id: "t3" });
-        yield* Effect.tryPromise(() =>
+        yield* awaitPromise(() =>
           settle({
             result: { type: "failure", data: { [RECEIPT_KEY]: receipt } },
             update: () => Promise.resolve(),
@@ -500,7 +502,7 @@ describe("form-action Mutations (ADR-0030 #215)", () => {
           "tally is locked",
         ]);
         expect(yield* query).toEqual([]);
-        yield* Effect.tryPromise(() => runtime.dispose());
+        yield* awaitPromise(() => runtime.dispose());
       })
     )
   );

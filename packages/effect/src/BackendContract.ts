@@ -59,6 +59,7 @@
  * its totals are the unwindowed subset's size.
  */
 
+import * as Defined from "./Defined.js";
 import * as Arr from "effect/Array";
 import * as DateTime from "effect/DateTime";
 import * as Deferred from "effect/Deferred";
@@ -633,7 +634,7 @@ const corpusSubsets = (
       collection: h.evalRows,
       where,
       orderBy: corpus.orderBys[index % corpus.orderBys.length],
-      ...(index % 3 === 0 ? { limit: 1 + (index % 7) } : {}),
+      ...Defined.fields({ limit: index % 3 === 0 ? 1 + (index % 7) : undefined }),
     })
   );
 

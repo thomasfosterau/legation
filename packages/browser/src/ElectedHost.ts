@@ -23,17 +23,22 @@
  * becomes the host immediately, which is only correct for a single tab —
  * see the package README's topology section.
  */
+import { Defined } from "@thomasfosterau/legation/internal";
 import type { Collection, Mutation, Node, Query, Transport } from "@thomasfosterau/legation";
 import { Client, ClientStore, TransportError } from "@thomasfosterau/legation";
 import {
   ClientEngine,
   ClientView,
   EngineHost,
+  type HostRequest,
   Mirror,
   MirrorProtocol,
+  Related,
   Subscriptions,
   Subset,
 } from "@thomasfosterau/legation/internal";
+import * as Context from "effect/Context";
+import type * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
 import * as Layer from "effect/Layer";
@@ -48,10 +53,11 @@ import * as ServiceWorkerHost from "./ServiceWorkerHost.js";
 export type Role = "host" | "mirror";
 
 /** Options for {@link run}. */
-export interface ElectedHostOptions {
+export interface ElectedHostOptions<Graph extends Node.NodeRegistry = Node.NodeRegistry> {
   /** The Web Lock name AND the sync-protocol client group — one election per group. */
   readonly clientGroupId: string;
-  readonly nodes: Node.NodeRegistry;
+  /** The node graph the tab's Client reads, which types its rows (`Client.ResolvedRow`). */
+  readonly nodes: Graph;
   readonly mutations: Mutation.MutatorRegistry;
   /**
    * `ClientStore` (durable — pair {@link IndexedDbClientStore}) and
@@ -84,10 +90,23 @@ export interface ElectedHostOptions {
   readonly syncLoop?: ClientEngine.SyncLoopOptions;
   /** Override for tests/non-browser injection. Defaults to `navigator.locks`. */
   readonly locks?: LockManager;
+  /**
+   * Host-request handlers the elected tab serves beside the introspection and
+   * `hydrate` kinds (forwarded to {@link EngineHost.run}, as
+   * `ServiceWorkerHost` does): `Devtools.hostRequests(engine, store)` from
+   * `@thomasfosterau/legation-devtools`, say.
+   */
+  readonly requests?: ReadonlyArray<HostRequest.Handler>;
+  /**
+   * How long a newly elected host over an empty store holds its engine's
+   * pulls for a tab's server-rendered snapshot (#146), forwarded to
+   * {@link EngineHost.run}. Unset, nothing is held.
+   */
+  readonly hydrationWindow?: Duration.Input | undefined;
 }
 
 /** What {@link run} returns: one stable Client for the tab, and a stream of its host/mirror role. */
-export interface ElectedHost {
+export interface ElectedHost<Graph extends Node.NodeRegistry = Node.NodeRegistry> {
   /**
    * One stable Client for the tab's whole lifetime: reads and writes go
    * through the mirror until this tab is elected, and through the owned
@@ -95,7 +114,7 @@ export interface ElectedHost {
    * live `observe`/`related` re-hydrates from the new tier; explicit
    * `subscribe` pins are replayed onto it).
    */
-  readonly client: Client.Client;
+  readonly client: Client.Client<Graph>;
   /** Purely observational — devtools/debug UI. Never drives application logic. */
   readonly role: Stream.Stream<Role>;
 }
@@ -201,6 +220,12 @@ const switchingView = (
         }).pipe(Effect.andThen(withCurrent((view) => view.unsubscribeQuery(name, args)))),
       queryNamed: (name, args) => withCurrent((view) => view.queryNamed(name, args)),
       pulled: (key) => withCurrent((view) => view.pulled(key)),
+      // A switch of tier moves every summary, so it is a change of its own.
+      pulledChanges: SubscriptionRef.changes(viewRef).pipe(
+        Stream.switchMap((view) =>
+          Stream.concat(Stream.succeed(undefined), view.pulledChanges ?? Stream.empty)
+        )
+      ),
       observeNamed: (name, args) =>
         SubscriptionRef.changes(viewRef).pipe(
           Stream.switchMap((view) => view.observeNamed(name, args))
@@ -212,6 +237,12 @@ const switchingView = (
               Stream.unwrap(view.related(registry, collectionName, subset, edges))
             )
           )
+        ),
+      queryRelated: (registry, collectionName, subset, edges) =>
+        withCurrent((view) =>
+          view.queryRelated === undefined
+            ? Related.query(view, registry, collectionName, subset, edges)
+            : view.queryRelated(registry, collectionName, subset, edges)
         ),
       // A held edge registration has no stream to redo the switch for it:
       // re-pin on every view this switches to (the current one first —
@@ -259,7 +290,9 @@ const switchingView = (
  * otherwise — and hand back one `Client` that works unchanged across the
  * transition, plus a `role` stream for observability.
  */
-export const run = (options: ElectedHostOptions): Effect.Effect<ElectedHost, never, Scope.Scope> =>
+export const run = <Graph extends Node.NodeRegistry>(
+  options: ElectedHostOptions<Graph>
+): Effect.Effect<ElectedHost<Graph>, never, Scope.Scope> =>
   Effect.gen(function* () {
     const channelName = options.channelName ?? ServiceWorkerHost.defaultChannelName;
     const locks = options.locks ?? globalLocks();
@@ -280,22 +313,28 @@ export const run = (options: ElectedHostOptions): Effect.Effect<ElectedHost, nev
       // One counted voice for both fronts over this engine — the host
       // serving other tabs and this tab's own view — so a mirror releasing
       // a window never drops one this tab's Client still pins.
+      // The dependencies are built here, not provided to the engine alone, so the
+      // host is handed the same store the engine runs over: given it, the host
+      // serves the introspection and `hydrate` request kinds (#136, #146).
+      const dependencies = yield* Layer.build(options.dependencies);
+      const store = Context.get(dependencies, ClientStore.ClientStore);
       const engine = Subscriptions.counted(
         yield* ClientEngine.make({
           clientId: hostClientId,
           clientGroupId: options.clientGroupId,
           mutators: options.mutations,
-          ...(options.queries === undefined ? {} : { queries: options.queries }),
-          ...(options.syncLoop === undefined ? {} : { syncLoop: options.syncLoop }),
-        }).pipe(Effect.provide(options.dependencies))
+          ...Defined.fields({ queries: options.queries, syncLoop: options.syncLoop }),
+        }).pipe(Effect.provideContext(dependencies))
       );
       const hostChannel = yield* BroadcastMirrorChannel.make(channelName);
       yield* EngineHost.run({
         channel: hostChannel,
         engine,
+        store,
+        requests: options.requests ?? [],
+        hydrationWindow: options.hydrationWindow,
         nodes: options.nodes,
-        ...(options.registry === undefined ? {} : { registry: options.registry }),
-        ...(options.urls === undefined ? {} : { urls: options.urls }),
+        ...Defined.fields({ registry: options.registry, urls: options.urls }),
       });
       yield* Effect.forkScoped(engine.runSync.pipe(Effect.ignore));
       yield* SubscriptionRef.set(viewRef, ClientView.fromEngine(engine));

@@ -7,6 +7,7 @@
  * advances it. Nothing here waits on wall-clock time, so a loaded machine
  * cannot make a case time out (#309).
  */
+import * as Defined from "../Defined.js";
 import { describe, expect, it } from "@effect/vitest";
 import * as Arr from "effect/Array";
 import * as Duration from "effect/Duration";
@@ -30,6 +31,7 @@ import type { Poke } from "../Protocol.js";
 import * as Subset from "../Subset.js";
 import * as SyncServer from "../SyncServer.js";
 import { ClientTransport, makeInMemory, type ServerHandler } from "../Transport.js";
+import { TestFailure } from "./test-failure.js";
 
 interface Todo {
   readonly id: string;
@@ -99,7 +101,7 @@ const makeClient = (
       clientId: `client-${name}`,
       clientGroupId: `group-${name}`,
       mutators: setTodo,
-      ...(syncLoop !== undefined ? { syncLoop } : {}),
+      ...Defined.fields({ syncLoop }),
     }).pipe(
       Effect.provideService(ClientStore, store),
       Effect.provideService(ClientTransport, transport)
@@ -125,7 +127,9 @@ const advanceUntil = <E>(
       yield* TestClock.adjust(step);
     }
     if (yield* condition) return;
-    return yield* Effect.die(new Error(`advanceUntil: condition never held in ${maxSteps} steps`));
+    return yield* Effect.die(
+      new TestFailure({ message: `advanceUntil: condition never held in ${maxSteps} steps` })
+    );
   });
 
 // Wait for a condition without moving the clock. Each step is a zero-length

@@ -168,7 +168,7 @@ export const make = <E>(handle: MutateHandle<E>): Effect.Effect<UndoManager<E>> 
     // redo runs the `execute` intents in order — the mirror of one another.
     const replay = (step: Step, direction: "undo" | "redo"): Effect.Effect<void, E> =>
       Effect.gen(function* () {
-        const ordered = direction === "undo" ? [...step].reverse() : step;
+        const ordered = direction === "undo" ? Arr.reverse(step) : step;
         yield* Effect.forEach(
           ordered,
           (entry) =>

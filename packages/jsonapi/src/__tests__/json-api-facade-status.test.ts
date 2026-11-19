@@ -13,8 +13,11 @@
  */
 import { describe, expect, it } from "@effect/vitest";
 import * as Arr from "effect/Array";
+import type * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
+import { awaitPromise } from "./await-promise.js";
 import * as Fiber from "effect/Fiber";
+import * as Option from "effect/Option";
 import * as R from "effect/Record";
 import * as Schema from "effect/Schema";
 import type * as Scope from "effect/Scope";
@@ -92,7 +95,7 @@ interface Fixture {
 const makeFixture = (
   options: {
     readonly maxTerminal?: number;
-    readonly maxWait?: JsonApiFacade.Options<string, never>["maxWait"];
+    readonly maxWait?: Duration.Input;
   } = {}
 ): Effect.Effect<Fixture, never, Scope.Scope> =>
   Effect.gen(function* () {
@@ -128,7 +131,7 @@ const makeFixture = (
         api,
         view: client.view,
         coverageOf: client.coverageOf,
-        cookie: store.getCookie,
+        cookie: Effect.map(store.getCookie, Option.fromUndefinedOr),
         online: () => false,
         mutate: engine.mutateWithAck,
         mutationStates: engine.mutationStates,
@@ -156,13 +159,15 @@ const status = (path: string, headers: Record<string, string> = {}) =>
   new Request(new URL(path, "http://notes.test"), { headers: { accept: MEDIA, ...headers } });
 
 const body = (response: Response): Effect.Effect<any> =>
-  Effect.orDie(Effect.tryPromise(() => response.json()));
+  Effect.orDie(awaitPromise(() => response.json()));
 
 const answer = (handler: JsonApiFacade.FetchHandler, request: Request): Effect.Effect<Response> =>
-  Effect.flatMap(handler.handle(request), (response) =>
-    response === undefined
-      ? Effect.die(`forwarded: ${request.method} ${request.url}`)
-      : Effect.succeed(response)
+  Effect.flatMap(
+    handler.handle(request),
+    Option.match({
+      onNone: () => Effect.die(`forwarded: ${request.method} ${request.url}`),
+      onSome: Effect.succeed,
+    })
   );
 
 /** Journal a create through the façade and return its receipt's `Location`. */

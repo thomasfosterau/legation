@@ -17,6 +17,11 @@
  * {@link MakeOptions.timeout}. Alchemy's RPC stubs take no abort signal, so a
  * call that times out is abandoned rather than aborted: the broker stops
  * waiting for it, and workerd cancels it with the event that made it.
+ *
+ * {@link publishOutOfBand} is the same publish for a writer outside any room:
+ * a cron or queue Worker that wrote rows without a mutation hands it the
+ * write's `ChangeHint`s, and every room leased on the derived topics is poked
+ * through the room namespace, as a push's publish pokes them.
  */
 
 import type * as Workers from "@alchemy.run/cloudflare/Workers";
@@ -28,7 +33,8 @@ import * as Exit from "effect/Exit";
 import * as PubSub from "effect/PubSub";
 import * as R from "effect/Record";
 import type * as Scope from "effect/Scope";
-import type { FanoutBroker, FanoutTopics } from "@thomasfosterau/legation/internal";
+import type { Backend, Node } from "@thomasfosterau/legation";
+import { type FanoutBroker, FanoutTopics } from "@thomasfosterau/legation/internal";
 import type * as FanoutShard from "./FanoutShard.js";
 
 /** Options for {@link make}. */
@@ -50,6 +56,14 @@ export interface MakeOptions {
    * seconds.
    */
   readonly timeout?: Duration.Input | undefined;
+}
+
+/** A room's poke RPC: what a publish calls on each room whose lease matched. */
+export interface PokeSurface {
+  /** Deliver the topics of a publish that matched the room's leases. */
+  readonly poke: (
+    topics: ReadonlyArray<FanoutTopics.Topic>
+  ) => Effect.Effect<void, never, RuntimeContext>;
 }
 
 /** The broker plus the room's poke inlet (wire it to the room's `poke` RPC). */
@@ -161,3 +175,64 @@ export const make = (
       notify: (topics) => PubSub.publish(hub, topics).pipe(Effect.asVoid),
     };
   });
+
+/** Options for {@link publishOutOfBand}. */
+export interface OutOfBandOptions {
+  /** The shard namespace (`yield* LegationShard` at the writer Worker's init). */
+  readonly shards: Workers.DurableObject<FanoutShard.ShardObject>;
+  /** The room namespace (`yield* LegationRoom`), through which the matched rooms are poked. */
+  readonly rooms: Workers.DurableObject<PokeSurface>;
+  /** The node graph the rooms derive their topics from, so the writer derives the same fine topics. */
+  readonly nodes: Node.NodeRegistry;
+  /**
+   * Bound on the whole publish and on each shard or room call in it; a call past it is logged and
+   * dropped. Default 5 seconds.
+   */
+  readonly timeout?: Duration.Input;
+}
+
+/**
+ * Pokes every room leased on the topics of a write that bypassed the rooms (a cron or queue
+ * Worker's own SQL, an import): build it once at the writer's init, then call it with the write's
+ * change hints after the write commits.
+ *
+ * The topics are those a room's own publish derives (`FanoutTopics.topicsForHints`): the coarse
+ * topic of each collection, plus a fine topic per edge or hint key in the hints' `values` and
+ * `oldValues`. A hint without values derives only the coarse topic, which reaches the rooms whose
+ * windows leased it; a window that leased a fine topic (an equality on an edge or hint key) then
+ * converges on its next interval pull instead. Pass the written rows as `values` (and the previous
+ * ones as `oldValues` for a row that moved or was deleted) to poke those too. Each shard and room call is bounded by {@link OutOfBandOptions.timeout} and
+ * fire-and-forget, like a room's publish: a failed or hung call is dropped, and the rooms converge
+ * on their next pull. It never fails.
+ *
+ * @example
+ * ```ts
+ * const publish = DurableFanoutBroker.publishOutOfBand({
+ *   shards: yield* LegationShard,
+ *   rooms: yield* LegationRoom,
+ *   nodes,
+ * });
+ * // after the cron job's write commits
+ * yield* publish([{ collection: "results", ids: [] }]);
+ * ```
+ */
+export const publishOutOfBand = (
+  options: OutOfBandOptions
+): ((hints: ReadonlyArray<Backend.ChangeHint>) => Effect.Effect<void, never, RuntimeContext>) => {
+  const derivable = FanoutTopics.derivableSets(options.nodes);
+  const timeout = options.timeout ?? "5 seconds";
+  return (hints) =>
+    make({
+      shards: options.shards,
+      poke: (roomId, topics) => options.rooms.getByName(roomId).poke(topics),
+      timeout,
+    }).pipe(
+      Effect.flatMap(({ broker }) => broker.publish(FanoutTopics.topicsForHints(hints, derivable))),
+      Effect.timeoutOrElse({
+        duration: timeout,
+        orElse: () =>
+          Effect.logWarning("DurableFanoutBroker: out-of-band publish timed out; dropped"),
+      }),
+      Effect.scoped
+    );
+};

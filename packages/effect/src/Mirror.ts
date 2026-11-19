@@ -28,6 +28,7 @@ import type * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
 import * as HashMap from "effect/HashMap";
+import * as HashSet from "effect/HashSet";
 import * as Match from "effect/Match";
 import * as Metric from "effect/Metric";
 import * as Option from "effect/Option";
@@ -38,6 +39,7 @@ import * as Ref from "effect/Ref";
 import * as Schema from "effect/Schema";
 import * as Scope from "effect/Scope";
 import * as Stream from "effect/Stream";
+import * as SubscriptionRef from "effect/SubscriptionRef";
 import type { MirrorChannel } from "./MirrorChannel.js";
 import * as MirrorProtocol from "./MirrorProtocol.js";
 
@@ -61,10 +63,11 @@ export interface MirrorOptions {
    */
   readonly changeHubCapacity?: number;
   /**
-   * How long {@link Mirror.request} waits for the host's answer before failing
-   * with a `HostRequestError` of reason `"Unanswered"` — what a host that
-   * predates the host-request envelope (it drops the request as foreign
-   * traffic) looks like from here. Defaults to 10 seconds.
+   * How long {@link Mirror.request} waits for the host's answer, and
+   * {@link Mirror.stream} for the host's first reply, before failing with a
+   * `HostRequestError` of reason `"Unanswered"` — what a host that predates
+   * the host-request envelope (it drops the request as foreign traffic) looks
+   * like from here. Defaults to 10 seconds.
    */
   readonly requestTimeout?: Duration.Input;
 }
@@ -162,9 +165,10 @@ export interface Mirror {
    * stops early or is interrupted sends `HostRequestCancel`, and the host
    * interrupts its handler. A host restart (`HostReady`) or this mirror
    * closing fails it with `Unanswered`; it is not replayed, so a caller that
-   * wants to keep following re-requests. No reply timeout applies, since a
-   * stream may rightly stay quiet: a host that predates the envelope leaves
-   * it silent.
+   * wants to keep following re-requests. The host's first reply (its
+   * `Started`, #628) is due within `requestTimeout`, or the stream fails with
+   * `Unanswered`, as against a host that predates the envelope; after it no
+   * timeout applies, since a stream may rightly stay quiet.
    */
   readonly stream: HostRequest.Requester["stream"];
   /** Validate args locally, forward to the host journal, await the ack. */
@@ -221,6 +225,8 @@ export interface Mirror {
   readonly observe: (subset: Subset.Subset) => Stream.Stream<ReadonlyArray<ClientEngine.LocalRow>>;
   /** The host's pulled summary of the registration under `key` (#426); see {@link ClientView.ClientView.pulled}. */
   readonly pulled: (key: string) => Effect.Effect<Coverage.Pulled>;
+  /** Emits as the host's pulled summaries arrive (#653); see {@link ClientView.ClientView.pulledChanges}. */
+  readonly pulledChanges: Stream.Stream<void>;
   /**
    * Row-level deltas of a subset's live window (#115) — see
    * {@link ClientEngine.ClientEngine.observeChanges}. The mirror has no
@@ -261,6 +267,13 @@ export interface Mirror {
     subset: Subset.Subset,
     edges: ReadonlyArray<string | Related.EdgeSelect>
   ) => Effect.Effect<Stream.Stream<ReadonlyArray<Related.RelatedRow>, never>, never, Scope.Scope>;
+  /** The host's current rows of a held relational read (#653); see {@link ClientView.ClientView.queryRelated}. */
+  readonly queryRelated: (
+    registry: Collection.CollectionRegistry,
+    collectionName: string,
+    subset: Subset.Subset,
+    edges: ReadonlyArray<Related.EdgeSelect>
+  ) => Effect.Effect<ReadonlyArray<Related.RelatedRow>>;
   /**
    * Hold a relational registration with the host for the scope's lifetime
    * without reading its resolved rows — an explicit pin's edge windows
@@ -318,6 +331,15 @@ export const make = (options: MirrorOptions): Effect.Effect<Mirror, never, Scope
     // one (a genuine restart, whose old in-memory bookkeeping is gone).
     const seenHostReady = yield* Ref.make(false);
     /** Add one unit of interest; posts Subscribe when it is the first. */
+    // The keys whose rows have reached this mirror since it last took an
+    // interest in them (#672). A host broadcasts its pulled summaries to every
+    // mirror, so a mirror can hold a key's mark before the host has sent it
+    // that key's rows: a key that has none here is not pulled, whatever its
+    // mark says. Cleared when the interest begins or ends, and on a host
+    // restart, so rows left from an earlier hold never count.
+    const received = yield* Ref.make(HashSet.empty<string>());
+    const forgetReceived = (key: string) => Ref.update(received, HashSet.remove(key));
+    const noteReceived = (key: string) => Ref.update(received, HashSet.add(key));
     const acquireInterest = (
       key: string,
       messages: {
@@ -339,7 +361,12 @@ export const make = (options: MirrorOptions): Effect.Effect<Mirror, never, Scope
         return [current === undefined, next] as const;
       }).pipe(
         Effect.flatMap((first) =>
-          first ? channel.post(messages.subscribe).pipe(Effect.ignore) : Effect.void
+          first
+            ? forgetReceived(key).pipe(
+                Effect.andThen(channel.post(messages.subscribe)),
+                Effect.ignore
+              )
+            : Effect.void
         )
       );
     /** Drop one unit of interest; posts Unsubscribe when it was the last. */
@@ -361,7 +388,9 @@ export const make = (options: MirrorOptions): Effect.Effect<Mirror, never, Scope
         return [undefined, next] as const;
       }).pipe(
         Effect.flatMap((unsubscribe) =>
-          unsubscribe === undefined ? Effect.void : channel.post(unsubscribe).pipe(Effect.ignore)
+          unsubscribe === undefined
+            ? Effect.void
+            : forgetReceived(key).pipe(Effect.andThen(channel.post(unsubscribe)), Effect.ignore)
         )
       );
     // Registers one unit of observer interest in `key` for as long as
@@ -388,7 +417,7 @@ export const make = (options: MirrorOptions): Effect.Effect<Mirror, never, Scope
     // shape differs from `LocalRow`.
     const mutationStatesRow = yield* Ref.make<MutationState.MutationStateMap>(HashMap.empty());
     // The host's pulled summaries of its registrations (#426); see `PulledRegistrations`.
-    const pulledKeys = yield* Ref.make<ReadonlyMap<string, Coverage.Pulled>>(new Map());
+    const pulledKeys = yield* SubscriptionRef.make<ReadonlyMap<string, Coverage.Pulled>>(new Map());
     // Monotonic seq stamped on every published key. The `rows` Ref is updated
     // before the key is published, so a re-read after a gap always sees the
     // latest rows even for a dropped key.
@@ -526,7 +555,9 @@ export const make = (options: MirrorOptions): Effect.Effect<Mirror, never, Scope
         const request = HashMap.get(map, requestId);
         return [
           request,
-          P.isTagged(outcome, "Item") ? map : HashMap.remove(map, requestId),
+          P.isTagged(outcome, "Item") || P.isTagged(outcome, "Started")
+            ? map
+            : HashMap.remove(map, requestId),
         ] as const;
       }).pipe(
         Effect.flatMap(
@@ -586,7 +617,8 @@ export const make = (options: MirrorOptions): Effect.Effect<Mirror, never, Scope
       // that up from the durable store regardless of what this
       // caller is told).
       Match.tag("HostReady", () =>
-        Ref.get(interests).pipe(
+        Ref.set(received, HashSet.empty<string>()).pipe(
+          Effect.andThen(Ref.get(interests)),
           Effect.flatMap((map) =>
             Effect.forEach(
               map.values(),
@@ -620,7 +652,7 @@ export const make = (options: MirrorOptions): Effect.Effect<Mirror, never, Scope
             message.key,
             message.rows.map((row) => ({ id: row.id, value: row.value }))
           )
-        ).pipe(Effect.andThen(publishKey(message.key)))
+        ).pipe(Effect.andThen(noteReceived(message.key)), Effect.andThen(publishKey(message.key)))
       ),
       Match.tag("RelatedUpdate", (message) =>
         Ref.update(relatedRows, (map) =>
@@ -632,7 +664,7 @@ export const make = (options: MirrorOptions): Effect.Effect<Mirror, never, Scope
               related: row.related as Record<string, Related.RelatedValue>,
             }))
           )
-        ).pipe(Effect.andThen(publishKey(message.key)))
+        ).pipe(Effect.andThen(noteReceived(message.key)), Effect.andThen(publishKey(message.key)))
       ),
       Match.tag("MutationStatesUpdate", (message) =>
         Ref.set(
@@ -646,7 +678,7 @@ export const make = (options: MirrorOptions): Effect.Effect<Mirror, never, Scope
         ).pipe(Effect.andThen(publishKey(MirrorProtocol.MUTATION_STATES_KEY)))
       ),
       Match.tag("PulledRegistrations", (message) =>
-        Ref.set(
+        SubscriptionRef.set(
           pulledKeys,
           new Map(message.registrations.map((entry) => [entry.key, entry.pulled]))
         )
@@ -944,10 +976,33 @@ export const make = (options: MirrorOptions): Effect.Effect<Mirror, never, Scope
             closeHostRequest(requestId)
           ).pipe(
             Effect.map(({ replies }) =>
-              Stream.fromQueue(replies).pipe(
-                // An `Item` keeps the stream open; anything else is its last
-                // reply. `End` closes it, and a `Failure` (or a `Value` from a
-                // host that answered it as single-reply) is handled as a reply.
+              // The first reply is due within `requestTimeout` (#628): a host
+              // sends `Started` once it accepts the request, and one that
+              // predates `Started` sends its first `Item`, `End` or `Failure`,
+              // so any reply acknowledges it. After that the stream waits as
+              // long as the host is quiet: a quiet stream is a healthy one.
+              Stream.unwrap(
+                Queue.take(replies).pipe(
+                  Effect.timeoutOrElse({
+                    duration: requestTimeout,
+                    orElse: () =>
+                      Effect.fail(
+                        HostRequest.unanswered(
+                          kind.name,
+                          "Mirror: the engine host did not accept the stream; it may predate host requests"
+                        )
+                      ),
+                  }),
+                  Effect.map((first) =>
+                    Stream.concat(Stream.make(first), Stream.fromQueue(replies))
+                  )
+                )
+              ).pipe(
+                // `Started` and `Item` keep the stream open; anything else is
+                // its last reply. `End` closes it, and a `Failure` (or a
+                // `Value` from a host that answered it as single-reply) is
+                // handled as a reply.
+                Stream.filter((outcome) => !P.isTagged(outcome, "Started")),
                 Stream.takeUntil((outcome) => !P.isTagged(outcome, "Item")),
                 Stream.filter((outcome) => !P.isTagged(outcome, "End")),
                 Stream.mapEffect((outcome) => HostRequest.replyValue(kind, outcome))
@@ -1028,8 +1083,19 @@ export const make = (options: MirrorOptions): Effect.Effect<Mirror, never, Scope
           return yield* Deferred.await(deferred);
         }),
       queryNamed: (name, args) => readKey(MirrorProtocol.namedKey(name, args)),
+      // A key's mark counts only once its rows are here (#672); see `received`.
       pulled: (key: string) =>
-        Ref.get(pulledKeys).pipe(Effect.map((map) => map.get(key) ?? Coverage.NOT_PULLED)),
+        Effect.all(
+          { marks: SubscriptionRef.get(pulledKeys), rowsHere: Ref.get(received) },
+          { concurrency: 1 }
+        ).pipe(
+          Effect.map(({ marks, rowsHere }) =>
+            HashSet.has(rowsHere, key)
+              ? (marks.get(key) ?? Coverage.NOT_PULLED)
+              : Coverage.NOT_PULLED
+          )
+        ),
+      pulledChanges: SubscriptionRef.changes(pulledKeys).pipe(Stream.as(undefined)),
       // Observing auto-registers with the host for the stream's lifetime:
       // the mirror only carries keys someone subscribed, so a live read IS a
       // subscription intent (refcounted; an explicit `subscribe` still pins a
@@ -1079,6 +1145,8 @@ export const make = (options: MirrorOptions): Effect.Effect<Mirror, never, Scope
         holdRelated(collectionName, subset, edgeInputs).pipe(
           Effect.map((key) => observeKey(key, readRelated(key)))
         ),
+      queryRelated: (_registry, collectionName, subset, edges) =>
+        readRelated(MirrorProtocol.relatedKey(collectionName, subset, edges)),
       pinEdges: (_registry, collectionName, subset, edgeInputs) =>
         Effect.asVoid(holdRelated(collectionName, subset, edgeInputs)),
     };

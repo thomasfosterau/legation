@@ -53,12 +53,12 @@ export type PageParams = typeof PageParams.Type;
  * JSON:API Request Options. `filter` is a filter-grammar AST (ADR-0028;
  * `Filter.eq("status", "open")`, `Filter.and(...)`, …), encoded exactly
  * through the grammar's canonical `filter[...]` form by
- * `JsonApiQuery.buildQueryString`.
+ * `JsonApiQuery.buildQueryString`. An absent member leaves its query family out.
  */
 export interface JsonApiRequestOptions {
-  include?: ReadonlyArray<string>;
-  fields?: Readonly<Record<string, ReadonlyArray<string>>>;
-  sort?: ReadonlyArray<SortTerm>;
-  filter?: Filter.Node;
-  page?: PageParams;
+  readonly include?: ReadonlyArray<string>;
+  readonly fields?: Readonly<Record<string, ReadonlyArray<string>>>;
+  readonly sort?: ReadonlyArray<SortTerm>;
+  readonly filter?: Filter.Node;
+  readonly page?: PageParams;
 }

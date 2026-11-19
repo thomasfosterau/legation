@@ -12,6 +12,7 @@
 import { describe, expect, it } from "@effect/vitest";
 import * as Arr from "effect/Array";
 import * as Effect from "effect/Effect";
+import * as Option from "effect/Option";
 import * as Layer from "effect/Layer";
 import * as Schema from "effect/Schema";
 import * as HttpApi from "effect/http-api/HttpApi";
@@ -21,11 +22,12 @@ import * as HttpClient from "effect/http/HttpClient";
 import * as HttpClientResponse from "effect/http/HttpClientResponse";
 import { Atomic } from "@thomasfosterau/effect-jsonapi";
 import type { Backend } from "@thomasfosterau/legation";
-import { ClientEngine, Subset } from "@thomasfosterau/legation/internal";
+import { ClientEngine, Subset, Defined } from "@thomasfosterau/legation/internal";
 import * as Convention from "../Convention.js";
 import * as JsonApiBackend from "../JsonApiBackend.js";
 import * as JsonApiSync from "../JsonApiSync.js";
 import { defined } from "./defined.js";
+import { withLayer } from "./with-layer.js";
 
 // A conventional JSON:API surface for `todos`, plus an atomic operations
 // endpoint declared with a plain HttpApiEndpoint: what makes it atomic is its
@@ -86,7 +88,7 @@ const rowResponse = (id: string, row: StoredRow) =>
         type: "todos",
         id,
         attributes: row.attributes,
-        ...(row.relationships !== undefined ? { relationships: row.relationships } : {}),
+        ...Defined.fields({ relationships: row.relationships }),
       },
     },
     jsonHeaders
@@ -163,9 +165,12 @@ const storeRow = (rows: Record<string, StoredRow>, data: any, merge: boolean): v
   const existing = merge ? rows[data.id] : undefined;
   rows[data.id] = {
     attributes: { ...existing?.attributes, ...data.attributes },
-    ...(existing?.relationships !== undefined || data.relationships !== undefined
-      ? { relationships: { ...existing?.relationships, ...data.relationships } }
-      : {}),
+    ...Defined.fields({
+      relationships:
+        existing?.relationships !== undefined || data.relationships !== undefined
+          ? { ...existing?.relationships, ...data.relationships }
+          : undefined,
+    }),
   };
 };
 
@@ -198,7 +203,7 @@ const makeBackend = (server: ReturnType<typeof makeServer>) =>
     mutators: registry.mutators,
     operations,
     atomic: { path: "/operations" },
-  }).pipe(Effect.provide(server.layer));
+  }).pipe(withLayer(server.layer));
 
 const context: Backend.SyncContext = { clientGroupId: "group-1" };
 const mutation = (mutationId: number, mutator: string, args: unknown) => ({
@@ -240,13 +245,15 @@ const rejectionAt = (index: number, detail: string) =>
 
 describe("Convention.reflectAtomic", () => {
   it("recognises the operations endpoint by its payload, wherever it is routed", () => {
-    expect(Convention.reflectAtomic(api)).toEqual({
-      groupId: "operations",
-      name: "operations",
-      method: "POST",
-      path: "/operations",
-    });
-    expect(Convention.reflectAtomic(plainApi)).toBeUndefined();
+    expect(Convention.reflectAtomic(api)).toEqual(
+      Option.some({
+        groupId: "operations",
+        name: "operations",
+        method: "POST",
+        path: "/operations",
+      })
+    );
+    expect(Convention.reflectAtomic(plainApi)).toEqual(Option.none());
     const custom = plainApi.add(
       HttpApiGroup.make("batch").add(
         HttpApiEndpoint.post("batch", "/api/v2/batch", {
@@ -255,7 +262,9 @@ describe("Convention.reflectAtomic", () => {
         })
       )
     );
-    expect(Convention.reflectAtomic(custom)?.path).toBe("/api/v2/batch");
+    expect(Option.map(Convention.reflectAtomic(custom), ({ path }) => path)).toEqual(
+      Option.some("/api/v2/batch")
+    );
     // The document may be one arm of a union (or behind a suspension) and is still recognised.
     const unioned = plainApi.add(
       HttpApiGroup.make("batch").add(
@@ -268,7 +277,9 @@ describe("Convention.reflectAtomic", () => {
         })
       )
     );
-    expect(Convention.reflectAtomic(unioned)?.path).toBe("/batch");
+    expect(Option.map(Convention.reflectAtomic(unioned), ({ path }) => path)).toEqual(
+      Option.some("/batch")
+    );
     expect(Convention.reflectResources(unioned).has("batch")).toBe(false);
   });
 
@@ -282,8 +293,8 @@ describe("Convention.reflectAtomic", () => {
       "todos/update",
     ]);
     expect(inspected.operations.has("operations/create")).toBe(false);
-    expect(inspected.atomic?.path).toBe("/operations");
-    expect(JsonApiSync.inspect(plainApi).atomic).toBeUndefined();
+    expect(Option.map(inspected.atomic, ({ path }) => path)).toEqual(Option.some("/operations"));
+    expect(JsonApiSync.inspect(plainApi).atomic).toEqual(Option.none());
   });
 });
 
@@ -549,8 +560,8 @@ const makeModeBackend = (mode: HintMode, server: ReturnType<typeof makeServer>) 
     resources,
     mutators: registry.mutators,
     operations,
-    ...(mode === "atomic" ? { atomic: { path: "/operations" } } : {}),
-  }).pipe(Effect.provide(server.layer));
+    ...Defined.fields({ atomic: mode === "atomic" ? { path: "/operations" } : undefined }),
+  }).pipe(withLayer(server.layer));
 
 for (const mode of ["atomic", "per-resource"] as const) {
   describe(`JsonApiBackend change hints across mutations, ${mode} path`, () => {
@@ -1205,8 +1216,8 @@ describe("JsonApiBackend checks getOne for the whole push before its first write
             resources: inspected.resources,
             mutators: inspected.registry.mutators,
             operations: inspected.operations,
-            ...(mode === "atomic" ? { atomic: { path: "/operations" } } : {}),
-          }).pipe(Effect.provide(server.layer));
+            ...Defined.fields({ atomic: mode === "atomic" ? { path: "/operations" } : undefined }),
+          }).pipe(withLayer(server.layer));
 
           const failure = yield* Effect.flip(
             backend.applyMutations(context, [
@@ -1245,8 +1256,8 @@ describe("JsonApiBackend without a getOne route for updated or deleted resources
           resources: inspected.resources,
           mutators: inspected.registry.mutators,
           operations: inspected.operations,
-          ...(mode === "atomic" ? { atomic: { path: "/operations" } } : {}),
-        }).pipe(Effect.provide(server.layer));
+          ...Defined.fields({ atomic: mode === "atomic" ? { path: "/operations" } : undefined }),
+        }).pipe(withLayer(server.layer));
 
         const failure = yield* Effect.flip(
           backend.applyMutations(context, [
@@ -1273,7 +1284,7 @@ describe("JsonApiBackend without a getOne route for updated or deleted resources
         resources: inspected.resources,
         mutators: inspected.registry.mutators,
         operations: inspected.operations,
-      }).pipe(Effect.provide(server.layer));
+      }).pipe(withLayer(server.layer));
       const result = yield* backend.applyMutations(context, [
         mutation(1, "todos/create", { type: "todos", id: "1", attributes: { title: "x" } }),
       ]);
@@ -1404,7 +1415,7 @@ describe("JsonApiSync.layer atomic detection", () => {
     Effect.gen(function* () {
       const server = makeStatefulServer();
       const titles = yield* createAndSync.pipe(
-        Effect.provide(
+        withLayer(
           JsonApiSync.layer(api, {
             baseUrl: "http://api.test",
             clientId: "client-1",
@@ -1423,7 +1434,7 @@ describe("JsonApiSync.layer atomic detection", () => {
     Effect.gen(function* () {
       const server = makeStatefulServer();
       const titles = yield* createAndSync.pipe(
-        Effect.provide(
+        withLayer(
           JsonApiSync.layer(api, {
             baseUrl: "http://api.test",
             clientId: "client-1",
@@ -1481,8 +1492,8 @@ const makeRejectingBackend = (mode: HintMode, server: ReturnType<typeof rejectin
     resources,
     mutators: registry.mutators,
     operations,
-    ...(mode === "atomic" ? { atomic: { path: "/operations" } } : {}),
-  }).pipe(Effect.provide(server.layer));
+    ...Defined.fields({ atomic: mode === "atomic" ? { path: "/operations" } : undefined }),
+  }).pipe(withLayer(server.layer));
 
 const createFour = mutation(4, "todos/create", {
   type: "todos",
@@ -1579,7 +1590,7 @@ describe("JsonApiBackend getRows after its own writes (#395)", () => {
         ]);
 
         const [row] = yield* backend.getRows(context, "todos", ["1"]);
-        expect((row?.value as { title?: string } | undefined)?.title).toBe("second");
+        expect((defined(row).value as { title?: string }).title).toBe("second");
         // Only the listing and the read before the write reached the server.
         expect(readsOf(server, "/todos")).toHaveLength(1);
         expect(readsOf(server, "/todos/1")).toHaveLength(1);
@@ -1634,9 +1645,7 @@ const twoUpdates = [updateRowOne, updateRowTwo];
 
 /** The title `getRows` serves for each row, by id. */
 const titlesOf = (rows: ReadonlyArray<{ readonly id: string; readonly value: unknown }>) =>
-  Object.fromEntries(
-    rows.map((row) => [row.id, (row.value as { title?: string } | undefined)?.title])
-  );
+  Object.fromEntries(rows.map((row) => [row.id, (row.value as { title?: string }).title]));
 
 /**
  * The cache is updated only by writes the server applied (#395): a rejected or

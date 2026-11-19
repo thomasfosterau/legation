@@ -26,6 +26,14 @@
  * Figma's original algorithm) and not specific to this implementation.
  */
 
+import * as Schema from "effect/Schema";
+
+/** Thrown by `generateBetween` when `lo` does not sort before `hi`. */
+class InvalidBounds extends Schema.TaggedError<InvalidBounds, { readonly brand: unique symbol }>()(
+  "InvalidBounds",
+  { message: Schema.String }
+) {}
+
 const DIGITS = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz";
 const BASE = DIGITS.length;
 const ZERO = DIGITS.charAt(0);
@@ -55,9 +63,9 @@ export const compare = (a: string, b: string): number => {
  */
 export const generateBetween = (lo?: string, hi?: string): string => {
   if (lo !== undefined && hi !== undefined && compare(lo, hi) >= 0) {
-    throw new Error(
-      `FractionalIndex.generateBetween: lo (${JSON.stringify(lo)}) must sort before hi (${JSON.stringify(hi)})`
-    );
+    throw new InvalidBounds({
+      message: `FractionalIndex.generateBetween: lo (${JSON.stringify(lo)}) must sort before hi (${JSON.stringify(hi)})`,
+    });
   }
   const digits: Array<number> = [];
   let unbounded = hi === undefined;

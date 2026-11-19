@@ -12,6 +12,7 @@ import { describe, expect, it } from "@effect/vitest";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Metric from "effect/Metric";
+import * as Option from "effect/Option";
 import * as Stream from "effect/Stream";
 import * as CacheApiHttpCache from "../CacheApiHttpCache.js";
 import * as HttpCacheInvalidation from "../HttpCacheInvalidation.js";
@@ -76,8 +77,8 @@ describe("invalidateOnChanges", () => {
       );
 
       // The todos entry (tagged collection:todos) is gone; notes is untouched.
-      expect(yield* store.match(todos)).toBeUndefined();
-      expect(yield* store.match(notes)).toBeDefined();
+      expect(Option.isNone(yield* store.match(todos))).toBe(true);
+      expect(Option.isSome(yield* store.match(notes))).toBe(true);
     })
   );
 
@@ -117,7 +118,7 @@ describe("invalidateOnChanges", () => {
 
       // The fibre survived the first (failed) batch and evicted on the second.
       expect(calls).toBe(2);
-      expect(yield* base.match(notes)).toBeUndefined();
+      expect(Option.isNone(yield* base.match(notes))).toBe(true);
     })
   );
 
@@ -165,10 +166,10 @@ describe("invalidateOnChanges", () => {
         );
 
         // Row A's own entry is gone (fine tag matched).
-        expect(yield* store.match(rowA)).toBeUndefined();
+        expect(Option.isNone(yield* store.match(rowA))).toBe(true);
         // Row B's entry survives: it carries neither the fine tag for A nor
         // (in this response) the coarse tag, so the write to A cannot touch it.
-        expect(yield* store.match(rowB)).toBeDefined();
+        expect(Option.isSome(yield* store.match(rowB))).toBe(true);
       })
   );
 
@@ -209,7 +210,7 @@ describe("invalidateOnChanges", () => {
           })
         );
 
-        expect(yield* store.match(aggregate)).toBeUndefined();
+        expect(Option.isNone(yield* store.match(aggregate))).toBe(true);
       })
   );
 });

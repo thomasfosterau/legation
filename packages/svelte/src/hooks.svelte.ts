@@ -28,6 +28,8 @@ import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
 import * as HashMap from "effect/HashMap";
+import * as Layer from "effect/Layer";
+import * as ManagedRuntime from "effect/ManagedRuntime";
 import * as Option from "effect/Option";
 import * as P from "effect/Predicate";
 import * as R from "effect/Record";
@@ -72,8 +74,12 @@ export interface LiveOptions<A> {
   readonly initial?: A;
 }
 
-/** The rows a read resolves to: node values with their included edges. */
-export type ResolvedRows = ReadonlyArray<Client.ResolvedRow>;
+/**
+ * The rows a read resolves to: node values with their included edges, typed
+ * by the app's registered graph (`Client.ResolvedRow`, `Register`) for a read
+ * whose collection is a literal of it, and untyped otherwise.
+ */
+export type ResolvedRows<R extends Query.Read = Query.Read> = ReadonlyArray<Client.ResolvedRow<R>>;
 const EMPTY_ROWS: ResolvedRows = [];
 
 /** A `promise` that never settles — `.promise` while a read thunk opts out. */
@@ -154,6 +160,13 @@ const live = <A, E>(
  * IS subscribing: the read's windows are registered for the hook's
  * lifetime through the Client's ledger.
  *
+ * The rows are typed from the read — declared `as const satisfies
+ * Query.Read`, or written inline — and the app's registered graph
+ * (`Register` on `@thomasfosterau/legation`): `row.value` is the node's row,
+ * `row.related` carries exactly the included edges, and a misnamed
+ * collection, edge or field fails to compile here (`Query.Validate`). With no
+ * graph registered, or for a dynamic read, the rows are untyped.
+ *
  * The thunk may return `undefined` to opt out (#141) — "nothing right now",
  * for a read keyed on a selection that starts empty. No window is
  * registered and no request is issued; `current` stays `Initial` rather
@@ -162,10 +175,10 @@ const live = <A, E>(
  * stays reactive either way: flipping the condition subscribes/unsubscribes
  * with the same stale-while-revalidate behaviour as any other input change.
  */
-export const useQuery = (
-  read: () => Query.Read | undefined,
-  options?: LiveOptions<ResolvedRows>
-): Live<ResolvedRows> =>
+export const useQuery = <const R extends Query.Read>(
+  read: () => (R & Query.Validate<Client.Registered, R>) | undefined,
+  options?: LiveOptions<ResolvedRows<R>>
+): Live<ResolvedRows<R>> =>
   live(
     getClientRuntime(),
     () => {
@@ -176,8 +189,35 @@ export const useQuery = (
     options
   );
 
+/**
+ * Live answer of a declarative read: {@link useQuery}'s rows with their
+ * completeness beside them (`Client.Answer`, #653), from
+ * `Client.observeAnswers`.
+ *
+ * `completeness` is `"partial"` while the read's windows are not pulled yet
+ * (offline, or before the first pull), so the replica may hold fewer rows
+ * than the server, and `"complete"` once a pull covers them. The rows are
+ * typed and the read checked as {@link useQuery}'s are, against the app's
+ * registered graph; the thunk may return `undefined` to opt out in the same
+ * way. A seed from `initial` is an answer the page already holds, with the
+ * completeness it was given.
+ */
+export const useAnswer = <const R extends Query.Read>(
+  read: () => (R & Query.Validate<Client.Registered, R>) | undefined,
+  options?: LiveOptions<Client.Answer<R>>
+): Live<Client.Answer<R>> =>
+  live(
+    getClientRuntime(),
+    () => {
+      const value = read();
+      if (value === undefined) return undefined;
+      return (client) => client.observeAnswers(value);
+    },
+    options
+  );
+
 /** A live, growing connection over a read's root window (ADR-0024). */
-export interface Connection extends Live<ResolvedRows> {
+export interface Connection<R extends Query.Read = Query.Read> extends Live<ResolvedRows<R>> {
   /**
    * Widen the window by one page. A no-op while a widen is still resolving
    * or once {@link hasMore} is false — call it freely from a click handler.
@@ -198,7 +238,9 @@ export interface Connection extends Live<ResolvedRows> {
 }
 
 /** Options for {@link useConnection}. */
-export interface ConnectionOptions extends LiveOptions<ResolvedRows> {
+export interface ConnectionOptions<R extends Query.Read = Query.Read> extends LiveOptions<
+  ResolvedRows<R>
+> {
   /** Rows per page — the window grows by this on each `loadMore`. Default 20. */
   readonly pageSize?: number;
 }
@@ -231,6 +273,8 @@ const connectionKey = (read: Query.Read): string => {
  * // <button onclick={reviews.loadMore} disabled={!reviews.hasMore}>More</button>
  * ```
  *
+ * Rows are typed and the read checked as {@link useQuery}'s are.
+ *
  * The read thunk may return `undefined` to opt out (#141): no window is
  * registered and no request issued, `current` stays `Initial`, and paging
  * state (`hasMore`/`loading`) reads as idle until the thunk starts returning
@@ -247,10 +291,10 @@ const connectionKey = (read: Query.Read): string => {
  * A joined read, or a mirror-backed connection, falls back to the original
  * resubscribe-per-page behavior, unchanged.
  */
-export const useConnection = (
-  read: () => Query.Read | undefined,
-  options?: ConnectionOptions
-): Connection => {
+export const useConnection = <const R extends Query.Read>(
+  read: () => (R & Query.Validate<Client.Registered, R>) | undefined,
+  options?: ConnectionOptions<R>
+): Connection<R> => {
   const pageSize = options?.pageSize ?? 20;
   const runtime = getClientRuntime();
   let pages = $state(1);
@@ -283,7 +327,7 @@ export const useConnection = (
   const windowed = live(
     runtime,
     () => {
-      const value = read();
+      const value: Query.Read | undefined = read();
       if (value === undefined) {
         retargetHandle = undefined;
         return undefined;
@@ -321,7 +365,7 @@ export const useConnection = (
     options
   );
 
-  const rows = (): ResolvedRows => AsyncResult.getOrElse(windowed.current, () => EMPTY_ROWS);
+  const rows = (): ResolvedRows<R> => AsyncResult.getOrElse(windowed.current, () => EMPTY_ROWS);
 
   const widenTo = (nextPages: number) => {
     pages = nextPages;
@@ -375,8 +419,8 @@ export const useNamedQuery = (
  * tier only — the aggregate sees the rows this client has synced. The read
  * thunk may return `undefined` to opt out (#141): see {@link useQuery}.
  */
-export const useAggregate = (
-  read: () => Query.Read | undefined,
+export const useAggregate = <const R extends Query.Read>(
+  read: () => (R & Query.Validate<Client.Registered, R>) | undefined,
   aggregate: Aggregate.Aggregate,
   options?: LiveOptions<Aggregate.AggregateValue>
 ): Live<Aggregate.AggregateValue> =>
@@ -399,8 +443,8 @@ export const useAggregate = (
  * `String(row.value[groupBy])`. The read thunk may return `undefined` to
  * opt out (#141): see {@link useQuery}.
  */
-export const useAggregateGrouped = (
-  read: () => Query.Read | undefined,
+export const useAggregateGrouped = <const R extends Query.Read>(
+  read: () => (R & Query.Validate<Client.Registered, R>) | undefined,
   aggregate: Aggregate.Aggregate,
   groupBy: string,
   options?: LiveOptions<Record<string, Aggregate.AggregateValue>>
@@ -485,17 +529,21 @@ export interface UndoControls {
   readonly redo: () => Promise<void>;
 }
 
+// The adapter's own runtime for the undo hooks: the manager's streams and effects close over the
+// engine (no `R`), so there is no service to supply and no Client to find in context.
+const edge = ManagedRuntime.make(Layer.empty);
+
 /** Drain a boolean stream into `$state`, interrupting on teardown. */
 const useFlag = (changes: Stream.Stream<boolean>): { readonly current: boolean } => {
   let value = $state(false);
   $effect(() => {
     // The manager's streams close over the engine (no `R`), so they run on the
     // default runtime — `useUndo` needs no Client in context.
-    const fiber = Effect.runFork(
+    const fiber = edge.runFork(
       Stream.runForEach(changes, (next) => Effect.sync(() => (value = next)))
     );
     return () => {
-      Effect.runFork(Fiber.interrupt(fiber));
+      edge.runFork(Fiber.interrupt(fiber));
     };
   });
   return {
@@ -520,7 +568,7 @@ export const useUndo = <E>(manager: Undo.UndoManager<E>): UndoControls => {
     get canRedo() {
       return canRedo.current;
     },
-    undo: () => Effect.runPromise(Effect.ignore(manager.undo)),
-    redo: () => Effect.runPromise(Effect.ignore(manager.redo)),
+    undo: () => edge.runPromise(Effect.ignore(manager.undo)),
+    redo: () => edge.runPromise(Effect.ignore(manager.redo)),
   };
 };

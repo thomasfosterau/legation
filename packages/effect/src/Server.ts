@@ -173,7 +173,10 @@ const receiptOf = (
  * to in-memory / in-process.
  */
 export interface MakeOptions {
-  /** The storage contract (ADR-0009). */
+  /**
+   * The storage contract (ADR-0009). A backend from `Backend.perRequest` is
+   * acquired once per push, pull and read, in that request's scope (#681).
+   */
   readonly backend: BackendService;
   readonly auth: {
     /** Deny-by-default per-collection filters. */

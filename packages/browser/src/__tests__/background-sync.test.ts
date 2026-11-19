@@ -42,9 +42,11 @@ import {
   SyncServer,
 } from "@thomasfosterau/legation/internal";
 import type { Protocol } from "@thomasfosterau/legation/internal";
-import { describe, expect, it } from "@effect/vitest";
+import { describe, describeWrapped, expect, layer } from "@effect/vitest";
 import * as Arr from "effect/Array";
+import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
+import { awaitPromise } from "./await-promise.js";
 import * as HashMap from "effect/HashMap";
 import * as Layer from "effect/Layer";
 import * as Logger from "effect/Logger";
@@ -59,6 +61,7 @@ import { KeyValueStore } from "effect/persistence";
 import * as BackgroundSync from "../BackgroundSync.js";
 import * as ServiceWorkerHost from "../ServiceWorkerHost.js";
 import { defined } from "./defined.js";
+import { TestFailure } from "./test-failure.js";
 
 interface Todo {
   readonly id: string;
@@ -153,8 +156,8 @@ const listenOn = (
 
 /** Await a held `waitUntil` promise, as its outcome or its rejection. */
 const settle = (promise: Promise<unknown> | undefined) =>
-  Effect.promise(() =>
-    (promise ?? Promise.reject(new Error("nothing was held"))).then(
+  awaitPromise(() =>
+    (promise ?? Promise.reject(new TestFailure({ message: "nothing was held" }))).then(
       (value) => ({ ok: true as const, value }),
       (error: unknown) => ({ ok: false as const, error })
     )
@@ -229,20 +232,26 @@ const makeEngine = (
     return { engine, store, pushes, failure, pullsDown };
   });
 
-/** Every log line at `Warn` or above, with the minimum level lowered to `All`. */
-const recordLogs = () => {
-  const loud: Array<string> = [];
-  const logger = Logger.make((options) => {
-    if (LogLevel.isGreaterThanOrEqualTo(options.logLevel, "Warn")) {
-      loud.push(`${options.logLevel}: ${String(options.message)}`);
-    }
-  });
-  const layer = Layer.merge(
-    Logger.layer([logger]),
-    Layer.succeed(References.MinimumLogLevel)("All")
+/** Every log line at `Warn` or above one test logged, with the minimum level lowered to `All`. */
+class Logs extends Context.Service<Logs, { readonly loud: Array<string> }>()(
+  "test/BackgroundSync/Logs"
+) {
+  static readonly layer = Layer.unwrap(
+    Effect.sync(() => {
+      const loud: Array<string> = [];
+      const logger = Logger.make((options) => {
+        if (LogLevel.isGreaterThanOrEqualTo(options.logLevel, "Warn")) {
+          loud.push(`${options.logLevel}: ${String(options.message)}`);
+        }
+      });
+      return Layer.mergeAll(
+        Layer.succeed(Logs)({ loud }),
+        Logger.layer([logger]),
+        Layer.succeed(References.MinimumLogLevel)("All")
+      );
+    })
   );
-  return { loud, layer };
-};
+}
 
 const phases = (engine: ClientEngine.ClientEngine) =>
   Stream.runHead(engine.mutationStates).pipe(
@@ -270,14 +279,14 @@ const eventually = <A, E>(read: Effect.Effect<A, E>, check: (value: A) => boolea
       if (check(value)) return value;
       yield* Effect.sleep("20 millis");
     }
-    return yield* Effect.die(new Error("condition never held"));
+    return yield* Effect.die(new TestFailure({ message: "condition never held" }));
   });
 
 const uniqueChannel = () => `legation-bg-${crypto.randomUUID()}`;
 
 // ─── Tests ───────────────────────────────────────────────────────────────────
 
-describe("BackgroundSync (#213)", () => {
+describeWrapped("BackgroundSync (#213)", (it) => {
   it.live(
     "journal → sync event → push → acknowledgement → overlay drop, composed into ServiceWorkerHost",
     () =>
@@ -431,42 +440,13 @@ describe("BackgroundSync (#213)", () => {
     }).pipe(Effect.scoped)
   );
 
-  it.live("a store failure rejects the event and is logged at Warn", () =>
-    Effect.gen(function* () {
-      const logs = recordLogs();
-      const self = fakeScope();
-      const listener = listenOn(self);
-      const inner = yield* ClientStore.makeMemory;
-      const broken = yield* Ref.make(false);
-      const store: ClientStore.ClientStore = {
-        ...inner,
-        pendingMutations: Ref.get(broken).pipe(
-          Effect.flatMap((down) =>
-            down ? Effect.fail(new StoreError({ message: "disk gone" })) : inner.pendingMutations
-          )
-        ),
-      };
-      const { engine } = yield* makeEngine(store);
-      // The flush runs under the services of whoever attached it.
-      yield* listener.serve(engine).pipe(Effect.provide(logs.layer));
-      yield* engine.mutate("todo/set", { id: "1", title: "pending" });
-
-      yield* Ref.set(broken, true);
-      const failed = yield* settle(self.dispatch(BackgroundSync.defaultTag).held[0]);
-      expect(failed.ok).toBe(false);
-      expect(failed.ok === false && (failed.error as { _tag?: string })._tag).toBe("StoreError");
-      expect(logs.loud).toHaveLength(1);
-      expect(logs.loud[0]).toMatch(/^Warn: .*store/);
-    }).pipe(Effect.scoped)
-  );
-
   it.live("with no host attached in time, the event rejects rather than hanging the worker", () =>
     Effect.gen(function* () {
       const self = fakeScope();
       listenOn(self, { readyTimeout: "50 millis" });
       const result = yield* settle(self.dispatch(BackgroundSync.defaultTag).held[0]);
       expect(result.ok).toBe(false);
-      expect(result.ok === false && (result.error as { _tag?: string })._tag).toBe("HostNotReady");
+      expect(!result.ok && (result.error as { _tag?: string })._tag).toBe("HostNotReady");
     })
   );
 
@@ -693,9 +673,12 @@ describe("BackgroundSync (#213)", () => {
       }).pipe(Effect.scoped)
     );
   });
+});
 
-  describe("the identity boundary (#212)", () => {
-    it.live("a sync event does not push a quarantined journal", () =>
+// A live clock (`excludeTestServices`): the flushes below race the host's real timers.
+describe("BackgroundSync identity boundary (#212)", () => {
+  layer(KeyValueStore.layerMemory, { excludeTestServices: true })((scoped) => {
+    scoped.effect("a sync event does not push a quarantined journal", () =>
       Effect.gen(function* () {
         const self = fakeScope();
         // Bob is who the app says is signed in now.
@@ -715,63 +698,105 @@ describe("BackgroundSync (#213)", () => {
         // not lost.
         expect(yield* Ref.get(pushes)).toEqual([]);
         expect(yield* engine.quarantinedMutations(ALICE)).toHaveLength(1);
-      }).pipe(Effect.scoped, Effect.provide(KeyValueStore.layerMemory))
+      }).pipe(Effect.scoped)
     );
+  });
 
-    it.live("a replica stamped for someone other than the current identity is not flushed", () =>
-      Effect.gen(function* () {
-        // The tab closed before the app called `reset`: the store is still
-        // stamped for Alice, but Bob is who the app now says is signed in.
-        const current = yield* Ref.make<Identity.Fingerprint | undefined>(BOB);
-        const self = fakeScope();
-        const listener = listenOn(self, { identity: Ref.get(current) });
-        const store = yield* ClientStore.makeKeyValue({ identity: ALICE });
-        const { engine, pushes } = yield* makeEngine(store);
-        yield* listener.serve(engine);
-        yield* engine.mutate("todo/set", { id: "1", title: "alice's unsynced write" });
+  layer(KeyValueStore.layerMemory, { excludeTestServices: true })((scoped) => {
+    scoped.effect(
+      "a replica stamped for someone other than the current identity is not flushed",
+      () =>
+        Effect.gen(function* () {
+          // The tab closed before the app called `reset`: the store is still
+          // stamped for Alice, but Bob is who the app now says is signed in.
+          const current = yield* Ref.make<Identity.Fingerprint | undefined>(BOB);
+          const self = fakeScope();
+          const listener = listenOn(self, { identity: Ref.get(current) });
+          const store = yield* ClientStore.makeKeyValue({ identity: ALICE });
+          const { engine, pushes } = yield* makeEngine(store);
+          yield* listener.serve(engine);
+          yield* engine.mutate("todo/set", { id: "1", title: "alice's unsynced write" });
 
-        const skipped = yield* settle(self.dispatch(BackgroundSync.defaultTag).held[0]);
-        expect(skipped).toEqual({ ok: true, value: "IdentityChanged" });
-        expect(yield* Ref.get(pushes)).toEqual([]);
-        expect(yield* store.pendingMutations).toHaveLength(1);
+          const skipped = yield* settle(self.dispatch(BackgroundSync.defaultTag).held[0]);
+          expect(skipped).toEqual({ ok: true, value: "IdentityChanged" });
+          expect(yield* Ref.get(pushes)).toEqual([]);
+          expect(yield* store.pendingMutations).toHaveLength(1);
 
-        // "Cannot tell who is signed in" skips too.
-        yield* Ref.set(current, undefined);
-        const unknown = yield* settle(self.dispatch(BackgroundSync.defaultTag).held[0]);
-        expect(unknown).toEqual({ ok: true, value: "IdentityChanged" });
-        expect(yield* Ref.get(pushes)).toEqual([]);
+          // "Cannot tell who is signed in" skips too.
+          yield* Ref.set(current, undefined);
+          const unknown = yield* settle(self.dispatch(BackgroundSync.defaultTag).held[0]);
+          expect(unknown).toEqual({ ok: true, value: "IdentityChanged" });
+          expect(yield* Ref.get(pushes)).toEqual([]);
 
-        // Alice is signed in again: her journal is hers to push.
-        yield* Ref.set(current, ALICE);
-        const flushed = yield* settle(self.dispatch(BackgroundSync.defaultTag).held[0]);
-        expect(flushed).toEqual({ ok: true, value: "Flushed" });
-        expect(yield* Ref.get(pushes)).toHaveLength(1);
-        expect(yield* store.pendingMutations).toEqual([]);
-      }).pipe(Effect.scoped, Effect.provide(KeyValueStore.layerMemory))
+          // Alice is signed in again: her journal is hers to push.
+          yield* Ref.set(current, ALICE);
+          const flushed = yield* settle(self.dispatch(BackgroundSync.defaultTag).held[0]);
+          expect(flushed).toEqual({ ok: true, value: "Flushed" });
+          expect(yield* Ref.get(pushes)).toHaveLength(1);
+          expect(yield* store.pendingMutations).toEqual([]);
+        }).pipe(Effect.scoped)
     );
+  });
 
-    it.live("an anonymous replica is not flushed under a sign-in, and is under anonymous", () =>
+  layer(KeyValueStore.layerMemory, { excludeTestServices: true })((scoped) => {
+    scoped.effect(
+      "an anonymous replica is not flushed under a sign-in, and is under anonymous",
+      () =>
+        Effect.gen(function* () {
+          // Anonymous → signed in is the one benign transition, but a
+          // context with no UI does not apply it: the page boot does.
+          const current = yield* Ref.make<Identity.Fingerprint | undefined>(ALICE);
+          const self = fakeScope();
+          const listener = listenOn(self, { identity: Ref.get(current) });
+          const store = yield* ClientStore.makeKeyValue({ identity: Identity.anonymous });
+          const { engine, pushes } = yield* makeEngine(store);
+          yield* listener.serve(engine);
+          yield* engine.mutate("todo/set", { id: "1", title: "an anonymous write" });
+
+          const skipped = yield* settle(self.dispatch(BackgroundSync.defaultTag).held[0]);
+          expect(skipped).toEqual({ ok: true, value: "IdentityChanged" });
+          expect(yield* Ref.get(pushes)).toEqual([]);
+          expect(yield* store.pendingMutations).toHaveLength(1);
+
+          yield* Ref.set(current, Identity.anonymous);
+          const flushed = yield* settle(self.dispatch(BackgroundSync.defaultTag).held[0]);
+          expect(flushed).toEqual({ ok: true, value: "Flushed" });
+          expect(yield* Ref.get(pushes)).toHaveLength(1);
+        }).pipe(Effect.scoped)
+    );
+  });
+});
+
+// A live clock (`excludeTestServices`): the flush races the host's real timers.
+describe("BackgroundSync store failure logging", () => {
+  layer(Logs.layer, { excludeTestServices: true })((scoped) => {
+    scoped.effect("a store failure rejects the event and is logged at Warn", () =>
       Effect.gen(function* () {
-        // Anonymous → signed in is the one benign transition, but a
-        // context with no UI does not apply it: the page boot does.
-        const current = yield* Ref.make<Identity.Fingerprint | undefined>(ALICE);
+        const logs = yield* Logs;
         const self = fakeScope();
-        const listener = listenOn(self, { identity: Ref.get(current) });
-        const store = yield* ClientStore.makeKeyValue({ identity: Identity.anonymous });
-        const { engine, pushes } = yield* makeEngine(store);
+        const listener = listenOn(self);
+        const inner = yield* ClientStore.makeMemory;
+        const broken = yield* Ref.make(false);
+        const store: ClientStore.ClientStore = {
+          ...inner,
+          pendingMutations: Ref.get(broken).pipe(
+            Effect.flatMap((down) =>
+              down ? Effect.fail(new StoreError({ message: "disk gone" })) : inner.pendingMutations
+            )
+          ),
+        };
+        const { engine } = yield* makeEngine(store);
+        // The flush runs under the services of whoever attached it.
         yield* listener.serve(engine);
-        yield* engine.mutate("todo/set", { id: "1", title: "an anonymous write" });
+        yield* engine.mutate("todo/set", { id: "1", title: "pending" });
 
-        const skipped = yield* settle(self.dispatch(BackgroundSync.defaultTag).held[0]);
-        expect(skipped).toEqual({ ok: true, value: "IdentityChanged" });
-        expect(yield* Ref.get(pushes)).toEqual([]);
-        expect(yield* store.pendingMutations).toHaveLength(1);
-
-        yield* Ref.set(current, Identity.anonymous);
-        const flushed = yield* settle(self.dispatch(BackgroundSync.defaultTag).held[0]);
-        expect(flushed).toEqual({ ok: true, value: "Flushed" });
-        expect(yield* Ref.get(pushes)).toHaveLength(1);
-      }).pipe(Effect.scoped, Effect.provide(KeyValueStore.layerMemory))
+        yield* Ref.set(broken, true);
+        const failed = yield* settle(self.dispatch(BackgroundSync.defaultTag).held[0]);
+        expect(failed.ok).toBe(false);
+        expect(!failed.ok && (failed.error as { _tag?: string })._tag).toBe("StoreError");
+        expect(logs.loud).toHaveLength(1);
+        expect(logs.loud[0]).toMatch(/^Warn: .*store/);
+      }).pipe(Effect.scoped)
     );
   });
 });

@@ -14,6 +14,7 @@
  */
 
 import * as Effect from "effect/Effect";
+import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 import { Collection, Mutator } from "@thomasfosterau/legation";
 import type { RelationshipRef, ResourceValue } from "./CollectionLoader.js";
@@ -38,12 +39,31 @@ export const toRow = (value: ResourceValue): JsonApiRow => ({
   relationships: value.relationships,
 });
 
-/** Permissive codec for a row (the engine never decodes rows through it). */
-// oxlint-disable-next-line effect/avoid-any, effect/no-chained-type-assertions -- deliberately permissive: the runtime codec is `Record<string, unknown>` (no `id`/`relationships` check), typed as the row it carries; the two types do not overlap, so no single assertion or schema change keeps both the runtime behaviour and the exported type
-export const RowSchema = Schema.Record(
-  Schema.String,
-  Schema.Unknown
-) as unknown as Schema.Codec<JsonApiRow>;
+/** A resource identifier in a row's relationship linkage. */
+const Linkage = Schema.Struct({ type: Schema.String, id: Schema.String });
+
+/**
+ * A row's checked members: its `id` and its `relationships` linkage (to-one,
+ * to-many, or `null` for an empty to-one), with every other field (the
+ * flattened attributes) passed through as is.
+ */
+const Row = Schema.StructWithRest(
+  Schema.Struct({
+    id: Schema.String,
+    relationships: Schema.Record(
+      Schema.String,
+      Schema.NullOr(Schema.Union([Linkage, Schema.Array(Linkage)]))
+    ),
+  }),
+  [Schema.Record(Schema.String, Schema.Unknown)]
+);
+
+/**
+ * Codec for a row: its `id` and relationship linkage are checked, and the
+ * flattened attributes pass through as is. The engine never decodes a stored
+ * row through it on read (ADR-0014).
+ */
+export const RowSchema: Schema.Codec<JsonApiRow> = Row;
 
 /** The collection for a resource type: rows keyed by resource id. */
 export const collectionFor = (type: string): Collection.Collection<JsonApiRow> =>
@@ -135,7 +155,7 @@ export const derive = (resources: ResourceMap): Derived => {
     const type = resource.type;
     collections.push(collectionFor(type));
 
-    if (resource.create !== undefined) {
+    if (Option.isSome(resource.create)) {
       add(type, "create", CreateArgs, (args, writer) =>
         writer.put(
           type,
@@ -150,13 +170,16 @@ export const derive = (resources: ResourceMap): Derived => {
       );
     }
 
-    if (resource.update !== undefined) {
+    if (Option.isSome(resource.update)) {
       add(type, "update", UpdateArgs, (args, writer) =>
         Effect.gen(function* () {
-          const current = (yield* writer.get(type, args.id)) as JsonApiRow | undefined;
+          const current = Option.map(
+            Option.fromUndefinedOr(yield* writer.get(type, args.id)),
+            (row) => row as JsonApiRow
+          );
           // Flat rows: overlay the new attributes, keep id + relationships.
           yield* writer.put(type, args.id, {
-            ...(current ?? { id: args.id, relationships: {} }),
+            ...Option.getOrElse(current, (): JsonApiRow => ({ id: args.id, relationships: {} })),
             ...args.attributes,
             id: args.id,
           });
@@ -164,7 +187,7 @@ export const derive = (resources: ResourceMap): Derived => {
       );
     }
 
-    if (resource.delete !== undefined) {
+    if (Option.isSome(resource.delete)) {
       add(type, "delete", DeleteArgs, (args, writer) => writer.del(type, args.id));
     }
   });

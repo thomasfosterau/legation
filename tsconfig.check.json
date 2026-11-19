@@ -12,6 +12,7 @@
       "@thomasfosterau/legation/internal": ["./packages/effect/src/internal.ts"],
       "@thomasfosterau/legation/sql": ["./packages/effect/src/sql/index.ts"],
       "@thomasfosterau/legation-browser": ["./packages/browser/src/index.ts"],
+      "@thomasfosterau/legation-browser/http-cache": ["./packages/browser/src/http-cache.ts"],
       "@thomasfosterau/legation-alchemy-cloudflare": ["./packages/alchemy-cloudflare/src/index.ts"],
       "@thomasfosterau/legation-auth": ["./packages/auth/src/index.ts"],
       "@thomasfosterau/legation-auth/client": ["./packages/auth/src/client.ts"],
@@ -22,6 +23,11 @@
     },
     "lib": ["ES2023", "DOM", "DOM.Iterable"]
   },
-  "include": ["./packages/*/src/**/*", "./packages/*/examples/**/*", "./tests/**/*"],
+  "include": [
+    "./packages/*/src/**/*",
+    "./packages/*/examples/**/*",
+    "./tests/**/*",
+    "./stacks/**/*"
+  ],
   "exclude": ["node_modules", "packages/*/dist"]
 }

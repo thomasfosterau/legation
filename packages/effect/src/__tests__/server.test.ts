@@ -9,6 +9,7 @@
  * the debounced auto-push fires when a case moves time past it, and nothing
  * waits on wall-clock time a loaded machine could exhaust (#285).
  */
+import * as Defined from "../Defined.js";
 import { describe, expect, it } from "@effect/vitest";
 import * as Arr from "effect/Array";
 import * as Deferred from "effect/Deferred";
@@ -31,6 +32,7 @@ import {
 } from "../index.js";
 import { InvalidationBus } from "../internal.js";
 import { defined } from "./defined.js";
+import { TestFailure } from "./test-failure.js";
 
 const Product = Node.make("products", {
   attributes: { name: Schema.String },
@@ -60,7 +62,9 @@ const advanceUntil = <A>(read: Effect.Effect<A>, until: (value: A) => boolean, m
     }
     const value = yield* read;
     if (until(value)) return value;
-    return yield* Effect.die(new Error(`advanceUntil: condition never held in ${maxSteps} steps`));
+    return yield* Effect.die(
+      new TestFailure({ message: `advanceUntil: condition never held in ${maxSteps} steps` })
+    );
   });
 
 describe("Server", () => {
@@ -210,7 +214,7 @@ describe("Server", () => {
               mutations,
               clientId,
               clientGroupId: group,
-              ...(options.autoPush ? { syncLoop: { pushDebounce } } : {}),
+              ...Defined.fields({ syncLoop: options.autoPush ? { pushDebounce } : undefined }),
             }).pipe(
               Effect.provideService(ClientStore.ClientStore, store),
               Effect.provideService(Transport.ClientTransport, transport)

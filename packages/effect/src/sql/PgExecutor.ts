@@ -15,10 +15,11 @@
  * });
  * ```
  *
- * The executor needs only the `SqlClient` service, which ships in `effect`
- * itself, so this package gains no dependency (ADR-0006): the driver
- * (`@effect/sql-pg`) and its connection settings are the app's choice, and it
- * provides the `SqlClient` layer.
+ * The executor needs only two members of an `effect/sql` client (`Client`),
+ * whose types ship in `effect` itself, so this package gains no dependency
+ * (ADR-0006): the driver (`@effect/sql-pg`) and its connection settings are the
+ * app's choice, and it provides the client. Either the generic `SqlClient`
+ * service or the driver's own (`PgClient`) will do.
  *
  * **Transactions:** `transaction` is the client's `withTransaction`, so each
  * mutation batch is one real PostgreSQL transaction on one connection, and
@@ -47,13 +48,23 @@ const asBackendError = (message: string) => (cause: unknown) =>
   new BackendError({ message, cause });
 
 /**
+ * The members of an `effect/sql` client the executor uses: `unsafe` statements and `withTransaction`.
+ *
+ * Structural, so the driver's own client is accepted as well as the generic `SqlClient` service: from
+ * effect 4.1.3 a driver client such as `@effect/sql-pg`'s `PgClient` extends `SqlClient`'s `Base`,
+ * without the `SqlClient` type id, and is no longer a `SqlClient` (#687). Both members have the same
+ * type on every effect 4 release.
+ */
+export type Client = Pick<SqlClient, "unsafe" | "withTransaction">;
+
+/**
  * The executor over `sql`: unprepared statements, and a real transaction per `transaction` call.
  *
  * A failed statement or transaction fails as a `BackendError` that carries the driver's `SqlError`
  * as its `cause` (a serialization refusal included), with the statement text, never its parameters,
  * in the message.
  */
-export const make = (sql: SqlClient): SqlBackend.SqlExecutor => ({
+export const make = (sql: Client): SqlBackend.SqlExecutor => ({
   query: (fragment: Sql.SqlFragment) =>
     sql
       .unsafe<SqlBackend.SqlRow>(fragment.text, fragment.params)

@@ -6,6 +6,7 @@
  * are the exception: they drive the host's sweep and the mirror's heartbeat
  * on the TestClock (#312).
  */
+import { Defined } from "@thomasfosterau/legation/internal";
 import {
   Authorization,
   Backend,
@@ -26,6 +27,7 @@ import {
   EngineHost,
   InvalidationBus,
   MirrorChannel,
+  MirrorProtocol,
   Subset,
   SyncServer,
   Mirror,
@@ -35,6 +37,7 @@ import { describe, expect, it } from "@effect/vitest";
 import * as Arr from "effect/Array";
 import * as Clock from "effect/Clock";
 import * as Effect from "effect/Effect";
+import * as P from "effect/Predicate";
 import * as Exit from "effect/Exit";
 import * as Fiber from "effect/Fiber";
 import * as Ref from "effect/Ref";
@@ -43,6 +46,7 @@ import * as Str from "effect/String";
 import * as TestClock from "effect/testing/TestClock";
 import * as BroadcastMirrorChannel from "../BroadcastMirrorChannel.js";
 import { defined } from "./defined.js";
+import { TestFailure } from "./test-failure.js";
 
 const TodoArgs = Schema.Struct({
   id: Schema.String,
@@ -71,7 +75,10 @@ const allTodos = Subset.make({ collection: "todos" });
 
 /** Real timers, independent of the test clock. */
 const sleepReal = (millis: number) =>
-  Effect.promise(() => new Promise<void>((resolve) => setTimeout(resolve, millis)));
+  Effect.callback<void>((resume) => {
+    const timer = setTimeout(() => resume(Effect.void), millis);
+    return Effect.sync(() => clearTimeout(timer));
+  });
 
 /** Poll until `read` passes `until`, with a bounded number of attempts. */
 const eventually = <A>(read: Effect.Effect<A>, until: (value: A) => boolean) =>
@@ -81,7 +88,7 @@ const eventually = <A>(read: Effect.Effect<A>, until: (value: A) => boolean) =>
       if (until(value)) return value;
       yield* sleepReal(5);
     }
-    return yield* Effect.die(new Error("eventually: condition never held"));
+    return yield* Effect.die(new TestFailure({ message: "eventually: condition never held" }));
   });
 
 // The liveness cases (#312) step the TestClock with these.
@@ -107,7 +114,9 @@ const settle = (condition: Effect.Effect<boolean>, maxTurns = 100) =>
       yield* Effect.yieldNow;
     }
     if (yield* condition) return;
-    return yield* Effect.die(new Error(`settle: condition never held in ${maxTurns} turns`));
+    return yield* Effect.die(
+      new TestFailure({ message: `settle: condition never held in ${maxTurns} turns` })
+    );
   });
 
 /**
@@ -470,11 +479,12 @@ const stubUrls: Client.UrlReads = {
       const include = searchParams.get("include");
       return Effect.succeed({
         collection,
-        ...(include === null
-          ? {}
-          : {
-              include: Object.fromEntries(include.split(",").map((edge) => [edge, true as const])),
-            }),
+        ...Defined.fields({
+          include:
+            include === null
+              ? undefined
+              : Object.fromEntries(include.split(",").map((edge) => [edge, true as const])),
+        }),
       });
     }),
   canonical: (read) =>
@@ -833,5 +843,137 @@ describe("EngineHost.Host.registrations", () => {
       const held = yield* eventually(host.registrations, (current) => current.length === 1);
       expect(held).toMatchObject([{ root: allTodos, edges: [] }]);
     })
+  );
+});
+
+/**
+ * Two engines over one server: `writer` puts rows on the server that `engine`
+ * receives only by pulling.
+ */
+const makeEnginePair = Effect.fn("makeEnginePair")(function* () {
+  const backend = yield* MemoryBackend.make(
+    MemoryBackend.validatedHandlers([
+      MemoryBackend.handler(todoSet, (args, writer) => writer.put("todos", args.id, args)),
+    ])
+  );
+  const handler = yield* SyncServer.make.pipe(
+    Effect.provideService(Backend.Backend, backend),
+    Effect.provideService(
+      Authorization.AuthPolicy,
+      Authorization.policy({ todos: Authorization.allowAll, users: Authorization.allowAll })
+    ),
+    Effect.provideService(Cvr.CvrStore, yield* Cvr.makeMemoryStore),
+    Effect.provideService(InvalidationBus.InvalidationBus, yield* InvalidationBus.makeInProcess)
+  );
+  const engineFor = (clientId: string, clientGroupId: string) =>
+    Effect.gen(function* () {
+      const store = yield* ClientStore.makeMemory;
+      const transport = yield* Transport.makeInMemory(handler, clientGroupId);
+      return yield* ClientEngine.make({ clientId, clientGroupId, mutators }).pipe(
+        Effect.provideService(ClientStore.ClientStore, store),
+        Effect.provideService(Transport.ClientTransport, transport)
+      );
+    });
+  return {
+    engine: yield* engineFor("client-a", "group-a"),
+    writer: yield* engineFor("client-b", "group-b"),
+  };
+});
+
+/**
+ * A host channel whose row updates reach the mirrors `lag` late, as a host's
+ * broadcast loop does when it is behind the engine's changes. Every other
+ * message goes at once.
+ */
+const laggingRows = (
+  channel: MirrorChannel.MirrorChannel,
+  lag: number
+): MirrorChannel.MirrorChannel => ({
+  ...channel,
+  post: (message) =>
+    P.isTagged(message, "MirrorUpdate") || P.isTagged(message, "RelatedUpdate")
+      ? sleepReal(lag).pipe(Effect.andThen(channel.post(message)))
+      : channel.post(message),
+});
+
+/** Whether a host message is a `PulledRegistrations` that holds `allTodos`'s root pulled. */
+const marksTodosPulled = (message: MirrorProtocol.HostMessage): boolean =>
+  P.isTagged(message, "PulledRegistrations") &&
+  message.registrations.some((entry) => entry.key === todosRoot && rootPulled(entry.pulled));
+
+/** The row ids of each `MirrorUpdate` for `allTodos` among `messages`, in order. */
+const todosUpdates = (
+  messages: ReadonlyArray<MirrorProtocol.HostMessage>
+): ReadonlyArray<ReadonlyArray<string>> =>
+  messages.flatMap((message) =>
+    P.isTagged(message, "MirrorUpdate") && message.key === todosRoot
+      ? [message.rows.map((row) => row.id)]
+      : []
+  );
+
+describe("pulled marks follow their rows over a mirror (#672)", () => {
+  it.live("the host posts a registration's pulled rows before the mark that calls it pulled", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const { engine, writer } = yield* makeEnginePair();
+        // A row only the server has: the host's replica gets it by pulling.
+        yield* writer.mutate("todo/set", { id: "1", title: "from the server", isDone: false });
+        yield* writer.push.pipe(Effect.orDie);
+        const { host: hostChannel, mirror: channel } = yield* MirrorChannel.makeLoopbackPair;
+        const inbox = yield* channel.subscribe;
+        const seen = yield* Ref.make<ReadonlyArray<MirrorProtocol.HostMessage>>([]);
+        yield* Effect.forkScoped(
+          Effect.forever(
+            inbox.take.pipe(
+              Effect.flatMap(MirrorProtocol.decodeHostMessage),
+              Effect.flatMap((message) =>
+                message === undefined ? Effect.void : Ref.update(seen, Arr.append(message))
+              )
+            )
+          )
+        );
+        yield* EngineHost.run({ channel: laggingRows(hostChannel, 30), engine });
+        yield* channel.post({ _tag: "Subscribe", mirrorId: "page", subset: allTodos });
+        const log = yield* eventually(Ref.get(seen), (messages) => messages.some(marksTodosPulled));
+        // By the time the mark arrives, the rows the pull brought have too.
+        const markedAt = log.findIndex(marksTodosPulled);
+        expect(todosUpdates(log.slice(0, markedAt)).at(-1)).toEqual(["1"]);
+        // ...and nothing older follows it.
+        yield* sleepReal(60);
+        const after = todosUpdates((yield* Ref.get(seen)).slice(markedAt + 1));
+        expect(after).toEqual(after.map(() => ["1"]));
+      })
+    )
+  );
+
+  it.live("a mirror holds a key unpulled until that key's rows have reached it", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        // A stand-in host that sends the mark first, as a host that predates
+        // #672 could, or one whose mark reached this tab before it took an
+        // interest in the key.
+        const { host: hostChannel, mirror: channel } = yield* MirrorChannel.makeLoopbackPair;
+        const mirror = yield* Mirror.make({ channel, mutators });
+        yield* mirror.subscribe(allTodos);
+        yield* hostChannel.post({
+          _tag: "PulledRegistrations",
+          registrations: [
+            { key: todosRoot, pulled: { windows: [{ subset: allTodos, pulled: true }] } },
+          ],
+        });
+        // The mark has been applied, but no rows have come, so the key is not pulled.
+        yield* sleepReal(20);
+        expect(rootPulled(yield* mirror.pulled(todosRoot))).toBe(false);
+        // The rows land: now the mark counts.
+        yield* hostChannel.post(
+          MirrorProtocol.mirrorUpdate(todosRoot, [{ id: "1", value: { title: "a" } }])
+        );
+        yield* eventually(mirror.pulled(todosRoot), rootPulled);
+        // Released and taken again, the key waits for fresh rows once more.
+        yield* mirror.unsubscribe(allTodos);
+        yield* mirror.subscribe(allTodos);
+        expect(rootPulled(yield* mirror.pulled(todosRoot))).toBe(false);
+      })
+    )
   );
 });

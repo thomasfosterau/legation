@@ -8,7 +8,6 @@
 import { describe, expect, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
-import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 import * as HttpClient from "effect/http/HttpClient";
@@ -31,7 +30,7 @@ const writes = FacadeWrites.writesOf(nodes);
 
 /** Map a structural write through the façade's intent and back. */
 const roundTrip = (write: JsonApiBackend.Write) =>
-  Option.fromUndefinedOr(intentOf(write)).pipe(
+  intentOf(write).pipe(
     Option.flatMap((intent) =>
       Option.map(Option.fromUndefinedOr(writes.get(intent.mutator)), (inverse) =>
         inverse(intent.args)
@@ -151,9 +150,11 @@ describe("a JsonApiBackend over a node-graph app (#529)", () => {
           "notes",
           {
             type: "notes",
-            create: ref("POST", "/notes"),
-            update: ref("PATCH", "/notes/:id"),
-            delete: ref("DELETE", "/notes/:id"),
+            list: Option.none(),
+            getOne: Option.none(),
+            create: Option.some(ref("POST", "/notes")),
+            update: Option.some(ref("PATCH", "/notes/:id")),
+            delete: Option.some(ref("DELETE", "/notes/:id")),
           },
         ],
       ]);
@@ -162,8 +163,8 @@ describe("a JsonApiBackend over a node-graph app (#529)", () => {
         resources,
         mutators: CrudMutation.registry(nodes).mutators,
         operations: new Map(),
-        writes,
-      }).pipe(Effect.provide(Layer.succeed(HttpClient.HttpClient)(client)));
+        writes: writes,
+      }).pipe(Effect.provideService(HttpClient.HttpClient, client));
 
       // What the façade journals for a POST /notes with a category linkage.
       const intent = intentOf({
@@ -173,9 +174,15 @@ describe("a JsonApiBackend over a node-graph app (#529)", () => {
         attributes: { title: "Hello" },
         relationships: { category: "c-1" },
       });
-      expect(intent?.mutator).toBe("notes/create");
+      expect(Option.map(intent, ({ mutator }) => mutator)).toEqual(Option.some("notes/create"));
       yield* backend.applyMutations({ clientGroupId: "g" }, [
-        { clientId: "c", mutationId: 1, mutator: "notes/create", args: intent?.args, createdAt: 0 },
+        {
+          clientId: "c",
+          mutationId: 1,
+          mutator: "notes/create",
+          args: Option.getOrUndefined(intent)?.args,
+          createdAt: 0,
+        },
       ]);
 
       expect(sent.map(({ method, url }) => `${method} ${url}`)).toEqual(["POST /notes"]);

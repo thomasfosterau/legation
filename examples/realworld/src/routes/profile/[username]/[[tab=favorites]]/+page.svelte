@@ -17,8 +17,6 @@
     allFavorites,
     allFollows,
     userProfile,
-    type Favorite,
-    type Follow,
   } from "#lib/domain.js";
   import { toArticlePage, toProfile, values } from "#lib/joins.js";
   import { getSession } from "#lib/session.svelte.js";
@@ -53,8 +51,8 @@
       page,
       session.username,
       AsyncResult.getOrElse(articleRows.current, () => []),
-      values<Follow>(AsyncResult.getOrElse(followRows.current, () => [])),
-      values<Favorite>(AsyncResult.getOrElse(favoriteRows.current, () => []))
+      values(AsyncResult.getOrElse(followRows.current, () => [])),
+      values(AsyncResult.getOrElse(favoriteRows.current, () => []))
     )
   );
 

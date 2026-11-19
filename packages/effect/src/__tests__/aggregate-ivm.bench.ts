@@ -13,10 +13,10 @@
  * Named `*.bench.ts` so `vitest run` (test mode) ignores it; run with
  * `bun run bench` (`vitest bench`). Kept out of the coverage/test path.
  */
-import { describe, test } from "vite-plus/test";
+import { describe, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
+import * as Layer from "effect/Layer";
 import * as Schema from "effect/Schema";
-import * as Scope from "effect/Scope";
 import * as Stream from "effect/Stream";
 import * as Aggregate from "../Aggregate.js";
 import * as Authorization from "../Authorization.js";
@@ -61,75 +61,68 @@ const makeServer = Effect.gen(function* () {
   );
 });
 
-// One shared, never-torn-down engine + scope: this file is a short-lived CLI
-// process (`vitest bench`), so leaking the scope past the last bench is fine
-// — it just keeps the observer fibers (and the server's + engine's internal
-// resources) alive for the process's lifetime instead of tearing them down
-// between benches. The scope is provided around the whole bootstrap (not just
-// engine construction), since `SyncServer.make` needs one too.
-const scope = await Effect.runPromise(Scope.make());
-
-const bootstrap = Effect.gen(function* () {
-  const server = yield* makeServer;
-  const store = yield* ClientStoreModule.makeMemory;
-  const engine = yield* ClientEngineModule.make({
-    clientId: "bench",
-    clientGroupId: "bench",
-    mutators,
-  }).pipe(
-    Effect.provideService(ClientStore, store),
-    Effect.provide(layerInMemory("bench")),
-    Effect.provideService(ServerHandler, server)
-  );
-
-  yield* Effect.forEach(
-    Array.from({ length: ROWS }, (_, i) => i),
-    (i) => engine.mutate("row/set", { id: `r${i}`, n: i, team: i % 5 }),
-    { concurrency: 1, discard: true }
-  );
-  yield* engine.push;
-  yield* engine.pull; // confirms the seed, so churn starts from an empty journal
-
-  // Hold three live aggregates open (detached — they run until the process
-  // exits), so every churn below re-triggers all three incremental folds.
-  yield* Effect.forkDetach(
-    Stream.runForEach(engine.observeAggregate(allRows, Aggregate.count), () => Effect.void)
-  );
-  yield* Effect.forkDetach(
-    Stream.runForEach(engine.observeAggregate(allRows, Aggregate.sum("n")), () => Effect.void)
-  );
-  yield* Effect.forkDetach(
-    Stream.runForEach(
-      engine.observeAggregateGrouped(allRows, Aggregate.count, "team"),
-      () => Effect.void
-    )
-  );
-
-  return engine;
-}).pipe(Effect.provideService(Scope.Scope, scope));
-
-const engine = await Effect.runPromise(bootstrap);
-
-// A steady-state single-row churn against the seeded, already-observed
-// collection: mutate + push (acknowledged by the real server) + pull, so it
-// arrives as exactly one `Put` in a `Patch`.
-let churnCounter = ROWS;
-const churnOnce = () => {
-  churnCounter += 1;
-  const i = churnCounter % ROWS;
-  return Effect.runPromise(
-    engine
-      .mutate("row/set", { id: `r${i}`, n: churnCounter, team: churnCounter % 5 })
-      .pipe(Effect.andThen(engine.push), Effect.andThen(engine.pull))
-  );
-};
-
+// The seeded engine is built inside the test, in the test's scope (`SyncServer.make` and the engine
+// need one), so the 10k-row seed happens once and only the timed churn repeats per iteration.
 describe("incremental aggregates (#110)", () => {
-  test(`single-row churn over ${ROWS} rows (Count + Sum + grouped Count live)`, async ({
-    bench,
-  }) => {
-    await bench(`single-row churn over ${ROWS} rows (Count + Sum + grouped Count live)`, async () => {
-      await churnOnce();
-    }).run();
-  });
+  // Live clock: the bench measures wall-clock time.
+  it.live(
+    `single-row churn over ${ROWS} rows (Count + Sum + grouped Count live)`,
+    ({ bench }) =>
+      Effect.gen(function* () {
+        const server = yield* makeServer;
+        const store = yield* ClientStoreModule.makeMemory;
+        const transport = yield* Layer.build(
+          layerInMemory("bench").pipe(Layer.provide(Layer.succeed(ServerHandler)(server)))
+        );
+        const engine = yield* ClientEngineModule.make({
+          clientId: "bench",
+          clientGroupId: "bench",
+          mutators,
+        }).pipe(Effect.provideService(ClientStore, store), Effect.provideContext(transport));
+
+        yield* Effect.forEach(
+          Array.from({ length: ROWS }, (_, i) => i),
+          (i) => engine.mutate("row/set", { id: `r${i}`, n: i, team: i % 5 }),
+          { concurrency: 1, discard: true }
+        );
+        yield* engine.push;
+        yield* engine.pull; // confirms the seed, so churn starts from an empty journal
+
+        // Hold three live aggregates open (forked into the test's scope), so every churn below re-triggers
+        // all three incremental folds.
+        yield* Effect.forkScoped(
+          Stream.runForEach(engine.observeAggregate(allRows, Aggregate.count), () => Effect.void)
+        );
+        yield* Effect.forkScoped(
+          Stream.runForEach(engine.observeAggregate(allRows, Aggregate.sum("n")), () => Effect.void)
+        );
+        yield* Effect.forkScoped(
+          Stream.runForEach(
+            engine.observeAggregateGrouped(allRows, Aggregate.count, "team"),
+            () => Effect.void
+          )
+        );
+
+        const run = Effect.runPromiseWith(yield* Effect.context());
+        // A steady-state single-row churn against the seeded, already-observed
+        // collection: mutate + push (acknowledged by the real server) + pull, so it
+        // arrives as exactly one `Put` in a `Patch`.
+        let churnCounter = ROWS;
+        const churnOnce = () => {
+          churnCounter += 1;
+          const i = churnCounter % ROWS;
+          return run(
+            engine
+              .mutate("row/set", { id: `r${i}`, n: churnCounter, team: churnCounter % 5 })
+              .pipe(Effect.andThen(engine.push), Effect.andThen(engine.pull))
+          );
+        };
+        yield* Effect.tryPromise(() =>
+          bench(`single-row churn over ${ROWS} rows (Count + Sum + grouped Count live)`, async () => {
+            await churnOnce();
+          }).run()
+        ).pipe(Effect.orDie);
+      }),
+    120_000
+  );
 });

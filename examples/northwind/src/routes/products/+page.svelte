@@ -28,7 +28,7 @@
   let page = $state(0);
 
   const categories = $derived(
-    values<Category>(AsyncResult.getOrElse(categoryRows.current, () => []))
+    values(AsyncResult.getOrElse(categoryRows.current, () => []))
   );
   const filter = $derived<ProductFilter>({ search, categoryId });
   const views = $derived(

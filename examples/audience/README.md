@@ -19,7 +19,7 @@ effect-auth policies (`src/policy.ts`): public posts; one's own; followers-only
 posts of people one follows (a **named set**, `following`, resolved from the
 server-side `follows` collection — the relationship-scoped case of ADR-0015);
 and the **moderator** role, which compiles to `AllowAll` and short-circuits.
-An anonymous viewer is `User::""`, which only the public rule admits.
+An anonymous viewer is `Anonymous::"anonymous"`, which only the public rule admits.
 
 There is no UI: the server, the client and the façade run in one process, as
 the commerce example's tests do. A browser profile is a `Device`
@@ -30,12 +30,13 @@ jar, a network that can go down, one `Client`, and the façade.
 
 ```
 src/domain.ts   the node, the mutations, the reads (ADR-0022)
-src/policy.ts   effect-auth binding + policies, the `following` set, the AuthPolicy
+src/policy.ts   the binding (derived from the node) + policies, the `following`
+                set, the AuthPolicy
 src/api.ts      the effect-jsonapi resource and HttpApi (the node graph's codec)
 src/server.ts   effect-auth SessionService over its testing memory stores,
                 legation-auth's Resolver, Server + MemoryBackend, RestHandlers
 src/device.ts   one browser profile: replica, cookie jar, transport, Client,
-                SignOut.onSessionChange, JsonApiFacade
+                SignOut.follow, JsonApiFacade
 tests/          the five tests of #221
 ```
 
@@ -70,16 +71,8 @@ its tests against the packages' built `dist/`.
 The app aims to write nothing between the libraries. What it still writes by
 hand, each marked in the source, is a gap a library should close:
 
-- `server.ts` `restContext`: the derived REST handlers take a hand-written
-  `context` instead of the `IdentityResolver` the sync carrier runs.
-- `policy.ts` `scopeRequest`: the `Principal` → effect-auth `ScopeRequest`
-  (`User::<id>`, `User::""` when anonymous, the user under its role).
-- `policy.ts` `following`: a named set read off a backend collection.
-- `policy.ts` `binding` / `attributes`: the effect-auth binding restates the
-  node's schema.
-- `device.ts` `jarTransport`: an in-process transport whose credentials follow
-  the session (and whose network can go down).
-- `device.ts` `change` / `fingerprintOf`: keeping the cookie jar and
-  `SignOut.onSessionChange` in step, and the boot-time fingerprint.
+- `device.ts` `makeJar`: the cookie jar, shaped as effect-auth's session
+  store (its session Atom), which `SignOut.follow` subscribes to (the example has no auth
+  HTTP tier for `createAuthClient` to talk to).
 - `server.ts` `authLayer`: effect-auth's `SessionService` over its testing
   stores.

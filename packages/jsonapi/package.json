@@ -1,6 +1,6 @@
 {
   "name": "@thomasfosterau/legation-jsonapi",
-  "version": "0.3.0",
+  "version": "0.6.0",
   "description": "JSON:API v1.1 collection loaders for the legation engine: map JSON:API documents into engine collection rows",
   "keywords": [
     "collection-loader",
@@ -42,15 +42,16 @@
     "access": "public"
   },
   "dependencies": {
-    "@thomasfosterau/effect-jsonapi": "catalog:",
     "@thomasfosterau/legation": "workspace:^"
   },
   "devDependencies": {
     "@effect/vitest": "catalog:",
+    "@thomasfosterau/effect-jsonapi": "catalog:",
     "effect": "catalog:",
     "vitest": "catalog:"
   },
   "peerDependencies": {
-    "effect": "catalog:peers"
+    "@thomasfosterau/effect-jsonapi": "catalog:jsonapi-peers",
+    "effect": "catalog:jsonapi-peers"
   }
 }

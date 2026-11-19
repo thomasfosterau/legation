@@ -10,7 +10,7 @@
 import * as Arr from "effect/Array";
 import * as Effect from "effect/Effect";
 import * as Random from "effect/Random";
-import { describe, expect, it } from "vite-plus/test";
+import { describe, expect, it } from "@effect/vitest";
 import * as Predicate from "../Predicate.js";
 import * as Subset from "../Subset.js";
 import { defined } from "./defined.js";
@@ -66,39 +66,39 @@ const TRIALS = 5000;
 const SEED = 20260903;
 
 /** `TRIALS` random string pairs, deterministic for `SEED`. */
-const randomPairs: ReadonlyArray<readonly [string, string]> = Effect.runSync(
-  Effect.all([randomString, randomString], { concurrency: 1 })
-    .pipe(Effect.replicateEffect(TRIALS))
-    .pipe(Random.withSeed(SEED))
-);
+const randomPairs: Effect.Effect<ReadonlyArray<readonly [string, string]>> = Effect.all(
+  [randomString, randomString],
+  { concurrency: 1 }
+).pipe(Effect.replicateEffect(TRIALS), Random.withSeed(SEED));
 
 describe("Predicate.compareText (ADR-0028 rule (c))", () => {
-  it(`agrees with the Array.from code-point reference over ${TRIALS} random pairs`, () => {
-    let divergedFromCodeUnits = 0;
-    const mismatches: Array<{ a: string; b: string; actual: number; expected: number }> = [];
-    Arr.forEach(randomPairs, ([a, b]) => {
-      const actual = sign(Predicate.compareText(a, b));
-      const expected = sign(referenceCompare(a, b));
-      // Agreement with the reference, antisymmetry and reflexivity.
-      if (
-        actual !== expected ||
-        sign(Predicate.compareText(b, a)) !== sign(-actual) ||
-        Predicate.compareText(a, a) !== 0
-      ) {
-        mismatches.push({ a, b, actual, expected });
-      }
-      if (actual !== sign(codeUnitCompare(a, b))) divergedFromCodeUnits++;
-    });
-    // Reproduce any failure with `SEED`; the offending pair prints here.
-    expect(mismatches).toEqual([]);
-    // The generator does exercise the region where the two orders differ.
-    expect(divergedFromCodeUnits).toBeGreaterThan(0);
-  });
+  it.effect(`agrees with the Array.from code-point reference over ${TRIALS} random pairs`, () =>
+    Effect.gen(function* () {
+      let divergedFromCodeUnits = 0;
+      const mismatches: Array<{ a: string; b: string; actual: number; expected: number }> = [];
+      Arr.forEach(yield* randomPairs, ([a, b]) => {
+        const actual = sign(Predicate.compareText(a, b));
+        const expected = sign(referenceCompare(a, b));
+        // Agreement with the reference, antisymmetry and reflexivity.
+        if (
+          actual !== expected ||
+          sign(Predicate.compareText(b, a)) !== sign(-actual) ||
+          Predicate.compareText(a, a) !== 0
+        ) {
+          mismatches.push({ a, b, actual, expected });
+        }
+        if (actual !== sign(codeUnitCompare(a, b))) divergedFromCodeUnits++;
+      });
+      // Reproduce any failure with `SEED`; the offending pair prints here.
+      expect(mismatches).toEqual([]);
+      // The generator does exercise the region where the two orders differ.
+      expect(divergedFromCodeUnits).toBeGreaterThan(0);
+    })
+  );
 
   it("orders the known boundary cases", () => {
     expect(Predicate.compareText("￿", "😀")).toBe(-1); // U+FFFF < U+1F600
-    // oxlint-disable-next-line no-constant-binary-expression -- the literal comparison is the point: code units say the opposite
-    expect("￿" < "😀").toBe(false); // code units say the opposite
+    expect(codeUnitCompare("￿", "😀")).toBe(1); // code units say the opposite
     expect(Predicate.compareText("", "\u{10000}")).toBe(-1);
     expect(Predicate.compareText("a", "a😀")).toBe(-1);
     expect(Predicate.compareText("😀", "😀")).toBe(0);
@@ -116,6 +116,35 @@ describe("Predicate.compareText (ADR-0028 rule (c))", () => {
     expect(Predicate.compareLiterals(1, "1")).toBeUndefined();
     expect(Predicate.compareLiterals(null, null)).toBeUndefined();
     expect(Predicate.compareLiterals(true, 1)).toBeUndefined();
+  });
+
+  it("typeName names a value as typeof does", () => {
+    const values: ReadonlyArray<unknown> = [
+      "a",
+      1,
+      Number.NaN,
+      true,
+      1n,
+      Symbol("s"),
+      undefined,
+      () => 0,
+      null,
+      [],
+      {},
+    ];
+    expect(values.map(Predicate.typeName)).toEqual([
+      "string",
+      "number",
+      "number",
+      "boolean",
+      "bigint",
+      "symbol",
+      "undefined",
+      "function",
+      "object",
+      "object",
+      "object",
+    ]);
   });
 });
 

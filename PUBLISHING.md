@@ -5,7 +5,7 @@ Releases are automated with [Changesets](https://github.com/changesets/changeset
 ## The release flow
 
 1. **Add a changeset with your change.** Run `pnpm changeset`, pick the packages and the bump (`patch` / `minor` / `major`) and write a user-facing summary, then commit the generated file alongside your change. Which changes need one is set out in [CONTRIBUTING.md](CONTRIBUTING.md#branches-and-pull-requests).
-2. **Merge to `trunk`.** The [`Release`](./.github/workflows/release.yml) workflow runs and, while changesets are pending, opens or updates a **"chore: version packages"** PR that applies the version bumps and rolls the changesets into each package's `CHANGELOG.md`. The version step is `pnpm run version`: `changeset version && vp fmt && pnpm install --lockfile-only`.
+2. **Merge to `trunk`.** The [`Release`](./.github/workflows/release.yml) workflow runs and, while changesets are pending, opens or updates a **"chore: version packages"** PR that applies the version bumps and rolls the changesets into each package's `CHANGELOG.md`. The version step is `pnpm run version`: `changeset version && vp fmt && pnpm install --lockfile-only`. The job then assigns the owner to that PR (Changesets has no assignee setting of its own).
 3. **Merge the version PR and approve the `release` environment.** With no changesets left, the workflow runs `pnpm run release`, which builds every package (`vp run build`) and runs [`scripts/publish.mjs`](scripts/publish.mjs):
    1. Every public package under `packages/` whose current version is not on npm yet is taken in dependency order. Versions already on npm are skipped, so a re-run after a partial failure publishes only what is missing.
    2. Each is packed with `pnpm pack`, which rewrites the `workspace:^` dependencies on sibling packages and every `catalog:` / `catalog:peers` specifier to real ranges; `npm pack` would copy them verbatim and ship an uninstallable manifest ([#267](https://github.com/thomasfosterau/legation/issues/267)).
@@ -29,3 +29,5 @@ Releases are automated with [Changesets](https://github.com/changesets/changeset
 
 4. **Protect the `release` environment.** **Settings → Environments → `release`** → enable **Required reviewers** (yourself) and restrict deployment to the `trunk` branch, so publishing pauses for manual approval.
 5. **Protect `trunk`.** Require pull requests and passing CI before merge, and disallow direct pushes, so a release can only be triggered by merging the reviewed version PR.
+
+Steps 4 and 5 are declared in [`stacks/github.ts`](stacks/github.ts), with the rest of the repository's GitHub settings: `vp run github:plan` shows any drift from it and `vp run github:deploy` applies it (owner-run: it needs an admin-scoped `GITHUB_TOKEN` and the Cloudflare credentials of Alchemy's state store).

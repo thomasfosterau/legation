@@ -60,20 +60,22 @@ export interface StatusResource {
 
 /**
  * The link to the resource a graph-derived CRUD mutation (`{type}/create|update|delete`,
- * args `{ type, id, … }`) addresses: `{prefix}/{type}/{id}`. `undefined` for any other mutation.
+ * args `{ type, id, … }`) addresses: `{prefix}/{type}/{id}`. `None` for any other mutation.
  */
 const resourceLink = (
   nodes: Node.NodeRegistry,
   prefix: string,
   state: MutationState.MutationState
-): string | undefined => {
+): Option.Option<string> => {
   const parts = state.mutator.split("/");
   const [type = "", operation = ""] = parts;
-  if (parts.length !== 2 || !nodes.nodes.has(type)) return undefined;
-  if (operation !== "create" && operation !== "update" && operation !== "delete") return undefined;
+  if (parts.length !== 2 || !nodes.nodes.has(type)) return Option.none();
+  if (operation !== "create" && operation !== "update" && operation !== "delete") {
+    return Option.none();
+  }
   const args = state.args;
-  if (!P.isObject(args) || !("id" in args) || !P.isString(args.id)) return undefined;
-  return `${prefix}/${type}/${encodeURIComponent(args.id)}`;
+  if (!P.isObject(args) || !("id" in args) || !P.isString(args.id)) return Option.none();
+  return Option.some(`${prefix}/${type}/${encodeURIComponent(args.id)}`);
 };
 
 /** The `200` document of the status URL: one status resource. */
@@ -98,7 +100,10 @@ export const document = (
       type: resourceType,
       id: String(state.mutationId),
       attributes: reason === undefined ? timed : { ...timed, reason },
-      links: resource === undefined ? { self } : { self, resource },
+      links: Option.match(resource, {
+        onNone: () => ({ self }),
+        onSome: (link) => ({ self, resource: link }),
+      }),
     },
   };
 };

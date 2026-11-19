@@ -31,7 +31,7 @@ describe("one corpus, one collection, a replica per viewer", () => {
             mona,
             ["a-followers", "a-private", "a-public", "b-private", "b-public", "c-followers"],
           ],
-          // Signed out: `User::""`, which only the public rule admits.
+          // Signed out: `Anonymous::"anonymous"`, which only the public rule admits.
           ["anonymous", undefined, ["a-public", "b-public"]],
         ];
         for (const [name, user, ids] of expected) {

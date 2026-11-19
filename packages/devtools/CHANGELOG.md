@@ -1,5 +1,50 @@
 # @thomasfosterau/legation-devtools
 
+## 0.2.3
+
+### Patch Changes
+
+- Updated dependencies [a7d5a09]
+  - @thomasfosterau/legation@0.6.0
+
+## 0.2.2
+
+### Patch Changes
+
+- 1ce8b2b: Effects that must run at a callback edge run on a runtime the adapter owns (#562). Background Sync's listener, the Svelte undo hooks and the devtools panel use a module-level `ManagedRuntime.make(Layer.empty)` in place of the implicit-runtime `Effect.runPromise` / `runFork` / `runSync`, and the room transport's poke socket offers to its queue with `Queue.offerUnsafe`. No behaviour changes.
+- dc243b9: `dist/` is one ESM module per source module instead of merged shared chunks (#678), so a consumer's bundler can tree-shake with `sideEffects: false`. The entries and their exports are unchanged.
+- Updated dependencies [f1f0092]
+- Updated dependencies [515a427]
+- Updated dependencies [584ea1c]
+- Updated dependencies [87e83f9]
+  - @thomasfosterau/legation@0.5.0
+
+## 0.2.1
+
+### Patch Changes
+
+- 6b520e3: `Devtools.OfflineControl`'s doc comment names the in-memory loopback's `Transport.makeInMemory(...).setOnline` as a second way to build the offline control, beside `Transport.simulateOffline`.
+- Updated dependencies [da296dc]
+- Updated dependencies [9441aa0]
+- Updated dependencies [520e1c8]
+- Updated dependencies [9b22e38]
+- Updated dependencies [20d9793]
+- Updated dependencies [da04d41]
+- Updated dependencies [82eb11e]
+- Updated dependencies [b0f51d9]
+- Updated dependencies [ed8dd92]
+- Updated dependencies [3c83004]
+- Updated dependencies [e8e3419]
+- Updated dependencies [0e102c0]
+- Updated dependencies [aab6099]
+- Updated dependencies [3ca13de]
+- Updated dependencies [d5b8f8b]
+- Updated dependencies [8a60f29]
+- Updated dependencies [20d9793]
+- Updated dependencies [89eef12]
+- Updated dependencies [2afcd9f]
+  - @thomasfosterau/legation@0.4.0
+
 ## 0.2.0
 
 ### Minor Changes

@@ -36,7 +36,7 @@ an Alchemy-based one.
   `effect` is a singleton there.
 - **It is written against the provider's services, not workerd's types.** The
   room and the shard are Alchemy Durable Object implementations
-  (`Room.make(config)`, `FanoutShard.make()`) that the app binds to classes it
+  (`Room.make(config)`, `FanoutShard.make`) that the app binds to classes it
   declares (`LegationRoom.make(...)`); their state, storage and sockets are
   `Cloudflare.DurableObjectState`'s; the D1 executor runs statements through
   `QueryDatabaseClient`; the router forwards through the room namespace's stub.

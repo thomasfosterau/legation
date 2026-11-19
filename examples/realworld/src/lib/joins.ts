@@ -10,24 +10,24 @@
  *
  * Counts and flags come from the join collections, never denormalised onto the
  * row — so a rebase can never leave a stale counter.
+ *
+ * The reads are declared `as const satisfies Query.Read`, so their rows arrive
+ * typed from the node graph: `row.value` is the node's row and `row.related`
+ * carries exactly the edges the read includes. Nothing here casts.
  */
-import type { Client } from "@thomasfosterau/legation";
-import type { Article, Comment, Favorite, Follow, User } from "./domain";
+import type { Client, Query } from "@thomasfosterau/legation";
+import type { Favorite, Follow, User, allArticles, articleComments, userProfile } from "./domain";
 import type { ArticlePage, ArticleView, CommentView, Feed, ProfileView } from "./types";
 
-/** Rows as a read resolves them: the node value plus its `include`d edges. */
-export type Rows = ReadonlyArray<Client.ResolvedRow>;
+/** The rows a read resolves to, typed from the read and the registered graph. */
+export type Rows<R extends Query.Read> = ReadonlyArray<Client.ResolvedRow<R>>;
+
+/** An article row with the `author` and `favorites` edges every card reads. */
+export type ArticleRow = Client.ResolvedRow<typeof allArticles>;
 
 export const PAGE_SIZE = 10;
 
 const DEFAULT_IMAGE = "https://static.productionready.io/images/smiley-cyrus.jpg";
-
-// A resolved edge is `unknown` — the node graph types the schema, but not what
-// a read hands back — so each accessor casts once, here.
-const one = <T>(row: Client.ResolvedRow, edge: string): T | null =>
-  (row.related[edge] as T | null | undefined) ?? null;
-const many = <T>(row: Client.ResolvedRow, edge: string): ReadonlyArray<T> =>
-  (row.related[edge] as ReadonlyArray<T> | undefined) ?? [];
 
 /** A profile from a user row (or a placeholder), plus the viewer's follow state. */
 export const profileOf = (
@@ -54,16 +54,16 @@ export const isFollowing = (
  * `favorites` edge is both the count and the viewer's own favourite flag.
  */
 export const toArticleView = (
-  row: Client.ResolvedRow,
+  row: ArticleRow,
   follows: ReadonlyArray<Follow>,
   viewer: string | null
 ): ArticleView => {
-  const article = row.value as Article;
-  const favorites = many<Favorite>(row, "favorites");
+  const { value: article, related } = row;
+  const favorites = related.favorites;
   return {
     article,
     author: profileOf(
-      one<User>(row, "author"),
+      related.author,
       article.authorId,
       isFollowing(follows, viewer, article.authorId)
     ),
@@ -73,10 +73,10 @@ export const toArticleView = (
 };
 
 /** The distinct tags across the read's articles, most-used first. */
-export const toTags = (rows: Rows): ReadonlyArray<string> => {
+export const toTags = (rows: ReadonlyArray<ArticleRow>): ReadonlyArray<string> => {
   const counts = new Map<string, number>();
   for (const row of rows)
-    for (const tag of (row.value as Article).tagList) counts.set(tag, (counts.get(tag) ?? 0) + 1);
+    for (const tag of row.value.tagList) counts.set(tag, (counts.get(tag) ?? 0) + 1);
   return [...counts.entries()].sort((a, b) => b[1] - a[1]).map(([tag]) => tag);
 };
 
@@ -89,11 +89,11 @@ export const toArticlePage = (
   feed: Feed,
   page: number,
   viewer: string | null,
-  rows: Rows,
+  rows: ReadonlyArray<ArticleRow>,
   follows: ReadonlyArray<Follow>,
   favorites: ReadonlyArray<Favorite>
 ): ArticlePage => {
-  const article = (row: Client.ResolvedRow): Article => row.value as Article;
+  const article = (row: ArticleRow) => row.value;
   let filtered = rows;
   switch (feed.kind) {
     case "global":
@@ -129,7 +129,7 @@ export const toArticlePage = (
 
 /** The single article a by-slug read resolves to (undefined while loading). */
 export const toArticle = (
-  rows: Rows,
+  rows: ReadonlyArray<ArticleRow>,
   follows: ReadonlyArray<Follow>,
   viewer: string | null
 ): ArticleView | undefined =>
@@ -140,12 +140,16 @@ export const toArticle = (
  * follow rows pointing at this user, so the viewer's follow state is a lookup
  * in what the read already resolved — no global follows needed.
  */
-export const toProfile = (rows: Rows, username: string, viewer: string | null): ProfileView => {
+export const toProfile = (
+  rows: Rows<ReturnType<typeof userProfile>>,
+  username: string,
+  viewer: string | null
+): ProfileView => {
   const row = rows[0];
   if (row === undefined) return profileOf(null, username, false);
-  const followers = many<Follow>(row, "followers");
+  const followers = row.related.followers;
   return profileOf(
-    row.value as User,
+    row.value,
     username,
     viewer !== null && followers.some((f) => f.followerId === viewer)
   );
@@ -155,11 +159,15 @@ export const toProfile = (rows: Rows, username: string, viewer: string | null): 
  * Comments with their author profiles, from a read that `include`s `author`.
  * (Comment authors don't surface a follow flag in the UI.)
  */
-export const toComments = (rows: Rows): ReadonlyArray<CommentView> =>
-  rows.map((row) => {
-    const comment = row.value as Comment;
-    return { comment, author: profileOf(one<User>(row, "author"), comment.authorId, false) };
-  });
+export const toComments = (
+  rows: Rows<ReturnType<typeof articleComments>>
+): ReadonlyArray<CommentView> =>
+  rows.map(({ value: comment, related: { author } }) => ({
+    comment,
+    author: profileOf(author, comment.authorId, false),
+  }));
 
-/** Plain rows of one collection, for the reads with no edges. */
-export const values = <T>(rows: Rows): ReadonlyArray<T> => rows.map((row) => row.value as T);
+/** Plain row values of one collection, for the reads with no edges. */
+export const values = <R extends Query.Read>(
+  rows: Rows<R>
+): ReadonlyArray<Client.ResolvedRow<R>["value"]> => rows.map((row) => row.value);

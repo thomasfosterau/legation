@@ -18,11 +18,9 @@
  * room simply ages out shard-side.
  */
 
-import * as Arr from "effect/Array";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Scope from "effect/Scope";
-import type { ChangeHint } from "./Backend.js";
 import type { FanoutBroker } from "./FanoutBroker.js";
 import * as FanoutTopics from "./FanoutTopics.js";
 import type { InvalidationBus } from "./InvalidationBus.js";
@@ -62,29 +60,6 @@ export interface MakeOptions {
    */
   readonly timeout?: Duration.Input | undefined;
 }
-
-/** The topics one hint derives (coarse + fine over old and new values). */
-const topicsForHint = (
-  hint: ChangeHint,
-  derivable: ReadonlySet<string> | undefined
-): ReadonlySet<FanoutTopics.Topic> => {
-  const values = new Map(hint.values?.map(({ id, value }) => [id, value]) ?? []);
-  const olds = new Map(hint.oldValues?.map(({ id, value }) => [id, value]) ?? []);
-  const topics = new Set<FanoutTopics.Topic>([FanoutTopics.coarse(hint.collection)]);
-  const ids = Arr.isReadonlyArrayNonEmpty(hint.ids) ? hint.ids : [...values.keys()];
-  Arr.forEach(ids, (id) => {
-    Arr.forEach(
-      FanoutTopics.topicsForWrite(hint.collection, derivable, {
-        oldValue: olds.get(id),
-        newValue: values.get(id),
-      }),
-      (topic) => {
-        topics.add(topic);
-      }
-    );
-  });
-  return topics;
-};
 
 /** Build the bus; the lease heartbeat runs until the scope closes. */
 export const make = (options: MakeOptions): Effect.Effect<InvalidationBus, never, Scope.Scope> =>
@@ -129,12 +104,7 @@ export const make = (options: MakeOptions): Effect.Effect<InvalidationBus, never
 
     return {
       publish: (hints) => {
-        const topics = new Set<FanoutTopics.Topic>();
-        Arr.forEach(hints, (hint) => {
-          Arr.forEach(topicsForHint(hint, derivable.get(hint.collection)), (topic) => {
-            topics.add(topic);
-          });
-        });
+        const topics = FanoutTopics.topicsForHints(hints, derivable);
         // Freshen the lease alongside the write — a busy room never expires.
         return bounded("publish", options.broker.publish(topics)).pipe(Effect.andThen(registerNow));
       },

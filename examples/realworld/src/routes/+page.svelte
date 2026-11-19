@@ -9,7 +9,7 @@
    */
   import { AsyncResult } from "effect/reactivity";
   import { useQuery } from "@thomasfosterau/legation-svelte";
-  import { allArticles, allFavorites, allFollows, type Favorite, type Follow } from "#lib/domain.js";
+  import { allArticles, allFavorites, allFollows } from "#lib/domain.js";
   import { toArticlePage, toTags, values } from "#lib/joins.js";
   import { getSession } from "#lib/session.svelte.js";
   import ArticleList from "#lib/components/ArticleList.svelte";
@@ -25,9 +25,9 @@
   let page = $state(0);
 
   const articles = $derived(AsyncResult.getOrElse(articleRows.current, () => []));
-  const follows = $derived(values<Follow>(AsyncResult.getOrElse(followRows.current, () => [])));
+  const follows = $derived(values(AsyncResult.getOrElse(followRows.current, () => [])));
   const favorites = $derived(
-    values<Favorite>(AsyncResult.getOrElse(favoriteRows.current, () => []))
+    values(AsyncResult.getOrElse(favoriteRows.current, () => []))
   );
 
   const feed = $derived<Feed>(

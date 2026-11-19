@@ -8,7 +8,8 @@
  * Named `*.bench.ts` so `vitest run` (test mode) ignores it; run with
  * `bun run bench` (`vitest bench`). Kept off the coverage/test path.
  */
-import { describe, test } from "vite-plus/test";
+import { describe, it } from "@effect/vitest";
+import * as Console from "effect/Console";
 import * as Effect from "effect/Effect";
 import { KeyValueStore } from "effect/persistence";
 import * as ClientStoreModule from "../ClientStore.js";
@@ -51,53 +52,63 @@ interface Counts {
 }
 
 /** Seed `collectionSize` rows, then apply a `patchSize`-op patch, counting sets. */
-const measure = (collectionSize: number, patchSize: number): Counts => {
-  const { store, sets } = countingStore();
-  Effect.runSync(
-    Effect.gen(function* () {
+const measure = (collectionSize: number, patchSize: number): Effect.Effect<Counts> =>
+  Effect.gen(function* () {
+    const { store, sets } = countingStore();
+    yield* Effect.gen(function* () {
       const s = yield* ClientStoreModule.makeKeyValue();
       yield* s.applyRowOps(putOps(0, collectionSize));
       sets.clear();
       // Update the first `patchSize` existing rows.
       yield* s.applyRowOps(putOps(0, patchSize));
-    }).pipe(Effect.provideService(KeyValueStore.KeyValueStore, store))
-  );
-  const keys = [...sets.entries()];
-  const rowValueSets = keys
-    .filter(([k]) => k.startsWith("legation/row/todos/"))
-    .reduce((n, [, c]) => n + c, 0);
-  const indexSets = sets.get("legation/rowIndex/todos") ?? 0;
-  const totalSets = keys.reduce((n, [, c]) => n + c, 0);
-  return { collectionSize, patchSize, rowValueSets, indexSets, totalSets };
-};
+    }).pipe(Effect.provideService(KeyValueStore.KeyValueStore, store), Effect.orDie);
+    const keys = [...sets.entries()];
+    const rowValueSets = keys
+      .filter(([k]) => k.startsWith("legation/row/todos/"))
+      .reduce((n, [, c]) => n + c, 0);
+    const indexSets = sets.get("legation/rowIndex/todos") ?? 0;
+    const totalSets = keys.reduce((n, [, c]) => n + c, 0);
+    return { collectionSize, patchSize, rowValueSets, indexSets, totalSets };
+  });
 
-// Print the scaling table once at load: hold the patch size fixed while the
-// collection grows (row-value writes stay flat), then grow the patch (they
-// track it). This is the acceptance evidence.
-const table: Array<Counts> = [
-  measure(100, 10),
-  measure(1_000, 10),
-  measure(10_000, 10),
-  measure(10_000, 1),
-  measure(10_000, 50),
-  measure(10_000, 200),
+// The scaling table: hold the patch size fixed while the collection grows
+// (row-value writes stay flat), then grow the patch (they track it). This is
+// the acceptance evidence.
+const scalingTable: ReadonlyArray<readonly [number, number]> = [
+  [100, 10],
+  [1_000, 10],
+  [10_000, 10],
+  [10_000, 1],
+  [10_000, 50],
+  [10_000, 200],
 ];
-// eslint-disable-next-line no-console
-console.table(table);
 
 const patchOnLarge = putOps(0, 20);
 
 describe("per-row store I/O scaling", () => {
-  test("20-op patch over a 10k-row collection (value I/O ∝ patch size)", async ({ bench }) => {
-    await bench("20-op patch over a 10k-row collection (value I/O ∝ patch size)", () => {
-      const { store } = countingStore();
-      Effect.runSync(
-        Effect.gen(function* () {
-          const s = yield* ClientStoreModule.makeKeyValue();
-          yield* s.applyRowOps(putOps(0, 10_000));
-          yield* s.applyRowOps(patchOnLarge);
-        }).pipe(Effect.provideService(KeyValueStore.KeyValueStore, store))
+  // Live clock: the bench measures wall-clock time.
+  it.live("20-op patch over a 10k-row collection (value I/O ∝ patch size)", ({ bench }) =>
+    Effect.gen(function* () {
+      yield* Console.table(
+        yield* Effect.forEach(
+          scalingTable,
+          ([collectionSize, patchSize]) => measure(collectionSize, patchSize),
+          { concurrency: 1 }
+        )
       );
-    }).run({ time: 500 });
-  });
+      const runSync = Effect.runSyncWith(yield* Effect.context());
+      yield* Effect.tryPromise(() =>
+        bench("20-op patch over a 10k-row collection (value I/O ∝ patch size)", () => {
+          const { store } = countingStore();
+          runSync(
+            Effect.gen(function* () {
+              const s = yield* ClientStoreModule.makeKeyValue();
+              yield* s.applyRowOps(putOps(0, 10_000));
+              yield* s.applyRowOps(patchOnLarge);
+            }).pipe(Effect.provideService(KeyValueStore.KeyValueStore, store))
+          );
+        }).run({ time: 500 })
+      ).pipe(Effect.orDie);
+    })
+  );
 });

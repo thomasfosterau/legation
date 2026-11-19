@@ -19,6 +19,7 @@
  * same machinery via {@link queryWith}/{@link observeWith}/{@link relatedWith}.
  */
 
+import * as Defined from "./Defined.js";
 import * as Arr from "effect/Array";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
@@ -207,7 +208,7 @@ export const fieldMappingStrategy = (
       map.set(collection, {
         field: entry.field,
         ids: entry.ids,
-        ...(entry.window === undefined ? {} : { window: entry.window }),
+        ...Defined.fields({ window: entry.window }),
       });
     }
     return map;
@@ -243,7 +244,7 @@ const selectRelationships = (
     if (relationship !== undefined) {
       selected.push({
         ...relationship,
-        ...(select.first === undefined ? {} : { first: select.first }),
+        ...Defined.fields({ first: select.first }),
       });
     }
   }

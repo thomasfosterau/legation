@@ -26,6 +26,7 @@ import {
 } from "@thomasfosterau/legation";
 import * as NodeBridge from "../NodeBridge.js";
 import { defined } from "./defined.js";
+import { TestFailure } from "./test-failure.js";
 
 // The commerce trio, declared once as JSON:API resources. The graph is
 // acyclic (the library's resource types expand eagerly): products point at
@@ -197,7 +198,10 @@ describe("NodeBridge.registry", () => {
 // ─── End to end: the bridged graph drives a Client read ─────────────────────
 
 const sleepReal = (millis: number) =>
-  Effect.promise(() => new Promise<void>((resolve) => setTimeout(resolve, millis)));
+  Effect.callback<void>((resume) => {
+    const timer = setTimeout(() => resume(Effect.void), millis);
+    return Effect.sync(() => clearTimeout(timer));
+  });
 
 const eventually = <A>(read: Effect.Effect<A>, until: (value: A) => boolean) =>
   Effect.gen(function* () {
@@ -206,7 +210,7 @@ const eventually = <A>(read: Effect.Effect<A>, until: (value: A) => boolean) =>
       if (until(value)) return value;
       yield* sleepReal(10);
     }
-    return yield* Effect.die(new Error("eventually: condition never held"));
+    return yield* Effect.die(new TestFailure({ message: "eventually: condition never held" }));
   });
 
 describe("a bridged registry over a real engine", () => {

@@ -20,7 +20,7 @@
   import { setClientRuntime } from "@thomasfosterau/legation-svelte";
   import { useMutation, useQuery } from "@thomasfosterau/legation-svelte";
   import type { Transport } from "@thomasfosterau/legation";
-  import { allUsers, type User } from "#lib/domain.js";
+  import { allUsers } from "#lib/domain.js";
   import { values } from "#lib/joins.js";
   import { createSession, setSession } from "#lib/session.svelte.js";
 
@@ -35,7 +35,7 @@
   // The session needs the live users read (to verify a login and to resolve the
   // signed-in user's row) and the mutate helper (to register / update).
   const userRows = useQuery(() => allUsers);
-  const users = $derived(values<User>(AsyncResult.getOrElse(userRows.current, () => [])));
+  const users = $derived(values(AsyncResult.getOrElse(userRows.current, () => [])));
   const session = createSession(() => users, useMutation(), world);
   setSession(session);
 

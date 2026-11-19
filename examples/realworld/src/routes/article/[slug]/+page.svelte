@@ -14,7 +14,7 @@
   import { useQuery } from "@thomasfosterau/legation-svelte";
   import { getActions } from "#lib/actions.svelte.js";
   import { getSession } from "#lib/session.svelte.js";
-  import { allFollows, articleBySlug, articleComments, type Follow } from "#lib/domain.js";
+  import { allFollows, articleBySlug, articleComments } from "#lib/domain.js";
   import { toArticle, toComments, values } from "#lib/joins.js";
   import ArticleMeta from "#lib/components/ArticleMeta.svelte";
   import FavoriteButton from "#lib/components/FavoriteButton.svelte";
@@ -31,7 +31,7 @@
   const view = $derived(
     toArticle(
       AsyncResult.getOrElse(articleRows.current, () => []),
-      values<Follow>(AsyncResult.getOrElse(followRows.current, () => [])),
+      values(AsyncResult.getOrElse(followRows.current, () => [])),
       session.username
     )
   );

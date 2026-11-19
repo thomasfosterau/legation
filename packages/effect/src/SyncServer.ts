@@ -17,6 +17,7 @@
  * convergence, so anything a single row can't decide matches (ADR-0009).
  */
 
+import * as Defined from "./Defined.js";
 import * as Arr from "effect/Array";
 import * as Clock from "effect/Clock";
 import * as Duration from "effect/Duration";
@@ -34,6 +35,7 @@ import {
   type ChangeHint,
   evaluateAll,
   evaluateCountedAll,
+  forRequest,
   type SyncContext,
   totalsOf,
 } from "./Backend.js";
@@ -46,6 +48,7 @@ import {
   authorize,
   checkFilterable,
   passthroughMiddleware,
+  resolveContext,
 } from "./Authorization.js";
 import * as Cvr from "./Cvr.js";
 import * as Hash from "./Hash.js";
@@ -70,8 +73,8 @@ import type {
 import * as Predicate from "./Predicate.js";
 import * as Query from "./Query.js";
 import * as Telemetry from "./Telemetry.js";
-// oxlint-disable-next-line effect/no-service-constructor-imports -- the poke hub is a private per-handler instance, not a service; exposing it as one would add a requirement to the public sync-server layers.
-import { type HandleOptions, ServerHandler, makePokeHub } from "./Transport.js";
+import * as PokeHub from "./PokeHub.js";
+import { type HandleOptions, ServerHandler } from "./Transport.js";
 import type { Subset } from "./Subset.js";
 import * as Subsets from "./Subset.js";
 
@@ -151,6 +154,66 @@ const evaluateRows = (
     );
   });
 
+// Evaluate the desired next view: (collection → id → version) per subset.
+// The subsets go to the backend together (`Backend.evaluateAll`), so a
+// backend with `evaluateMany` answers the pull in a bounded number of
+// round trips (#505); one without it is asked per subset.
+// Each subset's total rides beside it (#210): `undefined` when the backend
+// cannot count (`Backend.evaluateCounted` absent).
+const evaluateView = (backend: Backend, context: SyncContext, subsets: ReadonlyArray<Subset>) =>
+  Effect.gen(function* () {
+    const evaluated = yield* evaluateCountedAll(backend, context, subsets);
+    const rows = new Map<string, Map<string, string | number>>();
+    Arr.forEach(subsets, (subset, index) => {
+      const collection = rows.get(subset.collection) ?? new Map<string, string | number>();
+      Arr.forEach(evaluated[index]?.entries ?? [], (entry) => {
+        collection.set(entry.id, entry.version);
+      });
+      rows.set(subset.collection, collection);
+    });
+    const view: Cvr.NextView = { rows };
+    return { view, totals: evaluated.map((answer) => answer.total) };
+  });
+
+// Assemble the patch from a CVR diff: a reset clear, then puts (rows fetched
+// per collection) then deletes.
+const assemblePatch = (
+  backend: Backend,
+  context: SyncContext,
+  difference: Cvr.CvrDiff,
+  isReset: boolean
+) =>
+  Effect.gen(function* () {
+    const patch: Array<PatchOp> = isReset ? [{ _tag: "Clear" }] : [];
+    const putsByCollection = new Map<string, Array<string>>();
+    Arr.forEach(difference.puts, (put) => {
+      putsByCollection.set(put.collection, [
+        ...(putsByCollection.get(put.collection) ?? []),
+        put.id,
+      ]);
+    });
+    yield* Effect.forEach(
+      putsByCollection,
+      ([collection, ids]) =>
+        Effect.gen(function* () {
+          Arr.forEach(yield* backend.getRows(context, collection, ids), (row) => {
+            patch.push({
+              _tag: "Put",
+              collection,
+              id: row.id,
+              version: row.version,
+              value: row.value,
+            });
+          });
+        }),
+      { concurrency: 1, discard: true }
+    );
+    Arr.forEach(difference.dels, (del) => {
+      patch.push({ _tag: "Del", collection: del.collection, id: del.id });
+    });
+    return patch;
+  });
+
 /**
  * ADR-0025's read without its carrier: pull's front half, then
  * `Backend.evaluate` + `getRows`, and nothing else. The subsets are checked
@@ -182,7 +245,12 @@ export const readSubsets = (
       (subset) => authorize(deps.authPolicy, context, subset, "server"),
       { concurrency: 1 }
     );
-    return yield* evaluateRows(deps.backend, context, authorized);
+    // One acquisition for the read's statements (#681): a per-request backend opens it here.
+    return yield* Effect.scoped(
+      Effect.flatMap(forRequest(deps.backend), (backend) =>
+        evaluateRows(backend, context, authorized)
+      )
+    );
   });
 
 /**
@@ -210,7 +278,9 @@ export const readTotal = (
       (each) => authorize(deps.authPolicy, context, each, "server"),
       { concurrency: 1 }
     );
-    const totals = yield* totalsOf(deps.backend, context, authorized);
+    const totals = yield* Effect.scoped(
+      Effect.flatMap(forRequest(deps.backend), (backend) => totalsOf(backend, context, authorized))
+    );
     return totals.reduce((sum, total) => sum + total, 0);
   });
 
@@ -433,7 +503,9 @@ export const makeWithIntrospectionWith = (
               message: `Schema version ${version ?? "(unset)"} is not supported by this server`,
             })
           );
-    const backend = yield* Backend;
+    // The configured backend. Each push, pull and read runs against `forRequest`'s
+    // acquisition of it (#681), one per request; everything else here is per server.
+    const configured = yield* Backend;
     const authPolicy = yield* AuthPolicy;
     const cvrStore = yield* Cvr.CvrStore;
     const bus = yield* InvalidationBus;
@@ -451,19 +523,12 @@ export const makeWithIntrospectionWith = (
       clientGroupId: string,
       options?: HandleOptions
     ): Effect.Effect<SyncContext, AuthorizationError> =>
-      identityOption._tag === "None"
-        ? Effect.succeed({ clientGroupId })
-        : identityOption.value
-            .resolve({
-              clientGroupId,
-              credentials: Option.getOrElse(
-                options?.credentials ?? Option.none(),
-                () => noCredentials
-              ),
-            })
-            .pipe(Effect.map((identity) => ({ clientGroupId, identity })));
+      resolveContext(identityOption, {
+        clientGroupId,
+        credentials: Option.getOrElse(options?.credentials ?? Option.none(), () => noCredentials),
+      });
 
-    const pokeHub = yield* makePokeHub;
+    const pokeHub = yield* PokeHub.make;
     // Each session's named-set resolutions (#205), by client group, then by the
     // set's key: the collection whose scope declares it and its name, so two
     // collections that declare different sets under one name never share an
@@ -559,6 +624,23 @@ export const makeWithIntrospectionWith = (
           return [groups, HashSet.isEmpty(groups) ? all : next];
         }
       );
+    // Record writes to these collections (#205, #652): count them, so a named set
+    // whose resolution overlapped a write is cached as stale, and mark every
+    // cached set over one of them stale. Returns the client groups that held
+    // one, which the fan-out pokes. A push records its own writes before it
+    // answers, so a pull it races can never bind a set's members from before
+    // the write; the fan-out records them again from the hints (idempotent),
+    // which is how another server's writes reach this one.
+    const recordWrites = (sources: HashSet.HashSet<string>) =>
+      Ref.update(sourceWrites, (counts) =>
+        HashSet.reduce(sources, counts, (next, collection) =>
+          HashMap.set(
+            next,
+            collection,
+            Option.getOrElse(HashMap.get(next, collection), () => 0) + 1
+          )
+        )
+      ).pipe(Effect.andThen(staleSets(sources)));
     // Active subscriptions per client group, for fan-out matching.
     const activeSubsets = yield* Ref.make(new Map<string, ReadonlyArray<Subset>>());
     // Each group's last-synced view (collection → id → version), for matching a
@@ -598,17 +680,7 @@ export const makeWithIntrospectionWith = (
               const cvrs = yield* Ref.get(activeCvrs);
               // A write to a named set's source may move the set (#205): those
               // sessions are poked whatever their windows hold.
-              const sources = HashSet.fromIterable(touched);
-              yield* Ref.update(sourceWrites, (counts) =>
-                HashSet.reduce(sources, counts, (next, collection) =>
-                  HashMap.set(
-                    next,
-                    collection,
-                    Option.getOrElse(HashMap.get(next, collection), () => 0) + 1
-                  )
-                )
-              );
-              const scoped = yield* staleSets(sources);
+              const scoped = yield* recordWrites(HashSet.fromIterable(touched));
               yield* Effect.forEach(
                 groups,
                 ([clientGroupId, subsets]) =>
@@ -647,6 +719,10 @@ export const makeWithIntrospectionWith = (
           Effect.gen(function* () {
             const context = yield* contextFor(request.clientGroupId, options);
             const checked = yield* middleware.onPush(context, request);
+            // The push's one acquisition (#681), opened after the middleware so a
+            // refused push opens none: `applyMutations` is one transaction, so its
+            // mutation-id claims and the handlers' writes share its connection.
+            const backend = yield* forRequest(configured);
             // The commit and the fan-out of its hints are one uninterruptible
             // region (#356): an interrupt landing after the backend commits must
             // not skip the publish, because a replayed retry carries no hints and
@@ -664,15 +740,24 @@ export const makeWithIntrospectionWith = (
             const result = yield* Effect.uninterruptible(
               backend
                 .applyMutations(context, checked.mutations)
-                .pipe(Effect.tap((applied) => bus.publish(applied.hints)))
+                .pipe(
+                  Effect.tap((applied) =>
+                    recordWrites(
+                      HashSet.fromIterable(applied.hints.map((hint) => hint.collection))
+                    ).pipe(Effect.andThen(bus.publish(applied.hints)))
+                  )
+                )
             );
             return {
               lastMutationIds: result.lastMutationIds,
-              ...(result.rejected !== undefined && Arr.isReadonlyArrayNonEmpty(result.rejected)
-                ? { rejected: result.rejected }
-                : {}),
+              ...Defined.fields({
+                rejected:
+                  result.rejected !== undefined && Arr.isReadonlyArrayNonEmpty(result.rejected)
+                    ? result.rejected
+                    : undefined,
+              }),
             };
-          }).pipe(Effect.mapError(asTransportError))
+          }).pipe(Effect.scoped, Effect.mapError(asTransportError))
         ),
         Effect.withSpan(Telemetry.span.serverPush)
       );
@@ -732,61 +817,6 @@ export const makeWithIntrospectionWith = (
         return [...direct, ...named];
       });
 
-    // Evaluate the desired next view: (collection → id → version) per subset.
-    // The subsets go to the backend together (`Backend.evaluateAll`), so a
-    // backend with `evaluateMany` answers the pull in a bounded number of
-    // round trips (#505); one without it is asked per subset.
-    // Each subset's total rides beside it (#210): `undefined` when the backend
-    // cannot count (`Backend.evaluateCounted` absent).
-    const evaluateView = (context: SyncContext, subsets: ReadonlyArray<Subset>) =>
-      Effect.gen(function* () {
-        const evaluated = yield* evaluateCountedAll(backend, context, subsets);
-        const rows = new Map<string, Map<string, string | number>>();
-        Arr.forEach(subsets, (subset, index) => {
-          const collection = rows.get(subset.collection) ?? new Map<string, string | number>();
-          Arr.forEach(evaluated[index]?.entries ?? [], (entry) => {
-            collection.set(entry.id, entry.version);
-          });
-          rows.set(subset.collection, collection);
-        });
-        const view: Cvr.NextView = { rows };
-        return { view, totals: evaluated.map((answer) => answer.total) };
-      });
-
-    // Assemble the patch from a CVR diff: a reset clear, then puts (rows fetched
-    // per collection) then deletes.
-    const assemblePatch = (context: SyncContext, difference: Cvr.CvrDiff, isReset: boolean) =>
-      Effect.gen(function* () {
-        const patch: Array<PatchOp> = isReset ? [{ _tag: "Clear" }] : [];
-        const putsByCollection = new Map<string, Array<string>>();
-        Arr.forEach(difference.puts, (put) => {
-          putsByCollection.set(put.collection, [
-            ...(putsByCollection.get(put.collection) ?? []),
-            put.id,
-          ]);
-        });
-        yield* Effect.forEach(
-          putsByCollection,
-          ([collection, ids]) =>
-            Effect.gen(function* () {
-              Arr.forEach(yield* backend.getRows(context, collection, ids), (row) => {
-                patch.push({
-                  _tag: "Put",
-                  collection,
-                  id: row.id,
-                  version: row.version,
-                  value: row.value,
-                });
-              });
-            }),
-          { concurrency: 1, discard: true }
-        );
-        Arr.forEach(difference.dels, (del) => {
-          patch.push({ _tag: "Del", collection: del.collection, id: del.id });
-        });
-        return patch;
-      });
-
     // Resolve the CVR the presented cookie names. A cookie minted under a
     // different fleet namespace (a bumped deploy) is treated as unknown, so the
     // pull degrades to a reset patch exactly as an unrecognised cookie does (#48).
@@ -813,6 +843,7 @@ export const makeWithIntrospectionWith = (
     // watermarks agree. Writes nothing: the CVR is recorded once, by the caller,
     // for the view it returns.
     const readPullOnce = (
+      backend: Backend,
       context: SyncContext,
       authorized: ReadonlyArray<Subset>,
       cookie: string | undefined,
@@ -820,10 +851,15 @@ export const makeWithIntrospectionWith = (
     ) =>
       Effect.gen(function* () {
         const before = yield* backend.lastMutationIds(context);
-        const { view: next, totals } = yield* evaluateView(context, authorized);
+        const { view: next, totals } = yield* evaluateView(backend, context, authorized);
         const previous = yield* resolvePrevious(cookie, epoch);
         const isReset = cookie !== undefined && previous === undefined;
-        const patch = yield* assemblePatch(context, Cvr.diff(previous ?? Cvr.empty, next), isReset);
+        const patch = yield* assemblePatch(
+          backend,
+          context,
+          Cvr.diff(previous ?? Cvr.empty, next),
+          isReset
+        );
         const after = yield* backend.lastMutationIds(context);
         return {
           next,
@@ -854,6 +890,7 @@ export const makeWithIntrospectionWith = (
     // transient revert until the next pull; it never covers less than the patch
     // carries, so it cannot double-apply.
     const readPullView = (
+      backend: Backend,
       context: SyncContext,
       authorized: ReadonlyArray<Subset>,
       cookie: string | undefined,
@@ -867,7 +904,7 @@ export const makeWithIntrospectionWith = (
           Effect.Success<ReturnType<typeof readPullOnce>>,
           Effect.Error<ReturnType<typeof readPullOnce>>
         > =>
-          Effect.flatMap(readPullOnce(context, authorized, cookie, epoch), (view) =>
+          Effect.flatMap(readPullOnce(backend, context, authorized, cookie, epoch), (view) =>
             view.consistent || attempt >= PULL_VIEW_ATTEMPTS
               ? Effect.succeed(view)
               : read(attempt + 1)
@@ -913,7 +950,11 @@ export const makeWithIntrospectionWith = (
               new Map(m).set(request.clientGroupId, [...authorized, ...leased])
             );
 
+            // The pull's one acquisition (#681): every pass over its view, and the
+            // rejections read after, go through it.
+            const backend = yield* forRequest(configured);
             const { next, totals, patch, lastMutationIds } = yield* readPullView(
+              backend,
               context,
               authorized,
               checked.cookie,
@@ -955,10 +996,12 @@ export const makeWithIntrospectionWith = (
               cookie,
               patch,
               lastMutationIds,
-              ...(Arr.isReadonlyArrayNonEmpty(rejected) ? { rejected } : {}),
+              ...Defined.fields({
+                rejected: Arr.isReadonlyArrayNonEmpty(rejected) ? rejected : undefined,
+              }),
             };
             return placed === undefined ? response : { ...response, totals: placed };
-          }).pipe(Effect.mapError(asTransportError))
+          }).pipe(Effect.scoped, Effect.mapError(asTransportError))
         ),
         Effect.withSpan(Telemetry.span.serverPull)
       );
@@ -976,7 +1019,11 @@ export const makeWithIntrospectionWith = (
         Effect.andThen(
           Effect.gen(function* () {
             const context = yield* contextFor(request.clientGroupId, options);
-            const rows = yield* readSubsets({ backend, authPolicy, middleware }, context, request);
+            const rows = yield* readSubsets(
+              { backend: configured, authPolicy, middleware },
+              context,
+              request
+            );
             return { rows };
           }).pipe(Effect.mapError(asTransportError))
         ),

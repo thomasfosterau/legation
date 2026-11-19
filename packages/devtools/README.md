@@ -26,7 +26,7 @@ Add `svelte` (an optional peer, `>=5.40`) for the `@thomasfosterau/legation-devt
 
 ## Effect version
 
-Peers `effect ^4.0.0`. Tested against `4.1.2` (the version CI pins) and `4.0.0` (the floor; CI runs the tests against it on every PR); install one copy of `effect` in your app (ADR-0003).
+Peers `effect ^4.0.0`. Tested against `4.1.2` (the version CI pins) and `4.0.0` (the floor; checked by hand, not in CI, before 1.0); install one copy of `effect` in your app (ADR-0003).
 
 ## Scope
 
@@ -45,7 +45,9 @@ import * as Devtools from "@thomasfosterau/legation-devtools";
 // `engine`/`store` are the same values you provided to `ClientEngine.make`.
 const devtools = Devtools.make(engine, store, {
   // Optional: wires the "simulated offline" action. Build `offline` with
-  // `Transport.simulateOffline` and wrap your real transport with it.
+  // `Transport.simulateOffline` and wrap your real transport with it; over the
+  // in-memory loopback, `setOffline: (offline) => loopback.setOnline(!offline)`
+  // and `isOffline` reads `loopback.status` as "disconnected".
   offline: { setOffline, isOffline },
 });
 ```

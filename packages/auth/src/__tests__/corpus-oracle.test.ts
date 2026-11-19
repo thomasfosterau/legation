@@ -9,8 +9,11 @@
  *
  * Generated as `FilterCorpus` generates: Effect's `Random` under
  * `Random.withSeed`, so a seed reproduces the corpus and a failure reports it.
+ *
+ * The anonymous principal is `Anonymous::"anonymous"`, so effect-auth compiles
+ * an "own" policy to false for it and its scope translates exactly like any other (#662).
  */
-import { describe, expect, it } from "@effect/vitest";
+import { assert, describe, expect, it } from "@effect/vitest";
 import * as Arr from "effect/Array";
 import * as Effect from "effect/Effect";
 import * as DateTime from "effect/DateTime";
@@ -22,7 +25,7 @@ import * as R from "effect/Record";
 import * as Random from "effect/Random";
 import { Condition, Entity, Policy, ReadScope as AuthScope } from "@thomasfosterau/effect-auth";
 import { type Authorization, Predicate } from "@thomasfosterau/legation";
-import { ReadScopes } from "@thomasfosterau/legation-auth";
+import { Principal, ReadScopes } from "@thomasfosterau/legation-auth";
 import { orFail } from "./support.js";
 
 const SEED = 20261112;
@@ -55,7 +58,7 @@ const map = orFail(
     collection: "items",
     binding,
     attributes: { s: "s", i: "i", d: "d", b: "b", t: "t", owner: "ownerId" },
-    sets: Option.some({
+    sets: {
       friends: {
         source: "friends",
         maxAge: "1 hour",
@@ -66,7 +69,7 @@ const map = orFail(
         maxAge: "1 hour",
         resolve: () => Effect.succeed(members.watched),
       },
-    }),
+    },
   })
 );
 
@@ -91,6 +94,12 @@ const owners: Arr.NonEmptyReadonlyArray<string> = [
   "user-carol",
   "user-dave",
 ];
+/**
+ * A row's owner, and an owner literal: a user, or the empty id. No principal
+ * compiles to the empty id; a row may still hold one, so the corpus checks that
+ * no principal (the anonymous one included) is taken to own such a row.
+ */
+const rowOwners: Arr.NonEmptyReadonlyArray<string> = [...owners, ""];
 
 const int = (max: number) => Random.nextIntBetween(0, max, { halfOpen: true });
 /** A uniform pick from a non-empty pool. */
@@ -125,7 +134,7 @@ const generateRow = (index: number): Effect.Effect<CorpusRow> =>
       t: Effect.map(field(instants), (ms) =>
         P.isNumber(ms) ? DateTime.toDateUtc(DateTime.makeUnsafe(ms)) : ms
       ),
-      owner: field(owners),
+      owner: field(rowOwners),
     },
     { concurrency: 1 }
   ).pipe(Effect.map((fields) => ({ id: `r${index}`, ...fields })));
@@ -178,7 +187,7 @@ const leaves: Arr.NonEmptyReadonlyArray<Effect.Effect<AuthScope.Predicate>> = [
   Effect.map(pick(doubles), (v) => eqOf("d", AuthScope.double(v))),
   Effect.map(pick([true, false]), (v) => eqOf("b", AuthScope.boolean(v))),
   Effect.map(pick(instants), (v) => eqOf("t", AuthScope.instant(v))),
-  Effect.map(pick(owners), (v) => eqOf("owner", AuthScope.text(v))),
+  Effect.map(pick(rowOwners), (v) => eqOf("owner", AuthScope.text(v))),
   Effect.map(Effect.all([pick(ops), pick(integers)], { concurrency: 1 }), ([op, v]) =>
     compareOf(op, "i", AuthScope.integer(v))
   ),
@@ -306,6 +315,15 @@ const policies = [
   }),
 ];
 
+/** The scope effect-auth compiles for the anonymous principal (`Anonymous::"anonymous"`). */
+const anonymousScopeOf = (set: ReadonlyArray<Policy.DeclarativePolicy>): AuthScope.ReadScope => {
+  const compiled = AuthScope.compile(set, binding, {
+    principal: ReadScopes.principalRef(Principal.anonymous),
+    action: Entity.ref("Action", "read"),
+  });
+  return P.isTagged(compiled, "Exact") ? compiled.scope : assert.fail("expected Exact");
+};
+
 describe("the corpus oracle: translated scopes admit exactly what effect-auth admits", () => {
   it.effect(`agrees row by row over ${PREDICATES} generated predicates (seed ${SEED})`, () =>
     Effect.gen(function* () {
@@ -335,6 +353,8 @@ describe("the corpus oracle: translated scopes admit exactly what effect-auth ad
       expect(results.filter(({ legation }) => discriminates(legation)).length).toBeGreaterThan(
         PREDICATES / 3
       );
+      // The corpus exercises the empty owner, as a row value and as a literal.
+      expect(rows.some((row) => row.owner === "")).toBe(true);
     })
   );
 
@@ -353,6 +373,7 @@ describe("the corpus oracle: translated scopes admit exactly what effect-auth ad
       );
       expect(exact).toHaveLength(owners.length);
       const results = exact.map(({ user, scope }) => {
+        // Translated for the signed-in principal, as the auth filter does: no narrowing.
         const { legation, effectAuth } = admitted(scope, rows);
         return { user, legation, effectAuth };
       });
@@ -361,5 +382,118 @@ describe("the corpus oracle: translated scopes admit exactly what effect-auth ad
       );
       expect(results.every(({ effectAuth }) => discriminates(effectAuth))).toBe(true);
     })
+  );
+
+  it.effect("agrees for the anonymous principal, whom an owner policy never names (#662)", () =>
+    Effect.gen(function* () {
+      const { rows } = yield* corpus;
+      const result = admitted(anonymousScopeOf(policies), rows);
+      expect(result.legation).toEqual(result.effectAuth);
+      // Exactly as if the "own" policy did not exist: no row is owned signed out.
+      const withoutOwn = anonymousScopeOf(policies.filter((policy) => policy.id !== "own"));
+      expect(result.legation).toEqual(
+        rows
+          .filter((row) => AuthScope.matches(withoutOwn, authRowOf(row), inSet))
+          .map((row) => row.id)
+      );
+      expect(discriminates(result.legation)).toBe(true);
+    })
+  );
+});
+
+/** The ids a scope admits, by effect-auth and by legation, which must agree. */
+const agreedIds = (scope: AuthScope.ReadScope, rows: ReadonlyArray<CorpusRow>) => {
+  const result = admitted(scope, rows);
+  expect(result.legation).toEqual(result.effectAuth);
+  return result.legation;
+};
+
+/** The scope effect-auth compiles for a signed-in user. */
+const userScopeOf = (
+  set: ReadonlyArray<Policy.DeclarativePolicy>,
+  user: string
+): AuthScope.ReadScope => {
+  const compiled = AuthScope.compile(set, binding, {
+    principal: Entity.ref("User", user),
+    action: Entity.ref("Action", "read"),
+  });
+  return P.isTagged(compiled, "Exact") ? compiled.scope : assert.fail("expected Exact");
+};
+
+const allIds = (rows: ReadonlyArray<CorpusRow>) => rows.map((row) => row.id);
+const hidden = Condition.eq(resource("b"), Condition.lit(true));
+/** The rows a forbid on `resource.b == true` leaves: a forbid fails closed, so a row without `b` is forbidden too. */
+const visibleIds = (rows: ReadonlyArray<CorpusRow>) =>
+  rows.filter((row) => row.b === false).map((row) => row.id);
+/** Whether a row has an owner: a comparison with an absent attribute fails closed. */
+const owned = (row: CorpusRow) => row.owner !== null && row.owner !== undefined;
+const permitAll = Policy.permit({ id: "all", resource: Policy.isType("Item") });
+
+describe('the anonymous principal is Anonymous::"anonymous", not a User', () => {
+  it.effect("a User-scoped permit does not match it", () =>
+    Effect.gen(function* () {
+      const { rows } = yield* corpus;
+      const set = [
+        Policy.permit({
+          id: "members",
+          principal: Policy.isType("User"),
+          resource: Policy.isType("Item"),
+        }),
+      ];
+      expect(agreedIds(anonymousScopeOf(set), rows)).toEqual([]);
+      // The same permit admits every row to a signed-in user.
+      expect(agreedIds(userScopeOf(set, "user-alice"), rows)).toEqual(allIds(rows));
+    })
+  );
+
+  it.effect("a User-scoped forbid does not bind it, and an unscoped forbid does", () =>
+    Effect.gen(function* () {
+      const { rows } = yield* corpus;
+      const userForbid = [
+        permitAll,
+        Policy.forbid({
+          id: "hidden",
+          principal: Policy.isType("User"),
+          resource: Policy.isType("Item"),
+          when: hidden,
+        }),
+      ];
+      const unscopedForbid = [
+        permitAll,
+        Policy.forbid({ id: "hidden", resource: Policy.isType("Item"), when: hidden }),
+      ];
+      expect(agreedIds(anonymousScopeOf(userForbid), rows)).toEqual(allIds(rows));
+      expect(agreedIds(userScopeOf(userForbid, "user-alice"), rows)).toEqual(visibleIds(rows));
+      expect(agreedIds(anonymousScopeOf(unscopedForbid), rows)).toEqual(visibleIds(rows));
+      // The corpus discriminates: some rows are hidden, some not.
+      expect(discriminates(visibleIds(rows))).toBe(true);
+    })
+  );
+
+  it.effect(
+    "a negated owner comparison admits every row with an owner, the empty owner included",
+    () =>
+      Effect.gen(function* () {
+        const { rows } = yield* corpus;
+        const set = [
+          Policy.permit({
+            id: "not-own",
+            resource: Policy.isType("Item"),
+            when: Condition.not(Condition.eq(resource("owner"), Condition.principal)),
+          }),
+        ];
+        // `resource.owner == principal` is false for an `Anonymous` reference
+        // whatever the row's owner holds, so its negation holds on every row
+        // that has an owner, `""` included. A row without one is refused: the
+        // comparison fails closed on an absent attribute, negated or not.
+        const anonymous = agreedIds(anonymousScopeOf(set), rows);
+        expect(anonymous).toEqual(rows.filter(owned).map((row) => row.id));
+        expect(rows.some((row) => row.owner === "" && anonymous.includes(row.id))).toBe(true);
+        expect(discriminates(anonymous)).toBe(true);
+        // A user is also refused the rows they own.
+        expect(agreedIds(userScopeOf(set, "user-alice"), rows)).toEqual(
+          rows.filter((row) => owned(row) && row.owner !== "user-alice").map((row) => row.id)
+        );
+      })
   );
 });

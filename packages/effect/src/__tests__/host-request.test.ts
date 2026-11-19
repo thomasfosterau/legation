@@ -4,12 +4,14 @@
  * single-reply kind round-trips one `Value`, a streaming kind its `Item`s and
  * `End`; every failure is a reply (`UnknownKind`, `InvalidRequest`, `Failed`);
  * a mirror never waits forever (`Unanswered` on its timeout, on a host
- * restart, and from a host that predates the envelope); a consumer that stops
+ * restart, and from a host that predates the envelope), while a stream the
+ * host has `Started` (#628) may stay quiet past it; a consumer that stops
  * cancels the host's stream, as does the mirror's `Disconnect`; and a reply
  * addressed to another mirror is not taken.
  */
 import { describe, expect, it } from "@effect/vitest";
 import * as Deferred from "effect/Deferred";
+import type * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
 import * as Fiber from "effect/Fiber";
@@ -67,6 +69,11 @@ const endless = HostRequest.streaming("test/endless", {
   request: HostRequest.NoInput,
   response: Schema.Finite,
 });
+// A stream that never says anything, as `introspect/events` may rightly not.
+const quiet = HostRequest.streaming("test/quiet", {
+  request: HostRequest.NoInput,
+  response: Schema.Finite,
+});
 
 /** What the test handlers fail and die with. */
 class HandlerError extends Schema.TaggedError<HandlerError, { readonly brand: unique symbol }>()(
@@ -109,7 +116,7 @@ const recording = (channel: MirrorChannel.MirrorChannel) =>
   });
 
 /** A real host serving the test kinds, a recorded mirror channel, and the endless stream's hooks. */
-const setup = Effect.fn("setup")(function* () {
+const setup = Effect.fn("setup")(function* (requestTimeout: Duration.Input = "10 seconds") {
   const engine = yield* makeEngine();
   const pair = yield* MirrorChannel.makeLoopbackPair;
   const endlessStarted = yield* Deferred.make<void>();
@@ -126,6 +133,7 @@ const setup = Effect.fn("setup")(function* () {
         Effect.die(new HandlerError({ message: "the handler died" }))
       ),
       HostRequest.streamHandler(count, ({ to }) => Stream.range(1, to)),
+      HostRequest.streamHandler(quiet, () => Stream.never),
       HostRequest.streamHandler(endless, () =>
         Stream.concat(
           Stream.fromEffect(Deferred.succeed(endlessStarted, undefined).pipe(Effect.as(0))),
@@ -135,7 +143,11 @@ const setup = Effect.fn("setup")(function* () {
     ],
   });
   const { channel, posted } = yield* recording(pair.mirror);
-  const mirror = yield* Mirror.make({ channel, mutators });
+  const mirror = yield* Mirror.make({
+    channel,
+    mutators,
+    requestTimeout,
+  });
   return { pair, mirror, posted, endlessStarted, endlessStopped };
 });
 
@@ -265,6 +277,65 @@ describe("host requests (ADR-0021 amendment)", () => {
       const exit = yield* Effect.exit(mirror.request(double, { n: 1 }));
       expect(reasonOf(exit)).toBe("Unanswered");
     })
+  );
+
+  it.live("a quiet stream stays open past the timeout once the host has Started it (#628)", () =>
+    Effect.gen(function* () {
+      const { mirror } = yield* setup("50 millis");
+      const followed = yield* Effect.forkChild(Stream.runDrain(mirror.stream(quiet, {})));
+      // Still following well past the 50 ms timeout: no deadline after `Started`.
+      const ended = yield* Fiber.join(followed).pipe(
+        Effect.exit,
+        Effect.timeoutOption("200 millis")
+      );
+      expect(Option.isNone(ended)).toBe(true);
+      yield* Fiber.interrupt(followed);
+    })
+  );
+
+  it.live("a stream no host accepts is Unanswered after the mirror's timeout (#628)", () =>
+    Effect.gen(function* () {
+      const pair = yield* MirrorChannel.makeLoopbackPair;
+      // A host that predates the envelope: it drops every HostRequest.
+      yield* scriptedHost(pair.host, () => Effect.void);
+      const mirror = yield* Mirror.make({
+        channel: pair.mirror,
+        mutators,
+        requestTimeout: "50 millis",
+      });
+      const exit = yield* Effect.exit(Stream.runDrain(mirror.stream(count, { to: 3 })));
+      expect(reasonOf(exit)).toBe("Unanswered");
+    })
+  );
+
+  it.live(
+    "a host that predates Started has its first Item taken as the acknowledgement (#628)",
+    () =>
+      Effect.gen(function* () {
+        const pair = yield* MirrorChannel.makeLoopbackPair;
+        const reply = (message: HostRequestMessage, outcome: MirrorProtocol.HostResponseOutcome) =>
+          pair.host.post({
+            _tag: "HostResponse",
+            mirrorId: message.mirrorId,
+            requestId: message.requestId,
+            outcome,
+          });
+        // An Item at once, then quiet well past the timeout, then End: no Started.
+        const scope = yield* Effect.scope;
+        yield* scriptedHost(pair.host, (message) =>
+          reply(message, { _tag: "Item", value: 1 }).pipe(
+            Effect.andThen(Effect.sleep("150 millis")),
+            Effect.andThen(reply(message, { _tag: "End" })),
+            Effect.forkIn(scope)
+          )
+        );
+        const mirror = yield* Mirror.make({
+          channel: pair.mirror,
+          mutators,
+          requestTimeout: "50 millis",
+        });
+        expect(yield* Stream.runCollect(mirror.stream(count, { to: 1 }))).toEqual([1]);
+      })
   );
 
   it.effect("a host restart fails every request in flight with Unanswered", () =>

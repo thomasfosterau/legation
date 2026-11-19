@@ -153,44 +153,58 @@ export const follows = Node.make("follows", {
 /** The closed, validated graph: nodes + the derived engine registry. */
 export const nodes = Node.registry([users, articles, comments, favorites, follows]);
 
+/**
+ * The graph registered for the rune hooks: `useQuery` and `useConnection` find
+ * the Client in context, so this is how they type each read's rows.
+ */
+declare module "@thomasfosterau/legation" {
+  interface Register {
+    readonly nodes: typeof nodes;
+  }
+}
+
 // ─── Reads ───────────────────────────────────────────────────────────────────
 //
 // The working set is small (a demo dataset), so the tab syncs every collection
 // and the feeds filter/paginate locally. Articles are newest-first to match
 // Conduit's feed ordering.
+//
+// Each read is a plain literal declared `as const satisfies Query.Read`: the
+// shape is checked here, and the literal collection and `include` keys type
+// the rows the hooks hand back (the graph is registered above).
 
 /** Articles with the author and favourites every card needs, newest first. */
-export const allArticles: Query.Read = {
+export const allArticles = {
   collection: "articles",
   order: ["-createdAt"],
   include: { author: true, favorites: true },
-};
+} as const satisfies Query.Read;
 
 /** One article by slug, with the same edges as the feed cards. */
-export const articleBySlug = (slug: string): Query.Read => ({
+export const articleBySlug = (slug: string) => ({
   collection: "articles",
   where: { slug },
   include: { author: true, favorites: true },
-});
+}) as const satisfies Query.Read;
 
 /** One article's comments, oldest first, each with its author resolved. */
-export const articleComments = (slug: string): Query.Read => ({
+export const articleComments = (slug: string) => ({
   collection: "comments",
   where: { articleSlug: slug },
   order: ["createdAt"],
   include: { author: true },
-});
+}) as const satisfies Query.Read;
 
 /** One profile, with the follow rows that decide the viewer's follow state. */
-export const userProfile = (username: string): Query.Read => ({
+export const userProfile = (username: string) => ({
   collection: "users",
   where: { username },
   include: { followers: true },
-});
+}) as const satisfies Query.Read;
 
-export const allUsers: Query.Read = { collection: "users" };
-export const allFollows: Query.Read = { collection: "follows" };
-export const allFavorites: Query.Read = { collection: "favorites" };
+export const allUsers = { collection: "users" } as const satisfies Query.Read;
+export const allFollows = { collection: "follows" } as const satisfies Query.Read;
+export const allFavorites = { collection: "favorites" } as const satisfies Query.Read;
 
 /**
  * What the shell pins for the tab's lifetime. The feed filters ("your feed",

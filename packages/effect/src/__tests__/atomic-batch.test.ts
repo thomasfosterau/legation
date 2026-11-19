@@ -29,6 +29,7 @@ import * as Subset from "../Subset.js";
 import * as SyncServer from "../SyncServer.js";
 import { ClientTransport, makeInMemory } from "../Transport.js";
 import { defined } from "./defined.js";
+import { TestFailure } from "./test-failure.js";
 
 // ─── Harness ─────────────────────────────────────────────────────────────────
 
@@ -589,13 +590,18 @@ describe("the atomic batch on the key-value store (#393)", () => {
         };
         const dieOnceAfterCommit = yield* Effect.clockWith((real) =>
           Effect.succeed<Clock.Clock>({
-            ...real,
+            currentTimeMillisUnsafe: () => real.currentTimeMillisUnsafe(),
             currentTimeMillis: Effect.suspend(() => {
               if (!armed) return real.currentTimeMillis;
               armed = false;
               died.count += 1;
-              return Effect.die(new Error("the pull died after its commit"));
+              return Effect.die(new TestFailure({ message: "the pull died after its commit" }));
             }),
+            currentTimeNanosUnsafe: () => real.currentTimeNanosUnsafe(),
+            currentTimeNanos: real.currentTimeNanos,
+            monotonicTimeNanosUnsafe: () => real.monotonicTimeNanosUnsafe(),
+            monotonicTimeNanos: real.monotonicTimeNanos,
+            sleep: (duration) => real.sleep(duration),
           })
         );
         const pull = yield* Effect.exit(

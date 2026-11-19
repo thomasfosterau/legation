@@ -26,6 +26,7 @@ import * as Layer from "effect/Layer";
 import * as Schema from "effect/Schema";
 import { IDBKeyRange, indexedDB } from "fake-indexeddb";
 import * as IndexedDbClientStore from "../IndexedDbClientStore.js";
+import { withLayer } from "./with-layer.js";
 
 const fakeIndexedDb = Layer.succeed(IndexedDb.IndexedDb)(
   IndexedDb.make({ indexedDB, IDBKeyRange })
@@ -63,7 +64,7 @@ describe("IndexedDbClientStore", () => {
           createdAt: 0,
         });
         yield* store.setCookie("cvr-1");
-      }).pipe(Effect.provide(storeLayer("sw-lifetime")));
+      }).pipe(withLayer(storeLayer("sw-lifetime")));
 
       // Second lifetime over the same database: everything rehydrates.
       yield* Effect.gen(function* () {
@@ -74,7 +75,7 @@ describe("IndexedDbClientStore", () => {
         expect(yield* store.pendingMutations).toHaveLength(1);
         expect(yield* store.getCookie).toBe("cvr-1");
         expect(yield* store.nextMutationId("c1")).toBe(2);
-      }).pipe(Effect.provide(storeLayer("sw-lifetime")));
+      }).pipe(withLayer(storeLayer("sw-lifetime")));
     })
   );
 
@@ -83,12 +84,12 @@ describe("IndexedDbClientStore", () => {
       yield* Effect.gen(function* () {
         const store = yield* ClientStore.ClientStore;
         yield* store.putRow("todos", { id: "1", version: 1, value: {} });
-      }).pipe(Effect.provide(storeLayer("db-a")));
+      }).pipe(withLayer(storeLayer("db-a")));
 
       yield* Effect.gen(function* () {
         const store = yield* ClientStore.ClientStore;
         expect(yield* store.listRows("todos")).toEqual([]);
-      }).pipe(Effect.provide(storeLayer("db-b")));
+      }).pipe(withLayer(storeLayer("db-b")));
     })
   );
 
@@ -108,7 +109,7 @@ describe("IndexedDbClientStore", () => {
           args: { id: "2" },
           createdAt: 0,
         });
-      }).pipe(Effect.provide(scopedLayer("shared-device", ALICE)));
+      }).pipe(withLayer(scopedLayer("shared-device", ALICE)));
 
       yield* Effect.gen(function* () {
         const store = yield* ClientStore.ClientStore;
@@ -117,7 +118,7 @@ describe("IndexedDbClientStore", () => {
         expect(yield* store.pendingMutations).toEqual([]);
         // Held, not destroyed.
         expect(yield* store.quarantinedMutations(ALICE)).toHaveLength(1);
-      }).pipe(Effect.provide(scopedLayer("shared-device", BOB)));
+      }).pipe(withLayer(scopedLayer("shared-device", BOB)));
     })
   );
 
@@ -126,13 +127,13 @@ describe("IndexedDbClientStore", () => {
       yield* Effect.gen(function* () {
         const store = yield* ClientStore.ClientStore;
         yield* store.putRow("todos", { id: "1", version: 1, value: { title: "alice's" } });
-      }).pipe(Effect.provide(namespacedLayer("two-users", ALICE)));
+      }).pipe(withLayer(namespacedLayer("two-users", ALICE)));
 
       yield* Effect.gen(function* () {
         const store = yield* ClientStore.ClientStore;
         expect(yield* store.listRows("todos")).toEqual([]);
         yield* store.putRow("todos", { id: "2", version: 1, value: { title: "bob's" } });
-      }).pipe(Effect.provide(namespacedLayer("two-users", BOB)));
+      }).pipe(withLayer(namespacedLayer("two-users", BOB)));
 
       // A switches back to a replica still warm — nothing was reset, because
       // the two never shared a keyspace.
@@ -140,7 +141,7 @@ describe("IndexedDbClientStore", () => {
         const store = yield* ClientStore.ClientStore;
         const rows = yield* store.listRows("todos");
         expect(rows.map((row) => (row.value as { title: string }).title)).toEqual(["alice's"]);
-      }).pipe(Effect.provide(namespacedLayer("two-users", ALICE)));
+      }).pipe(withLayer(namespacedLayer("two-users", ALICE)));
     })
   );
 });
@@ -214,7 +215,7 @@ describe("IndexedDbClientStore: the unpulled tail (#336)", () => {
         yield* engine.push;
         expect(yield* store.pendingMutations).toEqual([]);
         expect((yield* store.unpulled).map((m) => m.mutationId)).toEqual([1]);
-      }).pipe(Effect.provide(storeLayer("unpulled-tail")), Effect.scoped);
+      }).pipe(withLayer(storeLayer("unpulled-tail")), Effect.scoped);
 
       // The restart: a new engine over the reopened database, before any pull.
       yield* Effect.gen(function* () {
@@ -225,7 +226,7 @@ describe("IndexedDbClientStore: the unpulled tail (#336)", () => {
         yield* engine.pull;
         expect(yield* store.unpulled).toEqual([]);
         expect(yield* counterValue(engine)).toBe(1);
-      }).pipe(Effect.provide(storeLayer("unpulled-tail")), Effect.scoped);
+      }).pipe(withLayer(storeLayer("unpulled-tail")), Effect.scoped);
     })
   );
 });
