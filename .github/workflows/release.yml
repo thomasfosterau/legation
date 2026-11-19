@@ -10,9 +10,27 @@ on:
 permissions: {}
 
 jobs:
+  # Nothing publishes unless every action resolves to its locked commit.
+  verify-lockfile:
+    if: github.repository == 'thomasfosterau/legation'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v7.0.1
+        with:
+          persist-credentials: false
+      - name: Install gh-actions-lock
+        run: gh extension install github/gh-actions-lock --pin v0.4.1
+      - name: Verify the workflow lockfile
+        run: gh actions-lock --verify
+
   select:
     name: Select mode
-    if: github.repository == 'thomasfosterau/legation'
+    needs: verify-lockfile
     runs-on: ubuntu-latest
     timeout-minutes: 10
     permissions:
@@ -30,7 +48,7 @@ jobs:
         with:
           version-file: pnpm-workspace.yaml
           node-version: lts
-          cache: true
+          cache: false
           run-install: |
             - args: ["--frozen-lockfile", "--ignore-scripts"]
       - name: Select mode
@@ -39,7 +57,7 @@ jobs:
 
   version:
     name: Version packages
-    needs: select
+    needs: [verify-lockfile, select]
     if: needs.select.outputs.mode == 'version'
     runs-on: ubuntu-latest
     timeout-minutes: 20
@@ -61,7 +79,7 @@ jobs:
         with:
           version-file: pnpm-workspace.yaml
           node-version: lts
-          cache: true
+          cache: false
           run-install: |
             - args: ["--frozen-lockfile", "--ignore-scripts"]
       - name: Create or update the version PR
@@ -81,7 +99,7 @@ jobs:
 
   publish:
     name: Publish to npm
-    needs: select
+    needs: [verify-lockfile, select]
     if: needs.select.outputs.mode == 'publish'
     runs-on: ubuntu-latest
     timeout-minutes: 20
@@ -107,7 +125,7 @@ jobs:
         with:
           version-file: pnpm-workspace.yaml
           node-version: lts
-          cache: true
+          cache: false
           run-install: |
             - args: ["--frozen-lockfile", "--ignore-scripts"]
       # OIDC trusted publishing needs npm >= 11.5.1; major-pinned so a new
