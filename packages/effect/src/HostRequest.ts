@@ -154,6 +154,7 @@ const failure = (
 ): MirrorProtocol.HostResponseOutcome => ({ _tag: "Failure", reason, message });
 
 const END: MirrorProtocol.HostResponseOutcome = { _tag: "End" };
+const STARTED: MirrorProtocol.HostResponseOutcome = { _tag: "Started" };
 
 /** A handler's failure as its `Failed` reply; an interruption alone sends nothing (the request was cancelled). */
 const failedOf = (cause: Cause.Cause<unknown>): Stream.Stream<MirrorProtocol.HostResponseOutcome> =>
@@ -200,7 +201,10 @@ export const handler = <I, O, E>(
     ),
 });
 
-/** Serve a streaming kind: each element as an `Item`, then `End`, or a `Failure` when the stream fails or dies. */
+/**
+ * Serve a streaming kind: `Started` once the payload has decoded (#628), each
+ * element as an `Item`, then `End`, or a `Failure` when the stream fails or dies.
+ */
 export const streamHandler = <I, O, E>(
   kind: Streaming<I, O>,
   run: (input: I) => Stream.Stream<O, E>
@@ -211,7 +215,8 @@ export const streamHandler = <I, O, E>(
       run(input).pipe(
         Stream.mapEffect((value) => Schema.encodeEffect(kind.response)(value)),
         Stream.map((value): MirrorProtocol.HostResponseOutcome => ({ _tag: "Item", value })),
-        Stream.concat(Stream.make(END))
+        Stream.concat(Stream.make(END)),
+        (items) => Stream.concat(Stream.make(STARTED), items)
       )
     ),
 });
@@ -250,8 +255,8 @@ export const decodeResponse = <I, O>(
 
 /**
  * One reply as its caller sees it: a `Value` or `Item` decoded against the
- * kind's response schema, a `Failure` as its {@link HostRequestError}, and an
- * `End` where a value was due as `Failed`.
+ * kind's response schema, a `Failure` as its {@link HostRequestError}, and a
+ * `Started` or `End` where a value was due as `Failed`.
  */
 export const replyValue = <I, O>(
   kind: Kind<I, O>,
@@ -260,6 +265,14 @@ export const replyValue = <I, O>(
   Match.valueTags(outcome, {
     Value: ({ value }) => decodeResponse(kind, value),
     Item: ({ value }) => decodeResponse(kind, value),
+    Started: () =>
+      Effect.fail(
+        new HostRequestError({
+          kind: kind.name,
+          reason: "Failed",
+          message: "The host answered the request as a stream where a value was due",
+        })
+      ),
     Failure: ({ reason, message }) =>
       Effect.fail(new HostRequestError({ kind: kind.name, reason, message })),
     End: () =>

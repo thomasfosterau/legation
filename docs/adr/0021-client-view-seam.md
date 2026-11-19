@@ -197,3 +197,33 @@ nothing crossing the mirror, are not taken. The mirror-aware boot unit is
 - #146 implements `hydrate`, the `createClient` mirror boot and commerce's
   snapshot path. #136 implements the introspection kinds and
   `Introspection.fromMirror`. Neither needs another protocol change.
+
+## Amendment (#628): a streaming request is acknowledged with `Started`
+
+Date: 2026-11-19
+Status: Accepted when its PR merges. It specifies the owner's decision on #625
+of 2026-11-11, recorded in #628.
+
+**Context.** The first amendment gave a streaming request no reply timeout,
+because a stream such as `introspect/events` may rightly stay quiet. So a
+stream sent to a host that predates the envelope stayed silent forever, which
+broke "a mirror never waits forever" for streams.
+
+**Decision.** `HostResponse`'s `outcome` gains `{ _tag: "Started" }`.
+
+- The host sends it once it has accepted a streaming request: the payload
+  decoded and the handler began. `Item`s, then `End` or a `Failure`, follow
+  as before.
+- The mirror applies its `requestTimeout` to a stream's first reply, and
+  waits without a deadline once one arrives. A timeout fails the stream with
+  `Unanswered`.
+- A host that predates `Started` never sends it, so the mirror takes any
+  reply (`Item`, `End` or `Failure`) as the acknowledgement.
+- A mirror that predates `Started` cannot decode the reply and drops it, as
+  any foreign message, so the change is additive on the wire.
+- A single-reply request answered `Started` (the two sides disagree about the
+  kind) fails `Failed`, as an `End` where a value was due does.
+
+**Consequences.** Every request now has a deadline for its first reply, so a
+mirror never waits forever against an old host. A host restart still fails a
+stream in flight with `Unanswered`, before or after `Started`.
