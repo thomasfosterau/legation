@@ -432,9 +432,13 @@ connection string: a Worker cannot reuse one request's connection in another.
 `Backend.perRequest(acquire)` does that for a `Server`: `acquire` builds the
 `SqlBackend` for one request, and the server runs it once per push, pull and
 read, so a push's transaction is on the one client it opened (#681).
-What Hyperdrive guarantees about transactions, isolation statements and query
-caching is still to be confirmed against its documentation:
-[#506](https://github.com/thomasfosterau/legation/issues/506).
+Hyperdrive pools in transaction mode, so a transaction stays on one origin
+connection and the `SET TRANSACTION ISOLATION LEVEL SERIALIZABLE` that
+`Sql.postgres` issues first is honoured: Backend guarantee 1 holds through it.
+Its query caching does not: it serves read-only queries outside a transaction
+from cache, without invalidating them on a write, and `evaluate` and `getRows`
+run outside one. Use a Hyperdrive configuration with caching disabled for the
+sync backend. The details are in the repository's `docs/alchemy-postgres.md`.
 
 ### Ledger without the `rejections` column
 

@@ -214,7 +214,11 @@ dropped, not closed.
   only within the invocation that read them, so return
   `Backend.perRequest(acquire)` from `backend`: the room builds the client in
   `acquire` once per push, pull and read, in that request's scope, and one
-  push's transaction stays on its connection (#681).
+  push's transaction stays on its connection (#681). Hyperdrive pools in
+  transaction mode, so the push stays atomic. Bind the room to a
+  configuration with **query caching disabled** (`--caching-disabled`):
+  Hyperdrive caches reads outside a transaction without invalidating them on
+  a write, and the pull's reads run outside one.
 
 Details: [`docs/alchemy-postgres.md`](../../docs/alchemy-postgres.md).
 

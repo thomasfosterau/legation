@@ -117,7 +117,7 @@ export interface RoomConfig<R = never> {
    * the instance. That scope is never closed: an evicted instance's
    * connections are dropped by the platform, with no finalizer, and the next
    * instance builds its own. What is safe to hold across requests, and what is
-   * not (Hyperdrive), is in `docs/alchemy-postgres.md` (#506).
+   * not (Hyperdrive), is in `docs/alchemy-postgres.md`.
    *
    * For a store that must be opened per request (a Hyperdrive client, whose
    * credentials are valid only within the current invocation), return
@@ -126,7 +126,9 @@ export interface RoomConfig<R = never> {
    * push's transaction stays on the connection it opened, and closes it when
    * the request ends. `acquire` may need the room's services (the
    * `RuntimeContext` a `Hyperdrive.ConnectClient` accessor reads); they are
-   * captured here.
+   * captured here. Bind it to a Hyperdrive configuration with query caching
+   * disabled: the pull's reads run outside a transaction, and a cached answer
+   * would give a CVR a stale view.
    */
   readonly backend: Effect.Effect<Backend.Backend, never, RoomServices | Scope.Scope>;
   /** Deny-by-default per-collection filters, built in the per-instance phase. */
