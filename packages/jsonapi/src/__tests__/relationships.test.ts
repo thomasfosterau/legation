@@ -287,7 +287,7 @@ describe("Relationships", () => {
           const settled = bodiesOf(yield* Relationships.query(engine, issues, ["comments"]));
           expect(settled).toEqual([Option.some("edited"), Option.some("second")]);
           // ...and the observer re-emits it. Its emissions can lag the pull
-          // (and a push ack briefly re-emits the pre-edit join, #286), so wait
+          // (and a push ack briefly re-emits the pre-edit join), so wait
           // for the latest one to match rather than reading a snapshot.
           const latest = yield* emitted(
             (acc) => acc.length >= 2 && JSON.stringify(acc.at(-1)) === JSON.stringify(settled)

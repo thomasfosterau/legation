@@ -1,5 +1,5 @@
 /**
- * HintSource (#43): `fromStream` forks a scoped fibre that publishes each hint
+ * HintSource: `fromStream` forks a scoped fibre that publishes each hint
  * batch it takes off the stream to the in-context InvalidationBus, and stops
  * when the scope closes.
  *
@@ -17,7 +17,7 @@ import type { ChangeHint } from "../Backend.js";
 import * as HintSource from "../HintSource.js";
 import * as InvalidationBus from "../InvalidationBus.js";
 
-describe("HintSource.fromStream (#43)", () => {
+describe("HintSource.fromStream", () => {
   it.effect("publishes each hint batch from the stream to the bus", () =>
     Effect.gen(function* () {
       const bus = yield* InvalidationBus.makeInProcess;

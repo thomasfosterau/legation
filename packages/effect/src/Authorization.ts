@@ -10,7 +10,7 @@
  *
  * Before the auth filter is AND-ed in, a client-authored subset is checked
  * against its collection's **filterable set** (FilterPolicy.ts, ADR-0028
- * rule d, #154): every field it filters or sorts by must be declared with
+ * rule d): every field it filters or sorts by must be declared with
  * that operator and a literal of the declared kind, and `Exists` is refused
  * outright. The auth filter's own predicate and server-resolved named
  * queries are server-authored and exempt.
@@ -43,7 +43,7 @@ import * as Subsets from "./Subset.js";
 
 /**
  * A named, session-resolved set an auth filter's predicate refers to by name
- * (`Predicate.inSet(field, name)`, ADR-0015's #205 amendment): the viewer's
+ * (`Predicate.inSet(field, name)`, ADR-0015 amendment): the viewer's
  * following ids, the tenants they belong to. The name, not the members, is
  * part of the predicate, so a subscription keeps its identity while the set
  * moves.
@@ -105,7 +105,7 @@ const memberOf =
 /**
  * A {@link NamedSet} whose members are read through the backend: the distinct
  * `member` values of the `source` rows `where` selects for the request (the
- * relationship-scoped set of ADR-0015's #205 amendment: the users a viewer
+ * relationship-scoped set of ADR-0015 amendment: the users a viewer
  * follows, the tenants they belong to). The read is server-authored, so no
  * auth filter applies to it.
  *
@@ -123,7 +123,7 @@ export const namedSet = (backend: Backend, options: NamedSetOptions): NamedSet =
       Option.match(options.where(context), {
         onNone: () => Effect.succeed([]),
         onSome: (where) =>
-          // One acquisition for the read's two calls, as a pull's (#681).
+          // One acquisition for the read's two calls, as a pull's.
           Effect.scoped(
             Effect.flatMap(forRequest(backend), (acquired) =>
               acquired.evaluate(context, Subsets.make({ collection: source, where })).pipe(
@@ -151,7 +151,7 @@ export const namedSet = (backend: Backend, options: NamedSetOptions): NamedSet =
 };
 
 /**
- * What an auth filter decides for a request (ADR-0015's #205 amendment, the
+ * What an auth filter decides for a request (ADR-0015 amendment, the
  * same shape as effect-auth's compiled read scope): every row of the collection
  * (`AllowAll`, the role short-circuit), none of them (`Deny`), or the rows a
  * predicate admits (`Filter`), which may refer to named sets by name.
@@ -224,7 +224,7 @@ export const resolveSet: SetBinder = (context, _collection, _name, set) =>
 export interface AuthPolicy {
   readonly filters: ReadonlyMap<string, AuthFilter>;
   /**
-   * The filterable set per collection (#154), from the collection registry
+   * The filterable set per collection, from the collection registry
    * the policy was built with. When present, every client-authored subset
    * is checked against its collection's declaration — a collection the
    * registry does not know gets {@link FilterPolicy.bare} (`id` by `eq` /
@@ -293,7 +293,7 @@ export const checkFilterable = (
 
 /**
  * Narrow a subset with its collection's auth filter (deny by default). A
- * `"client"` subset is first checked against the filterable set (#154) —
+ * `"client"` subset is first checked against the filterable set —
  * before the filter runs, so nothing undeclared reaches `Backend.evaluate`.
  */
 export const authorize = (

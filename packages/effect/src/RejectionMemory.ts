@@ -1,5 +1,5 @@
 /**
- * The forgetting bound for a backend's rejection memory (#355, #366, #468): the
+ * The forgetting bound for a backend's rejection memory: the
  * per-client rule that drops a remembered rejection once the client's next push
  * has moved past it. MemoryBackend and JsonApiBackend bound their memory with
  * `forgetBelow`; SqlBackend shares only `floorsOf` and keeps its own forgetting
@@ -9,7 +9,7 @@
 import * as Arr from "effect/Array";
 
 /**
- * The lowest mutation id a push carries, per client: the push's floors (#355).
+ * The lowest mutation id a push carries, per client: the push's floors.
  * A client resends only ids it has not had acknowledged, so a push whose lowest
  * id for a client is `f` proves the client has seen the outcome of every id below `f`.
  */
@@ -24,7 +24,7 @@ export const floorsOf = (
 };
 
 /**
- * Forget the rejections a client's push has moved past (#355): drop each client's
+ * Forget the rejections a client's push has moved past: drop each client's
  * remembered rejections whose mutation id is below its floor, and keep the rest.
  * `clients` maps each client in one client group to its remembered rejections
  * (mutation id → reason); `floors` maps each client in a push to the lowest

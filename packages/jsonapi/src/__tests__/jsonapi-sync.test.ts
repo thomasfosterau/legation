@@ -303,7 +303,7 @@ describeWrapped("JsonApiSync.layer store option", (it) => {
   });
 });
 
-describe("JsonApiSync.layer ledger default (#468)", () => {
+describe("JsonApiSync.layer ledger default", () => {
   const todoCreate = {
     type: "todos",
     id: "1",

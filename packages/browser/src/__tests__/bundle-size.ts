@@ -1,5 +1,5 @@
 /**
- * Bundle-size measurement for the size tests (#678): what a consumer's
+ * Bundle-size measurement for the size tests: what a consumer's
  * bundler ships for one import, minified and gzipped.
  *
  * The packages are packed in memory with the workspace's own `vp pack`

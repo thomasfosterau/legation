@@ -1,5 +1,5 @@
 /**
- * The identity boundary (#212).
+ * The identity boundary.
  *
  * The invariant under test, in the register CONTEXT.md states it: **a durable
  * replica belongs to exactly one resolved identity, and an identity change is

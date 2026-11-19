@@ -1,5 +1,5 @@
 /**
- * Permanent mutation rejection (issue #35), end to end: a mutation the backend
+ * Permanent mutation rejection, end to end: a mutation the backend
  * permanently rejects is acknowledged (id bumped) without effects, so it never
  * poisons the queue — the client's optimistic effect for it disappears after
  * the acknowledging push/pull with no app code, and mutations queued behind it
@@ -69,7 +69,7 @@ const makeServer: Effect.Effect<ServerHandler, never, Scope.Scope> = Effect.gen(
 
 const allTodos = Subset.make({ collection: "todos" });
 
-describe("permanent mutation rejection (#35)", () => {
+describe("permanent mutation rejection", () => {
   it.effect("a poison mutation's optimistic effect vanishes; the one behind it applies", () =>
     Effect.gen(function* () {
       const handler = yield* makeServer;

@@ -1,5 +1,5 @@
 /**
- * Edge invalidation (#206): a committed write's hints become KV deletes and
+ * Edge invalidation: a committed write's hints become KV deletes and
  * cache tag purges, forwarded from the committing Worker to the Worker that
  * holds the cache. Eviction is fire-and-forget: a failed delete, a purge that
  * rejects or resolves `{ success: false }`, and a failed forward are logged,
@@ -53,7 +53,7 @@ const touched: HttpCache.Touched = {
   ],
 };
 
-describe("EdgeInvalidation.kv (#206)", () => {
+describe("EdgeInvalidation.kv", () => {
   layer(Warnings.layer)((scoped) => {
     scoped.effect("deletes `{collection}:{id}` for every touched row", () =>
       Effect.gen(function* () {
@@ -84,7 +84,7 @@ describe("EdgeInvalidation.kv (#206)", () => {
   });
 });
 
-describe("EdgeInvalidation.cachePurge (#206)", () => {
+describe("EdgeInvalidation.cachePurge", () => {
   layer(Warnings.layer)((scoped) => {
     scoped.effect(
       "purges the coarse and fine tags, spelled as the browser's Cache API spells them",
@@ -142,7 +142,7 @@ describe("EdgeInvalidation.cachePurge (#206)", () => {
   });
 });
 
-describe("EdgeInvalidation.forward / receive (#206)", () => {
+describe("EdgeInvalidation.forward / receive", () => {
   layer(Warnings.layer)((scoped) => {
     scoped.effect("carries what a write touched to the Worker holding the cache", () =>
       Effect.gen(function* () {
@@ -198,7 +198,7 @@ describe("EdgeInvalidation.forward / receive (#206)", () => {
 const Post = Schema.Struct({ id: Schema.String });
 const put = Mutation.make("post/put", Post);
 
-describeWrapped("InvalidationSink.run over a server's bus (#206)", (it) => {
+describeWrapped("InvalidationSink.run over a server's bus", (it) => {
   it.effect("a write's hint reaches the sinks, and a failing sink never fails the write", () =>
     Effect.gen(function* () {
       const bus = yield* InvalidationBus.makeInProcess;

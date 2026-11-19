@@ -1,7 +1,7 @@
 /**
  * InvalidationSink
  *
- * Turn committed writes into evictions of server-side caches (#206). A
+ * Turn committed writes into evictions of server-side caches. A
  * {@link InvalidationSink} is told what each hint batch on the
  * {@link InvalidationBus} touched, the collections and the row ids, and evicts
  * whatever it caches for them: a KV read-through cache, the edge HTTP cache's
@@ -27,7 +27,7 @@ import type { Touched } from "./HttpCache.js";
 import { InvalidationBus } from "./InvalidationBus.js";
 
 /**
- * A server-side cache that evicts what a change touched (#206). `invalidate`
+ * A server-side cache that evicts what a change touched. `invalidate`
  * never fails: an implementation logs its own failures, since a lost eviction
  * only leaves an entry until its TTL.
  */

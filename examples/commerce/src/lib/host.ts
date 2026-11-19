@@ -4,14 +4,14 @@
  * needs a `BroadcastChannel`, so the identical composition also works
  * un-elected on a main thread — that's `@thomasfosterau/legation-browser`'s `ElectedHost`
  * (the shipped no-service-worker fallback, ADR-0010), which wraps this same
- * `ServiceWorkerHost.run` call behind a `navigator.locks` leader election
- * (#119). This app runs the service worker by default (dev included), but
+ * `ServiceWorkerHost.run` call behind a `navigator.locks` leader election.
+ *This app runs the service worker by default (dev included), but
  * `bootElected` below wires the same domain (nodes/mutators/transport) onto
  * `ElectedHost.run` instead — a documented dev-mode toggle (`?host=main` in
  * `+layout.svelte`) so the no-service-worker fallback topology actually gets
- * exercised somewhere, not just unit-tested (#133 item 6).
+ * exercised somewhere, not just unit-tested.
  *
- * Paced mutations (#117) — the cart-quantity stepper demo — are wired in
+ * Paced mutations — the cart-quantity stepper demo — are wired in
  * *here*, not in the cart page: `Paced.debounce` needs the real
  * `ClientEngine` (`mutateWithAck` + `dropIfPending`), which only exists on
  * this side of the mirror boundary (ADR-0010 — same reason `Undo` isn't
@@ -25,7 +25,7 @@
  * one per click. `bootElected` does not wire this in — it demonstrates the
  * plain topology, and a paced elected host is unexercised follow-up.
  *
- * The worker also serves the JSON:API façade (ADR-0029, #166) beside the
+ * The worker also serves the JSON:API façade (ADR-0029) beside the
  * mirrors: `runHost` starts the host through `ServiceWorkerHost.start` and
  * hands `onStart` what the façade reads — the engine, the registrations the
  * host holds on the tabs' behalf (the only ledger in the worker that knows
@@ -65,7 +65,7 @@ export interface StartedHost extends ServiceWorkerHost.Host {
 export type PageSignal =
   | { readonly type: "legation:pull-landed"; readonly cookie: string | undefined }
   /**
-   * A pull the server answered (#146): the cookie the request carried, and
+   * A pull the server answered: the cookie the request carried, and
    * whether the answer was a reset (a `Clear`). After a snapshot hydration the
    * first one carries the snapshot's cookie and is no reset.
    */
@@ -106,7 +106,7 @@ const transportLayer = (options: {
       if (onSignal === undefined) return connected;
       // Each answered pull, as `legation:pull-answered`: what the request
       // carried is the evidence that a hydrated replica continues the
-      // snapshot's CVR conversation rather than starting over (#146).
+      // snapshot's CVR conversation rather than starting over.
       return {
         ...connected,
         pull: (request) =>
@@ -150,7 +150,7 @@ const withPacedCartQty = (
       : engine.mutateWithAck(mutator, args),
 });
 
-/** The raw engine layer over the store in context, wrapped so `cart/setQty` is debounced (#117's demo). */
+/** The raw engine layer over the store in context, wrapped so `cart/setQty` is debounced. */
 const pacedEngineLayer = (
   options: HostOptions
 ): Layer.Layer<ClientEngine.ClientEngine, never, ClientStore.ClientStore> =>
@@ -204,7 +204,7 @@ export const runHost = (options: HostOptions): Effect.Effect<never> =>
         }
       };
       // Opened before the host starts, so the sync loop's first events are not missed: an event
-      // published before the stream is opened is lost (#426, the reason EngineHost opens its own first).
+      // published before the stream is opened is lost (the reason EngineHost opens its own first).
       const events = yield* Stream.toPull(engine.engineEvents);
       yield* Effect.forkScoped(
         Effect.forever(
@@ -221,7 +221,7 @@ export const runHost = (options: HostOptions): Effect.Effect<never> =>
       nodes,
       urls: JsonApiQuery.urlReads(nodes),
       // A first visit boots this worker from a tab holding the page's SSR
-      // snapshot (#146): over an empty replica, hold the first pull until the
+      // snapshot: over an empty replica, hold the first pull until the
       // tab's offer arrives, so the snapshot wins and the first pull continues
       // from its cookie. A returning visitor's replica is never held.
       hydrationWindow: "3 seconds",
@@ -243,7 +243,7 @@ export interface ElectedBootOptions {
  * Dev-mode toggle (#133 item 6, `?host=main` in `+layout.svelte`): the same
  * domain (nodes/mutators) and transport `runHost` gives the service worker,
  * hosted via `ElectedHost.run`'s `navigator.locks` leader election instead —
- * the shipped no-service-worker fallback (ADR-0010, #119) — so it actually
+ * the shipped no-service-worker fallback (ADR-0010) — so it actually
  * runs somewhere in this repo, not just under `elected-host.test.ts`. One
  * `ManagedRuntime` per tab, holding the SAME `IndexedDbClientStore` a service
  * worker would (same-origin `window`/worker `indexedDB` share storage), so

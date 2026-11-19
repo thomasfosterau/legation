@@ -1,5 +1,5 @@
 /**
- * Booting the bindings without an Effect runtime (#147): `createClient` takes
+ * Booting the bindings without an Effect runtime: `createClient` takes
  * `Client.make`'s options and returns a handle with its own `dispose`, and
  * `setClient` puts it in context. With no Client (`setClient(undefined)`, as on
  * the server) a hook renders from its seed and fails only when it reaches for
@@ -21,7 +21,7 @@ afterEach(() => {
   document.body.innerHTML = "";
 });
 
-describe("createClient (#147)", () => {
+describe("createClient", () => {
   it("boots a Client from plain options, live through the hooks, and disposes it", async () => {
     const client = createClient({ nodes, mutations: mutators });
     const harness = mount(ClientHarness, {

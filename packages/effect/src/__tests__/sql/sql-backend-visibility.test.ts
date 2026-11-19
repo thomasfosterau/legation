@@ -1,5 +1,5 @@
 /**
- * SqlBackend visibility before the bump (Backend guarantee 1, #381).
+ * SqlBackend visibility before the bump (Backend guarantee 1).
  *
  * A handler's writes and its ledger bump must stay invisible to a concurrent
  * read until its mutation commits, then both become visible together.

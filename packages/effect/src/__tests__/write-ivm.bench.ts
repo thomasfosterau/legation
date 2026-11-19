@@ -1,5 +1,5 @@
 /**
- * Write-path IVM benchmark (#39): a burst of single-row mutates over a large
+ * Write-path IVM benchmark: a burst of single-row mutates over a large
  * collection with K live-query observers. Measures the cost of the mutate path
  * with collection-scoped rebuilds + the shared overlay cache against a K that
  * would, without them, force K full journal replays per change.

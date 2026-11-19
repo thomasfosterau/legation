@@ -39,7 +39,7 @@
  * `observe` never falls through: observing subscribes, which IS the
  * upgrade from a one-shot fallthrough to a live, replica-backed read.
  *
- * **An answer can say how complete it is** (#653): `answer` and
+ * **An answer can say how complete it is**: `answer` and
  * `observeAnswers` are `query` and `observe` with each answer's
  * {@link Completeness} beside its rows ({@link Answer}). A covered or
  * server-answered read is `"complete"`; an uncovered one answered from the
@@ -197,7 +197,7 @@ export type Completeness = "complete" | "partial";
 /**
  * A read's answer with its {@link Completeness}: the rows, typed as
  * {@link ResolvedRow} types them, and whether they are all the rows the read
- * selects (#653).
+ * selects.
  *
  * `rows` is exactly what {@link Client.query} resolves to for the same read;
  * `completeness` is a value beside it, so filtering or copying the rows never
@@ -317,7 +317,7 @@ export interface Client<Graph extends Node.NodeRegistry = Node.NodeRegistry> {
    * `options.snapshot`, when given, is the root rows the caller already read for
    * this read (with the subset they are of): the verdict is judged over those rows
    * instead of a fresh read, so a caller that answers from the same rows judges
-   * exactly what it answers (#426). A snapshot of any other subset is not used; the
+   * exactly what it answers. A snapshot of any other subset is not used; the
    * verdict then reads its root as usual. Omit it to judge a fresh read.
    *
    * This judges a read before it is answered; {@link Client.answer} and
@@ -328,7 +328,7 @@ export interface Client<Graph extends Node.NodeRegistry = Node.NodeRegistry> {
     options?: Coverage.JudgeOptions
   ) => Effect.Effect<Coverage.Verdict>;
   /**
-   * A subscription's **total** as the last pull reported it (#210): how many
+   * A subscription's **total** as the last pull reported it: how many
    * rows its `where` matches on the server, whatever its window. This is what
    * a JSON:API façade over this Client writes as `meta.total` for a read a
    * windowed subscription covers. `undefined` when no pull has reported one,
@@ -347,13 +347,13 @@ export interface Client<Graph extends Node.NodeRegistry = Node.NodeRegistry> {
     args: unknown
   ) => Effect.Effect<ClientEngine.MutationOutcome, ClientView.ClientViewError>;
   /**
-   * The client half of an enhanced form submit (ADR-0030 #215 §4): apply the
+   * The client half of an enhanced form submit (ADR-0030 §4): apply the
    * Mutation optimistically under the form client's id, without journaling it
    * (the form action delivers it), and settle the returned submission on the
    * action's receipt. An acknowledgement parks the effect in the unpulled
    * tail until the pull that covers the form client releases it; a rejection
    * drops it. Over a connected host (`connect`) the host's engine holds the
-   * entry and every mirror sees its overlay (#536); a host that predates that
+   * entry and every mirror sees its overlay; a host that predates that
    * answers with a `TransportError`, as does a view that carries no form
    * submit at all.
    */
@@ -363,14 +363,14 @@ export interface Client<Graph extends Node.NodeRegistry = Node.NodeRegistry> {
     args: unknown
   ) => Effect.Effect<ClientEngine.FormSubmission, ClientView.ClientViewError>;
   /**
-   * The keyed mutation-state map (#116) — TanStack Query's
+   * The keyed mutation-state map — TanStack Query's
    * `useMutationState` analogue: every journaled mutation's current
    * lifecycle state, current value now then every fold. Works identically
    * over an owned engine and a connected host (ADR-0021).
    */
   readonly mutationStates: Stream.Stream<MutationState.MutationStateMap>;
   /**
-   * Adopt an identity, scoping the durable replica to it (#212). **The
+   * Adopt an identity, scoping the durable replica to it. **The
    * invariant: a durable replica belongs to exactly one resolved identity,
    * and an identity change is a reset, not a rebase** (CONTEXT.md, "Identity
    * boundary").
@@ -524,7 +524,7 @@ const keyOf = (registration: Coverage.Registration): string =>
         registration.edges
       );
 
-// ─── Answers (#653) ──────────────────────────────────────────────────────────
+// ─── Answers ──────────────────────────────────────────────────────────
 
 /** An answer over the erased graph: the shape the Client builds before typing it. */
 interface UntypedAnswer {
@@ -792,7 +792,7 @@ export const fromView = <Graph extends Node.NodeRegistry>(
 
   // One rule, one scan: the first pulled ledger entry (in registration order)
   // that covers the read, under `Coverage`. The read's root rows are read from
-  // the view, so the edge windows it links to are the ones judged (#426). An
+  // the view, so the edge windows it links to are the ones judged. An
   // entry whose windows the read needs and the replica does not hold yet covers
   // nothing: the read goes to the server. A failed read of the rows is uncovered.
   const verdictOf = (
@@ -809,13 +809,13 @@ export const fromView = <Graph extends Node.NodeRegistry>(
     );
 
   // The replica's answer to a read when a pulled subscription covers it
-  // (ADR-0029), which is complete (#653); `None` when nothing covers it. The
+  // (ADR-0029), which is complete; `None` when nothing covers it. The
   // marks are read first, then the rows: a pull marks its windows only after
   // its rows are in the replica, so rows read after a mark says pulled are at
   // least that pull's, and rows read before it are never called complete.
   // The verdict is judged over those earlier marks and the root rows just
   // read, which the answer is joined from, so a root row whose edge windows
-  // were not pulled when the marks were read uncovers the read (#426); edge
+  // were not pulled when the marks were read uncovers the read; edge
   // rows `answerOf` reads come after the marks too. The root is read once,
   // and a failed read of it is uncovered.
   const coveredAnswer = <R extends ClientEngine.LocalRow>(
@@ -851,7 +851,7 @@ export const fromView = <Graph extends Node.NodeRegistry>(
       )
     );
 
-  // A live read's answers (#653). An emitted array may predate the pull that
+  // A live read's answers. An emitted array may predate the pull that
   // covers the read, and a pull's tick may arrive before its rows, so no
   // emitted array is called complete as it stands: on each emission and each
   // `pulledChanges` tick the read is answered again by `covered`, and while
@@ -906,14 +906,14 @@ export const fromView = <Graph extends Node.NodeRegistry>(
   // for the coverage verdict and the run); local again when fallthrough is
   // unavailable or fails (offline-first — local is always an answer).
   // A covered answer is `coveredAnswer`'s: judged before, and over, the one
-  // snapshot of the root rows it is joined from (#426, #653).
+  // snapshot of the root rows it is joined from.
   const answerOnce = (
     read: QueryModule.Read
   ): Effect.Effect<UntypedAnswer, ClientView.ClientViewError> => {
     const readThrough = view.read;
     const compiled = Query.plan(nodes, read);
     // Uncovered and answered from the replica: never wider than the policy,
-    // but possibly short of what the server holds (#653).
+    // but possibly short of what the server holds.
     const local = Effect.suspend(() => Query.run(view, nodes, read)).pipe(Effect.map(partial));
     const uncovered =
       readThrough === undefined
@@ -1103,8 +1103,8 @@ export interface MakeOptions<
    */
   readonly syncLoop?: ClientEngine.SyncLoopOptions;
   /**
-   * Auto-discover indexable fields from registered subsets and index them
-   * (issue #113), in addition to any `indexes` a Node/Collection declares.
+   * Auto-discover indexable fields from registered subsets and index them,
+   *in addition to any `indexes` a Node/Collection declares.
    * Defaults to `false`: zero-config behaviour is identical to no indexing.
    */
   readonly autoIndex?: boolean;
@@ -1115,7 +1115,7 @@ export interface MakeOptions<
    */
   readonly sync?: boolean;
   /**
-   * The identity this replica belongs to (#212). Supplying it turns the
+   * The identity this replica belongs to. Supplying it turns the
    * identity boundary on: the Client adopts the fingerprint at construction
    * — before the sync loop starts — exactly as {@link Client.reset} would, so
    * a replica left by a different principal is quarantined-and-cleared
@@ -1147,7 +1147,7 @@ const declaredIndexes = (
 };
 
 /**
- * What {@link make} built (#142): the Client, and the engine and store it owns
+ * What {@link make} built: the Client, and the engine and store it owns
  * in this thread. An app reads and writes through `client`; `engine` and
  * `store` are there for the engine-level capabilities a Client does not
  * expose, such as attaching devtools (`Devtools.make(engine, store, …)`). A

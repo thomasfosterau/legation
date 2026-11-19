@@ -1,5 +1,5 @@
 /**
- * ElectedHost tests (#119): navigator.locks-based leader election over the
+ * ElectedHost tests: navigator.locks-based leader election over the
  * main-thread host path. Node has no Web Locks API, so these tests inject a
  * minimal FIFO exclusive-lock fake (`makeFakeLockManager`) via the `locks`
  * option — same queuing/abort semantics as the real API, just synchronous
@@ -169,7 +169,7 @@ const dependenciesOf = (
     Layer.effect(Transport.ClientTransport)(Transport.makeInMemory(handler, clientGroupId))
   );
 
-describe("ElectedHost (#119)", () => {
+describe("ElectedHost", () => {
   // Real clock: the periodic pull runs on `Schedule.spaced`, which the
   // TestClock would freeze.
   it.live(
@@ -298,7 +298,7 @@ describe("ElectedHost (#119)", () => {
 
           // Resumed from the SAME durable store: the old leader's row reaches
           // the successor without tab B ever having journaled it itself. The
-          // successor's registration is not pulled (#426), so its read goes to
+          // successor's registration is not pulled, so its read goes to
           // the server, which has the row once the leader's (or the successor's
           // own journal) push lands: converge rather than read once.
           const rows = yield* eventually(

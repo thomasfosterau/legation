@@ -1,5 +1,5 @@
 /**
- * Retry/backoff policies (issue #34): the sync loop survives transient
+ * Retry/backoff policies: the sync loop survives transient
  * transport failures, leaves non-transient errors alone, re-establishes a
  * failed poke stream, and surfaces terminal failures. Backoff *timing* is
  * verified with TestClock; the loop-integration cases use `it.live`.
@@ -77,7 +77,7 @@ const fast: Schedule.Schedule<unknown, unknown> = Schedule.max([
   Schedule.recurs(5),
 ]);
 
-describe("retry/backoff timing (#34)", () => {
+describe("retry/backoff timing", () => {
   it.effect("default policy backs off exponentially (1s then 2s)", () =>
     Effect.gen(function* () {
       const attempts = yield* Ref.make(0);
@@ -119,7 +119,7 @@ describe("retry/backoff timing (#34)", () => {
   );
 });
 
-describe("retry integration (#34)", () => {
+describe("retry integration", () => {
   it.live("a pull that fails twice then succeeds converges without app intervention", () =>
     Effect.gen(function* () {
       const handler = yield* makeServer;
@@ -214,7 +214,7 @@ describe("retry integration (#34)", () => {
       expect(failure._tag).toBe("Some");
       assert(Option.isSome(failure), "a sync failure should be reported");
       expect(failure.value.operation).toBe("pull");
-      // The point-in-time record (#136) holds it too.
+      // The point-in-time record holds it too.
       const recent = yield* engine.recentSyncFailures;
       expect(recent.map((entry) => entry.operation)).toContain("pull");
       const after = (yield* Metric.value(Telemetry.syncFailuresTotal)).count;

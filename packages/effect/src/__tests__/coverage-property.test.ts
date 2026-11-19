@@ -1,5 +1,5 @@
 /**
- * Coverage soundness as a property (issue #162, ADR-0029 section 3): for
+ * Coverage soundness as a property (ADR-0029 section 3): for
  * generated `(subscribed, requested)` window pairs over the #153 corpus
  * generators and random rows, whenever `Coverage.covers` says the
  * subscription covers the request, evaluating the request over only the

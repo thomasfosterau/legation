@@ -1,5 +1,5 @@
 /**
- * The client `PgExecutor.make` accepts (#687): the generic `SqlClient` service
+ * The client `PgExecutor.make` accepts: the generic `SqlClient` service
  * and a driver's own client both, on every effect 4 release. From effect 4.1.3 a
  * driver client (`@effect/sql-pg`'s `PgClient`, `@effect/sql-sqlite-node`'s
  * `SqliteClient`) extends `SqlClient`'s `Base` without the `SqlClient` type id,
@@ -30,7 +30,7 @@ const overEach = (pg: PgClient.PgClient, sqlite: SqliteClient.SqliteClient, sql:
   PgExecutor.make(sql),
 ];
 
-describe("PgExecutor.make's client (#687)", () => {
+describe("PgExecutor.make's client", () => {
   it("accepts the generic SqlClient service and the drivers' own clients", () => {
     expectTypeOf<SqlClient>().toExtend<PgExecutor.Client>();
     expectTypeOf<PgClient.PgClient>().toExtend<PgExecutor.Client>();

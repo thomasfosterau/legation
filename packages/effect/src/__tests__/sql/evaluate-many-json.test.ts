@@ -1,6 +1,6 @@
 /**
  * `SqlBackend.evaluateMany` on a `Json` dialect (PostgreSQL's `row_to_json`)
- * over a fake executor with canned rows (#505). A row whose JSON holds a
+ * over a fake executor with canned rows. A row whose JSON holds a
  * number `JSON.parse` cannot carry exactly (a `numeric` past a double's
  * digits, an integer past ±(2^53 − 1), such a number nested in a `jsonb`
  * column) sends the pull to `evaluate` per subset, and the backend warns once
@@ -64,7 +64,7 @@ const withWarnings = <A, E>(
 
 const pull = [Subset.make({ collection: "items" })];
 
-describe("SqlBackend.evaluateMany on a Json dialect (#505)", () => {
+describe("SqlBackend.evaluateMany on a Json dialect", () => {
   it.effect("reads exact JSON numbers from the one statement, without a warning", () =>
     withWarnings((warnings) =>
       Effect.gen(function* () {
@@ -152,7 +152,7 @@ describe("SqlBackend.evaluateMany on a Json dialect (#505)", () => {
   );
 });
 
-describe("SqlBackend.evaluateMany names every inexact column (#505)", () => {
+describe("SqlBackend.evaluateMany names every inexact column", () => {
   it.effect("warns for each inexact column of a row, its JSON escapes decoded", () =>
     withWarnings((warnings) =>
       Effect.gen(function* () {

@@ -39,7 +39,7 @@ export const PushRequest = Schema.Struct({
   clientGroupId: Schema.String,
   mutations: Schema.Array(Mutation),
   /**
-   * The client build's schema version (#48). Additive and optional: an old
+   * The client build's schema version. Additive and optional: an old
    * client omits it and still decodes, a new server tolerates its absence. The
    * server's acceptor may reject an unsupported version up front
    * (VersionNotSupportedError) so an obsolete build is told to update.
@@ -74,7 +74,7 @@ export const PushResponse = Schema.Struct({
    * Mutations the backend permanently rejected: their `lastMutationId` is
    * bumped (so they are acknowledged and skipped, never poisoning the queue)
    * but their effects were not applied. Additive and optional, so older clients
-   * ignore it; the per-mutation outcome surface (#36) reads it.
+   * ignore it; the per-mutation outcome surface reads it.
    */
   rejected: Schema.optional(Schema.Array(RejectedMutation)),
 });
@@ -132,7 +132,7 @@ export type PullRequest = typeof PullRequest.Type;
  *
  * A pull acknowledges every id its `lastMutationIds` covers, and a permanently
  * rejected id is one of them (its bump is what makes it acknowledged). So the
- * response also carries the rejections the watermark covers (#365): the client
+ * response also carries the rejections the watermark covers: the client
  * settles those entries as rejected, not applied, before it acknowledges the
  * rest. The list is additive and optional, like the push response's: an older
  * client ignores it and keeps its previous settlement, and a pull from an older
@@ -149,7 +149,7 @@ export const PullResponse = Schema.Struct({
    */
   rejected: Schema.optional(Schema.Array(RejectedMutation)),
   /**
-   * Each subscription's **total** (#210, ADR-0029's #210 amendment): how many
+   * Each subscription's **total** (ADR-0029 amendment): how many
    * rows its subset's `where` matches under the server's auth filter,
    * whatever its window. One entry per `PullRequest.subscriptions` entry, in
    * that order, so a windowed subscription's total is the collection's and

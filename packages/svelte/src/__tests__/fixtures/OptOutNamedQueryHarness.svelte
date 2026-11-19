@@ -8,7 +8,7 @@
   // svelte-ignore state_referenced_locally
   setClientRuntime(runtime);
 
-  // Starts opted out (#141): no title chosen yet.
+  // Starts opted out: no title chosen yet.
   let title = $state<string | undefined>(undefined);
   // svelte-ignore state_referenced_locally
   const rows = useNamedQuery(() =>

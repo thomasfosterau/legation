@@ -1,9 +1,9 @@
 /**
  * Ledger
  *
- * The ledger a `JsonApiBackend` keeps for each client group (#468): the highest
+ * The ledger a `JsonApiBackend` keeps for each client group: the highest
  * acknowledged mutation id per client (`lastMutationIds`) and the permanent
- * rejections it still remembers, each with its reason (#366, #365). A
+ * rejections it still remembers, each with its reason. A
  * `LedgerStore` is where that state is read from and written to. The default,
  * {@link memory}, keeps nothing, so the backend's own in-memory copy is the
  * ledger and a restart forgets it. {@link keyValue} stores each group's ledger
@@ -34,7 +34,7 @@ export interface GroupLedger {
 export const emptyGroup: GroupLedger = { lastMutationIds: {}, rejections: [] };
 
 /**
- * Where a `JsonApiBackend` reads and writes each client group's ledger (#468).
+ * Where a `JsonApiBackend` reads and writes each client group's ledger.
  * `read` is called once per group when the backend first needs it; `write`
  * replaces the group's stored ledger after each change, and only after the
  * server has applied the writes the change acknowledges.

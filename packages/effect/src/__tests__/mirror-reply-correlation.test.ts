@@ -1,5 +1,5 @@
 /**
- * Two tabs on one host (#546): every host reply reaches every mirror on the
+ * Two tabs on one host: every host reply reaches every mirror on the
  * channel, and each mirror numbers its requests from zero. With both tabs'
  * request 1 in flight, each must still get its own `mutate`, `mutateWithAck`
  * and `read` answer, never the other tab's. A reply carries the requesting
@@ -114,7 +114,7 @@ const scriptedHost = (
 const both = <A, B, E1, E2>(a: Effect.Effect<A, E1>, b: Effect.Effect<B, E2>) =>
   Effect.all([Effect.exit(a), Effect.exit(b)], { concurrency: "unbounded" });
 
-describe("mirror replies are addressed to the requesting mirror (#546)", () => {
+describe("mirror replies are addressed to the requesting mirror", () => {
   it.effect("each tab's mutate gets its own answer", () =>
     Effect.gen(function* () {
       const { tabA, tabB } = yield* makeHost();

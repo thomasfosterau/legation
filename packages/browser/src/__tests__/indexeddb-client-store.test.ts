@@ -161,7 +161,7 @@ const incrementCounter = <E>(
 
 // #336: the acknowledged-but-unpulled tail is durable in IndexedDB, so a
 // restart between a push acknowledgement and the next pull keeps the effect.
-describe("IndexedDbClientStore: the unpulled tail (#336)", () => {
+describe("IndexedDbClientStore: the unpulled tail", () => {
   const counterMutators = Mutator.registry([
     {
       mutator: Mutator.make("counter/inc", Schema.Unknown),

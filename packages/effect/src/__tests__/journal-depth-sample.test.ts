@@ -1,5 +1,5 @@
 /**
- * Sampling the journal-depth gauge must not read the journal (#260).
+ * Sampling the journal-depth gauge must not read the journal.
  *
  * The engine samples `legation_journal_depth` on every append, acknowledgement
  * and paced compaction. It used to take `pendingMutations.length`, which on the
@@ -91,7 +91,7 @@ const harness = Effect.gen(function* () {
   return { engine, store, kv };
 });
 
-describe("journal-depth sampling reads no journal bodies (#260)", () => {
+describe("journal-depth sampling reads no journal bodies", () => {
   it.effect("a mutate against a long journal reads no pending body", () =>
     Effect.gen(function* () {
       const { engine, store, kv } = yield* harness;
@@ -114,7 +114,7 @@ describe("journal-depth sampling reads no journal bodies (#260)", () => {
       for (let n = 1; n <= 50; n++) yield* engine.mutate("todo/set", { id: `t${n}` });
 
       // The usual paced shape: the superseded entry is the newest one, so the
-      // compaction moves nothing (#259 S3) and the sample after it counts.
+      // compaction moves nothing and the sample after it counts.
       kv.reads.length = 0;
       const compaction = yield* engine.dropIfPending([50]);
       expect(compaction.dropped).toEqual([50]);
@@ -125,7 +125,7 @@ describe("journal-depth sampling reads no journal bodies (#260)", () => {
   );
 });
 
-describe("ClientStore.pendingCount (#260)", () => {
+describe("ClientStore.pendingCount", () => {
   const entry = (mutationId: number, clientId = "c1"): Mutation => ({
     clientId,
     mutationId,

@@ -4,8 +4,8 @@
  * Row-level deltas anchored to a subset's *result* — its windowed page, not
  * its full matching set — so a predicate or limit-boundary crossing produces
  * the same `enter`/`exit` a consumer diffing two `observe()` pages by hand
- * would derive (#115). `update` marks a same-membership value change;
- * `move` marks a same-membership, same-value row whose stable position (#112)
+ * would derive. `update` marks a same-membership value change;
+ * `move` marks a same-membership, same-value row whose stable position
  * shifted — a neighbor entering/leaving the window re-ranked it without its
  * own value changing; `reset` marks a batch the consumer cannot diff against
  * (a `ViewChange.Rebuild` or a seq-gap collapse — the view could have shifted

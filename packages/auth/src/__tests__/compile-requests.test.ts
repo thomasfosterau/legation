@@ -1,5 +1,5 @@
 /**
- * The glue an app no longer writes (#646, #648): the effect-auth compile
+ * The glue an app no longer writes: the effect-auth compile
  * request built from a `Principal` (`ReadScopes.principalRequest`), with the
  * anonymous principal's entity pinned down, and the effect-auth `Binding`
  * derived from the node's schema (`ReadScopes.bindingOf`), so a kind mismatch
@@ -104,7 +104,7 @@ const recording = Effect.fn("recording")(function* (entities: ReadonlyArray<Enti
   return { resolver, asked };
 });
 
-// ─── principalRequest (#646) ─────────────────────────────────────────────────
+// ─── principalRequest ─────────────────────────────────────────────────
 
 describe("ReadScopes.principalRequest: the compile request from a Principal", () => {
   it.effect('the anonymous principal is Anonymous::"anonymous" with an empty slice', () =>
@@ -221,7 +221,7 @@ describe("ReadScopes.principalRequest: the compile request from a Principal", ()
   );
 });
 
-// ─── bindingOf (#648) ────────────────────────────────────────────────────────
+// ─── bindingOf ────────────────────────────────────────────────────────
 
 describe("ReadScopes.bindingOf: the binding derived from the node", () => {
   it("derives every attribute's kind from the node's schema", () => {
@@ -327,7 +327,7 @@ describe("ReadScopes.bindingOf: the binding derived from the node", () => {
   );
 
   it.effect(
-    'through ReadScopes.policy, an anonymous viewer never owns a row whose owner is "" (#662)',
+    'through ReadScopes.policy, an anonymous viewer never owns a row whose owner is ""',
     () =>
       Effect.gen(function* () {
         const compile = ReadScopes.compiler({

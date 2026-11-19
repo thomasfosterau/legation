@@ -1,11 +1,11 @@
 /**
- * Sync-loop scheduling (issue #33): push-on-mutate debounce, interval pull as
+ * Sync-loop scheduling: push-on-mutate debounce, interval pull as
  * the correctness backstop, and scoped interruption of the scheduling fibres.
  *
  * Every case runs under `it.effect`, so the debounce, the interval and the
  * retry schedules all sleep on the `TestClock` and only move when a test
  * advances it. Nothing here waits on wall-clock time, so a loaded machine
- * cannot make a case time out (#309).
+ * cannot make a case time out.
  */
 import * as Defined from "../Defined.js";
 import { describe, expect, it } from "@effect/vitest";
@@ -145,7 +145,7 @@ const settle = <E>(condition: Effect.Effect<boolean, E>, maxSteps = 200) =>
 const atLeast = (counter: Ref.Ref<number>, n: number) =>
   Effect.map(Ref.get(counter), (count) => count >= n);
 
-describe("sync-loop scheduling (#33)", () => {
+describe("sync-loop scheduling", () => {
   it.effect("auto-pushes a mutation with no app-level push call", () =>
     Effect.gen(function* () {
       const handler = yield* makeServer;
@@ -176,7 +176,7 @@ describe("sync-loop scheduling (#33)", () => {
     })
   );
 
-  // A mutation journaled at any point after `runSync` is auto-pushed (#317).
+  // A mutation journaled at any point after `runSync` is auto-pushed.
   // The connect leg's push reads the journal once; the debounce fibre must
   // already be subscribed to the push trigger by the time a later mutation
   // signals it, or the trigger is lost and the mutation sits in the journal.
@@ -188,7 +188,7 @@ describe("sync-loop scheduling (#33)", () => {
   for (const forked of [true, false]) {
     for (let turns = 0; turns <= 8; turns++) {
       it.effect(
-        `auto-pushes a mutation journaled ${turns} turn${turns === 1 ? "" : "s"} after ${forked ? "forking" : "running"} runSync (#317)`,
+        `auto-pushes a mutation journaled ${turns} turn${turns === 1 ? "" : "s"} after ${forked ? "forking" : "running"} runSync`,
         () =>
           Effect.gen(function* () {
             const handler = yield* makeServer;
@@ -218,7 +218,7 @@ describe("sync-loop scheduling (#33)", () => {
   }
 
   it.effect(
-    "pins the default: an unconfigured connected client never auto-pushes a journaled mutation (#143)",
+    "pins the default: an unconfigured connected client never auto-pushes a journaled mutation",
     () =>
       Effect.gen(function* () {
         const handler = yield* makeServer;

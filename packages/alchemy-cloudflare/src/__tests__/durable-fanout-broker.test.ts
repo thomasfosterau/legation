@@ -1,6 +1,6 @@
 /**
  * DurableFanoutBroker's shard calls (publishes and lease registrations) are
- * bounded (#356 follow-up). A publish runs inside the sync server's
+ * bounded. A publish runs inside the sync server's
  * uninterruptible region, so a shard that never answers must be dropped at the
  * timeout rather than hold the region open. Alchemy's RPC stubs take no abort
  * signal, so a dropped call is abandoned, not aborted; the fake shard records
@@ -40,7 +40,7 @@ const makeBroker = (
     Effect.provideService(RuntimeContext, runtimeContext)
   );
 
-describe("DurableFanoutBroker shard calls (#356)", () => {
+describe("DurableFanoutBroker shard calls", () => {
   it.effect("a hung shard call is dropped at its timeout, so the publish returns", () =>
     Effect.gen(function* () {
       const { shards, abandoned } = hungShards();

@@ -93,7 +93,7 @@ const NEVER_PROMISE: Promise<never> = new Promise(() => {});
  * synchronous `Success`). This adapter resolves the Client from the
  * context runtime and keeps the SSR seam below.
  *
- * `makeStream` returning `undefined` is the read thunk's opt-out (#141):
+ * `makeStream` returning `undefined` is the read thunk's opt-out:
  * "nothing right now". No window is ever registered and no request is
  * issued, because the closure that would call `client.observe`/
  * `view.observeNamed` never runs — `Stream.never` stands in, so
@@ -118,7 +118,7 @@ const live = <A, E>(
     return toStream;
   };
   const seed = options?.initial === undefined ? {} : { initial: options.initial };
-  // With no Client set (#147), a read that is not opted out fails at once with
+  // With no Client set, a read that is not opted out fails at once with
   // `ClientUnavailable`, run where nothing needs the Client; one that renders
   // only from its seed (SSR, where no `$effect` runs) never gets this far.
   const result = Option.isNone(getClient())
@@ -167,7 +167,7 @@ const live = <A, E>(
  * collection, edge or field fails to compile here (`Query.Validate`). With no
  * graph registered, or for a dynamic read, the rows are untyped.
  *
- * The thunk may return `undefined` to opt out (#141) — "nothing right now",
+ * The thunk may return `undefined` to opt out — "nothing right now",
  * for a read keyed on a selection that starts empty. No window is
  * registered and no request is issued; `current` stays `Initial` rather
  * than becoming a `Success` over zero rows, so an opted-out read stays
@@ -191,7 +191,7 @@ export const useQuery = <const R extends Query.Read>(
 
 /**
  * Live answer of a declarative read: {@link useQuery}'s rows with their
- * completeness beside them (`Client.Answer`, #653), from
+ * completeness beside them (`Client.Answer`), from
  * `Client.observeAnswers`.
  *
  * `completeness` is `"partial"` while the read's windows are not pulled yet
@@ -275,12 +275,12 @@ const connectionKey = (read: Query.Read): string => {
  *
  * Rows are typed and the read checked as {@link useQuery}'s are.
  *
- * The read thunk may return `undefined` to opt out (#141): no window is
+ * The read thunk may return `undefined` to opt out: no window is
  * registered and no request issued, `current` stays `Initial`, and paging
  * state (`hasMore`/`loading`) reads as idle until the thunk starts returning
  * a read again.
  *
- * **Engine-level retargeting (#133).** When the read has no `include`d edges
+ * **Engine-level retargeting.** When the read has no `include`d edges
  * and the view is engine-backed (`ClientView.observeWindow` present — a
  * `Mirror` has none, see `docs/observing-row-changes.md`), `loadMore`/`reset`
  * widen or shrink the SAME open observation's window via
@@ -300,7 +300,7 @@ export const useConnection = <const R extends Query.Read>(
   let pages = $state(1);
   // Non-reactive: tracks the base read so a reused hook re-bases to page 1
   // when its inputs change (a per-parent instance never trips this).
-  // `undefined` also covers the opted-out state (#141).
+  // `undefined` also covers the opted-out state.
   let baseKey: string | undefined;
 
   $effect(() => {
@@ -397,7 +397,7 @@ export const useConnection = <const R extends Query.Read>(
 
 /**
  * Live result of a named query (server-resolved), with reactive name/args.
- * The thunk may return `undefined` to opt out (#141): see {@link useQuery}.
+ * The thunk may return `undefined` to opt out: see {@link useQuery}.
  */
 export const useNamedQuery = (
   query: () => { readonly name: string; readonly args: unknown } | undefined,
@@ -417,7 +417,7 @@ export const useNamedQuery = (
 /**
  * Live aggregate over a read's root window (count/sum/min/max/avg). Local
  * tier only — the aggregate sees the rows this client has synced. The read
- * thunk may return `undefined` to opt out (#141): see {@link useQuery}.
+ * thunk may return `undefined` to opt out: see {@link useQuery}.
  */
 export const useAggregate = <const R extends Query.Read>(
   read: () => (R & Query.Validate<Client.Registered, R>) | undefined,
@@ -441,7 +441,7 @@ export const useAggregate = <const R extends Query.Read>(
 /**
  * Live grouped aggregate over a read's root window, keyed by
  * `String(row.value[groupBy])`. The read thunk may return `undefined` to
- * opt out (#141): see {@link useQuery}.
+ * opt out: see {@link useQuery}.
  */
 export const useAggregateGrouped = <const R extends Query.Read>(
   read: () => (R & Query.Validate<Client.Registered, R>) | undefined,
@@ -490,7 +490,7 @@ export const useMutationWithAck = (): ((
 };
 
 /**
- * Reactive mutation-state list (#116) — TanStack Query's `useMutationState`
+ * Reactive mutation-state list — TanStack Query's `useMutationState`
  * analogue: every journaled mutation's current lifecycle state (`pending` →
  * `acknowledged` | `rejected`), oldest-journaled first. Pass a `mutator`
  * thunk to scope to one mutator (reactive, like {@link useQuery}'s `read`);
@@ -556,7 +556,7 @@ const useFlag = (changes: Stream.Stream<boolean>): { readonly current: boolean }
 /**
  * Undo/redo over a manager's history as runes. Build one manager per client
  * with `Undo.make(handle)` — a `Client` or a `ClientEngine` both work
- * (issue #223) — and call this during component initialisation.
+ * — and call this during component initialisation.
  */
 export const useUndo = <E>(manager: Undo.UndoManager<E>): UndoControls => {
   const canUndo = useFlag(manager.canUndoChanges);

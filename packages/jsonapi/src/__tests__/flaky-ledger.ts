@@ -1,5 +1,5 @@
 /**
- * A ledger store that fails on demand, for the ledger-store failure tests (#468).
+ * A ledger store that fails on demand, for the ledger-store failure tests.
  */
 import * as Effect from "effect/Effect";
 import * as Ref from "effect/Ref";

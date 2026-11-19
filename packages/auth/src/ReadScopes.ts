@@ -37,7 +37,7 @@
  *   of a type of its own: effect-auth refuses an empty id or type, and an
  *   entity attribute of type `User` is equal to no `Anonymous` reference, so
  *   `resource.owner == principal` compiles to false for it and no row is
- *   "owned" by a signed-out viewer (#662).
+ *   "owned" by a signed-out viewer.
  *
  * Named sets: each set an effect-auth `SetFact` names must have an app-declared
  * `Authorization.NamedSet` ({@link mapping} checks it). The translated
@@ -564,7 +564,7 @@ export const AnonymousEntityType = "Anonymous";
  * type (`principal is User`) does not name it, and a policy comparing a
  * resource's owner reference with the principal (`resource.owner ==
  * principal`) compiles to false for it, so no row is readable signed out
- * through ownership (#662). A policy that is not scoped to a principal type
+ * through ownership. A policy that is not scoped to a principal type
  * still applies to it.
  */
 export const principalRef = (

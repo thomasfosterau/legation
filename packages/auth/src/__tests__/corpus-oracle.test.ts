@@ -1,5 +1,5 @@
 /**
- * The corpus oracle (#219 §2): over a seeded fixture corpus with typed
+ * The corpus oracle: over a seeded fixture corpus with typed
  * columns — text, integer, double, boolean, an instant column holding real
  * `Date`s, and an entity reference — the rows legation's `Predicate.test`
  * admits under the translated scope equal, row by row, the rows effect-auth's
@@ -11,7 +11,7 @@
  * `Random.withSeed`, so a seed reproduces the corpus and a failure reports it.
  *
  * The anonymous principal is `Anonymous::"anonymous"`, so effect-auth compiles
- * an "own" policy to false for it and its scope translates exactly like any other (#662).
+ * an "own" policy to false for it and its scope translates exactly like any other.
  */
 import { assert, describe, expect, it } from "@effect/vitest";
 import * as Arr from "effect/Array";
@@ -384,7 +384,7 @@ describe("the corpus oracle: translated scopes admit exactly what effect-auth ad
     })
   );
 
-  it.effect("agrees for the anonymous principal, whom an owner policy never names (#662)", () =>
+  it.effect("agrees for the anonymous principal, whom an owner policy never names", () =>
     Effect.gen(function* () {
       const { rows } = yield* corpus;
       const result = admitted(anonymousScopeOf(policies), rows);

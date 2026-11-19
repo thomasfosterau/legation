@@ -190,7 +190,7 @@ export const makeHandlers = (sql: SqlClient): Readonly<Record<string, SqlBackend
         return yield* review({ ...args, userId });
       }).pipe(transient),
 
-    // The graph-derived mutations the façade journals (ADR-0030 §5, #525): the
+    // The graph-derived mutations the façade journals (ADR-0030 §5): the
     // same rules as the named intents above, over the graph row form.
     "reviews/create": (raw, _tx, context) =>
       Effect.gen(function* () {

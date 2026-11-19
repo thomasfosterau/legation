@@ -119,13 +119,13 @@ export interface Node<
    */
   readonly hintKeys: ReadonlyArray<string>;
   /**
-   * Fields eligible for secondary indexing (issue #113), carried through to
+   * Fields eligible for secondary indexing, carried through to
    * the derived {@link Collection}'s `indexes`. See
    * {@link Collection.Collection.indexes}.
    */
   readonly indexes: ReadonlyArray<string>;
   /**
-   * The **filterable set** (ADR-0028 rule d, #154): every field a client may
+   * The **filterable set** (ADR-0028 rule d): every field a client may
    * filter by, with its operators and literal kind. The identity attribute
    * and every `one`-edge `via` field are filterable by `eq` / `in` (kind
    * `text`) by default; everything else is declared via `make`'s
@@ -134,7 +134,7 @@ export interface Node<
    */
   readonly filterable: Readonly<Record<string, FilterPolicy.FilterableField>>;
   /**
-   * The fields a client may order by (#154); always includes the identity
+   * The fields a client may order by; always includes the identity
    * attribute (ADR-0026's tie-break).
    */
   readonly sortable: ReadonlyArray<string>;
@@ -397,7 +397,7 @@ const toCollection = (
     ...Defined.fields({
       indexes: Arr.isReadonlyArrayNonEmpty(node.indexes) ? node.indexes : undefined,
     }),
-    // The filterable set travels like `indexes` (#154): the server enforces
+    // The filterable set travels like `indexes`: the server enforces
     // it from the collection alone.
     filterable: node.filterable,
     sortable: node.sortable,

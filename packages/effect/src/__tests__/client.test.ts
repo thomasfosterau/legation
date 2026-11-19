@@ -276,7 +276,7 @@ const productPage = (categoryId?: string) => ({
 /** The commerce shell's products pin (`shellReads`): windowed, ordered by id. */
 const shellProducts = { collection: "products", order: ["id"], first: 100 };
 
-/** A pull that starts after the registrations above, so they are pulled (ADR-0029 section 3, #426). */
+/** A pull that starts after the registrations above, so they are pulled (ADR-0029 section 3). */
 const pulled = (engine: ClientEngine.ClientEngine) => engine.pull.pipe(Effect.orDie);
 
 const rootHashes = (engine: ClientEngine.ClientEngine) =>
@@ -293,7 +293,7 @@ describe("Client.query coverage (ADR-0029: conjunct subsumption with strict wind
         yield* engine.push.pipe(Effect.orDie);
 
         yield* client.subscribe(shellProducts);
-        // Registered but not yet pulled: the rows are not in the replica, so nothing covers (#426).
+        // Registered but not yet pulled: the rows are not in the replica, so nothing covers.
         expect((yield* client.coverageOf(productPage()))._tag).toBe("Uncovered");
         yield* pulled(engine);
         // Row 1 of the windowed table: a prefix of the same window — local.
@@ -435,7 +435,7 @@ describe("Client.query coverage (ADR-0029: conjunct subsumption with strict wind
         const pinned: Query.Read = { collection: "products", include: { reviews: true } };
         yield* client.subscribe(pinned);
         // Offline no pull ever lands, so the pin covers nothing: the read is
-        // forwarded (here, answered locally), never Covered (#426).
+        // forwarded (here, answered locally), never Covered.
         expect(
           (yield* client.coverageOf({ collection: "products", include: { reviews: true } }))._tag
         ).toBe("Uncovered");
@@ -815,7 +815,7 @@ describe("Client.make defaults (zero wiring)", () => {
   );
 });
 
-describe("Client.make hands back what it built (#142)", () => {
+describe("Client.make hands back what it built", () => {
   it.effect("the engine and store it returns are the ones the Client runs over", () =>
     Effect.scoped(
       Effect.gen(function* () {
@@ -880,7 +880,7 @@ describe("Client.connect over a hosted engine", () => {
   );
 });
 
-// ─── #426: a read judges and answers from one snapshot of its root ───────────
+// ─── a read judges and answers from one snapshot of its root ───────────
 
 /** Two engines over one server: `reader` is the replica under test; `writer` puts rows it has not pulled. */
 const makeRacePair = Effect.gen(function* () {
@@ -901,7 +901,7 @@ const makeRacePair = Effect.gen(function* () {
   return { reader: yield* make("client-reader"), writer: yield* make("client-writer") };
 });
 
-describe("Client.query judges and answers from one snapshot (#426)", () => {
+describe("Client.query judges and answers from one snapshot", () => {
   it.effect(
     "a pull between the judgment and the answer cannot serve a root row with unpulled reviews",
     () =>
@@ -987,7 +987,7 @@ describe("Client.query judges and answers from one snapshot (#426)", () => {
   );
 });
 
-it.effect("a snapshot of another subset is not judged over (#426)", () =>
+it.effect("a snapshot of another subset is not judged over", () =>
   Effect.scoped(
     Effect.gen(function* () {
       const { reader, writer } = yield* makeRacePair;

@@ -98,7 +98,7 @@ Tests use [`@effect/vitest`](https://www.npmjs.com/package/@effect/vitest) (plai
 
 **Chromium.** The commerce façade's browser test (`examples/commerce/tests/facade-browser.test.ts`) fails, never skips, without Chromium. Install the revision `playwright-core` expects with `pnpm exec playwright-core install chromium`.
 
-**PostgreSQL test.** `packages/effect/src/__tests__/sql/sql-backend-postgres.test.ts` runs the READ COMMITTED overlap test (#360) against a real server. Set `DATABASE_URL` to a PostgreSQL URL for a throwaway database: the test drops and recreates `todos`, `effects` and `sync_mutations`, and drops them again when it finishes. Without the variable the suite is skipped locally with a warning; in CI (where `CI` is set) it fails instead. For example: `DATABASE_URL=postgres://postgres@127.0.0.1:5432/scratch vp test run packages/effect/src/__tests__/sql`.
+**PostgreSQL test.** `packages/effect/src/__tests__/sql/sql-backend-postgres.test.ts` runs the READ COMMITTED overlap test against a real server. Set `DATABASE_URL` to a PostgreSQL URL for a throwaway database: the test drops and recreates `todos`, `effects` and `sync_mutations`, and drops them again when it finishes. Without the variable the suite is skipped locally with a warning; in CI (where `CI` is set) it fails instead. For example: `DATABASE_URL=postgres://postgres@127.0.0.1:5432/scratch vp test run packages/effect/src/__tests__/sql`.
 
 ### Refreshing the postgres image digest
 

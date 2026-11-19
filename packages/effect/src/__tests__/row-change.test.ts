@@ -1,5 +1,5 @@
 /**
- * RowChange (#115, hardened per #133 item 5): property test that folding the
+ * RowChange (hardened per #133 item 5): property test that folding the
  * change feed reproduces `observe()`'s pages exactly. `LiveView.put`/`del`
  * already decide predicate and window membership per row
  * (`live-view.test.ts` covers that in isolation); this drives long randomized

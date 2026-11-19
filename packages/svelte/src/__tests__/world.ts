@@ -160,7 +160,7 @@ export interface RecordedPull {
 
 /**
  * The same engine graph as {@link engineLayer}, its transport wrapped to
- * record every `pull` call — proof that an opted-out read (#141) issues no
+ * record every `pull` call — proof that an opted-out read issues no
  * request, not merely that it registers no window.
  */
 const countingEngineLayer = (pulls: Array<RecordedPull>): typeof engineLayer =>

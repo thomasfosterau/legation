@@ -1,7 +1,7 @@
 /**
  * FilterPolicy
  *
- * The **filterable set** (ADR-0028 rule d, issue #154): the attributes of a
+ * The **filterable set** (ADR-0028 rule d): the attributes of a
  * node a client may filter or sort by, each with the operators it accepts
  * and the literal kind its values must carry. Declared on the Node
  * (`Node.make`'s `filterable` / `sortable` options), carried onto the
@@ -52,7 +52,7 @@ export const operators: ReadonlyArray<FilterOperator> = [
  * The literal kind of a filterable attribute (ADR-0028 §2(e), §4). The kind
  * cannot always be read off a JS literal — `text` and `instant` are both
  * strings, `integer` and `double` both numbers — so the declaration carries
- * it: the SQL compilers bind and collate by it (#156), and `authorize`
+ * it: the SQL compilers bind and collate by it, and `authorize`
  * checks every client literal against it.
  */
 export type LiteralKind = "text" | "integer" | "double" | "boolean" | "instant";

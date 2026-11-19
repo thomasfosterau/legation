@@ -83,7 +83,7 @@ export interface IncludeOptions {
  * equality map over row fields (a full `Predicate` is the escape hatch);
  * `include` names edges on the node; `order` tokens are field names,
  * `-` prefixed for descending; `first`/`after` page the root window by
- * cursor, `offset` by position (issue #209 — mutually exclusive with
+ * cursor, `offset` by position (mutually exclusive with
  * `after`; a caller compiling from a URL keeps them so, `JsonApiQuery`
  * rejects a request naming both).
  *
@@ -113,7 +113,7 @@ export interface Read {
   readonly first?: number;
   readonly after?: string;
   /**
-   * Offset pagination (#209): skip this many rows of the window before
+   * Offset pagination: skip this many rows of the window before
    * `first`. The root window's compiled `limit` absorbs it
    * (`offset + first`, see {@link plan}) so the same `Subset` both answers
    * the read and lets `Coverage.covers` judge it by the ordinary
@@ -238,7 +238,7 @@ export const edgeSelects = (compiled: Plan): ReadonlyArray<Related.EdgeSelect> =
 
 /**
  * The root window's compiled `limit`: `first` alone for cursor pagination,
- * or `offset + first` for offset pagination (#209) — the window
+ * or `offset + first` for offset pagination — the window
  * over-fetches by `offset` rows so a covering subscription is judged by
  * the ordinary limit-prefix rule and the read can slice its own page back
  * out of what it fetched. `offset` alone (no `first`) compiles to no
@@ -408,7 +408,7 @@ export const run = (
 /**
  * {@link run} over the root rows already read from the view: the same
  * edges and windows, joined from `rows` rather than a fresh read of the root,
- * so a caller that judged coverage over `rows` answers from those rows (#426).
+ * so a caller that judged coverage over `rows` answers from those rows.
  */
 export const runRows = (
   view: ClientView.Reader,

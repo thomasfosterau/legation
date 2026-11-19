@@ -1,8 +1,8 @@
 /**
  * FilterCorpus
  *
- * Seeded generators for the differential filter harness (issue #153,
- * ADR-0028). Three evaluators of one predicate AST exist — `Predicate.evaluate`
+ * Seeded generators for the differential filter harness
+ * (ADR-0028). Three evaluators of one predicate AST exist — `Predicate.evaluate`
  * in JS, `Sql.compileWhere` on SQLite, and `Sql.compileWhere` on Postgres —
  * and Postgres is normative: every other evaluator must agree with it
  * exactly. This module produces the corpus they are compared over: random

@@ -247,7 +247,7 @@ export interface SimulatedOffline {
  * every push/pull/read *fails* with a `TransportError` (as a real network
  * would), so the engine keeps mutations in the journal and its sync loop
  * flushes them on reconnect — exactly the behaviour a devtools "simulated
- * offline" action needs (issue #120), generalising the demo examples'
+ * offline" action needs, generalising the demo examples'
  * hand-rolled offline-gate transport into reusable substrate.
  *
  * `status`/`statusChanges` report `"disconnected"` while the gate is closed,

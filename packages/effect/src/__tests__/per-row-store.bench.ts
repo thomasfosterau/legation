@@ -1,5 +1,5 @@
 /**
- * Per-row store I/O benchmark (#47): counts KeyValueStore `set` calls for a
+ * Per-row store I/O benchmark: counts KeyValueStore `set` calls for a
  * patch-apply as a function of (collection size, patch size) over an in-memory
  * KVS. The point is the scaling law — a patch's *row-value* writes track the
  * patch size, never the collection it lands in — so the numbers are printed as

@@ -1,5 +1,5 @@
 /**
- * A refused or failed journal append must not burn a mutation id (#258).
+ * A refused or failed journal append must not burn a mutation id.
  *
  * The engine used to allocate the id (`nextMutationId`) and only then append,
  * so a refusal at `journalHighWater` or a failed write left the counter one
@@ -96,7 +96,7 @@ const flakyJournalWrites = () => {
   return { kvs, state };
 };
 
-describe("a refused or failed journal append burns no mutation id (#258)", () => {
+describe("a refused or failed journal append burns no mutation id", () => {
   layer(KeyValueStore.layerMemory)((scoped) => {
     scoped.effect("a high-water refusal is followed by a mutation the backend accepts", () =>
       Effect.gen(function* () {
@@ -211,7 +211,7 @@ describe("a refused or failed journal append burns no mutation id (#258)", () =>
   });
 });
 
-describe("ClientStore.appendNext (#258)", () => {
+describe("ClientStore.appendNext", () => {
   layer(KeyValueStore.layerMemory)((scoped) => {
     scoped.effect("assigns consecutive ids and a refusal leaves the counter alone", () =>
       Effect.gen(function* () {
@@ -312,7 +312,7 @@ const controlledCounters = () => {
 
 const draft = { clientId: "c1", mutator: "noop", args: {}, createdAt: 0 };
 
-describe("an id that has left the journal is never reissued (#258 review)", () => {
+describe("an id that has left the journal is never reissued", () => {
   layer(KeyValueStore.layerMemory)((scoped) => {
     scoped.effect(
       "counter write fails, entry acked, the next mutation is applied, not skipped",
@@ -472,13 +472,13 @@ describe("an id that has left the journal is never reissued (#258 review)", () =
 
 /**
  * Every memory-store operation that writes the journal, the quarantine or the
- * counters holds the same permit (#258 review). `acknowledge` and
+ * counters holds the same permit. `acknowledge` and
  * `quarantinePending` read then write back, so a writer outside the permit
  * landing between the two was overwritten. `MaxOpsBeforeYield` of 5 makes the
  * fibers yield between the read and the write, so the race fires on nearly
  * every round on the unlocked code.
  */
-describeWrapped("memory store: journal writers exclude one another (#258 review)", (it) => {
+describeWrapped("memory store: journal writers exclude one another", (it) => {
   const d = (clientId = "c") => ({ clientId, mutator: "noop", args: {}, createdAt: 0 });
   const m = (mutationId: number, clientId = "c") => ({ ...d(clientId), mutationId });
   const rounds = 50;
@@ -544,7 +544,7 @@ describeWrapped("memory store: journal writers exclude one another (#258 review)
     }).pipe(Effect.provideService(References.MaxOpsBeforeYield, 5))
   );
 
-  // The batch pull member (#411) writes the journal, the counters and the tail under the same permit,
+  // The batch pull member writes the journal, the counters and the tail under the same permit,
   // so it takes the same races as the single-step writers above.
   it.live("commitPull never loses a concurrent appendNext", () =>
     Effect.gen(function* () {

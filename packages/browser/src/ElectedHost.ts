@@ -2,7 +2,7 @@
  * ElectedHost
  *
  * Built-in multi-tab leader election for the no-service-worker degraded
- * topology (#119): exactly one tab runs the full host (ADR-0010's
+ * topology: exactly one tab runs the full host (ADR-0010's
  * main-thread path — `ClientEngine` + durable store + transports +
  * `BroadcastMirrorChannel` serving), every other tab mirrors it, and a
  * dying leader's replacement resumes the SAME client identity against the
@@ -81,7 +81,7 @@ export interface ElectedHostOptions<Graph extends Node.NodeRegistry = Node.NodeR
   /** Forwarded to {@link EngineHost.run} for mirrors' `related` registrations. */
   readonly registry?: Collection.CollectionRegistry;
   /**
-   * URL-keyed reads (#159): lets the returned Client `subscribe(url)`, and
+   * URL-keyed reads: lets the returned Client `subscribe(url)`, and
    * — with `nodes` — lets the hosting tab answer `SubscribeUrl` from pages
    * without a Client (forwarded to {@link EngineHost.run}).
    */
@@ -99,7 +99,7 @@ export interface ElectedHostOptions<Graph extends Node.NodeRegistry = Node.NodeR
   readonly requests?: ReadonlyArray<HostRequest.Handler>;
   /**
    * How long a newly elected host over an empty store holds its engine's
-   * pulls for a tab's server-rendered snapshot (#146), forwarded to
+   * pulls for a tab's server-rendered snapshot, forwarded to
    * {@link EngineHost.run}. Unset, nothing is held.
    */
   readonly hydrationWindow?: Duration.Input | undefined;
@@ -315,7 +315,7 @@ export const run = <Graph extends Node.NodeRegistry>(
       // a window never drops one this tab's Client still pins.
       // The dependencies are built here, not provided to the engine alone, so the
       // host is handed the same store the engine runs over: given it, the host
-      // serves the introspection and `hydrate` request kinds (#136, #146).
+      // serves the introspection and `hydrate` request kinds.
       const dependencies = yield* Layer.build(options.dependencies);
       const store = Context.get(dependencies, ClientStore.ClientStore);
       const engine = Subscriptions.counted(

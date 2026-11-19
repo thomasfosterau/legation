@@ -2,7 +2,7 @@
  * SignOut
  *
  * The client half: keep the durable replica scoped to the signed-in user
- * across a session change (#212's identity boundary). When the session's
+ * across a session change. When the session's
  * principal changes — sign-out, an account switch, a sign-in —
  * {@link onSessionChange} adopts the new principal's fingerprint with
  * `Client.reset`, whose transition rule decides what survives:

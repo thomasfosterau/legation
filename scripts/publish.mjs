@@ -8,7 +8,7 @@
  * effect peer, no leftover `workspace:` / `catalog:` specifier, Svelte export
  * conditions packed), so this packs once and uploads that file. Why not bare
  * `npm publish` in the package directory: npm does not understand pnpm's
- * `catalog:` and `workspace:` specifiers and would ship them verbatim (#267).
+ * `catalog:` and `workspace:` specifiers and would ship them verbatim.
  * So `pnpm pack` rewrites the specifiers into the tarball and
  * `npm publish <tarball>` authenticates via OIDC trusted publishing (npm >=
  * 11.5.1). Nothing requests provenance: an explicit request fails from a

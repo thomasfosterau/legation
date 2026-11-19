@@ -257,7 +257,7 @@ describe("the filter is the policy: replicas against effect-auth, over generated
                 else graph.set(followId(move), move);
               }
               // The server's fan-out marks every session's cached `following` set
-              // stale off the writes' hints, on its own fiber (#205): let it run
+              // stale off the writes' hints, on its own fiber: let it run
               // before the next pull, as the poke it sends would.
               yield* Effect.forEach(Arr.range(1, FANOUT_TURNS), () => Effect.yieldNow, {
                 discard: true,

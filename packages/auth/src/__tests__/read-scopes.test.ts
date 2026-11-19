@@ -481,7 +481,7 @@ describe("ReadScopes: roles and undeclared collections", () => {
     })
   );
 
-  it.effect('an anonymous viewer cannot read a row whose owner is "" (#662)', () =>
+  it.effect('an anonymous viewer cannot read a row whose owner is ""', () =>
     Effect.gen(function* () {
       const anonymous = yield* authorizeWith(
         ReadScopes.toAuthFilter(compile, checked()),
@@ -634,7 +634,7 @@ const followingIn = (backend: Backend.Backend) =>
     maxAge: "1 hour",
   });
 
-describe("ReadScopes.userSet: a named set keyed on the principal's user (#647)", () => {
+describe("ReadScopes.userSet: a named set keyed on the principal's user", () => {
   it.effect("reads the members for the principal's user", () =>
     Effect.gen(function* () {
       const { backend } = yield* followsBackend();

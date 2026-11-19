@@ -10,7 +10,7 @@
  * identity the tab later subscribes under are therefore the same string:
  * `GET /jsonapi/products?filter[categoryId]=c-audio&page[limit]=4&sort=id`
  * is the catalog load, the derived handler's read, and the live hook's
- * window (`Client.subscribe(url)`, #159), and a façade serving it from the
+ * window (`Client.subscribe(url)`), and a façade serving it from the
  * replica answers the same document (ADR-0029 §6).
  *
  * Writes go through the typed client derived from the same `HttpApi`

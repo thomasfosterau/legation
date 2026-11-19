@@ -8,7 +8,7 @@
  * one more consumer of the same tables.
  *
  * **Reads are derived, writes are hand-written.** Every `list` / `get` is
- * `RestHandlers` (#163) over the app's node graph, backend and auth policy:
+ * `RestHandlers` over the app's node graph, backend and auth policy:
  * the URL is the filter grammar (ADR-0028) — `filter[categoryId]=c-audio`,
  * `filter[userId]=u1`, `sort=-createdAt`, `page[limit]=4&page[after]=p-04`,
  * `include=variants`, `fields[products]=name` — parsed once into a
@@ -244,7 +244,7 @@ const variantsLive = HttpApiBuilder.group(api, "variants", (handlers) =>
 );
 
 /**
- * A per-resource create's client id (#525): effect-jsonapi's `createPayload`
+ * A per-resource create's client id: effect-jsonapi's `createPayload`
  * carries `lid` but no `id`, so decoding drops it; recover it from the raw
  * document (the body is cached, so re-reading it is free), as the atomic
  * endpoint does. An online forward and an offline journal of one create then
@@ -413,7 +413,7 @@ interface Batch {
  * effect-jsonapi's typed `add` operation carries `lid` but no `id`, so a
  * client-generated id is dropped by decoding — and `@thomasfosterau/legation-jsonapi`'s
  * atomic push always sends one, so a `JsonApiBackend` push must keep its
- * ids. As in #160's contract server, the id is recovered from the raw request
+ * ids. As in contract server, the id is recovered from the raw request
  * document (the body is cached, so re-reading it after decoding is free); an
  * `add` without one gets a server id, registered under its `lid` for later
  * operations in the batch.

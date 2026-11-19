@@ -43,7 +43,7 @@ import {
   Server,
   Transport,
 } from "@thomasfosterau/legation";
-// `Undo.make` takes any mutate-capable handle (issue #223), so this app
+// `Undo.make` takes any mutate-capable handle, so this app
 // builds its `Client` the zero-wiring way, through `Client.make` — no
 // hand-built `ClientEngine`, no manual `runSync` fork.
 import { type ClientView, type Protocol, Undo } from "@thomasfosterau/legation/internal";
@@ -87,10 +87,10 @@ export interface World {
   readonly runtime: ClientRuntime;
   readonly demo: Demo;
   /**
-   * The per-client undo manager (#46). Its `run`/`undo`/`redo` replay through
+   * The per-client undo manager. Its `run`/`undo`/`redo` replay through
    * the same optimistic `mutate` pipeline, so undo is journaled, rebased, and
    * offline-safe like any write; history is in-memory (a page reload clears it).
-   * Built from the `Client` (issue #223), so it fails with `ClientViewError`.
+   * Built from the `Client`, so it fails with `ClientViewError`.
    */
   readonly undo: Undo.UndoManager<ClientView.ClientViewError>;
 }
@@ -110,7 +110,7 @@ const backendHandlers = MemoryBackend.validatedHandlers([
 /** Public collection: read auth is allow-all (this demo has no identities). */
 const authPolicy = Authorization.policy(
   { todos: Authorization.allowAll },
-  // The node's filterable set bounds what a client may filter or sort by (#154).
+  // The node's filterable set bounds what a client may filter or sort by.
   { collections: nodes.collections }
 );
 

@@ -1,7 +1,7 @@
 /**
  * PushPoke
  *
- * The worker side of Web Push as a poke carrier (#214): a `push` listener that
+ * The worker side of Web Push as a poke carrier: a `push` listener that
  * turns the library's push into convergence for a client with no open tab. The
  * server side, which sends the push within the app's stated budget, is
  * `PushPoke.sink` in `@thomasfosterau/legation/internal`.
@@ -27,7 +27,7 @@
  *
  * A push may arrive for a user who has since signed out on this device. Before
  * acting, the listener compares who is signed in now with the replica's stamp,
- * as the Background Sync flush does (#212): anything but an exact match does
+ * as the Background Sync flush does: anything but an exact match does
  * nothing (`"IdentityChanged"`), so a push for a superseded identity never
  * pulls, or schedules a push, under the new one.
  *

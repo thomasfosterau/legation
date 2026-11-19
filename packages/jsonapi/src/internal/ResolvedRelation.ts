@@ -15,7 +15,7 @@ import type { JsonApiRow } from "../Derive.js";
  * core's `Related.RelatedValue`, which `Related.Strategy.resolveRow` must
  * return, which the core's join compares by reference, and which travels the
  * mirror protocol raw. It becomes an `Option` with the core's `Related`, in
- * the Option-everywhere work (owner decision, #562), with the wire encoding
+ * the Option-everywhere work (owner decision), with the wire encoding
  * unchanged.
  */
 export type RelatedValue = JsonApiRow | ReadonlyArray<JsonApiRow> | null | undefined;

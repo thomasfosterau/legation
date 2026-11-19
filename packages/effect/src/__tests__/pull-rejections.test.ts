@@ -1,5 +1,5 @@
 /**
- * Pull-carried rejections (#365). A permanent rejection is bumped into the
+ * Pull-carried rejections. A permanent rejection is bumped into the
  * client's watermark, so a pull covering it would otherwise settle it as
  * applied. A pull therefore carries the rejections its watermark covers, and
  * the client settles those entries as rejected before it acknowledges the
@@ -107,7 +107,7 @@ const makeLossyEngine = Effect.gen(function* () {
   return { backend, engine, store, lose };
 });
 
-describe("ClientEngine settles a pull-carried rejection (#365)", () => {
+describe("ClientEngine settles a pull-carried rejection", () => {
   it.effect("a lost push response then a pull settles the rejected mutation as rejected", () =>
     Effect.gen(function* () {
       const { backend, engine, store, lose } = yield* makeLossyEngine;
@@ -169,7 +169,7 @@ describe("ClientEngine settles a pull-carried rejection (#365)", () => {
 const push = (handler: ServerHandler, group: string, mutations: PushRequest["mutations"]) =>
   handler.handlePush({ clientGroupId: group, mutations });
 
-describe("SyncServer pull carries the rejections its watermark covers (#365)", () => {
+describe("SyncServer pull carries the rejections its watermark covers", () => {
   it.effect("lists each rejection the watermark covers, with its reason", () =>
     Effect.gen(function* () {
       const backend = yield* MemoryBackend.make(handlers);
@@ -280,7 +280,7 @@ describe("SyncServer pull carries the rejections its watermark covers (#365)", (
   );
 });
 
-describe("a pull settles only its own client's rejections in a group (#365)", () => {
+describe("a pull settles only its own client's rejections in a group", () => {
   it.effect("a pull lists another client's covered rejection, and this client ignores it", () =>
     Effect.gen(function* () {
       const backend = yield* MemoryBackend.make(handlers);

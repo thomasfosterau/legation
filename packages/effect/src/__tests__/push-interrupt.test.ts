@@ -1,5 +1,5 @@
 /**
- * An interrupted push still fans out (#356). The backend commit and the bus
+ * An interrupted push still fans out. The backend commit and the bus
  * publish of its hints are one uninterruptible region, so an interrupt that
  * lands after the commit cannot skip the publish: a replayed retry carries no
  * hints, so a lost publish would never be repaired.
@@ -23,7 +23,7 @@ const handlers = MemoryBackend.validatedHandlers([
   MemoryBackend.handler(todoSet, (args, writer) => writer.put("todos", args.id, { id: args.id })),
 ]);
 
-describe("SyncServer.handlePush and interruption (#356)", () => {
+describe("SyncServer.handlePush and interruption", () => {
   it.effect("an interrupt after the commit still publishes the committed hints", () =>
     Effect.gen(function* () {
       const memory = yield* MemoryBackend.make(handlers);

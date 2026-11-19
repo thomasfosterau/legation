@@ -1,5 +1,5 @@
 /**
- * Devtools over the mirror seam (#136): `Devtools.fromMirror` builds the same
+ * Devtools over the mirror seam: `Devtools.fromMirror` builds the same
  * `DevtoolsCore` from a tab that reaches the host's engine only through a
  * `Mirror` — reads over core's introspection kinds, row counts and actions
  * over this package's own kinds, served once the host is given its store and
@@ -92,7 +92,7 @@ const read = (core: Devtools.DevtoolsCore) =>
     { concurrency: 1 }
   );
 
-describe("Devtools.fromMirror (#136)", () => {
+describe("Devtools.fromMirror", () => {
   it.effect("reads what Devtools.make reads over the host's engine and store", () =>
     Effect.gen(function* () {
       const { engine, owned, remote } = yield* setup(true);

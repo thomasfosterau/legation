@@ -1,11 +1,11 @@
 /**
- * MemoryBackend atomicity (Backend guarantee 1, issue #341): a mutation's
+ * MemoryBackend atomicity (Backend guarantee 1): a mutation's
  * writes become visible only together with its lastMutationId bump, a
  * `BackendError` discards its writes, and a handler reads back its own staged
  * writes.
  *
- * The concurrency sections cover overlapping copies of one mutation (#346) and
- * the committed outcome a losing copy reports (#355), at the backend and
+ * The concurrency sections cover overlapping copies of one mutation and
+ * the committed outcome a losing copy reports, at the backend and
  * through a ClientEngine whose two push responses arrive in either order.
  */
 import { describe, expect, it } from "@effect/vitest";
@@ -264,7 +264,7 @@ const gatedHandlers = (
 const gatedMutation = (mutationId: number, gate: GateName, id: string, n: number): Mutation =>
   mutation(mutationId, "test/gated", { id, n, gate });
 
-describe("MemoryBackend concurrent applyMutations (#346)", () => {
+describe("MemoryBackend concurrent applyMutations", () => {
   it.effect("applies a mutation once when two in-flight copies of it race", () =>
     Effect.gen(function* () {
       const gates = yield* makeGates;
@@ -339,7 +339,7 @@ describe("MemoryBackend concurrent applyMutations (#346)", () => {
   );
 });
 
-/** The #346 handlers, plus a mutator that rejects at once and a plain set (#355). */
+/** The #346 handlers, plus a mutator that rejects at once and a plain set. */
 const outcomeHandlers = (
   gates: Record<GateName, Gate>
 ): Record<string, MemoryBackend.BackendHandler> => ({
@@ -355,7 +355,7 @@ const rejectedMutation = (mutationId: number): Mutation => mutation(mutationId, 
 
 const rejection = (mutationId: number) => ({ clientId, mutationId, reason: "forbidden" });
 
-describe("MemoryBackend committed outcome of a copy that loses the race (#355)", () => {
+describe("MemoryBackend committed outcome of a copy that loses the race", () => {
   it.effect("a skipped copy of N does not stop N+1 from applying, in order", () =>
     Effect.gen(function* () {
       const gates = yield* makeGates;
@@ -441,7 +441,7 @@ describe("MemoryBackend committed outcome of a copy that loses the race (#355)",
 
 /**
  * A push gate: the test sees when the backend has answered a push, and decides
- * when that response reaches the client (#355).
+ * when that response reaches the client.
  */
 interface PushGate {
   readonly returned: Deferred.Deferred<void>;
@@ -569,11 +569,11 @@ const mutationTagsOf = (
   );
 
 /**
- * One mutation, two copies racing at the backend (#355). The first copy parks
+ * One mutation, two copies racing at the backend. The first copy parks
  * and applies only after the second, which is rejected and commits first. The
  * client receives the two responses in the given order; either way it must
- * settle the mutation as the server committed it, and emit that outcome once
- * (#364): both responses report the rejection, but the second repeats it.
+ * settle the mutation as the server committed it, and emit that outcome once:
+ *both responses report the rejection, but the second repeats it.
  */
 const runRace = (order: "rejected-first" | "losing-first") =>
   Effect.gen(function* () {
@@ -677,13 +677,13 @@ const setMutators = Mutator.registry([
   },
 ]);
 
-describe("ClientEngine outcome of a race between a rejected and an applied copy (#355)", () => {
+describe("ClientEngine outcome of a race between a rejected and an applied copy", () => {
   it.effect("the rejected copy's response arrives first", () => runRace("rejected-first"));
 
   it.effect("the losing copy's response arrives first", () => runRace("losing-first"));
 });
 
-describe("ClientEngine settled outcomes are not re-settled (#364)", () => {
+describe("ClientEngine settled outcomes are not re-settled", () => {
   it.effect("a rejection reported after the entry was acknowledged is ignored", () =>
     Effect.gen(function* () {
       const backend = yield* MemoryBackend.make({
@@ -733,7 +733,7 @@ describe("ClientEngine settled outcomes are not re-settled (#364)", () => {
   );
 });
 
-/** One write to the `hot` row, pushed by one client of one group (#353). */
+/** One write to the `hot` row, pushed by one client of one group. */
 const hotMutation = (client: string): Mutation => ({
   clientId: client,
   mutationId: 1,
@@ -742,7 +742,7 @@ const hotMutation = (client: string): Mutation => ({
   createdAt: 0,
 });
 
-/** One increment of the shared counter, pushed by one client of one group (#353). */
+/** One increment of the shared counter, pushed by one client of one group. */
 const countMutation = (client: string): Mutation => ({
   clientId: client,
   mutationId: 1,
@@ -751,7 +751,7 @@ const countMutation = (client: string): Mutation => ({
   createdAt: 0,
 });
 
-describe("MemoryBackend serialisable isolation across client groups (#353)", () => {
+describe("MemoryBackend serialisable isolation across client groups", () => {
   it.effect("keeps group X's increment when group Y commits between X's read and its write", () =>
     Effect.gen(function* () {
       const seen = yield* Deferred.make<number>();

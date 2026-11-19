@@ -1,5 +1,5 @@
 /**
- * Hydration + seeding + prefetch (issue #41): `seed` renders confirmed rows
+ * Hydration + seeding + prefetch: `seed` renders confirmed rows
  * synchronously before any transport call and converges without a reset when
  * the versions are genuine; `dehydrate`/`hydrate` round-trip the store through
  * JSON; `ensureSubset` prefetches and dedupes concurrent pulls. Uses the same
@@ -117,7 +117,7 @@ const testNodes = Node.registry([
   Node.make("users", { attributes: {} }),
 ]);
 
-describe("ClientEngine.seed (#41)", () => {
+describe("ClientEngine.seed", () => {
   it.effect(
     "renders seeded rows synchronously with no transport, then pull converges (no Clear)",
     () =>
@@ -163,7 +163,7 @@ describe("ClientEngine.seed (#41)", () => {
   );
 });
 
-describe("Hydration.dehydrate/hydrate (#41)", () => {
+describe("Hydration.dehydrate/hydrate", () => {
   it.effect("round-trips rows + cookie + journal through JSON", () =>
     Effect.gen(function* () {
       const handler = yield* makeServer;
@@ -187,52 +187,50 @@ describe("Hydration.dehydrate/hydrate (#41)", () => {
     })
   );
 
-  it.effect(
-    "a reused clientId resumes from its acked counter after the journal drained (#271)",
-    () =>
-      Effect.gen(function* () {
-        const handler = yield* makeServer;
-        const a = yield* makeClient(handler, "a", "group-a");
-        yield* a.engine.subscribe(allTodos);
-        yield* a.engine.mutate("todo/set", { id: "1", title: "first", done: false });
-        yield* a.engine.mutate("todo/set", { id: "2", title: "second", done: false });
-        yield* a.engine.push;
-        yield* a.engine.pull;
-        // The acks drained the journal and the pull released the tail: no id survives but the counter.
-        expect(yield* a.store.pendingMutations).toEqual([]);
-        expect(yield* a.store.unpulled).toEqual([]);
+  it.effect("a reused clientId resumes from its acked counter after the journal drained", () =>
+    Effect.gen(function* () {
+      const handler = yield* makeServer;
+      const a = yield* makeClient(handler, "a", "group-a");
+      yield* a.engine.subscribe(allTodos);
+      yield* a.engine.mutate("todo/set", { id: "1", title: "first", done: false });
+      yield* a.engine.mutate("todo/set", { id: "2", title: "second", done: false });
+      yield* a.engine.push;
+      yield* a.engine.pull;
+      // The acks drained the journal and the pull released the tail: no id survives but the counter.
+      expect(yield* a.store.pendingMutations).toEqual([]);
+      expect(yield* a.store.unpulled).toEqual([]);
 
-        const snapshot = yield* Hydration.dehydrate(a.store);
-        expect(snapshot.counters).toEqual({ a: 2 });
-        const parsed = yield* Schema.decodeEffect(Hydration.SnapshotFromJson)(
-          yield* Schema.encodeEffect(Hydration.SnapshotFromJson)(snapshot)
-        );
+      const snapshot = yield* Hydration.dehydrate(a.store);
+      expect(snapshot.counters).toEqual({ a: 2 });
+      const parsed = yield* Schema.decodeEffect(Hydration.SnapshotFromJson)(
+        yield* Schema.encodeEffect(Hydration.SnapshotFromJson)(snapshot)
+      );
 
-        // The same clientId, hydrated into a fresh store, mutates and pushes.
-        const store = yield* ClientStoreModule.makeMemory;
-        yield* Hydration.hydrate(store, parsed);
-        const engine = yield* ClientEngineModule.make({
-          clientId: "a",
-          clientGroupId: "group-a",
-          mutators: setTodo,
-        }).pipe(
-          Effect.provideService(ClientStore, store),
-          Effect.provideService(ClientTransport, yield* makeInMemory(handler, "group-a"))
-        );
-        yield* engine.mutate("todo/set", { id: "3", title: "after hydrate", done: false });
-        expect((yield* store.pendingMutations).map((m) => m.mutationId)).toEqual([3]);
-        yield* engine.push;
+      // The same clientId, hydrated into a fresh store, mutates and pushes.
+      const store = yield* ClientStoreModule.makeMemory;
+      yield* Hydration.hydrate(store, parsed);
+      const engine = yield* ClientEngineModule.make({
+        clientId: "a",
+        clientGroupId: "group-a",
+        mutators: setTodo,
+      }).pipe(
+        Effect.provideService(ClientStore, store),
+        Effect.provideService(ClientTransport, yield* makeInMemory(handler, "group-a"))
+      );
+      yield* engine.mutate("todo/set", { id: "3", title: "after hydrate", done: false });
+      expect((yield* store.pendingMutations).map((m) => m.mutationId)).toEqual([3]);
+      yield* engine.push;
 
-        // The backend applied it: another client sees the row.
-        const reader = yield* makeClient(handler, "reader", "group-reader");
-        yield* reader.engine.subscribe(allTodos);
-        yield* reader.engine.pull;
-        const ids = (yield* reader.engine.query(allTodos)).map((row) => row.id);
-        expect(ids.toSorted()).toEqual(["1", "2", "3"]);
-      })
+      // The backend applied it: another client sees the row.
+      const reader = yield* makeClient(handler, "reader", "group-reader");
+      yield* reader.engine.subscribe(allTodos);
+      yield* reader.engine.pull;
+      const ids = (yield* reader.engine.query(allTodos)).map((row) => row.id);
+      expect(ids.toSorted()).toEqual(["1", "2", "3"]);
+    })
   );
 
-  it.effect("hydrate raises the counters and never lowers them (#271)", () =>
+  it.effect("hydrate raises the counters and never lowers them", () =>
     Effect.gen(function* () {
       const store = yield* ClientStoreModule.makeMemory;
       expect(yield* store.nextMutationId("a")).toBe(1);
@@ -258,7 +256,7 @@ describe("Hydration.dehydrate/hydrate (#41)", () => {
   );
 });
 
-describe("ClientEngine.ensureSubset (#41)", () => {
+describe("ClientEngine.ensureSubset", () => {
   it.effect("prefetches a subset and dedupes concurrent calls into one pull", () =>
     Effect.gen(function* () {
       const handler = yield* makeServer;

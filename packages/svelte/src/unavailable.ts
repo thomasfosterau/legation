@@ -1,5 +1,5 @@
 /**
- * The failure of a hook that reaches for a Client where none was set (#147):
+ * The failure of a hook that reaches for a Client where none was set:
  * `setClient(undefined)`, as on the server. Kept apart from `Runtime.ts` so the
  * hooks can raise it without importing the context module's public surface.
  */

@@ -9,7 +9,7 @@
  * the stale-while-revalidate cache noticing.
  *
  * Two tag granularities share one convention (see CONTEXT.md's "Tag" entry;
- * #206's edge/KV invalidation sink reuses this same spelling):
+ * edge/KV invalidation sink reuses this same spelling):
  *
  * - Coarse: `collection:{name}` (the default {@link defaultTagFor}) — every
  *   response enumerating (part of) a collection carries it.
@@ -40,7 +40,7 @@ import * as Metric from "effect/Metric";
 import * as Stream from "effect/Stream";
 import type * as Scope from "effect/Scope";
 
-/** The default coarse tag convention: `collection:{name}` (`HttpCache.tagFor`, shared with the edge, #206). */
+/** The default coarse tag convention: `collection:{name}` (`HttpCache.tagFor`, shared with the edge). */
 export const defaultTagFor: (collection: string) => string = HttpCache.tagFor;
 
 /** The default fine, per-row tag convention: `collection:{name}:{id}` (`HttpCache.fineTagFor`). */

@@ -5,7 +5,7 @@
  * object, so where a read is answered (this thread's engine, a worker-hosted
  * one, the server) is configuration the components never see.
  *
- * An app builds a {@link ClientHandle} with {@link createClient} (#147) and
+ * An app builds a {@link ClientHandle} with {@link createClient} and
  * hands it to the component tree with {@link setClient}; the hooks read it
  * back, so they must be called during component initialisation (the same
  * rule Svelte's `getContext` follows). The runtime the hooks run over is an
@@ -42,7 +42,7 @@ export { ClientUnavailable } from "./unavailable.js";
 export type ClientRuntime = ManagedRuntime.ManagedRuntime<Client.Client, never>;
 
 /**
- * The Client an app hands to its component tree (#147): what {@link setClient}
+ * The Client an app hands to its component tree: what {@link setClient}
  * takes, and what {@link createClient} and {@link fromRuntime} build.
  */
 export interface ClientHandle {
@@ -57,7 +57,7 @@ export interface ClientHandle {
 }
 
 /**
- * Options for a Client joined to an engine hosted elsewhere (#146, #147): a
+ * Options for a Client joined to an engine hosted elsewhere: a
  * service worker or an elected tab, reached over `channel`. `Client.connect`'s
  * options, plus the page's server-rendered snapshot to offer the host.
  */
@@ -174,14 +174,14 @@ const connectRuntime = (
 };
 
 /**
- * Build the Client a Svelte app boots with (#147): `Client.make`'s options in,
+ * Build the Client a Svelte app boots with: `Client.make`'s options in,
  * a {@link ClientHandle} out, with no Effect runtime for the app to build. The
  * Client is built on first use, so creating the handle does no work; with
  * `transport: { url }` it is the standard remote setup.
  *
  * Given a `channel` instead ({@link ConnectClientOptions}), the Client joins
  * an engine hosted elsewhere (a service worker, an elected tab), and a
- * `snapshot` is offered to that host's store first (#146): the host owns the
+ * `snapshot` is offered to that host's store first: the host owns the
  * empty-store gate, and the handle's `hydration` reports its answer.
  */
 export function createClient(options: ConnectClientOptions): ConnectedClientHandle;

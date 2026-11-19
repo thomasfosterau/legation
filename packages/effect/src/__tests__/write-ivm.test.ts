@@ -1,5 +1,5 @@
 /**
- * Write-path incremental view maintenance (#39): a `mutate` and a push
+ * Write-path incremental view maintenance: a `mutate` and a push
  * acknowledgement carry the collections they touch, so an observer of a
  * different collection neither re-emits nor re-materializes. A shared overlay
  * cache means one change costs one replay, not one per observer. Plus the
@@ -136,7 +136,7 @@ describe("write-path selective re-evaluation", () => {
     })
   );
 
-  it.live("a mutate on a warm cache patches the overlay in place, with no replay (#109)", () =>
+  it.live("a mutate on a warm cache patches the overlay in place, with no replay", () =>
     Effect.gen(function* () {
       const { engine, listRowsCount } = yield* makeClient(yield* makeServer, "w");
       yield* Effect.forEach(
@@ -151,12 +151,12 @@ describe("write-path selective re-evaluation", () => {
       yield* settle;
       // The tracked writer mutates the already-cached overlay in place
       // instead of invalidating it, so a mutate costs zero further replays
-      // regardless of how many observers are watching (#109).
+      // regardless of how many observers are watching.
       expect(yield* Ref.get(listRowsCount)).toBe(0);
     })
   );
 
-  it.live("a mutate on a cold cache replays once, then patches in place after (#109)", () =>
+  it.live("a mutate on a cold cache replays once, then patches in place after", () =>
     Effect.gen(function* () {
       const { engine, listRowsCount } = yield* makeClient(yield* makeServer, "w");
       // No observer has materialized yet, so the cache starts cold.

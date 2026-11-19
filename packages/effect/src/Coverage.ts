@@ -348,7 +348,7 @@ export const covering = <S extends Registration>(
   );
 };
 
-// ─── Pulled windows (#426) ───────────────────────────────────────────────────
+// ─── Pulled windows ───────────────────────────────────────────────────
 
 /**
  * One window a registration holds and whether its rows are in the replica:
@@ -440,7 +440,7 @@ const windowPulled = (held: ReadonlyArray<PulledWindow>, window: Subset.Subset):
 /**
  * The root rows a caller read once for a request, with the subset they are of. A
  * verdict judged over `rows` is judged over exactly the rows the caller answers from,
- * not a second read that a pull may have moved (#426).
+ * not a second read that a pull may have moved.
  */
 export interface Snapshot {
   readonly subset: Subset.Subset;
@@ -460,7 +460,7 @@ export interface JudgeOptions {
 
 /**
  * The rows of a snapshot as a {@link RowsOf}: the snapshot's rows for the subset it
- * is of (#426), and `rowsOf` for any other subset.
+ * is of, and `rowsOf` for any other subset.
  */
 export const snapshotOf =
   <E>(snapshot: Snapshot, rowsOf: RowsOf<E>): RowsOf<E> =>
@@ -512,7 +512,7 @@ export interface Entry extends Subscription {
  * and pulled, and every edge window the request's rows link to is pulled
  * (`windowPulled`). An edge window the request needs and the entry does not
  * hold is not pulled, so a read is never answered from the replica before the
- * rows it links to have arrived (#426).
+ * rows it links to have arrived.
  */
 export const pulledFor = (entry: Entry, requested: Requested): boolean =>
   heldPulled(entry.pulled.windows, entry.root) &&

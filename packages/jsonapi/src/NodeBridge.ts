@@ -12,8 +12,8 @@
  * The mapping:
  *
  * - `Relationship.one` / `Relationship.optional` → `Edge.one`, stored in
- *   the relationship's declared storage key, `Relationship.one(ref, { key })`
- *   (#553), else the foreign-key field `` `${name}Id` `` (the `via` option
+ *   the relationship's declared storage key, `Relationship.one(ref, { key })`,
+ * else the foreign-key field `` `${name}Id` `` (the `via` option
  *   overrides either, per relationship). JSON:API keeps relationship linkage out of `attributes`, so the
  *   engine-side row gains the key field the edge declares.
  * - `Relationship.many` / `Relationship.paginated` → `Edge.many` /
@@ -23,10 +23,10 @@
  *   annotation ({@link syncAnnotations}), or in the `inverses` option.
  * - `paginated` edges need an `order` (cursor pagination requires a stable
  *   order, and it is part of the edge's identity — ADR-0022). It is read off
- *   the relationship's own declaration, `Relationship.paginated(ref, { order })`
- *   (#220), or given in the `order` option.
+ *   the relationship's own declaration, `Relationship.paginated(ref, { order })`,
+ * or given in the `order` option.
  *
- * **Sync metadata on the resource (#220).** What only the sync engine needs —
+ * **Sync metadata on the resource.** What only the sync engine needs —
  * an inverse name, the literal kind of a field no schema can tell (an
  * `instant` stored as text) — is declared on the resource as
  * `@legation/`-namespaced annotations: `Resource.make(…, { annotations:
@@ -37,7 +37,7 @@
  *
  * **Cyclic and acyclic resource graphs.** A parent ⇄ child pair
  * (`Product ⇄ Review`) is authorable with one interface annotation per
- * resource in the cycle (effect-jsonapi#118, see `Resource.make`); with the
+ * resource in the cycle (see `Resource.make`); with the
  * child's key declared on its relationship, it bridges with no options.
  * A graph that points only parent → child, its child carrying the foreign
  * key as a plain attribute (`productId`), uses the `edges` option instead:
@@ -46,7 +46,7 @@
  * **bridged** one-edges, declared and relationship-derived alike, so the
  * graph bridges without naming an inverse by hand.
  *
- * **The filterable set** (ADR-0028 rule d, #154) is read off the resource's
+ * **The filterable set** (ADR-0028 rule d) is read off the resource's
  * own declaration (effect-jsonapi, since 0.13: `Filter.able` / `Sort.able` piped
  * onto an attribute schema, `Resource.attribute(schema, { filter, sort })`,
  * `Relationship.one(ref, { filter })`) through `Resource.filterable` /
@@ -65,7 +65,7 @@
  *
  * **Identity** is always `id` here: a JSON:API resource is identified by the
  * spec's `id` member, so a bridged node declares no identity attribute of its
- * own (`Node.make`'s `id` option, #144). The JSON:API surface — `/{type}/{id}`
+ * own (`Node.make`'s `id` option). The JSON:API surface — `/{type}/{id}`
  * widening to `filter[id]`, linkage and `included` reading `id` off a row
  * value — assumes that, so a hand-built node naming a natural key is not yet
  * servable through these handlers.
@@ -89,7 +89,7 @@ export class ResourceBridgeError extends Schema.TaggedError<
   message: Schema.String,
 }) {}
 
-// ─── Sync annotations (#220) ──────────────────────────────────────────────────
+// ─── Sync annotations ──────────────────────────────────────────────────
 //
 // What only the sync engine needs to know about a resource is declared on the
 // resource itself, as `@legation/`-namespaced annotations (effect-jsonapi's
@@ -102,7 +102,7 @@ export const InversesAnnotation = "@legation/inverses";
 /** The annotation key naming the literal kind of filterable fields, by row field. */
 export const KindsAnnotation = "@legation/kinds";
 
-/** The sync metadata a resource can declare about itself (#220). */
+/** The sync metadata a resource can declare about itself. */
 export interface SyncAnnotations {
   /**
    * The inverse edge name on the target, by `many` / `paginated` relationship
@@ -243,7 +243,7 @@ const oneEdgesOf = (resource: Resource.Any, options: BridgeOptions): Record<stri
     descriptor.kind === "one" || descriptor.kind === "optional"
       ? Result.succeed(
           Edge.one(descriptor.ref().type, {
-            // An explicit override wins, then the relationship's declared storage key (#553).
+            // An explicit override wins, then the relationship's declared storage key.
             via: options.via[name] ?? Option.getOrElse(descriptor.key, () => `${name}Id`),
           })
         )

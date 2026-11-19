@@ -90,7 +90,7 @@ Durable Object's hibernation or eviction included). Cloudflare also warns that
 a client held open in a long-lived Durable Object keeps an origin connection
 allocated from the pool, which many rooms can exhaust.
 
-`Backend.perRequest` gives a room exactly that (#681). Its argument builds the
+`Backend.perRequest` gives a room exactly that. Its argument builds the
 backend for one request, in that request's `Scope`; the room's sync server
 runs it once per push, pull and read (`Backend.forRequest`) and closes the
 scope when the request ends, which closes the client. Everything else the room

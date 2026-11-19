@@ -1,7 +1,7 @@
 /**
  * @thomasfosterau/legation-devtools/svelte — store adapters
  *
- * Bridges the headless {@link Devtools.DevtoolsCore} (#120) to Svelte
+ * Bridges the headless {@link Devtools.DevtoolsCore} to Svelte
  * `Readable` stores, the same shape `@thomasfosterau/legation-svelte`'s own `Query.ts`
  * bridges live queries with: a store's `start` callback forks the source in
  * a fiber and pushes each value through `set`; `stop` interrupts that fiber

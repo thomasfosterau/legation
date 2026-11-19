@@ -81,7 +81,7 @@ import * as Subsets from "./Subset.js";
 const asTransportError = (cause: { readonly message: string }): TransportError =>
   new TransportError({ message: cause.message, cause });
 
-// Whether two `lastMutationIds` watermarks name the same ids at the same values (#286).
+// Whether two `lastMutationIds` watermarks name the same ids at the same values.
 const sameWatermark = (
   a: Readonly<Record<string, number>>,
   b: Readonly<Record<string, number>>
@@ -104,7 +104,7 @@ export interface ReadDeps {
 const rowKey = (collection: string, id: string): string => Hash.canonicalJson([collection, id]);
 
 /**
- * Evaluate already-authorized subsets to their current rows (#534): one
+ * Evaluate already-authorized subsets to their current rows: one
  * `Backend.evaluateAll` for the `(id, version)` sets, in subset order (a
  * bounded number of statements on a backend with `evaluateMany`), then one
  * `getRows` per collection over the union of its ids, as a pull's patch
@@ -157,8 +157,8 @@ const evaluateRows = (
 // Evaluate the desired next view: (collection → id → version) per subset.
 // The subsets go to the backend together (`Backend.evaluateAll`), so a
 // backend with `evaluateMany` answers the pull in a bounded number of
-// round trips (#505); one without it is asked per subset.
-// Each subset's total rides beside it (#210): `undefined` when the backend
+// round trips; one without it is asked per subset.
+// Each subset's total rides beside it: `undefined` when the backend
 // cannot count (`Backend.evaluateCounted` absent).
 const evaluateView = (backend: Backend, context: SyncContext, subsets: ReadonlyArray<Subset>) =>
   Effect.gen(function* () {
@@ -217,13 +217,13 @@ const assemblePatch = (
 /**
  * ADR-0025's read without its carrier: pull's front half, then
  * `Backend.evaluate` + `getRows`, and nothing else. The subsets are checked
- * against the filterable set as the client's own text (#154), handed to
+ * against the filterable set as the client's own text, handed to
  * `SyncMiddleware.onRead`, narrowed by the deny-by-default auth filters —
  * every subset before any is evaluated, so a denied subset anywhere in the
  * batch means no backend call at all — then each is evaluated to its
  * current rows in subset order, the evaluation batched through
- * `Backend.evaluateAll` and the values through one `getRows` per collection
- * (#534). No cookie, no CVR read or write, no
+ * `Backend.evaluateAll` and the values through one `getRows` per collection.
+ *No cookie, no CVR read or write, no
  * `lastMutationIds`. `handleRead` is this behind the protocol's identity
  * resolution; a derived REST handler is this behind an HTTP request's —
  * one read path, two carriers.
@@ -245,7 +245,7 @@ export const readSubsets = (
       (subset) => authorize(deps.authPolicy, context, subset, "server"),
       { concurrency: 1 }
     );
-    // One acquisition for the read's statements (#681): a per-request backend opens it here.
+    // One acquisition for the read's statements: a per-request backend opens it here.
     return yield* Effect.scoped(
       Effect.flatMap(forRequest(deps.backend), (backend) =>
         evaluateRows(backend, context, authorized)
@@ -254,7 +254,7 @@ export const readSubsets = (
   });
 
 /**
- * The **total** of a read's root subset (#210): how many rows its `where`
+ * The **total** of a read's root subset: how many rows its `where`
  * matches under the request's identity, whatever its window. The same front
  * half as {@link readSubsets} (the filterable check, `onRead` middleware,
  * deny-by-default auth filters), then `Backend.totalsOf` in place of the
@@ -285,7 +285,7 @@ export const readTotal = (
   });
 
 /**
- * Server construction options (#48). Both default to today's behaviour: an
+ * Server construction options. Both default to today's behaviour: an
  * absent `acceptSchemaVersion` accepts every version, and an absent
  * `cookieNamespace` mints bare cookies.
  */
@@ -300,7 +300,7 @@ export interface SyncServerOptions {
    */
   readonly acceptSchemaVersion?: (version: string | undefined) => boolean;
   /**
-   * Fleet cookie-reset namespace (#48). Every cookie this server mints is
+   * Fleet cookie-reset namespace. Every cookie this server mints is
    * tagged with this namespace; a presented cookie carrying a *different*
    * namespace is treated as unknown, so its next pull degrades to a reset patch
    * (`Clear` + full puts, exactly as an unrecognised cookie does). Bumping this
@@ -320,13 +320,13 @@ const cookieNamespaceOf = (cookie: string): string => {
   return index === -1 ? "" : cookie.slice(0, index);
 };
 
-/** Separator between a cookie's body and its scope epoch (#205). */
+/** Separator between a cookie's body and its scope epoch. */
 const COOKIE_EPOCH_SEP = "~e";
 /** A cookie's trailing scope epoch: the separator, then the hex `scopeEpochOf` mints. */
 const COOKIE_EPOCH_PATTERN = /~e([0-9a-f]+)$/;
 
 /**
- * The scope epoch a cookie was minted under (#205; `""` when the pull bound no
+ * The scope epoch a cookie was minted under (`""` when the pull bound no
  * named set, the cookie format before #205).
  */
 const cookieEpochOf = (cookie: string): string =>
@@ -335,7 +335,7 @@ const cookieEpochOf = (cookie: string): string =>
   COOKIE_EPOCH_PATTERN.exec(cookie)?.[1] ?? "";
 
 /**
- * A pull's scope epoch (ADR-0015's #205 amendment): a hash of the named sets it
+ * A pull's scope epoch (ADR-0015 amendment): a hash of the named sets it
  * bound, by name, with their members, so servers sharing a CVR store agree on
  * it, and it moves exactly when a bound set's members do. `""` when the pull
  * bound no set: such a cookie carries no epoch.
@@ -366,7 +366,7 @@ type SessionSets = HashMap.HashMap<string, CachedSet>;
 const setKey = (collection: string, name: string): string => Hash.canonicalJson([collection, name]);
 
 /**
- * One session's cached resolution of a named set (#205): the members (`None`
+ * One session's cached resolution of a named set: the members (`None`
  * when the resolver failed), when they were resolved, the collection a write to
  * which makes them stale, and whether one has.
  */
@@ -450,7 +450,7 @@ export interface ServerGroup {
 }
 
 /**
- * A read-only view of the sync server's live fan-out state (#45): the active
+ * A read-only view of the sync server's live fan-out state: the active
  * client groups with their authorised subsets and CVR sizes, plus poke
  * counters. Reads the handler's internal `activeSubsets`/`activeCvrs` Refs and
  * the `legation_*` poke metrics; does not change fan-out behaviour.
@@ -479,7 +479,7 @@ export interface ServerHandlerWithIntrospection {
   readonly introspection: ServerIntrospection;
 }
 
-/** Build the ServerHandler together with its introspection view (with options, #48). */
+/** Build the ServerHandler together with its introspection view (with options). */
 export const makeWithIntrospectionWith = (
   options?: SyncServerOptions
 ): Effect.Effect<
@@ -491,7 +491,7 @@ export const makeWithIntrospectionWith = (
     const acceptSchemaVersion = options?.acceptSchemaVersion ?? (() => true);
     const cookieNamespace = options?.cookieNamespace ?? "";
     // Reject an unsupported schema version up front, before any mutation is
-    // applied or patch computed, so the journal is never poisoned (#48).
+    // applied or patch computed, so the journal is never poisoned.
     const checkVersion = (
       version: string | undefined
     ): Effect.Effect<void, VersionNotSupportedError> =>
@@ -504,7 +504,7 @@ export const makeWithIntrospectionWith = (
             })
           );
     // The configured backend. Each push, pull and read runs against `forRequest`'s
-    // acquisition of it (#681), one per request; everything else here is per server.
+    // acquisition of it, one per request; everything else here is per server.
     const configured = yield* Backend;
     const authPolicy = yield* AuthPolicy;
     const cvrStore = yield* Cvr.CvrStore;
@@ -529,14 +529,14 @@ export const makeWithIntrospectionWith = (
       });
 
     const pokeHub = yield* PokeHub.make;
-    // Each session's named-set resolutions (#205), by client group, then by the
+    // Each session's named-set resolutions, by client group, then by the
     // set's key: the collection whose scope declares it and its name, so two
     // collections that declare different sets under one name never share an
     // entry.
     const setCache = yield* Ref.make(HashMap.empty<string, SessionSets>());
     const sessionSetsOf = (all: HashMap.HashMap<string, SessionSets>, clientGroupId: string) =>
       Option.getOrElse(HashMap.get(all, clientGroupId), () => HashMap.empty<string, CachedSet>());
-    // How many writes each source collection has seen (#205). A resolution that
+    // How many writes each source collection has seen. A resolution that
     // overlaps a write to its source is cached as stale, so the write's hint,
     // which found no entry to mark while the resolution was in flight, is not
     // lost until the set's maxAge passes.
@@ -603,7 +603,7 @@ export const makeWithIntrospectionWith = (
         });
 
     // Mark every cached set whose source a hint touched stale, and return the
-    // client groups that held one, so they are poked (#205): their next pull
+    // client groups that held one, so they are poked: their next pull
     // resolves the set again, and resets if its members moved.
     const staleSets = (touched: HashSet.HashSet<string>) =>
       Ref.modify(
@@ -624,7 +624,7 @@ export const makeWithIntrospectionWith = (
           return [groups, HashSet.isEmpty(groups) ? all : next];
         }
       );
-    // Record writes to these collections (#205, #652): count them, so a named set
+    // Record writes to these collections: count them, so a named set
     // whose resolution overlapped a write is cached as stale, and mark every
     // cached set over one of them stale. Returns the client groups that held
     // one, which the fan-out pokes. A push records its own writes before it
@@ -655,7 +655,7 @@ export const makeWithIntrospectionWith = (
       const seq = yield* Ref.updateAndGet(cookieCounter, (n) => n + 1);
       const body = `cvr-${now}-${seq}`;
       // Tag the cookie with the fleet namespace so a later namespace bump makes
-      // every pre-bump cookie unknown → a reset patch on its next pull (#48).
+      // every pre-bump cookie unknown → a reset patch on its next pull.
       return cookieNamespace === "" ? body : `${cookieNamespace}${COOKIE_NAMESPACE_SEP}${body}`;
     });
 
@@ -678,7 +678,7 @@ export const makeWithIntrospectionWith = (
               const touched = new Set(hints.map((hint) => hint.collection));
               const groups = yield* Ref.get(activeSubsets);
               const cvrs = yield* Ref.get(activeCvrs);
-              // A write to a named set's source may move the set (#205): those
+              // A write to a named set's source may move the set: those
               // sessions are poked whatever their windows hold.
               const scoped = yield* recordWrites(HashSet.fromIterable(touched));
               yield* Effect.forEach(
@@ -719,12 +719,12 @@ export const makeWithIntrospectionWith = (
           Effect.gen(function* () {
             const context = yield* contextFor(request.clientGroupId, options);
             const checked = yield* middleware.onPush(context, request);
-            // The push's one acquisition (#681), opened after the middleware so a
+            // The push's one acquisition, opened after the middleware so a
             // refused push opens none: `applyMutations` is one transaction, so its
             // mutation-id claims and the handlers' writes share its connection.
             const backend = yield* forRequest(configured);
             // The commit and the fan-out of its hints are one uninterruptible
-            // region (#356): an interrupt landing after the backend commits must
+            // region: an interrupt landing after the backend commits must
             // not skip the publish, because a replayed retry carries no hints and
             // would never repair the loss. The Backend contract cannot tell
             // "committed" from "not yet", so the whole applyMutations call is
@@ -773,7 +773,7 @@ export const makeWithIntrospectionWith = (
           })
         : resolverOption.value.resolve(named.name, named.args, context);
 
-    // The filterable set (#154) is checked against the client's OWN text —
+    // The filterable set is checked against the client's OWN text —
     // the request as it arrived, before middleware may rewrite it — so what
     // a tenancy middleware ANDs in (a scoping key, an `Exists`) stays
     // server-authored, like the auth filter and a named query's resolution.
@@ -819,8 +819,8 @@ export const makeWithIntrospectionWith = (
 
     // Resolve the CVR the presented cookie names. A cookie minted under a
     // different fleet namespace (a bumped deploy) is treated as unknown, so the
-    // pull degrades to a reset patch exactly as an unrecognised cookie does (#48).
-    // So is a cookie minted under another scope epoch (#205): its CVR was
+    // pull degrades to a reset patch exactly as an unrecognised cookie does.
+    // So is a cookie minted under another scope epoch: its CVR was
     // computed under another scope, so no patch is computed against it, and a
     // narrowed scope can never leave a row behind on the client.
     const resolvePrevious = (
@@ -834,7 +834,7 @@ export const makeWithIntrospectionWith = (
     };
 
     // How many passes a pull makes over its view before it stops retrying a
-    // moving watermark (#286). A pass only repeats when a push committed during
+    // moving watermark. A pass only repeats when a push committed during
     // it, so a bound of 3 is ample under normal load.
     const PULL_VIEW_ATTEMPTS = 3;
 
@@ -870,14 +870,14 @@ export const makeWithIntrospectionWith = (
         };
       });
 
-    // The pull's view as one snapshot (#286), for a backend that meets Backend
+    // The pull's view as one snapshot, for a backend that meets Backend
     // guarantee 1: a client's `lastMutationId` bumped in the same commit as its
     // effects. Then a watermark that reads the same before and after the rows
     // means no push committed in between: every push the watermark covers is in
     // the rows, and no push is in the rows without being covered. That is the
     // invariant the client's overlay relies on to release an acknowledged
     // mutation without a revert or a double application. A backend that exposes
-    // effects before the bump (MemoryBackend today, #341; SqlBackend on D1, #342)
+    // effects before the bump (MemoryBackend today, #341; SqlBackend on D1)
     // can still hand a pull an effect its watermark does not cover; this check
     // cannot see that window.
     //
@@ -930,13 +930,13 @@ export const makeWithIntrospectionWith = (
             yield* checkClientSubsets(request.subscriptions);
             const checked = yield* middleware.onPull(context, request);
 
-            // The named sets this pull binds (#205), for its scope epoch.
+            // The named sets this pull binds, for its scope epoch.
             const binding = yield* Ref.make(HashMap.empty<string, BoundSet>());
             const authorized = yield* authorizeAll(context, checked, cachedBinder(binding));
             const bound = yield* Ref.get(binding);
             const epoch = scopeEpochOf(bound);
             // The session holds a lease on each bound set's source as it does on
-            // a window (ADR-0015's #205 amendment): the source's collection rides
+            // a window (ADR-0015 amendment): the source's collection rides
             // with the group's windows, so a room's fan-out registration (from
             // introspection) leases its topic too.
             const sources = HashMap.toValues(
@@ -950,7 +950,7 @@ export const makeWithIntrospectionWith = (
               new Map(m).set(request.clientGroupId, [...authorized, ...leased])
             );
 
-            // The pull's one acquisition (#681): every pass over its view, and the
+            // The pull's one acquisition: every pass over its view, and the
             // rejections read after, go through it.
             const backend = yield* forRequest(configured);
             const { next, totals, patch, lastMutationIds } = yield* readPullView(
@@ -961,7 +961,7 @@ export const makeWithIntrospectionWith = (
               epoch
             );
 
-            // The permanent rejections this pull's watermark covers (#365). A
+            // The permanent rejections this pull's watermark covers. A
             // rejected id is bumped into the watermark, so the client must learn
             // its outcome here, or it would settle the mutation as applied. Each
             // rejection is committed with its id's bump, so it is covered once the
@@ -981,7 +981,7 @@ export const makeWithIntrospectionWith = (
             );
             yield* Metric.update(Telemetry.patchOps, patch.length);
             yield* Metric.update(Telemetry.serverPullsTotal, 1);
-            // The client's subscriptions' totals, in its order (#210). `authorized`
+            // The client's subscriptions' totals, in its order. `authorized`
             // holds the direct subscriptions first, one per entry of the request the
             // middleware returned; when that is not the client's own count, no total
             // can be placed against the client's list, and none is sent.
@@ -1064,7 +1064,7 @@ export const makeWithIntrospection: Effect.Effect<
   Backend | AuthPolicy | Cvr.CvrStore | InvalidationBus | Scope.Scope
 > = makeWithIntrospectionWith();
 
-/** Build the ServerHandler with options (#48: schema-version acceptor, fleet cookie namespace). */
+/** Build the ServerHandler with options (schema-version acceptor, fleet cookie namespace). */
 export const makeWith = (
   options?: SyncServerOptions
 ): Effect.Effect<
@@ -1080,7 +1080,7 @@ export const make: Effect.Effect<
   Backend | AuthPolicy | Cvr.CvrStore | InvalidationBus | Scope.Scope
 > = makeWith();
 
-/** Layer providing the ServerHandler from Backend + policy + CVR + bus (with options, #48). */
+/** Layer providing the ServerHandler from Backend + policy + CVR + bus (with options). */
 export const layerWith = (
   options?: SyncServerOptions
 ): Layer.Layer<ServerHandler, never, Backend | AuthPolicy | Cvr.CvrStore | InvalidationBus> =>

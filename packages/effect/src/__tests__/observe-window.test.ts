@@ -1,5 +1,5 @@
 /**
- * ClientEngine.observeWindow / Subscriptions.acquireWindow (#133 item 3):
+ * ClientEngine.observeWindow / Subscriptions.acquireWindow:
  * reactive window retargeting. `retarget` widens/advances an open
  * observation's `limit`/`cursor` by reusing `LiveView`'s maintained order
  * (`LiveView.retarget`) instead of the caller re-subscribing with a wider

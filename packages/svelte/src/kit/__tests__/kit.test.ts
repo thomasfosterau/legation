@@ -280,7 +280,7 @@ describe("loadSnapshot + clientRuntime", () => {
   );
 });
 
-// ─── Form-action Mutations (ADR-0030 #215) ──────────────────────────────────
+// ─── Form-action Mutations ──────────────────────────────────
 
 const Tally = Schema.Struct({ id: Schema.String, n: Schema.Number });
 const asTally = Schema.decodeUnknownOption(Tally);
@@ -340,7 +340,7 @@ const postedForm = (form: { clientId: string; mutationId: number }, id: string) 
 // The form layer's decode of the posted fields into the Mutation's args.
 const tallyArgsOf = (data: FormData) => ({ id: String(data.get("id")) });
 
-describe("form-action Mutations (ADR-0030 #215)", () => {
+describe("form-action Mutations", () => {
   it.effect("the no-JS path: a rendered form resubmitted is applied once", () =>
     Effect.scoped(
       Effect.gen(function* () {

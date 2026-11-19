@@ -8,11 +8,11 @@
   // svelte-ignore state_referenced_locally
   setClientRuntime(runtime);
 
-  // Starts opted out (#141): per-parent paging with no parent selected yet.
+  // Starts opted out: per-parent paging with no parent selected yet.
   // `include`s an edge so the hook takes its ledger-registering fallback
   // path (ADR-0024's "a joined read falls back to resubscribe-per-page"),
   // which is what registers through `engine.activeSubscriptions` — the
-  // engine-level retarget path (#133) reuses an already-open observation
+  // engine-level retarget path reuses an already-open observation
   // instead and never touches that ledger.
   let authorId = $state<string | undefined>(undefined);
   // svelte-ignore state_referenced_locally

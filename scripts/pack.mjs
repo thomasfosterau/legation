@@ -7,7 +7,7 @@
  * The packages depend on each other as `workspace:^` and reference the
  * `pnpm-workspace.yaml` catalogs as `catalog:` / `catalog:peers`; `pnpm pack`
  * rewrites all three to real ranges, while `npm pack` would copy them
- * verbatim (#267). The checks, run on the packed tarball:
+ * verbatim. The checks, run on the packed tarball:
  *
  * - no `workspace:` / `catalog:` specifier is left anywhere in its
  *   `package.json`;
@@ -22,7 +22,7 @@
  * - `publint` (strict: warnings fail too) finds nothing wrong with
  *   `exports` / `main` / `types`, `files` or `sideEffects`;
  * - `attw` (arethetypeswrong) finds no type-resolution problem for the
- *   resolution modes an ESM-only package supports (#250).
+ *   resolution modes an ESM-only package supports.
  */
 import { execFileSync, spawnSync } from "node:child_process";
 import { readdirSync, readFileSync } from "node:fs";

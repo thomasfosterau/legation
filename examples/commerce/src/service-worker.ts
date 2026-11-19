@@ -153,7 +153,7 @@ const indexedDbLayer = Layer.succeed(IndexedDb.IndexedDb)(
  * Post a message to every client page of this worker's origin, controlled or
  * not: on a first visit the tab that boots the engine is not controlled yet
  * (the worker claims it on activation), and it must still hear the engine's
- * first pull (#146).
+ * first pull.
  */
 const toClients = (message: unknown) =>
   self.clients
@@ -188,7 +188,7 @@ config.addEventListener("message", (event) => {
         facade = makeFacade({
           view,
           coverageOf: Coverage.coverageOf(nodes, view.query, host.registrations),
-          // A windowed pin's total for `meta.total`, from the engine's last pull (#210).
+          // A windowed pin's total for `meta.total`, from the engine's last pull.
           totalOf: host.engine.totalOf,
           cookie: host.cookie,
           // Façade writes journal into this worker's engine, never over the mirror channel.

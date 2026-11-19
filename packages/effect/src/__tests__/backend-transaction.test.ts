@@ -1,5 +1,5 @@
 /**
- * `Backend.transaction` (#177): the combinator owns the ledger rules, whatever
+ * `Backend.transaction`: the combinator owns the ledger rules, whatever
  * the store's steps do. A scripted store records every step it is asked to
  * take, so each test checks what the combinator commits, releases and reports.
  */

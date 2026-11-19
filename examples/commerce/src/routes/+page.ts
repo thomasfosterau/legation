@@ -1,5 +1,5 @@
 /**
- * Catalog load — universal (#168): it runs on the server for the first
+ * Catalog load — universal: it runs on the server for the first
  * render (the no-JS baseline, unchanged) and in the browser on client
  * navigation, where its plain `fetch` of the JSON:API is what the service
  * worker's façade intercepts (ADR-0029). Both tiers read the same

@@ -1,5 +1,5 @@
 /**
- * Typed-query surface (#37):
+ * Typed-query surface:
  *
  * - Canonical arg keys: two structurally-equal args objects with different key
  *   order resolve to the same named-query subscription entry and the same Atom.

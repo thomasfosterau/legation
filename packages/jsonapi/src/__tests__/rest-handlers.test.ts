@@ -1,5 +1,5 @@
 /**
- * RestHandlers tests (#163): derived `list` / `get` handlers over the
+ * RestHandlers tests: derived `list` / `get` handlers over the
  * engine's read path — `MemoryBackend` under an auth policy with a private
  * collection — served in-process through effect-jsonapi's `Endpoint.list` /
  * `Endpoint.get` behind `HttpApiBuilder`, every document passing the
@@ -594,7 +594,7 @@ describe("RestHandlers over the read path", () => {
   );
 
   it.effect(
-    "pages by offset (#209): links stay in the offset idiom, a short page has no next but keeps prev",
+    "pages by offset: links stay in the offset idiom, a short page has no next but keeps prev",
     () =>
       Effect.scoped(
         Effect.gen(function* () {
@@ -755,7 +755,7 @@ const cookieResolver = (
     ),
 });
 
-describe("RestHandlers identity through the IdentityResolver (#645)", () => {
+describe("RestHandlers identity through the IdentityResolver", () => {
   it.effect("presents the request's cookie to the resolver, under the client group http", () =>
     Effect.scoped(
       Effect.gen(function* () {

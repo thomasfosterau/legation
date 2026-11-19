@@ -21,7 +21,7 @@
 
   const slug = $derived(page.params.slug);
   // `undefined` opts the hook out entirely while creating a new article
-  // (#141) — no window registered, no request issued.
+  // — no window registered, no request issued.
   const rows = useQuery(() => (slug === undefined ? undefined : articleBySlug(slug)));
   const existing = $derived(toArticle(AsyncResult.getOrElse(rows.current, () => []), [], null));
 

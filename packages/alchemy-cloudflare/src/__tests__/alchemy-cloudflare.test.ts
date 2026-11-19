@@ -13,7 +13,7 @@
  * heartbeat runs on a TestClock, so a beat happens only when the test advances
  * time, and its leases outlive any real run (see the headline test), so a
  * loaded machine cannot age a lease out between its beat and the write it must
- * route (#282).
+ * route.
  */
 import { describe, expect, it } from "@effect/vitest";
 import type * as cf from "@cloudflare/workers-types";
@@ -911,7 +911,7 @@ describe("Room backend lifetime", () => {
   );
 });
 
-describe("Room per-request backend (#681)", () => {
+describe("Room per-request backend", () => {
   it.live("acquires the backend once per request and releases it when the request ends", () =>
     Effect.gen(function* () {
       const clock = yield* TestClock.make();

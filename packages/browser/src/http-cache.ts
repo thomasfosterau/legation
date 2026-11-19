@@ -2,7 +2,7 @@
  * @thomasfosterau/legation-browser/http-cache
  *
  * The Cache API HTTP cache on its own entry, for a service worker that wants
- * the stale-while-revalidate fetch handler without the engine (#678): this
+ * the stale-while-revalidate fetch handler without the engine: this
  * entry reaches neither the sync engine nor the invalidation feed, so a
  * bundler keeps only the cache. Collection-driven invalidation
  * (`HttpCacheInvalidation`) is the opt-in on the root entry.

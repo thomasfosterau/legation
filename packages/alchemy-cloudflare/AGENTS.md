@@ -17,7 +17,7 @@ The reference deployment on Cloudflare (ADR-0022 topology, ADR-0023 topic-derive
 - **Every shard call, room poke and lease registration is bounded** by `publishTimeout`: a hung shard drops its poke, it never holds a push open. Alchemy's RPC stubs take no abort signal, so a call past the bound is abandoned, not aborted.
 - **A stub's RPC can fail with `RpcCallError` although its types say `never`**: every call through a stub is fire-and-forget (`DurableFanoutBroker`'s `call`), never trusted to succeed.
 - **The provider reports a failed storage or D1 call as a defect**; `DurableCvrStore` and `D1Executor` turn it into `StoreError` / `BackendError`.
-- **D1 has no interactive transactions**: the executor reports `transactional: false`, so the SQL backend runs each handler and then bumps its mutation id, not atomically. This does not meet Backend guarantee 1 (#342, #353); the `D1Executor.ts` header says what that costs. Don't document D1 as transactional.
+- **D1 has no interactive transactions**: the executor reports `transactional: false`, so the SQL backend runs each handler and then bumps its mutation id, not atomically. This does not meet Backend guarantee 1; the `D1Executor.ts` header says what that costs. Don't document D1 as transactional.
 - **A room answers a route by the request path's last segment** (`RoomProtocol.routeOf`): `routeSync` forwards the request unchanged, base path included, because Alchemy's stub forwards the platform request as it is.
 
 ## Tests

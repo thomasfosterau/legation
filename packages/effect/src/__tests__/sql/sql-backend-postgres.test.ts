@@ -1,8 +1,8 @@
 /**
- * SqlBackend on a real PostgreSQL server (issue #360): the overlap that #352 is
+ * SqlBackend on a real PostgreSQL server: the overlap that #352 is
  * about, and the lost update across client groups that #353 rules out, run with
- * two real transactions. Each `applyMutations` transaction runs at SERIALIZABLE
- * (#353), so an overlap that READ COMMITTED would let through is refused with a
+ * two real transactions. Each `applyMutations` transaction runs at SERIALIZABLE,
+ *so an overlap that READ COMMITTED would let through is refused with a
  * serialization failure instead. SQLite serialises its transactions and PGlite
  * is one connection behind a mutex, so neither can interleave two calls; the
  * mock in `sql-backend.test.ts` models the interleaving but not PostgreSQL's row
@@ -49,7 +49,7 @@ const DDL: ReadonlyArray<string> = [
   // One row per handler application, so a second application is visible.
   `CREATE TABLE effects (seq INTEGER GENERATED ALWAYS AS IDENTITY PRIMARY KEY, id TEXT NOT NULL)`,
   // The ledger's default table and columns (`SqlBackendConfig.mutationsTable`),
-  // with the `rejections` column a new install creates (#366).
+  // with the `rejections` column a new install creates.
   `CREATE TABLE sync_mutations (
     client_group_id TEXT NOT NULL, client_id TEXT NOT NULL, last_mutation_id INTEGER NOT NULL,
     rejections TEXT,
@@ -97,7 +97,7 @@ const withDatabase = <A>(
   ).pipe(Effect.orDie);
 
 /**
- * The shipped PostgreSQL executor (#203): transactions are real and do not serialise. Its
+ * The shipped PostgreSQL executor: transactions are real and do not serialise. Its
  * statements run unprepared, which this suite also relies on: a cached prepared statement is not
  * re-reported to `pg_stat_activity`, so the copy's lock wait would show a stale statement text
  * instead of the one it is waiting in.
@@ -231,7 +231,7 @@ it("has DATABASE_URL in CI, so the PostgreSQL overlap test cannot skip silently"
   const ciWithoutDatabase = Env.inCi && databaseUrl === undefined;
   expect(
     ciWithoutDatabase,
-    "DATABASE_URL is not set in CI: the PostgreSQL overlap test (#360) needs the " +
+    "DATABASE_URL is not set in CI: the PostgreSQL overlap test needs the " +
       "PostgreSQL service container in .github/workflows/ci.yml"
   ).toBe(false);
 });
@@ -239,7 +239,7 @@ it("has DATABASE_URL in CI, so the PostgreSQL overlap test cannot skip silently"
 if (databaseUrl === undefined && !Env.inCi) {
   process.stderr.write(
     "\n*** [sql-backend-postgres] SKIPPED: DATABASE_URL is not set, so the PostgreSQL " +
-      "READ COMMITTED overlap test (#360) did not run. Point DATABASE_URL at a " +
+      "READ COMMITTED overlap test did not run. Point DATABASE_URL at a " +
       "scratch PostgreSQL database to run it. ***\n\n"
   );
 }
@@ -359,11 +359,11 @@ describePostgres("SqlBackend on PostgreSQL: overlapping calls (#352, #360)", () 
   );
 });
 
-// The `transactional: false` ordering (D1's, #342) on PostgreSQL: each handler is
+// The `transactional: false` ordering (D1's) on PostgreSQL: each handler is
 // followed by the bump, an upsert whose DO UPDATE names the row's column. The
 // executor keeps its real transaction, because PostgreSQL's SAVEPOINT needs one;
-// only the ordering is the non-transactional one (#390).
-describePostgres("SqlBackend on PostgreSQL: transactional: false bump (#390)", () => {
+// only the ordering is the non-transactional one.
+describePostgres("SqlBackend on PostgreSQL: transactional: false bump", () => {
   const url = databaseUrl ?? "";
 
   it.live(
@@ -395,7 +395,7 @@ describePostgres("SqlBackend on PostgreSQL: transactional: false bump (#390)", (
   );
 });
 
-// Serialisable isolation across client groups (#353): group X's handler reads a
+// Serialisable isolation across client groups: group X's handler reads a
 // counter, parks, and group Y commits an increment before X writes. The rows are
 // the same, so X's write must be refused rather than lost.
 const GROUP_X = "gx";
@@ -420,97 +420,94 @@ const counterOf = (sql: SqlClient) =>
     Effect.orDie
   );
 
-describePostgres(
-  "SqlBackend on PostgreSQL: serialisable isolation across client groups (#353)",
-  () => {
-    const url = databaseUrl ?? "";
+describePostgres("SqlBackend on PostgreSQL: serialisable isolation across client groups", () => {
+  const url = databaseUrl ?? "";
 
-    // `it.live`, like the suites above: the server runs on the real clock. The
-    // race itself is staged with Deferreds and explicit joins, not by timing.
-    it.live(
-      "does not lose group X's increment when group Y commits between X's read and its write",
-      () =>
-        withDatabase(url, (sql) =>
-          Effect.gen(function* () {
-            yield* sql.unsafe(`INSERT INTO todos (id, title) VALUES ('counter', '0')`).unprepared;
+  // `it.live`, like the suites above: the server runs on the real clock. The
+  // race itself is staged with Deferreds and explicit joins, not by timing.
+  it.live(
+    "does not lose group X's increment when group Y commits between X's read and its write",
+    () =>
+      withDatabase(url, (sql) =>
+        Effect.gen(function* () {
+          yield* sql.unsafe(`INSERT INTO todos (id, title) VALUES ('counter', '0')`).unprepared;
 
-            // X's first run parks after its read, reporting the value it read.
-            const read = yield* Deferred.make<number>();
-            const release = yield* Deferred.make<void>();
-            const parked = yield* Ref.make(false);
-            const backend = SqlBackend.make({
-              executor: executorOver(sql),
-              tables: { todos: { table: "todos" } },
-              mutators: new Map<string, Mutator.AnyMutator>([
-                [incrementCounter.name, incrementCounter],
-              ]),
-              handlers: {
-                "counter/increment": (raw, tx, callContext) =>
-                  Effect.gen(function* () {
-                    const { id } = raw as Schema.Schema.Type<typeof incrementArgs>;
-                    const rows = yield* tx.query({
-                      text: `SELECT title FROM todos WHERE id = $1`,
-                      params: ["counter"],
-                    });
-                    const value = Number(rows[0]?.title);
-                    if (
-                      callContext.clientGroupId === GROUP_X &&
-                      !(yield* Ref.getAndSet(parked, true))
-                    ) {
-                      yield* Deferred.succeed(read, value);
-                      yield* Deferred.await(release);
-                    }
-                    yield* tx.run({
-                      text: `UPDATE todos SET title = $1 WHERE id = $2`,
-                      params: [String(value + 1), "counter"],
-                    });
-                    yield* tx.run({ text: `INSERT INTO effects (id) VALUES ($1)`, params: [id] });
-                    return [];
-                  }),
-              },
-              dialect: Sql.postgres,
-            });
+          // X's first run parks after its read, reporting the value it read.
+          const read = yield* Deferred.make<number>();
+          const release = yield* Deferred.make<void>();
+          const parked = yield* Ref.make(false);
+          const backend = SqlBackend.make({
+            executor: executorOver(sql),
+            tables: { todos: { table: "todos" } },
+            mutators: new Map<string, Mutator.AnyMutator>([
+              [incrementCounter.name, incrementCounter],
+            ]),
+            handlers: {
+              "counter/increment": (raw, tx, callContext) =>
+                Effect.gen(function* () {
+                  const { id } = raw as Schema.Schema.Type<typeof incrementArgs>;
+                  const rows = yield* tx.query({
+                    text: `SELECT title FROM todos WHERE id = $1`,
+                    params: ["counter"],
+                  });
+                  const value = Number(rows[0]?.title);
+                  if (
+                    callContext.clientGroupId === GROUP_X &&
+                    !(yield* Ref.getAndSet(parked, true))
+                  ) {
+                    yield* Deferred.succeed(read, value);
+                    yield* Deferred.await(release);
+                  }
+                  yield* tx.run({
+                    text: `UPDATE todos SET title = $1 WHERE id = $2`,
+                    params: [String(value + 1), "counter"],
+                  });
+                  yield* tx.run({ text: `INSERT INTO effects (id) VALUES ($1)`, params: [id] });
+                  return [];
+                }),
+            },
+            dialect: Sql.postgres,
+          });
 
-            const firstX = yield* Effect.forkChild(
-              backend.applyMutations({ clientGroupId: GROUP_X }, [incrementMutation("x1", "x1")])
-            );
-            expect(yield* Deferred.await(read)).toBe(0);
+          const firstX = yield* Effect.forkChild(
+            backend.applyMutations({ clientGroupId: GROUP_X }, [incrementMutation("x1", "x1")])
+          );
+          expect(yield* Deferred.await(read)).toBe(0);
 
-            // Group Y increments and commits while X is parked after its read. Its
-            // transaction touches nothing X has written, so it does not wait.
-            yield* backend.applyMutations({ clientGroupId: GROUP_Y }, [
-              incrementMutation("y1", "y1"),
-            ]);
+          // Group Y increments and commits while X is parked after its read. Its
+          // transaction touches nothing X has written, so it does not wait.
+          yield* backend.applyMutations({ clientGroupId: GROUP_Y }, [
+            incrementMutation("y1", "y1"),
+          ]);
 
-            yield* Deferred.succeed(release, undefined);
-            // Under SERIALIZABLE, X's write to the row Y changed is refused with
-            // SQLSTATE 40001, which the executor reports as a transient BackendError.
-            const refused = yield* Effect.flip(Fiber.join(firstX));
-            expect(refused).toMatchObject({
-              _tag: "BackendError",
-              cause: { reason: { _tag: "SerializationError" } },
-            });
+          yield* Deferred.succeed(release, undefined);
+          // Under SERIALIZABLE, X's write to the row Y changed is refused with
+          // SQLSTATE 40001, which the executor reports as a transient BackendError.
+          const refused = yield* Effect.flip(Fiber.join(firstX));
+          expect(refused).toMatchObject({
+            _tag: "BackendError",
+            cause: { reason: { _tag: "SerializationError" } },
+          });
 
-            // The client retries the batch. Its read now sees Y's value, so X
-            // writes 2, and its refused first attempt left no effect behind.
-            yield* backend.applyMutations({ clientGroupId: GROUP_X }, [
-              incrementMutation("x1", "x1"),
-            ]);
+          // The client retries the batch. Its read now sees Y's value, so X
+          // writes 2, and its refused first attempt left no effect behind.
+          yield* backend.applyMutations({ clientGroupId: GROUP_X }, [
+            incrementMutation("x1", "x1"),
+          ]);
 
-            expect(yield* counterOf(sql)).toBe(2);
-            expect(yield* applicationsOf(sql, "x1")).toBe(1);
-            expect(yield* applicationsOf(sql, "y1")).toBe(1);
-          })
-        ),
-      60_000
-    );
-  }
-);
+          expect(yield* counterOf(sql)).toBe(2);
+          expect(yield* applicationsOf(sql, "x1")).toBe(1);
+          expect(yield* applicationsOf(sql, "y1")).toBe(1);
+        })
+      ),
+    60_000
+  );
+});
 
-// A nested transaction cannot set SERIALIZABLE (#353): PostgreSQL refuses SET
+// A nested transaction cannot set SERIALIZABLE: PostgreSQL refuses SET
 // TRANSACTION inside a subtransaction, which the executor's nested `transaction`
 // runs as a savepoint. The batch must then fail rather than run at READ COMMITTED.
-describePostgres("SqlBackend on PostgreSQL: a nested transaction (#353)", () => {
+describePostgres("SqlBackend on PostgreSQL: a nested transaction", () => {
   const url = databaseUrl ?? "";
 
   it.live(
@@ -560,7 +557,7 @@ describePostgres("SqlBackend on PostgreSQL: a nested transaction (#353)", () => 
   );
 });
 
-// Rejection memory on PostgreSQL (#366). The first copy of a rejected mutation
+// Rejection memory on PostgreSQL. The first copy of a rejected mutation
 // parks inside its transaction, so the copy that is dropped has a real lock
 // wait behind it. The rejection is committed with the claim, so the copy sees
 // the committed outcome once it can read again.
@@ -570,7 +567,7 @@ const rejectionOf = (mutationId: number) => ({
   reason: `forbidden ${mutationId}`,
 });
 
-describePostgres("SqlBackend on PostgreSQL: rejection memory (#366)", () => {
+describePostgres("SqlBackend on PostgreSQL: rejection memory", () => {
   const url = databaseUrl ?? "";
 
   it.live(

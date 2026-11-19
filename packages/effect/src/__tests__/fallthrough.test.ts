@@ -327,7 +327,7 @@ const makeReader = (handler: Transport.ServerHandler, group: string) =>
     return { engine, client, setOffline: gate.setOffline };
   });
 
-/** Whether an answer has the given completeness (#653). */
+/** Whether an answer has the given completeness. */
 const answeredAs =
   (completeness: Client.Completeness) =>
   (answer: Client.Answer): boolean =>
@@ -338,7 +338,7 @@ const complete = answeredAs("complete");
 /** The ids of rows, sorted: a read's rows in no particular order. */
 const idsOf = (rows: ReadonlyArray<Client.ResolvedRow>) => rows.map((row) => row.id).toSorted();
 
-describe("answer completeness (#653)", () => {
+describe("answer completeness", () => {
   const products = { collection: "products" };
   const withReviews = { collection: "products", include: { reviews: { first: 2 } } };
 
@@ -532,7 +532,7 @@ const setup = (group: string, pass: number) =>
     return { engine, client: Client.fromView(nodes, view), open };
   });
 
-describe("completeness is judged against the rows it marks (#653)", () => {
+describe("completeness is judged against the rows it marks", () => {
   const products = { collection: "products" };
 
   it.effect("a pull's tick before its rows never marks the stale answer complete", () =>
@@ -584,7 +584,7 @@ describe("completeness is judged against the rows it marks (#653)", () => {
   );
 });
 
-describe("answer completeness over a hosted engine (#653)", () => {
+describe("answer completeness over a hosted engine", () => {
   it.effect("a mirror's answers carry the same completeness as the host's", () =>
     Effect.scoped(
       Effect.gen(function* () {

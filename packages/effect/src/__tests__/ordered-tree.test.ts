@@ -1,6 +1,6 @@
 /**
  * OrderedTree: correctness of the persistent weight-balanced tree LiveView
- * maintains its order in (issue #112) — insert/remove/rank/slice against a
+ * maintains its order in — insert/remove/rank/slice against a
  * plain-array reference, plus the "same reference on no-op" contract.
  */
 import { describe, expect, it } from "vite-plus/test";

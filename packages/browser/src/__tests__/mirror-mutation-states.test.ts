@@ -1,5 +1,5 @@
 /**
- * Mirror.mutationStates (#116): the host's keyed mutation-state map, mirrored
+ * Mirror.mutationStates: the host's keyed mutation-state map, mirrored
  * to tabs over the loopback channel — "tabs see the same states the host
  * holds." Mirror updates arrive on background fibers, so assertions poll with
  * real timers (clock-independent under the test environment).
@@ -102,7 +102,7 @@ const track = (stream: Stream.Stream<MutationState.MutationStateMap>) =>
 const get = (map: MutationState.MutationStateMap, id: number) =>
   Option.getOrUndefined(HashMap.get(map, id));
 
-describe("EngineHost ↔ Mirror.mutationStates (#116)", () => {
+describe("EngineHost ↔ Mirror.mutationStates", () => {
   it.effect("a mirror sees the host's mutation states, pending then acknowledged", () =>
     Effect.scoped(
       Effect.gen(function* () {

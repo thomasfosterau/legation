@@ -1,5 +1,5 @@
 /**
- * The JSON:API façade (ADR-0029, #166) as this app builds it: a plain
+ * The JSON:API façade (ADR-0029) as this app builds it: a plain
  * `fetch()` of a catalog or account URL, answered from the worker's replica
  * when the shell's pins cover it. The worker composes it first in its
  * `fetch` listener (src/service-worker.ts); this module only says what the
@@ -11,7 +11,7 @@
  * the façade answers are the URLs the server serves, under one grammar —
  * the parity the façade presumes.
  *
- * **The writes** (ADR-0030, #510, #525): with the engine's `mutateWithAck`, a
+ * **The writes** (ADR-0030): with the engine's `mutateWithAck`, a
  * `POST /jsonapi/reviews`, `/cartItems` or `/orders` (or a
  * `DELETE /jsonapi/cartItems/{id}`) carrying a client id is journaled as the
  * graph-derived `{type}/{operation}` while offline (or on
@@ -58,7 +58,7 @@ export interface FacadeSource {
   /** The ledger: the host's registrations in the worker, `client.coverageOf` in a test. */
   readonly coverageOf: (read: Query.Read) => Effect.Effect<Coverage.Verdict>;
   /**
-   * A windowed subscription's pulled total, for `meta.total` (#210): the worker
+   * A windowed subscription's pulled total, for `meta.total`: the worker
    * engine's `totalOf`, `client.totalOf` in a test. Absent, a listing only a
    * windowed pin covers is forwarded rather than served without its total.
    */

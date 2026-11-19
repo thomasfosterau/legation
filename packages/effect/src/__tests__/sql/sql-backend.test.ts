@@ -49,7 +49,7 @@ const unmodelled = (fragment: Sql.SqlFragment): never => {
 /**
  * A read of the seeded rows: the column lookup `evaluateMany` makes on SQLite
  * (every key a seeded row of the relation carries), `evaluateMany`'s `UNION
- * ALL` (#505: each arm's seeded rows, its columns by position as
+ * ALL` (each arm's seeded rows, its columns by position as
  * `"__legation_row"."<name>" AS "c<k>"`, tagged with the arm's subset index),
  * or any other `SELECT` (the table's seeded rows, its WHERE ignored).
  */
@@ -93,13 +93,13 @@ const readSeeded = (
  * - `transactional: false` (D1's order): the reads, the bump after the
  *   handler (an upsert to the larger of the stored and the new id), and, for a
  *   rejection, the insert-if-absent that creates the row before the rejection
- *   is stored (#366).
+ *   is stored.
  */
 const makeMock = (options: { readonly transactional?: boolean } = {}): Mock => {
   const transactional = options.transactional ?? true;
   const tables = new Map<string, ReadonlyArray<SqlBackend.SqlRow>>();
   const ledger = new Map<string, number>(); // `${group}:${client}` → lastId
-  // `${group}:${client}` → the `rejections` column's JSON text (#366), or null.
+  // `${group}:${client}` → the `rejections` column's JSON text, or null.
   const rejections = new Map<string, string | null>();
   const queries: Array<Sql.SqlFragment> = [];
 
@@ -126,7 +126,7 @@ const makeMock = (options: { readonly transactional?: boolean } = {}): Mock => {
     casLedger(fragment);
   };
   const storeRejections = (fragment: Sql.SqlFragment): void => {
-    // The rejection memory: `SET "rejections" = ?` for one client's row (#366).
+    // The rejection memory: `SET "rejections" = ?` for one client's row.
     const [json, group, client] = fragment.params as [string | null, string, string];
     rejections.set(`${group}:${client}`, json);
   };
@@ -536,7 +536,7 @@ describe.each([true, false])("SqlBackend applyMutations (transactional: %s)", (t
   );
 });
 
-describe("TableMapping.fromCollection (issue #204)", () => {
+describe("TableMapping.fromCollection", () => {
   it.effect("derives kinds from the collection's declared filterable set", () => {
     const todosCollection = Collection.make({
       name: "todos",
@@ -582,7 +582,7 @@ describe("TableMapping.fromCollection (issue #204)", () => {
   });
 });
 
-describe("TableMapping.readRelation (issue #204)", () => {
+describe("TableMapping.readRelation", () => {
   it.effect("evaluate and getRows read the relation, not the write target", () => {
     const mock = makeMock();
     // Only "todos_view" is seeded: a query against "todos" would find nothing.
@@ -612,7 +612,7 @@ describe("TableMapping.readRelation (issue #204)", () => {
   });
 });
 
-describe("tombstones and fail-closed relations across a pull (issue #204)", () => {
+describe("tombstones and fail-closed relations across a pull", () => {
   const allowTodos = Authorization.policy({ todos: Authorization.allowAll });
   const allTodos = [Subset.make({ collection: "todos" })];
 
@@ -882,7 +882,7 @@ describe("SqlBackend ledger order follows the executor's transactions (#342, #35
   );
 });
 
-describe("SqlBackend watermark without transactions (#352)", () => {
+describe("SqlBackend watermark without transactions", () => {
   it.effect("a parked call that finishes after a later bump never moves the watermark back", () => {
     // D1's order: nothing is claimed, so a copy of mutation 2 runs while the
     // first call is parked (the double-apply #342 describes). The watermark is
@@ -911,11 +911,11 @@ describe("SqlBackend watermark without transactions (#352)", () => {
   });
 });
 
-// The isolation statement (#353): a dialect that names one runs it first in each
+// The isolation statement: a dialect that names one runs it first in each
 // transaction, before any read or ledger write; SQLite, which serialises its own
 // writers, names none; an executor without transactions runs no transaction.
 // Runs one applyMutations call and returns the statements it ran, in order, from
-// both `query` and `run` (#353): an isolation statement after a read would not
+// both `query` and `run`: an isolation statement after a read would not
 // isolate that read, so the order is what the test pins.
 const applyOnce = (dialect: Sql.Dialect, transactional: boolean) => {
   const mock = makeMock({ transactional });
@@ -949,7 +949,7 @@ const applyOnce = (dialect: Sql.Dialect, transactional: boolean) => {
     .pipe(Effect.as(statements));
 };
 
-describe("SqlBackend isolation statement (#353)", () => {
+describe("SqlBackend isolation statement", () => {
   it.effect(
     "runs the PostgreSQL SERIALIZABLE statement before the transaction's first read or ledger write",
     () =>
@@ -997,11 +997,11 @@ const rejection = (mutationId: number) => ({
 });
 
 /**
- * The rejection memory over the mock ledger (#366), in both orders: a replayed
+ * The rejection memory over the mock ledger, in both orders: a replayed
  * copy of a committed rejection reports its stored reason, and a push that
  * starts past it forgets it.
  */
-describe("SqlBackend rejection memory over the mock ledger (#366)", () => {
+describe("SqlBackend rejection memory over the mock ledger", () => {
   const rejectArgs = Schema.Struct({ id: Schema.String });
   const rejectMutator = Mutator.make("todo/reject", rejectArgs);
   const rejectingBackend = (mock: Mock) =>
@@ -1051,7 +1051,7 @@ describe("SqlBackend rejection memory over the mock ledger (#366)", () => {
     });
   }
 
-  // D1's order (#419 follow-up): the rejection is recorded before the bump, so a
+  // D1's order: the rejection is recorded before the bump, so a
   // bump that fails leaves the rejection stored while the id stays unacknowledged.
   // The client retries, and the retry applies: the remembered rejection must go,
   // or every later replay reports a rejection for a mutation that was applied.

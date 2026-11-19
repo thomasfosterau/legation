@@ -10,7 +10,7 @@
  * (and the reverse: the value at a given rank) resolve in *O(log n)*, and a
  * `count`-bounded slice starting at a rank costs *O(log n + count)* — this is
  * what lets `LiveView` reslice its window without rescanning the whole
- * maintained order (issue #112).
+ * maintained order.
  *
  * Weight-balance (rather than a randomized treap) makes bulk construction
  * from an already-sorted array linear and deterministic: `fromSorted`

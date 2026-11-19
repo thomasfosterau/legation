@@ -21,8 +21,8 @@
  *   backend's own writes keep current (the sync server always evaluates before
  *   fetching put rows in the same pull), falling back to `GET /{type}/{id}`.
  *   The cache reflects this instance's own writes only, so a deployment runs
- *   one JsonApiBackend per server and writes the server only through it
- *   (#447): another writer's changes go unseen, and `getRows` can serve a
+ *   one JsonApiBackend per server and writes the server only through it:
+ * another writer's changes go unseen, and `getRows` can serve a
  *   superseded row.
  * - `applyMutations` replays the batch as HTTP writes. Each mutation is one
  *   JSON:API write (`Write`: a create, update or delete of one resource —
@@ -41,11 +41,11 @@
  * the windows a row moved away from. A REST API keeps no change token, and
  * nothing here says whether a cached row is still current (a write made
  * elsewhere goes unseen, #447; this backend's own writes do keep its cache
- * current, #395), so the old value is always read: each update or delete does one
+ * current), so the old value is always read: each update or delete does one
  * `GET /{type}/{id}` before its write, once per row per push. A row the push
  * creates was absent before the push, so it is not read (`enterBatchCreate`),
  * unless the server refuses the create and a later write of the row needs its
- * value (`readRefusedCreates`, #402). Every failed read fails the push with
+ * value (`readRefusedCreates`). Every failed read fails the push with
  * BackendError, a 4xx and a 404 included, and so does a 2xx with no resource, so
  * an update or delete is either sent with its old value or not sent. On the
  * atomic path nothing has been written by then, so the retry reads again. On the
@@ -69,7 +69,7 @@
  * a replayed copy or a pull can no longer report an earlier rejection. A
  * deployment that restarts its backend passes a durable `Ledger.LedgerStore`
  * (`ledger`, e.g. `Ledger.keyValue` over an Effect `KeyValueStore`) to keep
- * both across restarts (#468). Each ledger change is written after the server
+ * both across restarts. Each ledger change is written after the server
  * has applied its writes and before the ids are acknowledged, in the order the
  * push already uses. If that ledger write fails after the server write
  * succeeded, the push fails with a `BackendError`. Mutations acknowledged earlier
@@ -94,7 +94,7 @@
  * creates carry the client-generated `id`, and no mutator yet needs a
  * server-assigned one.
  *
- * The ledger also remembers the rejections it has made (#366), so a
+ * The ledger also remembers the rejections it has made, so a
  * replayed copy of a rejected mutation lists it in `rejected` with the same reason,
  * as MemoryBackend does. A push forgets the rejections below its lowest id per
  * client. The memory is bounded per client: a client that never pushes again keeps
@@ -188,7 +188,7 @@ export interface JsonApiBackendConfig {
   readonly includes?: Readonly<Record<string, ReadonlyArray<string>>>;
   /**
    * Where each client group's ledger (its acknowledged mutation ids and
-   * remembered rejections) is kept across restarts (#468). Unset, the ledger
+   * remembered rejections) is kept across restarts. Unset, the ledger
    * lives in this instance's memory (`Ledger.memory`), so a restart forgets it.
    * `Ledger.keyValue` over a durable Effect `KeyValueStore` keeps it.
    */
@@ -259,7 +259,7 @@ type WriteEffect = { readonly _tag: "put"; readonly value: unknown } | { readonl
  * Fold one applied write's effect into a push's PUT values (mutates `puts`). A
  * put records the row's value. A delete drops an earlier write's value for the
  * row, so a later delete in the same push leaves the hint naming it as a
- * delete (#369).
+ * delete.
  */
 const recordEffect = (
   puts: Map<string, Map<string, unknown>>,
@@ -551,7 +551,7 @@ const enterBatchCreate = (acc: WriteAccumulator, write: Write): void => {
 };
 
 /**
- * A client group's ledger as the backend holds it (#468): the highest acknowledged
+ * A client group's ledger as the backend holds it: the highest acknowledged
  * mutation id per client, and the rejections remembered per client, by mutation id.
  */
 interface Group {
@@ -578,7 +578,7 @@ const ledgerOf = (group: Group): Ledger.GroupLedger => ({
   ),
 });
 
-/** A listing's own `meta.total` (#210), when it reports a non-negative integer. */
+/** A listing's own `meta.total`, when it reports a non-negative integer. */
 const reportedTotal = (document: JsonApiDocument): Option.Option<number> => {
   const total = P.hasProperty(document.meta, "total") ? document.meta.total : undefined;
   return P.isNumber(total) && Number.isInteger(total) && total >= 0
@@ -606,7 +606,7 @@ export const make = (
     const cache = yield* Ref.make(new Map<string, Map<string, JsonApiRow>>());
     // collection → ids known complete in cache via a compound `included` harvest.
     const includedIds = yield* Ref.make(new Map<string, Set<string>>());
-    // clientGroupId → the group's ledger (#468): read from the store on first use,
+    // clientGroupId → the group's ledger: read from the store on first use,
     // then kept current with each change written to it.
     const groups = yield* Ref.make(new Map<string, Group>());
     const ledgerStore = config.ledger ?? Ledger.memory;
@@ -675,7 +675,7 @@ export const make = (
      *
      * The cache is never consulted here: it has no freshness signal for a write
      * made elsewhere (a version token would be needed), and this backend's own
-     * writes keep it current for `getRows` only (#395). So each push reads the row.
+     * writes keep it current for `getRows` only. So each push reads the row.
      */
     const readBefore = (type: string, id: string): Effect.Effect<JsonApiRow, BackendError> =>
       Effect.gen(function* () {
@@ -701,7 +701,7 @@ export const make = (
     /**
      * Enter a row the write touches. An update or delete reads the row on the
      * push's first write to it, so the pre-push value is kept for the hint (the
-     * read is `readBefore`, where a cache hit would replace it, #395). A row
+     * read is `readBefore`, where a cache hit would replace it). A row
      * already entered is not read again. A create reads nothing and enters no
      * row: its row is entered when the create applies, or up front for the
      * atomic path's batch (`enterBatchCreate`).
@@ -737,7 +737,7 @@ export const make = (
         : enterRow(acc, write);
 
     /**
-     * Read the rows the batch's refused creates would have made absent (#402).
+     * Read the rows the batch's refused creates would have made absent.
      * The batch entered each row a create touches as absent, which is right only
      * while the create applies. The server refused these creates, so the row may
      * exist: when a later update or delete of it is still to be sent, read it
@@ -783,7 +783,7 @@ export const make = (
       });
 
     /**
-     * Bring the cache into line with a write the server has applied (#395): the
+     * Bring the cache into line with a write the server has applied: the
      * row's value after the push's writes so far, or no row once a delete has
      * applied, so `getRows` never serves a value the push has superseded.
      */
@@ -823,7 +823,7 @@ export const make = (
         );
       });
 
-    // A subset's entries and total (#210) from the rows a listing (or the
+    // A subset's entries and total from the rows a listing (or the
     // include cache) holds: the window is cut here, so the total is the
     // matching rows before the cut, unless the listing reported its own
     // `meta.total` (an upstream that pages its listings knows better).
@@ -907,7 +907,7 @@ export const make = (
     const evaluate: Backend.Backend["evaluate"] = (_context, subset) =>
       Effect.map(evaluateOne(subset), (answer) => answer.entries);
 
-    // Each subset is the listing `evaluate` makes; the total comes with it (#210).
+    // Each subset is the listing `evaluate` makes; the total comes with it.
     const evaluateCounted: NonNullable<Backend.Backend["evaluateCounted"]> = (_context, subsets) =>
       Effect.forEach(subsets, evaluateOne, { concurrency: 1 });
 
@@ -1068,7 +1068,7 @@ export const make = (
             return { ...group, acknowledged };
           });
 
-    /** Remember permanent rejections, so a replayed copy of them reports the same outcome (#366). */
+    /** Remember permanent rejections, so a replayed copy of them reports the same outcome. */
     const rememberRejections = (
       context: Backend.SyncContext,
       rejected: ReadonlyArray<Backend.RejectedMutation>
@@ -1086,7 +1086,7 @@ export const make = (
           });
 
     /**
-     * Forget the rejections this push's floors have moved past (#355), so the
+     * Forget the rejections this push's floors have moved past, so the
      * memory is bounded per client, as MemoryBackend's is.
      */
     const forgetRejections = (
@@ -1103,7 +1103,7 @@ export const make = (
 
     /**
      * The rejections a push's replayed copies were committed with (an id the ledger
-     * already covers, with a remembered rejection). They are reported again (#366).
+     * already covers, with a remembered rejection). They are reported again.
      */
     const replayedRejections = (
       context: Backend.SyncContext,
@@ -1125,7 +1125,7 @@ export const make = (
         Effect.map((group) => Object.fromEntries(group.acknowledged))
       );
 
-    /** The group's remembered rejections, each with its reason (#365). A pull reports those its watermark covers. */
+    /** The group's remembered rejections, each with its reason. A pull reports those its watermark covers. */
     const rememberedRejections = (context: Backend.SyncContext) =>
       readGroup(context.clientGroupId).pipe(
         Effect.map((group) =>
@@ -1269,7 +1269,7 @@ export const make = (
                 };
                 acc.rejected.push(rejection);
                 // Remembered before the id is acknowledged, so a copy that sees the id
-                // as covered also sees its rejection (#366).
+                // as covered also sees its rejection.
                 yield* rememberRejections(context, [rejection]);
               }
               yield* bumpLedger(context, [mutation]);
@@ -1388,7 +1388,7 @@ export const make = (
 
         // Hints from what applied, in push order: each row's value from the
         // result document where the server returned one, else as merged or
-        // written. A delete drops an earlier write's value for the row (#369).
+        // written. A delete drops an earlier write's value for the row.
         yield* Effect.forEach(
           pending,
           ({ write }, position) => {
@@ -1412,7 +1412,7 @@ export const make = (
                   },
                 ];
           });
-        // The rejections are remembered before the ids are acknowledged (#366).
+        // The rejections are remembered before the ids are acknowledged.
         yield* rememberRejections(context, rejected);
         // Applied and rejected alike are acknowledged, in original order.
         yield* bumpLedger(
@@ -1432,7 +1432,7 @@ export const make = (
 
     const applyMutations: Backend.Backend["applyMutations"] = (context, mutations) =>
       Effect.gen(function* () {
-        // The rejections this push has moved past are forgotten first (#355, #366).
+        // The rejections this push has moved past are forgotten first.
         yield* forgetRejections(context, mutations);
         return Option.isNone(atomicEndpoint)
           ? yield* applyEach(context, mutations)

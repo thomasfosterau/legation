@@ -1,5 +1,5 @@
 /**
- * Predicate-aware fan-out matching (#42): a committed write pokes a client
+ * Predicate-aware fan-out matching: a committed write pokes a client
  * group only when some hinted change plausibly affects one of its
  * subscriptions. Soundness first — over-matching is safe (a redundant poke
  * costs an empty pull), under-matching would delay convergence — so a
@@ -124,7 +124,7 @@ const fanoutDeltas = <E>(publish: Effect.Effect<unknown, E>) =>
 const wasPoked = (handler: ServerHandler, group: string) =>
   Stream.runHead(handler.pokes(group)).pipe(Effect.map(Option.isSome));
 
-describe("predicate-aware fan-out matching (#42)", () => {
+describe("predicate-aware fan-out matching", () => {
   it.effect("pokes only the group whose predicate the write matches", () =>
     Effect.gen(function* () {
       const { handler } = yield* makeServer;

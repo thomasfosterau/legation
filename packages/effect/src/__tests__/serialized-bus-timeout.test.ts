@@ -1,5 +1,5 @@
 /**
- * A hung custom broker cannot hold the publish open (#375). `SyncServer.handlePush`
+ * A hung custom broker cannot hold the publish open. `SyncServer.handlePush`
  * runs `bus.publish` inside an uninterruptible region, and `makeSerialized` runs the
  * bus over a caller's `BusBroker`, so the bus bounds the broker's publish itself: a
  * publish that never returns is logged and dropped at its timeout (ADR-0009). Time is
@@ -21,7 +21,7 @@ const hungBroker: InvalidationBus.BusBroker = {
   subscribe: Effect.die(new TestFailure({ message: "unused" })),
 };
 
-describe("makeSerialized broker publish timeout (#375)", () => {
+describe("makeSerialized broker publish timeout", () => {
   it.effect(
     "a hung broker publish is dropped and logged at its bound, inside the uninterruptible region",
     () => {

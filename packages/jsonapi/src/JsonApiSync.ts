@@ -65,7 +65,7 @@ export interface JsonApiSyncOptions {
   readonly includes?: Readonly<Record<string, ReadonlyArray<string>>>;
   /**
    * Where the backend keeps its ledger (acknowledged mutation ids and remembered
-   * rejections) across restarts (#468). Unset, it is `Ledger.keyValue` over
+   * rejections) across restarts. Unset, it is `Ledger.keyValue` over
    * `keyValueStore` when that is given, and otherwise in memory, where a restart
    * of the backend forgets it. A durable ledger needs a durable client store too
    * (`keyValueStore` or `store`): with the in-memory store, a reload restarts the
@@ -74,7 +74,7 @@ export interface JsonApiSyncOptions {
    */
   readonly ledger?: Ledger.LedgerStore;
   /**
-   * The durable Effect `KeyValueStore` the client store is built over (#468). When
+   * The durable Effect `KeyValueStore` the client store is built over. When
    * it is set, the client store defaults to `ClientStore.layerKeyValue()` over it
    * (unless `store` is given), and the ledger defaults to `Ledger.keyValue` over it
    * (unless `ledger` is given), so one key/value store keeps the journal and the

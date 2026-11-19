@@ -32,7 +32,7 @@ export interface SubscriptionHandle {
 }
 
 /**
- * A held, reactively-retargetable window (#133): `rows`/`retarget` are
+ * A held, reactively-retargetable window: `rows`/`retarget` are
  * {@link WindowObservation}'s (see `ClientEngine.observeWindow`); `release`
  * drops the subscription this window's *current* (possibly retargeted)
  * subset holds — unlike {@link acquire}, not refcounted, since a window's
@@ -55,7 +55,7 @@ export interface Subscriptions {
   /** Acquire a raw-subset subscription (refcounted). */
   readonly acquire: (subset: Subset.Subset) => Effect.Effect<SubscriptionHandle>;
   /**
-   * Acquire a reactively-retargetable window (#133): composes `acquire`'s
+   * Acquire a reactively-retargetable window: composes `acquire`'s
    * subscribe/release with {@link ClientEngine.observeWindow}, so `retarget`
    * widens/advances the window in place (reusing `LiveView`'s maintained
    * order) and keeps the server-synced subscription in step — the

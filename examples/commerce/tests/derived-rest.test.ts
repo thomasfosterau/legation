@@ -1,5 +1,5 @@
 /**
- * The commerce JSON:API's reads are derived (#163, #165): every `list` /
+ * The commerce JSON:API's reads are derived: every `list` /
  * `get` in `server/jsonapi.ts` is `RestHandlers` over the app's node graph,
  * its backend and its auth policy, so this file is the phase-1 stack end to
  * end — the grammar in the URL, the read path, the auth policy, the
@@ -9,7 +9,7 @@
  *
  * 1. **The documents.** Each read the app makes (`src/lib/domain.ts`), at
  *    the canonical URL the SvelteKit loads fetch it by, against a committed
- *    fixture (`fixtures/rest/<read>.json`) — what #163's comparison with the
+ *    fixture (`fixtures/rest/<read>.json`) — what comparison with the
  *    hand-written handlers turned into once those were deleted. Regenerate
  *    with `COMMERCE_FIXTURES=write pnpm run test` and review the diff.
  * 2. **The declarations agree.** `src/lib/resources.ts` bridged through

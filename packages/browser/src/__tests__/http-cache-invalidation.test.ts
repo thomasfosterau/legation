@@ -1,5 +1,5 @@
 /**
- * HTTP-cache invalidation tests (#49, extended per-row by #207): a collection
+ * HTTP-cache invalidation tests (extended per-row by #207): a collection
  * or row change drives eviction of the responses tagged for it over the
  * Cache API store, `collectionChanges` projects an engine's events to the
  * touched collections/rows, and `tagsFor` builds a response's tags under the

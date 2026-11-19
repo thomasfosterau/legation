@@ -7,7 +7,7 @@
  * paginated live queries, and the window is sliced from the maintained order,
  * so a change outside the page never re-sorts it.
  *
- * The maintained order lives in an {@link OrderedTree} (issue #112), not a
+ * The maintained order lives in an {@link OrderedTree}, not a
  * copied array: `Subset.comparator`'s id tie-break makes every row's sort key
  * distinct, so locating the row a `put`/`del` touches is genuinely *O(log
  * n)* — including for an empty `orderBy`, where every row used to tie and
@@ -196,7 +196,7 @@ export const make = <A>(subset: Subset.Subset, rows: ReadonlyArray<ValueRow<A>>)
 
 /**
  * {@link make}, but reading rows from an id-keyed map with optional secondary-index
- * acceleration (issue #113) — the collection-scale rebuild path (`Rebuild`
+ * acceleration — the collection-scale rebuild path (`Rebuild`
  * view changes, a change-hub seq-gap collapse) shares the same narrowing as
  * one-shot `query`.
  */
@@ -229,7 +229,7 @@ export const result = <A>(view: LiveView<A>): ReadonlyArray<PositionedRow<A>> =>
  * move, matching `useConnection`'s "load more widens one window" (ADR-0024)
  * — the pure, comparator-shaped half of "widen"; the engine-level API that
  * reactively feeds a widened `limit` to an open subscription (so the client
- * never re-registers it) is `ClientEngine.observeWindow` (#133).
+ * never re-registers it) is `ClientEngine.observeWindow`.
  * Same-reference-on-no-op: returns `view` unchanged if neither `limit` nor
  * `cursor` moved.
  */

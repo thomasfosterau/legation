@@ -6,7 +6,7 @@ Browser-runtime adapters. Read the root [AGENTS.md](../../AGENTS.md) first.
 
 - Everything that touches browser globals (`WebSocket`, `indexedDB`, `BroadcastChannel`, `navigator`, the Cache API, service-worker and Background Sync APIs) lives here, never in `packages/effect` (ADR-0006). Imports from the workspace: `@thomasfosterau/legation` only.
 - Peers: `effect`, `@effect/platform-browser` (both `catalog:peers`).
-- Two entries: `src/index.ts` (`.`, every adapter) and `src/http-cache.ts` (`./http-cache`: `CacheApiHttpCache` and core's `HttpCache` alone, for a service worker without the engine, #678). Nothing reachable from `./http-cache` imports the engine or `HttpCacheInvalidation`; `src/__tests__/http-cache-size.test.ts` holds its bundle-size budget. `src/internal/` is private implementation, not exported.
+- Two entries: `src/index.ts` (`.`, every adapter) and `src/http-cache.ts` (`./http-cache`: `CacheApiHttpCache` and core's `HttpCache` alone, for a service worker without the engine). Nothing reachable from `./http-cache` imports the engine or `HttpCacheInvalidation`; `src/__tests__/http-cache-size.test.ts` holds its bundle-size budget. `src/internal/` is private implementation, not exported.
 
 ## Invariants
 

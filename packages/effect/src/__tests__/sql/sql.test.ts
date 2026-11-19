@@ -1,6 +1,6 @@
 /**
  * Sql translator tests: predicate → parameterised WHERE on both dialects,
- * exact under ADR-0028 (#156): the collation clause on declared-text
+ * exact under ADR-0028: the collation clause on declared-text
  * operands, typed binds by declared kind, the plain forms without a
  * declaration, and the NULL-bearing forms whose three-valued text must match
  * `Predicate.evaluate`.

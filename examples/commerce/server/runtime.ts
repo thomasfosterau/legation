@@ -51,7 +51,7 @@ export const authPolicy: Authorization.AuthPolicy = Authorization.policy(
       privateCollections.map((name) => [name, scopedBy(name === "profiles" ? "id" : "userId")])
     ),
   },
-  // The registry carries each node's filterable set (#154): a client
+  // The registry carries each node's filterable set: a client
   // subset over anything the domain did not declare is refused up front.
   { collections: registry }
 );
@@ -80,7 +80,7 @@ export const bindClientGroup = (clientGroupId: string, userId: string | undefine
 /**
  * The app's Server (handler + broadcast), the bus hint sources share, and
  * the backend the Server evaluates through — exposed so the derived REST
- * handlers (#163) read the same tables under the same policy.
+ * handlers read the same tables under the same policy.
  */
 export interface CommerceSync {
   readonly server: Server.Server;

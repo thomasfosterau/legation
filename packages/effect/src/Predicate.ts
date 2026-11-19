@@ -107,7 +107,7 @@ const Literal = Schema.Union([Schema.String, Schema.Number, Schema.Boolean, Sche
 /**
  * Wire codec for {@link Predicate}. `NotIn` and `IsNull` were added by
  * ADR-0028 (wire-additive: every older encoding still decodes). `InSet` has
- * no case: a named-set reference is server-authored only (#205), so a client
+ * no case: a named-set reference is server-authored only, so a client
  * can never send one, and the server binds every one before a subset is
  * stored or sent.
  */
@@ -241,7 +241,7 @@ export const exists = (options: {
 });
 
 /**
- * `field IN set(name)`: membership in a named, session-resolved set (#205).
+ * `field IN set(name)`: membership in a named, session-resolved set.
  * The predicate refers to the set by name; the sync server binds it to the
  * values the set's resolver produced ({@link bindSets}). Server-authored only.
  */
@@ -421,7 +421,7 @@ const negate = (inner: Option.Option<boolean>): Option.Option<boolean> =>
  * - `Exists` → `Some(true)`. It is relational and can't be decided from one
  *   row: a backend resolves it to an `In` before evaluation (`resolveExists`),
  *   and on the client the rows were already narrowed by the server.
- * - `InSet` → `Some(false)`: an unbound named set is the empty set (#205).
+ * - `InSet` → `Some(false)`: an unbound named set is the empty set.
  *   The sync server binds every one before evaluation ({@link bindSets}).
  */
 export const evaluate = (predicate: Predicate, row: unknown): Option.Option<boolean> =>
@@ -446,7 +446,7 @@ const dispatch = <Tag extends Predicate["_tag"]>(
  * One evaluator per node tag, keyed by `_tag`: a property lookup, not a
  * `Match`, because `evaluate` runs per row per node (a hoisted `Match.fn` tag
  * chain measured ~2.3x slower and `Match.typeTags` ~1.7x, the lookup ~8%
- * slower than a `switch`; #497). `Evaluators` keeps it exhaustive, and `dispatch` correlates a tag with its node, so no assertion is needed.
+ * slower than a `switch`). `Evaluators` keeps it exhaustive, and `dispatch` correlates a tag with its node, so no assertion is needed.
  */
 const evaluators: Evaluators = {
   True: () => TRUE,
@@ -527,7 +527,7 @@ const hasExistsNode = Match.type<Predicate>().pipe(
 /** Whether a predicate contains any (unresolved) `Exists` node. */
 export const hasExists = (predicate: Predicate): boolean => hasExistsNode(predicate);
 
-// ─── Named sets (#205) ───────────────────────────────────────────────────────
+// ─── Named sets ───────────────────────────────────────────────────────
 
 /** The sets a predicate's `InSet` nodes refer to, by name, with repeats. */
 const setsIn = (node: Predicate): ReadonlyArray<string> =>

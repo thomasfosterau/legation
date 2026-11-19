@@ -105,8 +105,8 @@ export const SnapshotRow = Schema.Struct({
 /**
  * A serialisable capture of a {@link ClientStore}: confirmed rows (flattened
  * with their collection), the pull cookie, the pending-mutation journal, the
- * acknowledged-but-unpulled tail (#336), and each client's mutation id counter
- * (#271). The tail and the counters are optional so a snapshot taken before
+ * acknowledged-but-unpulled tail, and each client's mutation id counter.
+ *The tail and the counters are optional so a snapshot taken before
  * they existed still loads, as an empty tail and no counters. The schema is
  * the source of truth; {@link Snapshot} is derived from it.
  *
@@ -148,7 +148,7 @@ const storeError = (message: string) => (cause: unknown) => new StoreError({ mes
 
 /**
  * The replica read member by member: the path for a store without `snapshot`. Its reads are not one
- * state, so a pull or a push acknowledgement can land between them (#392).
+ * state, so a pull or a push acknowledgement can land between them.
  */
 const readMembers = (store: ClientStore): Effect.Effect<ReplicaState, StoreError> =>
   Effect.gen(function* () {
@@ -181,7 +181,7 @@ const readMembers = (store: ClientStore): Effect.Effect<ReplicaState, StoreError
  *
  * The five parts are one state when the store offers {@link ClientStore.snapshot}
  * (the memory and key-value stores do): a pull or a push acknowledgement lands wholly
- * before or wholly after the read (#392). A store without it is read member by member.
+ * before or wholly after the read. A store without it is read member by member.
  */
 export const dehydrate = (store: ClientStore): Effect.Effect<Snapshot, StoreError> =>
   Effect.gen(function* () {
@@ -210,19 +210,19 @@ export const dehydrate = (store: ClientStore): Effect.Effect<Snapshot, StoreErro
  * any entry the tail already holds. A snapshot without a tail parks nothing. An
  * outstanding pull release is finished first.
  *
- * The counters are raised, never lowered (#271): a client id reused after
+ * The counters are raised, never lowered: a client id reused after
  * hydration continues above every id the snapshot's store had issued, so it
  * never reissues an id the backend has already applied. A snapshot without
  * counters leaves the store's as they are.
  *
  * A running {@link ClientEngine} built over the store re-reads its view and built
  * indexes afterwards: a direct write does not go through the engine, so without this
- * an indexed query could return a row whose indexed field changed (#350). The re-read
+ * an indexed query could return a row whose indexed field changed. The re-read
  * runs when a write fails too, since the rows written before the failure are in the
  * store. It reaches only the engines built over this exact store object: a store
  * wrapped in a new object (`ClientStore.of({ ...store })`) is not seen, so its engine
  * can stay stale. The same re-read tracks the appended journal entries in its
- * `mutationStates` as `"pending"` (#358), so they settle like a local mutation. Journal ids
+ * `mutationStates` as `"pending"`, so they settle like a local mutation. Journal ids
  * should be ids this client has not already settled: an id the map has evicted is tracked again,
  * and its outcome event can then follow a second time.
  *
@@ -231,8 +231,8 @@ export const dehydrate = (store: ClientStore): Effect.Effect<Snapshot, StoreErro
  * returns or fails, the engine's view and indexes match the store again.
  *
  * `hydrate` does not take the overlay lock of an engine built over the store, so it must
- * not run while that engine is pulling. Its first step finishes an outstanding pull release
- * (#387). If that release is a live pull's, the pull's remaining row writes then land over
+ * not run while that engine is pulling. Its first step finishes an outstanding pull release.
+ *If that release is a live pull's, the pull's remaining row writes then land over
  * the snapshot's rows. Hydrate before the engine starts, or while it is stopped.
  */
 export const hydrate = (store: ClientStore, snapshot: Snapshot): Effect.Effect<void, StoreError> =>
@@ -242,7 +242,7 @@ export const hydrate = (store: ClientStore, snapshot: Snapshot): Effect.Effect<v
     );
     yield* Effect.gen(function* () {
       // An outstanding pull release goes first: its record would re-apply its patch over the
-      // snapshot's rows on the next open, so it is finished before the snapshot is written (#387).
+      // snapshot's rows on the next open, so it is finished before the snapshot is written.
       yield* store.finishRelease;
       yield* Effect.forEach(
         decoded.rows,
@@ -253,13 +253,13 @@ export const hydrate = (store: ClientStore, snapshot: Snapshot): Effect.Effect<v
         { concurrency: 1, discard: true }
       );
       if (decoded.cookie !== undefined) yield* store.setCookie(decoded.cookie);
-      // The tail's effects are already in the rows, and the next pull releases it (#336).
+      // The tail's effects are already in the rows, and the next pull releases it.
       if (decoded.unpulled !== undefined) yield* store.parkUnpulled(decoded.unpulled);
-      // Once acks drain the journal, the counters are the only record of the ids already applied (#271).
+      // Once acks drain the journal, the counters are the only record of the ids already applied.
       if (decoded.counters !== undefined) yield* store.raiseMutationCounters(decoded.counters);
       // A snapshot read member by member (a store without `snapshot`) can hold a push acknowledgement's
       // entry in both its journal and its tail, since the two reads are not one state. The tail copy wins:
-      // it is not journaled again (#387). The store's tail is read too, since an entry the store already
+      // it is not journaled again. The store's tail is read too, since an entry the store already
       // parked can sit in a snapshot's journal; `appendMutation` refuses such an entry, so it must be skipped.
       const parked = new Set(
         (yield* store.unpulled).map((m) => `${m.clientId}\u0000${m.mutationId}`)
@@ -274,11 +274,11 @@ export const hydrate = (store: ClientStore, snapshot: Snapshot): Effect.Effect<v
         { concurrency: 1, discard: true }
       );
       // These entries came from another context: whether they were pushed there
-      // is unknowable here, so paced compaction must not renumber them (#249).
+      // is unknowable here, so paced compaction must not renumber them.
       yield* freezePending(store);
     }).pipe(
       // A refused write leaves the rows before it in the store, so the re-read
-      // runs on failure too (#350).
+      // runs on failure too.
       Effect.ensuring(ClientEngineModule.resyncAttachedEngines(store))
     );
   });
@@ -344,7 +344,7 @@ export const HydrateOutcome = Schema.Struct({
 export type HydrateOutcome = typeof HydrateOutcome.Type;
 
 /**
- * The hydration host-request kind (ADR-0021 amendment §6, #146): a tab holding
+ * The hydration host-request kind (ADR-0021 amendment §6): a tab holding
  * a server-rendered {@link Snapshot} hands it to the engine host it mirrors,
  * which owns the store and the empty-store gate. Single-reply; the answer is a
  * {@link HydrateOutcome}. Ask it with `Mirror.request(Hydration.requests.hydrate,

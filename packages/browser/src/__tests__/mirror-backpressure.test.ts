@@ -1,5 +1,5 @@
 /**
- * Tab-mirror backpressure (#44): the mirror's change hub is bounded, so a
+ * Tab-mirror backpressure: the mirror's change hub is bounded, so a
  * stalled tab observer cannot grow its queue without limit. On resume it
  * refreshes from the always-current `rows` Ref, so the newest rows are never
  * lost even when subset keys were dropped — and a forced refresh is counted in
@@ -88,7 +88,7 @@ const makeEngine = Effect.gen(function* () {
   return engine;
 });
 
-describe("Mirror backpressure (#44)", () => {
+describe("Mirror backpressure", () => {
   it.live("a stalled tab observer bounds its queue and refreshes to latest rows", () =>
     Effect.gen(function* () {
       const engine = yield* makeEngine;

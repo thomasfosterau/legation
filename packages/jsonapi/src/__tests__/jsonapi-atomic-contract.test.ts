@@ -117,7 +117,7 @@ const readOnly = {
  * The request document this server accepts: its operations decoded one by one
  * by the handler (`decodeOperation`), so an `add` may carry the client id
  * `JsonApiBackend` sends. Since effect-jsonapi 0.18 the default request
- * document refuses a client-generated `data.id` with 403 (#464), and
+ * document refuses a client-generated `data.id` with 403, and
  * `Endpoint.operations`' `payload` option is how an api that honours client
  * ids declares so.
  */
@@ -228,7 +228,7 @@ type Entry = { readonly data?: AnyResource };
 type BatchOperation = Atomic.Operation<typeof Row | typeof EvalRow>["Type"];
 
 /**
- * Test-only server behaviour for the visibility probe (#381). `holds` parks a
+ * Test-only server behaviour for the visibility probe. `holds` parks a
  * batch after it has staged the row with that id, until the probe releases it.
  * `publishEarly` is the broken server the probe must catch: it copies a staged
  * row into the committed store at once, instead of at the batch's commit.
@@ -343,7 +343,7 @@ const applyOperation = (
 /**
  * `lock` serialises whole batches: a batch copies the store, runs, and commits
  * over it, so two overlapping batches would lose the first one's writes. One
- * batch at a time is the store-wide lock that meets guarantee 1 (#353).
+ * batch at a time is the store-wide lock that meets guarantee 1.
  */
 const operationsLive = (store: Store, lock: Semaphore.Semaphore, probe: ServerProbe) =>
   HttpApiBuilder.group(api, "operations", (handlers) =>
@@ -494,7 +494,7 @@ const without = <V>(map: ReadonlyMap<string, V>, key: string) =>
   new Map([...map].filter(([name]) => name !== key));
 
 /**
- * What a test may hand the backend besides the default: its ledger store (#468),
+ * What a test may hand the backend besides the default: its ledger store,
  * and the server's tables, so a backend restarted over the same server keeps them.
  */
 interface BackendOptions {
@@ -578,7 +578,7 @@ describeWrapped(
   }
 );
 
-// ─── Visibility before the bump (guarantee 1, #381) ──────────────────────────
+// ─── Visibility before the bump (guarantee 1) ──────────────────────────
 
 const probeContext = { clientGroupId: "visibility-group" };
 const probeClient = "visibility-client";
@@ -671,7 +671,7 @@ describeWrapped("JsonApiBackend visibility before the bump (guarantee 1, #381)",
   );
 });
 
-// ─── The ledger store across a restart (#468) ────────────────────────────────
+// ─── The ledger store across a restart ────────────────────────────────
 
 const restartClient = "restart-client";
 const restartContext = { clientGroupId: "restart-group" };
@@ -694,7 +694,7 @@ const restartPush = () => [
   },
 ];
 
-describe("JsonApiBackend ledger store (#468), atomic mode", () => {
+describe("JsonApiBackend ledger store, atomic mode", () => {
   layer(KeyValueStore.layerMemory)((scoped) => {
     scoped.effect("satisfies verifyBackendContract over a durable ledger store", () =>
       Effect.gen(function* () {
@@ -732,9 +732,9 @@ describe("JsonApiBackend ledger store (#468), atomic mode", () => {
   });
 });
 
-// ─── Ledger store failures and the forgetting bound (#468) ───────────────────
+// ─── Ledger store failures and the forgetting bound ───────────────────
 
-describe("JsonApiBackend ledger store failures (#468), atomic mode", () => {
+describe("JsonApiBackend ledger store failures, atomic mode", () => {
   layer(KeyValueStore.layerMemory)((scoped) => {
     scoped.effect(
       "a ledger write that fails after the server write fails the push, the store and cache agree, and a retry acknowledges",
@@ -855,7 +855,7 @@ describe("JsonApiBackend ledger store failures (#468), atomic mode", () => {
           const ledger = Ledger.keyValue(yield* KeyValueStore.KeyValueStore);
           // The first run uses one group, and its ledger is what a restart must bring back.
           // The restarted backend runs the contract in another group; the same group is the
-          // restart test below (#477).
+          // restart test below.
           const firstContext = { clientGroupId: "contract-first" };
           const first = yield* makeBackend(undefined, noProbe, { ledger });
           yield* BackendContract.verifyBackendContract(first.backend, {
@@ -882,7 +882,7 @@ describe("JsonApiBackend ledger store failures (#468), atomic mode", () => {
   });
 });
 
-// ─── The contract across a restart in the same client group (#477, #483) ───
+// ─── The contract across a restart in the same client group ───
 
 const sameGroup = "contract-same-group";
 const CONTRACT_CLIENT = "contract-client";
@@ -892,7 +892,7 @@ const CONTRACT_CLIENT = "contract-client";
  * ledger the first run left: `restartWith` picks the store the restart reads. The
  * restarted backend has its own server tables, since the contract needs them empty.
  * The restarted run is verified with the ledgers the first run left, returned as
- * `outcome` (the restored ledger is what a restart expects, #483), together with what
+ * `outcome` (the restored ledger is what a restart expects), together with what
  * the restarted backend reports before the contract runs.
  */
 const restartInSameGroup = (restartWith: (ledger: Ledger.LedgerStore) => Ledger.LedgerStore) =>

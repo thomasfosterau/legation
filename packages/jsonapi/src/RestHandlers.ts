@@ -1,8 +1,8 @@
 /**
  * RestHandlers
  *
- * Derived JSON:API `list` / `get` handlers over the sync engine's read path
- * (issue #163). A JSON:API `GET` is ADR-0025's `read` operation with a
+ * Derived JSON:API `list` / `get` handlers over the sync engine's read path.
+ *A JSON:API `GET` is ADR-0025's `read` operation with a
  * document body: the URL is parsed into a `Query.Read` by the one grammar
  * (`JsonApiQuery.parseParams`), the request's identity becomes a
  * `SyncContext`, the read runs through `Query.plan` → the filterable check
@@ -91,7 +91,7 @@ export interface BaseOptions {
   readonly nodes: Node.NodeRegistry;
   /** The storage contract the read evaluates through. */
   readonly backend: Backend.Backend;
-  /** The deny-by-default auth policy, with the filterable declarations (#154). */
+  /** The deny-by-default auth policy, with the filterable declarations. */
   readonly policy: Authorization.AuthPolicy;
   /** The interception seam around reads (`onRead`); absent means passthrough. */
   readonly middleware?: Authorization.SyncMiddleware;
@@ -384,7 +384,7 @@ export const make = (options: Options): RestHandlers => {
             searchParamsOf(request)
           );
           const resolved = yield* run(context, node, plan, read);
-          // `meta.total` (#210): the read's filter counted behind the same auth
+          // `meta.total`: the read's filter counted behind the same auth
           // path as its rows, whatever the page, so it matches the total a pull
           // reports for the same subscription and the façade writes for the URL.
           const root = yield* Query.tryPlan(nodes, read);

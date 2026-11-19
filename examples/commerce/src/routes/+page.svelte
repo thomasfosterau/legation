@@ -32,7 +32,7 @@
   };
   const PAGE = CATALOG_PAGE_SIZE;
 
-  // First paint from the layout's SSR snapshot (#146) when there is one: the
+  // First paint from the layout's SSR snapshot when there is one: the
   // shell's rows, projected onto each read locally (`Hydration.rowsFor`), the
   // same rows the worker's replica is hydrated with — so the server markup,
   // the first client render and the replica agree. Without one (the sync

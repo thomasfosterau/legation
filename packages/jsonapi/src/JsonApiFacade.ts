@@ -1,7 +1,7 @@
 /**
  * JsonApiFacade
  *
- * The façade of ADR-0029 (issue #166): a fetch handler that answers a
+ * The façade of ADR-0029: a fetch handler that answers a
  * JSON:API `GET` from the replica when an explicit subscription covers it,
  * and stays out of the way otherwise. A service worker composes it into its
  * `fetch` listener **first**, before the HTTP cache and the network, so a
@@ -157,7 +157,7 @@ export interface Options<Id extends string, Groups extends HttpApiGroup.Constrai
    * an `EngineHost` holds on mirrors' behalf. A request is answered locally
    * only when every read it needs is covered. `options.snapshot` is the root
    * rows the façade read for the request, with their subset: the verdict is
-   * judged over them for that subset (#426), and any other read is judged as usual.
+   * judged over them for that subset, and any other read is judged as usual.
    */
   readonly coverageOf: (
     read: Query.Read,
@@ -170,7 +170,7 @@ export interface Options<Id extends string, Groups extends HttpApiGroup.Constrai
    */
   readonly cookie?: Effect.Effect<Option.Option<string>, unknown>;
   /**
-   * A subscription's total as the last pull reported it (#210), for
+   * A subscription's total as the last pull reported it, for
    * `meta.total` on a collection read a **windowed** subscription covers:
    * `host.engine.totalOf` in a worker, `client.totalOf` over a Client. A read
    * an unwindowed subscription covers is counted from the replica and needs
@@ -226,7 +226,7 @@ export interface Options<Id extends string, Groups extends HttpApiGroup.Constrai
    */
   readonly pull?: Effect.Effect<unknown, unknown>;
   /**
-   * The engine's mutation-state map (`engine.mutationStates`, #116), which
+   * The engine's mutation-state map (`engine.mutationStates`), which
    * the mutation status URL `{prefix}/_legation/mutations/{mutationId}` is
    * answered from (ADR-0030 §2, `MutationStatus`). Absent, that route is not
    * the façade's. A worker composing the façade should raise the engine's
@@ -651,7 +651,7 @@ export const fetchHandler = <Id extends string, Groups extends HttpApiGroup.Cons
     );
 
   /**
-   * A covered collection read's total (#210): counted from the replica when
+   * A covered collection read's total: counted from the replica when
    * the covering subscription is unwindowed (every matching row is there, so
    * the request's filter over them is exact), else the windowed subscription's
    * pulled total (`totalOf`); `None` when neither is known.
@@ -666,7 +666,7 @@ export const fetchHandler = <Id extends string, Groups extends HttpApiGroup.Cons
           onNone: () => Effect.succeedNone,
           onSome: (pulled) => pulled(root),
         })
-      : // An unwindowed request's rows are its whole filter: count the rows already read (#426).
+      : // An unwindowed request's rows are its whole filter: count the rows already read.
         !Coverage.isWindowed(root)
         ? Effect.succeedSome(read.length)
         : view.query(Subset.unwindowed(root)).pipe(
@@ -701,8 +701,8 @@ export const fetchHandler = <Id extends string, Groups extends HttpApiGroup.Cons
   /**
    * The request's root rows, read once: coverage is judged over them and the
    * document is written from them, so a pull between the two cannot add a root
-   * row whose edge windows are not pulled yet (#426). A listing also needs its
-   * total (#210). A root that cannot be read, an uncovered read, or a listing
+   * row whose edge windows are not pulled yet. A listing also needs its
+   * total. A root that cannot be read, an uncovered read, or a listing
    * whose total is unknown is {@link uncovered}.
    */
   const coveredRows = (needed: ReadonlyArray<Query.Read>, root: Subset.Subset, listing: boolean) =>

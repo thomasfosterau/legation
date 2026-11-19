@@ -1,6 +1,6 @@
 /**
- * The commerce app as a browser sees it, for the façade's browser test
- * (#168): one origin serving the SvelteKit production build — its pages,
+ * The commerce app as a browser sees it, for the façade's browser test:
+ *one origin serving the SvelteKit production build — its pages,
  * assets, the service worker and the read proxy — in front of the sync
  * server (WebSocket + HTTP carriers and the derived JSON:API), both
  * in-process on ephemeral ports over one temporary SQLite file, exactly
@@ -13,7 +13,7 @@
  *   test can assert the server was never asked for a locally served URL.
  * - The app is `vite build` (adapter-node), made once per Vitest run by
  *   the `commerce-browser` project's global setup before the test files
- *   start (`build.ts`, #289), whose `handler` is mounted on the front
+ *   start (`build.ts`), whose `handler` is mounted on the front
  *   server in-process — `SYNC_ORIGIN`, `PROTOCOL_HEADER`, `COMMERCE_DB` and
  *   the Better Auth secret are set before the build's modules load, which
  *   is when they read them. adapter-node 6 takes the app's origin from the
@@ -159,7 +159,7 @@ const tunnel = (
   });
   open.add(upstream);
   // Either end closing closes the other, so the sync server never keeps a
-  // WebSocket whose browser end is gone (#522).
+  // WebSocket whose browser end is gone.
   socket.on("close", () => {
     open.delete(socket);
     upstream.destroy();
@@ -248,7 +248,7 @@ export const serveApp = async (): Promise<App> => {
       // The carriers' tunnels and forwards first: `closeAllConnections`
       // reaches neither an upgraded socket nor the front's own connections
       // to the sync server, and one left open holds the sync server's
-      // shutdown for its whole 20 s graceful-shutdown bound (#522).
+      // shutdown for its whole 20 s graceful-shutdown bound.
       for (const connection of open) connection.destroy();
       front.closeAllConnections();
       await new Promise<void>((resolve) => front.close(() => resolve()));

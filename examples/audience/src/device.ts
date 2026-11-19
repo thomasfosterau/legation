@@ -6,7 +6,7 @@
  *
  * The cookie jar is read the way effect-auth's client session store is, and
  * legation-auth's `SignOut.follow` keeps the replica on it: each change of the
- * jar adopts the session's identity fingerprint with `Client.reset` (#212): a sign-out or an account switch drops the replica's confirmed
+ * jar adopts the session's identity fingerprint with `Client.reset`: a sign-out or an account switch drops the replica's confirmed
  * rows and quarantines the superseded user's unpushed writes before the next
  * viewer can read anything.
  *

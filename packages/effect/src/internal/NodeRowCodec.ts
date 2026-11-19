@@ -16,7 +16,7 @@ import type { AnyNode } from "../Node.js";
  * assertion, but `NodeBridge` builds nodes from effect-jsonapi's
  * `Resource.Any`, whose attribute fields are open too, so a bridged node is
  * not service-free by its type. The fix needs a service-free `Resource.Any`
- * in effect-jsonapi (#695).
+ * in effect-jsonapi.
  */
 export const rowCodec = (node: AnyNode): Schema.Codec<unknown, unknown> =>
   node.row as unknown as Schema.Codec<unknown, unknown>;

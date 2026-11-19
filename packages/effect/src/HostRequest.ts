@@ -2,7 +2,7 @@
  * HostRequest
  *
  * The mirror protocol's one generic request/response envelope (ADR-0021
- * amendment, #146, #136): a mirror asks its engine host for something outside
+ * amendment): a mirror asks its engine host for something outside
  * the `ClientView` surface by naming a **request kind**, and the host answers
  * from the handler it registered for that kind.
  *

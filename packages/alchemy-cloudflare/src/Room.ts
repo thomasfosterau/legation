@@ -42,7 +42,7 @@
  * per-instance phase (Alchemy runs it under `blockConcurrencyWhile` when the
  * object is constructed, after an eviction included). Its CVRs, bus and
  * named-set cache live as long as the instance; a `backend` built with
- * `Backend.perRequest` is the one part acquired per request (#681).
+ * `Backend.perRequest` is the one part acquired per request.
  */
 
 import * as Workers from "@alchemy.run/cloudflare/Workers";
@@ -129,7 +129,7 @@ export interface RoomConfig<R = never> {
    *
    * For a store that must be opened per request (a Hyperdrive client, whose
    * credentials are valid only within the current invocation), return
-   * `Backend.perRequest(acquire)` here (#681): the room's sync server then runs
+   * `Backend.perRequest(acquire)` here: the room's sync server then runs
    * `acquire` once per push, pull and read, in that request's scope, so one
    * push's transaction stays on the connection it opened, and closes it when
    * the request ends. `acquire` may need the room's services (the

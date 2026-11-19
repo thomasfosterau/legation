@@ -1,7 +1,7 @@
 /**
  * Devtools
  *
- * The headless core over the introspection substrate (#120): all data
+ * The headless core over the introspection substrate: all data
  * acquisition and every action live here as plain `Effect`/`Stream` values —
  * the same surfaces `@thomasfosterau/legation-svelte` already exposes bindings over — so a
  * framework panel (`@thomasfosterau/legation-devtools/svelte`) is a thin idiomatic UI over
@@ -10,7 +10,7 @@
  * Fed exclusively by already-public substrate (the `@thomasfosterau/legation/internal`
  * entrypoint, the same one `@thomasfosterau/legation-svelte` itself depends on):
  * `Introspection` (subscriptions, cookie, collections),
- * `ClientEngine.mutationStates` (#116, the journal/mutation timeline —
+ * `ClientEngine.mutationStates` (the journal/mutation timeline —
  * including the `"dropped"` phase paced compaction settles a compacted entry
  * to, so a devtools timeline never shows a phantom in-flight mutation),
  * `ClientEngine.engineEvents` (the sync activity log), and
@@ -18,7 +18,7 @@
  * state; a capability this core would need that isn't already exposed there
  * is substrate work, not a private hook.
  *
- * Two sources, one {@link DevtoolsCore} (#136): {@link make} attaches to an
+ * Two sources, one {@link DevtoolsCore}: {@link make} attaches to an
  * engine + store this process owns; {@link fromMirror} attaches from a tab
  * that reaches a service-worker-hosted engine only through its `Mirror`
  * (ADR-0010/0021), over the mirror protocol's host-request envelope. Its
@@ -78,11 +78,11 @@ export interface DevtoolsOptions {
  * and actions can also fail with a `HostRequestError`.
  */
 export interface DevtoolsCore {
-  // ─── Journal & mutation timeline (panel #1) ──────────────────────────────
-  /** The keyed, reactive mutation-state map (#116): re-emits on every fold. */
+  // ─── Journal & mutation timeline ──────────────────────────────
+  /** The keyed, reactive mutation-state map: re-emits on every fold. */
   readonly mutationStates: Stream.Stream<MutationState.MutationStateMap>;
 
-  // ─── Subscriptions & collections (panel #2) ──────────────────────────────
+  // ─── Subscriptions & collections ──────────────────────────────
   /** Active subsets: collection, predicate, order, and window (limit/cursor). */
   readonly subscriptions: Effect.Effect<ReadonlyArray<Subset.Subset>, HostRequest.HostRequestError>;
   /** The current pull cookie, or `undefined` before the first pull. */
@@ -93,7 +93,7 @@ export interface DevtoolsCore {
     StoreError | HostRequest.HostRequestError
   >;
 
-  // ─── Sync activity (panel #3) ────────────────────────────────────────────
+  // ─── Sync activity ────────────────────────────────────────────
   /**
    * The unified sync-lifecycle event stream (push/pull/poke/mutation/rebuild).
    * Over a mirror it re-follows the host's stream after a host restart.
@@ -109,7 +109,7 @@ export interface DevtoolsCore {
     HostRequest.HostRequestError
   >;
 
-  // ─── Actions (panel #4) ──────────────────────────────────────────────────
+  // ─── Actions ──────────────────────────────────────────────────
   /** Push the journal now. */
   readonly forcePush: Effect.Effect<
     void,
@@ -177,7 +177,7 @@ export const make = (
   );
 };
 
-// ─── Over the mirror seam (#136) ─────────────────────────────────────────────
+// ─── Over the mirror seam ─────────────────────────────────────────────
 
 const PACKAGE = "@thomasfosterau/legation-devtools";
 
@@ -248,7 +248,7 @@ export const hostRequests = (
 export type MirrorSource = Pick<Mirror.Mirror, "request" | "stream" | "mutationStates">;
 
 /**
- * Build the devtools core over the engine a mirror's host runs (#136). The
+ * Build the devtools core over the engine a mirror's host runs. The
  * host serves the reads when given its store, and the row counts and actions
  * when given {@link hostRequests}; whatever it does not serve fails with a
  * `HostRequestError` of reason `UnknownKind`. `events` follows the host's

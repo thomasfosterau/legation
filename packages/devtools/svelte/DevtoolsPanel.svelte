@@ -2,7 +2,7 @@
   /**
    * @thomasfosterau/legation-devtools/svelte — DevtoolsPanel
    *
-   * A thin Svelte panel over the headless `DevtoolsCore` (#120): every
+   * A thin Svelte panel over the headless `DevtoolsCore`: every
    * section below just reads a store built by `store.ts` (which in turn
    * just runs the core's Effects/Streams) — no data acquisition of its own.
    * Visual polish is out of scope for this first cut: plain, legible markup.

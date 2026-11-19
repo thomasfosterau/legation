@@ -8,7 +8,7 @@
   // svelte-ignore state_referenced_locally
   setClientRuntime(runtime);
 
-  // Starts opted out (#141): the master/detail case — a detail read keyed
+  // Starts opted out: the master/detail case — a detail read keyed
   // on a selection that starts empty.
   let selected = $state<string | undefined>(undefined);
   // svelte-ignore state_referenced_locally

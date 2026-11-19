@@ -1,5 +1,5 @@
 /**
- * FanoutBus bounds each broker call it makes, at the `timeout` the room passes it (#379). A
+ * FanoutBus bounds each broker call it makes, at the `timeout` the room passes it. A
  * publish runs inside the sync server's uninterruptible region, so a hung broker must be
  * dropped at that bound. TestClock moves the bound, not wall time.
  */
@@ -17,7 +17,7 @@ import { TestFailure } from "./test-failure.js";
 const Product = Node.make("products", { attributes: { name: Schema.String } });
 const nodes = Node.registry([Product]);
 
-describe("FanoutBus broker bound (#379)", () => {
+describe("FanoutBus broker bound", () => {
   it.effect("a hung broker publish is dropped at the timeout the bus was given", () =>
     Effect.gen(function* () {
       const broker: FanoutBroker.FanoutBroker = {

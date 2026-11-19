@@ -1,5 +1,5 @@
 /**
- * The IndexedDB atomic batch (#393): a pull and a push acknowledgement commit
+ * The IndexedDB atomic batch: a pull and a push acknowledgement commit
  * as one IndexedDB transaction on the database and object store the platform
  * KeyValueStore uses. Backed by fake-indexeddb, whose transactions abort like
  * the browser's, so an abort here is a real one.
@@ -177,7 +177,7 @@ const upgradeTo = (database: string, version: number) =>
     request.onerror = () => reject(request.error);
   });
 
-describe("IndexedDbClientStore's atomic batch (#393)", () => {
+describe("IndexedDbClientStore's atomic batch", () => {
   layer(Layer.mergeAll(storeLayer("atomic-readback"), platformLayer("atomic-readback")))(
     (scoped) => {
       scoped.effect(

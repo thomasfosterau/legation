@@ -63,7 +63,7 @@ export interface ClientView {
     subset: Subset.Subset
   ) => Stream.Stream<ReadonlyArray<LocalRow>, ClientViewError>;
   /**
-   * Reactive window retargeting (#133): like {@link observe}, but the
+   * Reactive window retargeting: like {@link observe}, but the
    * returned {@link ClientEngineModule.WindowObservation}'s `retarget` widens
    * or advances the SAME open observation's `limit`/`cursor` in place —
    * see {@link ClientEngineModule.ClientEngine.observeWindow}. Present only
@@ -81,7 +81,7 @@ export interface ClientView {
     Scope.Scope
   >;
   /**
-   * Row-level deltas of a subset's live window (#115) — see
+   * Row-level deltas of a subset's live window — see
    * {@link ClientEngineModule.ClientEngine.observeChanges}. Satisfied
    * structurally by `Mirror` (ADR-0021's one-surface principle), which folds
    * its own page-diffing over the keyed row broadcasts it already receives.
@@ -91,7 +91,7 @@ export interface ClientView {
     options?: ClientEngineModule.ObserveChangesOptions
   ) => Stream.Stream<ReadonlyArray<RowChange<LocalRow>>, ClientViewError>;
   /**
-   * The pulled summary of a registration (#426): the registration under `key`
+   * The pulled summary of a registration: the registration under `key`
    * (the subset hash, or the relational key of {@link MirrorProtocol.relatedKey})
    * with each window it holds and whether that window's rows are in the
    * replica. A Client answers a covered read from the replica only when the
@@ -101,7 +101,7 @@ export interface ClientView {
    */
   readonly pulled: (key: string) => Effect.Effect<Coverage.Pulled>;
   /**
-   * Emits after something may have moved a {@link pulled} summary (#653): a
+   * Emits after something may have moved a {@link pulled} summary: a
    * pull applied over an engine, the host's summaries arriving over a mirror.
    * A Client re-judges a live read's completeness on it, since a pull's rows
    * reach observers before the pull marks them pulled. Absent, a live read is
@@ -109,7 +109,7 @@ export interface ClientView {
    */
   readonly pulledChanges?: Stream.Stream<void>;
   /**
-   * A subscription's total as the last pull reported it (#210):
+   * A subscription's total as the last pull reported it:
    * {@link ClientEngineModule.ClientEngine.totalOf}. Present only for an
    * engine-backed view (`fromEngine`); a `Mirror` has no pulls of its own,
    * so a façade answering from a mirror's replica has no totals to give.
@@ -148,7 +148,7 @@ export interface ClientView {
   ) => Effect.Effect<Stream.Stream<ReadonlyArray<Related.RelatedRow>, never>, never, Scope.Scope>;
   /**
    * The current resolved rows of a relational read this view holds through
-   * {@link related} or {@link pinEdges}, read once (#653). A `Mirror` answers
+   * {@link related} or {@link pinEdges}, read once. A `Mirror` answers
    * from the rows its host sent for the registration; absent, a Client joins
    * the read locally over {@link query}, as an engine-backed view's rows are.
    */
@@ -182,7 +182,7 @@ export interface ClientView {
     subsets: ReadonlyArray<Subset.Subset>
   ) => Effect.Effect<ReadonlyArray<ClientEngineModule.ReadRow>, ClientViewError>;
   /**
-   * The identity boundary (#212), present only for an engine-backed view.
+   * The identity boundary, present only for an engine-backed view.
    * A `Mirror` holds no durable state of its own — the replica lives in the
    * host — so resetting a connected Client is the host's Client's job, not
    * something a mirror can do on its behalf; `Client.reset` says so rather
@@ -207,10 +207,10 @@ export interface ClientView {
     args: unknown
   ) => Effect.Effect<MutationOutcome, ClientViewError>;
   /**
-   * The client half of an enhanced form submit (ADR-0030 #215 §4): see
+   * The client half of an enhanced form submit (ADR-0030 §4): see
    * {@link ClientEngineModule.ClientEngine.beginFormMutation}. An
    * engine-backed view (`fromEngine`) begins it on its engine; a `Mirror`
-   * asks its host to (#536), which holds the in-flight entry for every
+   * asks its host to, which holds the in-flight entry for every
    * mirror. Absent from a view that can do neither.
    */
   readonly beginFormMutation?: (
@@ -219,7 +219,7 @@ export interface ClientView {
     args: unknown
   ) => Effect.Effect<ClientEngineModule.FormSubmission, ClientViewError>;
   /**
-   * The keyed mutation-state map (#116): current value now, then every fold.
+   * The keyed mutation-state map: current value now, then every fold.
    * A main-thread engine emits its own {@link ClientEngineModule.ClientEngine.mutationStates};
    * a mirror mirrors the host's — the same states either way (ADR-0021).
    */
@@ -279,7 +279,7 @@ export const fromEngine = (raw: ClientEngine): ClientView => {
     queryNamed: (name, args) => engine.queryNamed(name, args),
     observeNamed: (name, args) => engine.observeNamed(name, args),
     // A relational read holds its windows under its relational key, as a pin
-    // does, so a Client can judge its answers' completeness (#653).
+    // does, so a Client can judge its answers' completeness.
     related: (registry, collectionName, subset, edges) => {
       const key = MirrorProtocol.relatedKey(collectionName, subset, edges);
       return Effect.acquireRelease(marks.open(key, subset), () => marks.close(key)).pipe(

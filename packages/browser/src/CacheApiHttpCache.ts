@@ -12,7 +12,7 @@
  * testable without browser globals.
  *
  * Also on its own entry, `@thomasfosterau/legation-browser/http-cache`, which
- * reaches nothing of the engine (#678).
+ * reaches nothing of the engine.
  */
 
 import { StoreError, TransportError } from "@thomasfosterau/legation";

@@ -27,7 +27,7 @@
  * visibility before the bump"). A new backend must add its own mid-flight test
  * before it can claim guarantee 1.
  *
- * Serialisability across client groups (guarantee 1, #353) is a rule: rule 11
+ * Serialisability across client groups (guarantee 1) is a rule: rule 11
  * parks a handler after its read, lets another group commit a write to the same
  * row, then resumes the handler and checks that no write was lost. Its handler
  * parks through {@link park}, the one seam a backend's own counter handler needs
@@ -37,10 +37,10 @@
  * A backend that caches the rows a listing returns must keep that cache in line
  * with its own writes: rule 12 lists a collection, applies an update and a delete
  * to listed rows through the backend, and checks that `getRows` returns the
- * post-write value and omits the deleted row, without a re-list (#444). It uses
+ * post-write value and omits the deleted row, without a re-list. It uses
  * the existing `putRow` and `delRow` mutators and the `evaluate` collection.
  *
- * **Types and runtime (#177, ADR-0009's amendment).** A backend whose
+ * **Types and runtime (ADR-0009's amendment).** A backend whose
  * `applyMutations` is built with `Backend.transaction` gets the ledger's
  * ordering rules by construction: in-order application, idempotent skip and gap
  * rejection (rules 1–3), and the bump travelling with each outcome, a rejection
@@ -51,11 +51,11 @@
  * `getRows`, isolation and the rejection list (rules 5, 7, 8, 12 and 13) are
  * behaviour, and stay runtime only.
  *
- * A backend that provides the optional `evaluateMany` (#505) must agree with
+ * A backend that provides the optional `evaluateMany` must agree with
  * its own `evaluate`: rule 14 asks for rule 6's subsets, the generated corpus
  * included, in one call and checks each list against `evaluate` for that
  * subset. A backend without it passes that rule vacuously. Likewise rule 15
- * for the optional `evaluateCounted` (#210): its entries are `evaluate`'s and
+ * for the optional `evaluateCounted`: its entries are `evaluate`'s and
  * its totals are the unwindowed subset's size.
  */
 
@@ -151,7 +151,7 @@ export const rejectAlways = Mutator.make(
  * (the client's retry applies the mutation again). `failAlways` writes nothing
  * first, so it does not probe this. A backend that cannot discard a handler's
  * writes on its own failure fails this rule by design: D1 commits each
- * statement separately (#342), so it is not run through this contract. A
+ * statement separately, so it is not run through this contract. A
  * registered handler that never writes passes this rule vacuously, and the
  * contract cannot detect that: it sees only the failure.
  */
@@ -232,19 +232,18 @@ export interface VerifyOptions {
    * How rule 11 waits for the peer while the parked call is held. Absent, the
    * harness gives the peer a bounded number of scheduler turns, which suits a backend
    * whose peer runs at once or waits on a lock. A backend whose peer does real I/O
-   * (PostgreSQL) cannot reach the overlap that way, so it observes the peer instead
-   * (#416).
+   * (PostgreSQL) cannot reach the overlap that way, so it observes the peer instead.
    */
   readonly awaitPeer?: PeerSettle | undefined;
   /**
    * The contract client's ledger a restarted run expects: the id the backend reported for it before the
    * restart. Absent, the run is a fresh group and expects 0. The contract fails first when the backend
-   * reports another id, naming a forgotten or differing ledger, then numbers its mutations from it (#483).
+   * reports another id, naming a forgotten or differing ledger, then numbers its mutations from it.
    */
   readonly restoredLedger?: number | undefined;
   /**
    * The ledger rule 11's peer group expects on a restarted run, as `restoredLedger` is for the
-   * contract client. Absent, the peer group is fresh and expects 0 (#483).
+   * contract client. Absent, the peer group is fresh and expects 0.
    */
   readonly restoredPeerLedger?: number | undefined;
 }
@@ -271,11 +270,11 @@ interface Harness {
   readonly clientId: string;
   /**
    * The contract client's last acknowledged id when the contract begins: 0 on a
-   * fresh group, the restored id on a backend restarted over its ledger (#477, #483).
+   * fresh group, the restored id on a backend restarted over its ledger.
    * Every rule numbers its mutations from here, so expectations are relative to it.
    */
   readonly start: number;
-  /** Rule 11's peer group's last acknowledged id when the contract begins (#483). */
+  /** Rule 11's peer group's last acknowledged id when the contract begins. */
   readonly peerStart: number;
   /** The collection the write rules target. */
   readonly rows: string;
@@ -331,7 +330,7 @@ const CONTRACT_CLIENT = "contract-client";
 
 /**
  * The rule that checks, before any other rule runs, that the backend reports the
- * ledger the run expects (#483).
+ * ledger the run expects.
  */
 const restoredLedgerRule = "reports the ledger the run expects";
 
@@ -603,7 +602,7 @@ const evalSeed: ReadonlyArray<readonly [string, EvalRow]> = [
 ];
 
 /**
- * The generated corpus rules 6 and 14 share (issue #153): two columns, NULL
+ * The generated corpus rules 6 and 14 share: two columns, NULL
  * and astral values on, from the fixed seed, so every run sees the same rows,
  * predicates and order terms.
  */
@@ -639,12 +638,12 @@ const corpusSubsets = (
   );
 
 /**
- * The generated half of rule 6: a small corpus (issue #153) over the same two
+ * The generated half of rule 6: a small corpus over the same two
  * columns, so every backend inherits the check for every operator in the
  * core: `evaluate` must return exactly what `Subset.apply` returns over the
  * same rows, order included, for random predicates, order terms, and
  * limits. NULL/absent values and astral text are on: ADR-0028 makes
- * Postgres normative for both and the JS evaluator is exact there (#155),
+ * Postgres normative for both and the JS evaluator is exact there,
  * so a backend whose storage treats NULL two-valued, orders NULL first
  * ascending, or compares text by UTF-16 code unit fails here by design.
  * String order is code-point order (ADR-0028 rule (c)): the `tag` pool
@@ -854,7 +853,7 @@ const TRANSIENT_RETRIES = 3;
  * releases the handler anyway. Counted in turns, not time, so the rule never reads
  * the wall clock. On PostgreSQL the peer's statements are real I/O, so this turn
  * count does not reach the overlap: that backend observes the peer through
- * `awaitPeer` instead (#416).
+ * `awaitPeer` instead.
  */
 const PEER_TURNS = 1000;
 
@@ -882,7 +881,7 @@ const settleByTurns = (peerSettled: Effect.Effect<boolean>): Effect.Effect<void>
 };
 
 /**
- * 11. Serialisable across client groups (guarantee 1, #353). Group X reads a
+ * 11. Serialisable across client groups (guarantee 1). Group X reads a
  *     counter and parks after the read. Group Y increments the same counter and
  *     commits while X is parked. Then X resumes and increments. Both increments
  *     must land, so the counter reads 2. A backend whose handler read is not
@@ -893,7 +892,7 @@ const settleByTurns = (peerSettled: Effect.Effect<boolean>): Effect.Effect<void>
  *     releases X once the peer has settled, or blocked on X's lock, and does not
  *     deadlock. That wait is the backend's `awaitPeer`, or `PEER_TURNS` turns when
  *     it supplies none. A PostgreSQL run needs `awaitPeer` to reach the overlap at
- *     all (#416). D1 does not meet guarantee 1 (#342): it has no transaction to
+ *     all. D1 does not meet guarantee 1: it has no transaction to
  *     isolate the read from another group's commit, so it is not run through this
  *     contract, and this rule does not claim it.
  */
@@ -908,7 +907,7 @@ const rule11CrossGroupLostUpdate: Rule = (h) =>
       h.backend.applyMutations(h.context, [h.put(startId + 1, h.rows, row, { n: 0 })])
     );
 
-    // The peer group has its own ledger. A restarted run expects the one it left (#477, #483), and
+    // The peer group has its own ledger. A restarted run expects the one it left, and
     // the check runs before the gate is registered, so a failure leaves no parked handler behind.
     const peer: SyncContext = { clientGroupId: `${h.context.clientGroupId}-peer` };
     const peerLedger = (yield* h.expectOk(rule, h.backend.lastMutationIds(peer)))[h.clientId] ?? 0;
@@ -1000,7 +999,7 @@ const rule11CrossGroupLostUpdate: Rule = (h) =>
   });
 
 /**
- * 12. Own writes reach getRows (#444). A listing (`evaluate`) may cache a row, and a
+ * 12. Own writes reach getRows. A listing (`evaluate`) may cache a row, and a
  *     later write of that row through the same backend must show in `getRows` with no
  *     re-list: an update reads back the post-write value, and a delete makes `getRows`
  *     omit the row. A backend that caches listed rows and does not bring its cache into
@@ -1059,7 +1058,7 @@ const rule12OwnWritesReachGetRows: Rule = (h) =>
 /**
  * 13. Rejection memory: a permanent rejection is listed by `rejections`, with
  *     the reason `applyMutations` reported for it, so a pull whose watermark
- *     covers it can report it (#365). A client whose push response was lost
+ *     covers it can report it. A client whose push response was lost
  *     learns the outcome from that list.
  */
 const rule13ListsRejections: Rule = (h) =>
@@ -1094,7 +1093,7 @@ const rule13ListsRejections: Rule = (h) =>
   });
 
 /**
- * 14. `evaluateMany`, when the backend provides it (#505), equals per-subset
+ * 14. `evaluateMany`, when the backend provides it, equals per-subset
  *     `evaluate`: for rule 6's subsets over its rows (the hand-picked windows
  *     and the generated corpus) plus whole-collection subsets of both contract
  *     collections, asked in one call, each list holds the same entries, ids
@@ -1189,7 +1188,7 @@ const rule14EvaluateManyEquivalence: Rule = (h) =>
   });
 
 /**
- * 15. `evaluateCounted`, when the backend provides it (#210), answers rule 14's
+ * 15. `evaluateCounted`, when the backend provides it, answers rule 14's
  *     subsets, asked in one call, each with `evaluate`'s entries for that
  *     subset and a `total` equal to the number of entries `evaluate` gives
  *     the subset without its window (`Subset.unwindowed`): the rows its
@@ -1258,7 +1257,7 @@ const rules: ReadonlyArray<Rule> = [
  * the contract expects the backend to report a ledger of 0 for its client. A run
  * over a restarted backend passes the ledger it expects as `restoredLedger`: the
  * contract first checks the backend reports exactly that, failing a backend that
- * forgot its ledger, and then numbers its mutations from it (#483).
+ * forgot its ledger, and then numbers its mutations from it.
  */
 export const verifyBackendContract = (
   backend: Backend,

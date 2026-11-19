@@ -5,7 +5,7 @@
  * field mappings a collection declares (`Collection.Relationship`). Once the
  * foreign collections are synced, a declared relationship name resolves to the
  * actual related row value(s) — a client-side join over already-synced data, no
- * extra request (issue #38).
+ * extra request.
  *
  * This is the protocol-agnostic core of the "relationships / joins" gap. The
  * incremental-join plumbing (base `observe` → target collections → per-collection
@@ -263,7 +263,7 @@ const hydrate = (
 /**
  * Prime one index entry per targeted collection from the current local view:
  * only the pinned `foreignField IN (...)` rows, not the whole collection
- * (issue #113) — exactly what `resolveRow` ever looks up, and an `eq`/`In`
+ * — exactly what `resolveRow` ever looks up, and an `eq`/`In`
  * lookup the engine's secondary index can resolve without a full scan when
  * `target.field` is indexed. A target with no pinned ids needs no query.
  */
@@ -317,7 +317,7 @@ const joinRowsWith = (
   });
 
 /**
- * The delta-maintained join engine behind {@link observeWith} (issue #111).
+ * The delta-maintained join engine behind {@link observeWith}.
  * Maintains, per targeted foreign collection, an incremental `fk → rows`
  * bucket index — a row put/del touches at most the one or two buckets its old
  * and new key select, never a full re-group (`groupByField` was the O(n)
@@ -644,8 +644,8 @@ type JoinEvent =
     };
 
 /**
- * Live version of {@link queryWith} as an incrementally-maintained join
- * (issue #111). A {@link makeJoinEngine} consumes the base page and every
+ * Live version of {@link queryWith} as an incrementally-maintained join.
+ *A {@link makeJoinEngine} consumes the base page and every
  * targeted foreign collection's snapshots as they arrive over `view.observe`
  * and re-hydrates only the base rows a delta actually touches — never a full
  * re-group or a full base re-hydrate. A collection is observed for as long as
@@ -727,7 +727,7 @@ const desiredSubsets = (
  * The foreign windows a relational read holds for the root rows it reads: the
  * windows {@link related}'s reconcile subscribes for `baseRows` under the
  * declared edges (ADR-0024). A read whose rows link to them depends on exactly
- * these windows, so coverage asks only for them (ADR-0029 section 3, #426).
+ * these windows, so coverage asks only for them (ADR-0029 section 3).
  */
 export const windowsFor = (
   registry: Collection.CollectionRegistry,
@@ -948,7 +948,7 @@ export const query = (
 
 /**
  * {@link query} over base rows the caller has already read from the view:
- * the same join, judged and answered from one snapshot of the root (#426).
+ * the same join, judged and answered from one snapshot of the root.
  * Never reads the subset itself, so a caller that judged coverage over
  * `base` answers from exactly those rows.
  */

@@ -124,7 +124,7 @@ export default defineConfig({
 
       // ---- Effect preset: rules this workspace's conventions cut across ----
       // `prefer-option-over-null` goes to `error` once every surface is
-      // converted (owner decision, #562): an option-bag member is
+      // converted (owner decision): an option-bag member is
       // `readonly x?: T` (no `| undefined`: a caller holding `undefined` omits
       // the key), `x?: Option.Option<T>` only where "no value" is itself an
       // answer, and an absent return or result field is an `Option`. Optional
@@ -137,14 +137,14 @@ export default defineConfig({
       // encoded args, a caught failure. Parsing them earlier would decode
       // twice or change the wire shape.
       "effect/no-unknown-parameters": "warn",
-      // The same boundary on the way out is at `error` (#562): the one site
+      // The same boundary on the way out is at `error`: the one site
       // that returns an untyped row value (`Predicate.fieldValue`) lives in a
       // module of its own with a file-scoped override below. The derived
       // combinators (`Incremental`,
       // `Derive`) are typed by their row, so they return the caller's types.
       "effect/no-unknown-returns": "error",
       "effect/no-unsafe-dictionary-type": "warn",
-      // At 0 sites (#562): narrow through `effect/Predicate` (`P.isString`),
+      // At 0 sites: narrow through `effect/Predicate` (`P.isString`),
       // which measured no slower than a `typeof` switch on the per-row
       // `Predicate.compareLiterals` path.
       "effect/no-runtime-typeof": "error",
@@ -156,7 +156,7 @@ export default defineConfig({
       // not headroom. Once a rule's count reaches zero its line is deleted,
       // so it is back at the preset's `error`. The remaining sites are listed
       // in #497 (see AGENTS.md "Effect"). Counts re-measured under
-      // `@enfect/oxlint` 0.9.0 (#561).
+      // `@enfect/oxlint` 0.9.0.
       "effect/avoid-native-object-helpers": "warn", // 689 sites
       "effect/require-safety-comment-for-type-assertion": "warn", // 621 sites
       "effect/imperative-loops": "warn", // 366 sites
@@ -169,10 +169,10 @@ export default defineConfig({
       // ---- Type-aware rules (oxlint-tsgolint) -------------------------------
       // Turned on in #561. Each rule below is relaxed for a stated reason; a
       // `warn` carries the count it was adopted with, and a new site is a
-      // defect (follow-up: #497).
+      // defect.
       // Effect 4 marks much of its HTTP surface `@stability unstable`; the
       // native `tsc` gate already demotes this to a suggestion
-      // (tsconfig.base.json, #279) for the same reason: it fires on every such
+      // (tsconfig.base.json) for the same reason: it fires on every such
       // import and drowns real signal.
       "effecttsgo/unstable-api-usage": "off",
       // `unknown` in an error channel: the engine host's bridge effects and
@@ -189,7 +189,7 @@ export default defineConfig({
       // value may be absent. The rule fires on exactly that spelling.
       "typescript/no-redundant-type-constituents": "off",
 
-      // ---- paid down (#562): at error -------------------------------------
+      // ---- paid down: at error -------------------------------------
       // Rules whose last sites #562 fixed, pinned at `error` so a new site
       // fails the gate while their category is still at `warn`.
       "typescript/no-misused-spread": "error",
@@ -218,7 +218,7 @@ export default defineConfig({
       "typescript/no-unnecessary-type-parameters": "error",
     },
     overrides: [
-      // ---- Genuine can't-applies (#562) ------------------------------------
+      // ---- Genuine can't-applies ------------------------------------
       // No inline disable comments: a site a rule cannot apply to lives in a
       // small private module named for the reason, and the rule is off for
       // that module alone. Each module's header repeats the reason.
@@ -226,10 +226,10 @@ export default defineConfig({
       // The measured tag dispatches stay `switch` statements: a hoisted
       // `Match` measured slower on each path (ns per call, median, node).
       // Per row: `addNumber` (`Aggregate.addToBucket`'s fold) `Match.type`
-      // 4.3x, a Record table 1.8x (#667); `removeNumber`, its mirror, not
+      // 4.3x, a Record table 1.8x; `removeNumber`, its mirror, not
       // measured apart; `deltaFromChanges` `Match.type` 2.2x, `typeTags` 2.1x,
-      // a table 1.2x (#667); `holds` `Match.when` ~7x, a table ~5x (#667).
-      // Per emission or state (#562): `foldNumeric` `typeTags` 1.21x on a
+      // a table 1.2x; `holds` `Match.when` ~7x, a table ~5x.
+      // Per emission or state: `foldNumeric` `typeTags` 1.21x on a
       // 10-row `compute` (133 -> 160 ns); `emptyBucket` `typeTags` 1.47x on
       // an empty `initState` (44 -> 65 ns); `bucketValue` `Match.type` 2.3x on
       // `stateValue` (10 -> 23 ns) and +13% per emission over 10k groups,
@@ -265,7 +265,7 @@ export default defineConfig({
       // A node's row codec asserted service-free for `Collection.make`.
       // `AnyNode` could state it, but `NodeBridge` builds nodes from
       // effect-jsonapi's open `Resource.Any`, so a bridged node is not
-      // service-free by its type; the fix is upstream (#695).
+      // service-free by its type; the fix is upstream.
       {
         files: ["packages/effect/src/internal/NodeRowCodec.ts"],
         rules: {
@@ -589,7 +589,7 @@ export default defineConfig({
         // The effect-auth bridge's suite, apart for the same reason: its
         // `effect` floor is `catalogs.auth-peers` (4.1.0, which effect-auth
         // requires), so `vp run ci:floor` runs it at that floor.
-        // The audience example (#221) composes effect-auth with the engine
+        // The audience example composes effect-auth with the engine
         // and the façade, so its tests share the floor and the project.
         extends: true,
         test: {
@@ -601,7 +601,7 @@ export default defineConfig({
       {
         // The commerce façade's browser test serves the app's production
         // build. Its global setup builds the app once, before the parallel
-        // test phase (#289): a `vite build` inside the test's `beforeAll`
+        // test phase: a `vite build` inside the test's `beforeAll`
         // competed with every other file for CPU, so its wall time scaled
         // with host load. Vitest runs the setup only when this project has
         // files in the run.
@@ -626,7 +626,7 @@ export default defineConfig({
               // back over RPC: about 4.5x the CPU of a native import (1.2 s
               // against 0.27 s). Under a load average of ~95 on 4 cores that
               // import alone took 113 s and timed the hook out at 120 s; loaded
-              // natively it took 5-29 s (#472). The build is plain Node ESM:
+              // natively it took 5-29 s. The build is plain Node ESM:
               // load it the way `node build` serves it.
               external: [/\/examples\/commerce\/build\//],
             },

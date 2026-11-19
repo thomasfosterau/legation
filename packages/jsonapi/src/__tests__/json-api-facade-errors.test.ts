@@ -1,5 +1,5 @@
 /**
- * JsonApiFacade write error document tests (#512, ADR-0030 §3): what the
+ * JsonApiFacade write error document tests (ADR-0030 §3): what the
  * façade answers, offline, for a write it cannot journal — the `503`
  * `offline` document (with `client_id_required` or `not_journalable`
  * appended where the decision table says so), and the `400` / `409` / `422`

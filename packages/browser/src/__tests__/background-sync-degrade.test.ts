@@ -1,7 +1,7 @@
 /**
  * @vitest-environment jsdom
  *
- * BackgroundSync without Background Sync (#213). The API is Chromium-only, so
+ * BackgroundSync without Background Sync. The API is Chromium-only, so
  * on Safari and Firefox there is no `SyncManager` — and that is the common
  * case, not a fault. Registration reports `"Unsupported"` without logging
  * anything an app would read as an error, and the journal still flushes on
@@ -63,7 +63,7 @@ class Logs extends Context.Service<
   );
 }
 
-describe("BackgroundSync without Background Sync (#213)", () => {
+describe("BackgroundSync without Background Sync", () => {
   layer(Logs.layer)((scoped) => {
     scoped.effect("registration degrades quietly wherever the API is missing or refused", () =>
       Effect.gen(function* () {

@@ -1,5 +1,5 @@
 /**
- * The host-request envelope (ADR-0021 amendment, #146, #136): a mirror asks
+ * The host-request envelope (ADR-0021 amendment): a mirror asks
  * its host a typed request kind and the host answers from its registry. A
  * single-reply kind round-trips one `Value`, a streaming kind its `Item`s and
  * `End`; every failure is a reply (`UnknownKind`, `InvalidRequest`, `Failed`);

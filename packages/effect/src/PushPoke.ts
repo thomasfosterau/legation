@@ -1,7 +1,7 @@
 /**
  * PushPoke
  *
- * Web Push as a poke carrier (#214): the one mechanism that wakes a service
+ * Web Push as a poke carrier: the one mechanism that wakes a service
  * worker that is not running, so a client with no open tab converges before
  * the user returns. Under poke-then-pull it is a safe fit. A poke carries no
  * data, so a lost push costs a delay and a duplicate costs one pull that finds

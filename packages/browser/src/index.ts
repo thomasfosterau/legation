@@ -13,7 +13,7 @@
  * - `ServiceWorkerHost`: the recommended host composition (engine sync
  *   loop + mirror serving) for the per-origin service-worker singleton
  * - `ElectedHost`: `navigator.locks`-based multi-tab leader election for the
- *   no-service-worker degraded topology (#119) — the shipped fallback for
+ *   no-service-worker degraded topology — the shipped fallback for
  *   `ServiceWorkerHost`'s main-thread path
  * - `CacheApiHttpCache`: ResponseCacheStore over the Cache API plus the
  *   stale-while-revalidate fetch handler
@@ -23,9 +23,9 @@
  *   `ClientTransport` so the sync loop's reconnect/focus triggers fire
  * - `BackgroundSync`: the worker's `sync` listener and the registration
  *   helper, so a journal written offline flushes after its tab has closed
- *   (#213) — composed into `ServiceWorkerHost` via `backgroundSync`
+ *   — composed into `ServiceWorkerHost` via `backgroundSync`
  * - `PushPoke`: the worker's `push` listener for the library's contentless
- *   Web Push poke (#214) — composed into `ServiceWorkerHost` via `pushPoke`
+ *   Web Push poke — composed into `ServiceWorkerHost` via `pushPoke`
  */
 
 export * as IndexedDbClientStore from "./IndexedDbClientStore.js";

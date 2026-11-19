@@ -14,12 +14,12 @@
  * `evaluate`, `getRows` or `lastMutationIds` sees both or neither. A
  * `BackendError` discards the stage and skips the bump.
  *
- * Concurrent `applyMutations` calls for one client group are safe (#346): the
+ * Concurrent `applyMutations` calls for one client group are safe: the
  * commit re-checks the client's committed `lastMutationId`, so a copy of a
  * mutation that another call committed while its handler ran is dropped (its
  * stage discarded, reported as a replay skip), and the watermark only rises.
  *
- * Calls from different client groups are serialisable (#353). Every row a
+ * Calls from different client groups are serialisable. Every row a
  * handler reads from committed state is recorded with the version it had, and
  * the commit re-checks those versions inside the same state update that applies
  * the writes. A row another group changed since the read makes the commit
@@ -31,7 +31,7 @@
  * A handler still stale after a fixed number of runs fails with a transient
  * `BackendError` and writes nothing, so a hot row cannot loop it forever.
  *
- * Every copy reports the committed outcome (#355). A mutation committed as
+ * Every copy reports the committed outcome. A mutation committed as
  * permanently rejected is remembered with its reason, so a copy that loses the
  * race, or a later replay, lists it in `rejected` just as the copy that
  * committed it did. The client's outcome therefore does not depend on which
@@ -82,7 +82,7 @@ export interface BackendWriter {
  * An authoritative mutator handler. Fail with `BackendError` for a transient
  * error (aborts the batch, client retries) or `MutationRejected` for a
  * permanent one (id bumped without effects; the mutation is skipped). A handler
- * may run more than once when a row it read changed before its commit (#353),
+ * may run more than once when a row it read changed before its commit,
  * so anything it does outside the writer must be safe to repeat.
  */
 export type BackendHandler = (
@@ -141,7 +141,7 @@ interface MemoryRow {
 
 /**
  * How many times one mutation's handler runs while a row it read keeps changing
- * before its commit (#353). A handler still stale after this many runs fails
+ * before its commit. A handler still stale after this many runs fails
  * with a transient `BackendError` instead of looping on a hot row.
  */
 const MAX_HANDLER_ATTEMPTS = 16;
@@ -159,7 +159,7 @@ interface MemoryState {
 }
 
 /**
- * A subset's entries and total over a state (#210): its correlated `Exists`
+ * A subset's entries and total over a state: its correlated `Exists`
  * nodes resolved against the stored rows, then filter, sort and window, the
  * total counted before the window.
  */
@@ -202,7 +202,7 @@ type ReadSet = Map<string, Map<string, number | undefined>>;
  * A mutation's writes, not yet committed. `log` keeps them in handler order so
  * the commit assigns row versions exactly as an unstaged run would; `overlay`
  * keeps the latest write per row so the handler's reads see its own writes;
- * `reads` is what the handler saw in committed state (#353).
+ * `reads` is what the handler saw in committed state.
  */
 interface Stage {
   readonly log: Array<StagedEntry>;
@@ -295,7 +295,7 @@ const rejectionOf = (
   mutationId: number
 ): string | undefined => s.rejections.get(clientGroupId)?.get(clientId)?.get(mutationId);
 
-/** The state with a permanent rejection of one mutation remembered (#355). */
+/** The state with a permanent rejection of one mutation remembered. */
 const withRejection = (
   s: MemoryState,
   clientGroupId: string,
@@ -313,7 +313,7 @@ const withRejection = (
 };
 
 /**
- * Forget the rejections a client has moved past (#355). The rule, with its
+ * Forget the rejections a client has moved past. The rule, with its
  * floors, is {@link RejectionMemory.forgetBelow}.
  */
 const forgetRejectionsBelow = (
@@ -357,7 +357,7 @@ const oldValuesOf = (
  * Fold a committed stage into a batch's hint inputs: the ids it touched and
  * the values of its PUTs. A delete removes the id from the values, so it is
  * absent from what the hint emits, even when an earlier mutation of the same
- * batch put the row (#344): the hint describes the batch's final state, and a
+ * batch put the row: the hint describes the batch's final state, and a
  * row deleted later in the batch carries no value.
  */
 const foldStage = (
@@ -381,7 +381,7 @@ const foldStage = (
   });
 };
 
-/** One opened mutation: the context it runs in, and the committed rows its handler reads (#353). */
+/** One opened mutation: the context it runs in, and the committed rows its handler reads. */
 interface MemoryUnit {
   readonly context: SyncContext;
   readonly mutation: Mutation;
@@ -398,7 +398,7 @@ interface MemoryBatch {
  * Build a memory backend with the given authoritative handlers. Its
  * `applyMutations` is {@link transaction} over the memory store's steps, so the
  * ledger rules (order, skip, gap, the bump with each outcome, reporting) are
- * the combinator's (#177).
+ * the combinator's.
  */
 export const make = (handlers: Readonly<Record<string, BackendHandler>>): Effect.Effect<Backend> =>
   Effect.gen(function* () {
@@ -431,13 +431,13 @@ export const make = (handlers: Readonly<Record<string, BackendHandler>>): Effect
     // readers see both or neither. The client's committed watermark is
     // re-checked inside that update: a concurrent call may have committed this
     // mutation while its handler was running, and then this copy's outcome is
-    // dropped (#346) and the committed one is reported instead (#355).
+    // dropped and the committed one is reported instead.
     //
     // The start-of-mutation gap rule needs no re-check here: `open` proved
     // `mutationId = watermark + 1`, and the watermark only rises, so the bound
     // still holds at commit.
     //
-    // The reads the handler made are re-checked here too (#353), after the
+    // The reads the handler made are re-checked here too, after the
     // replay check and before any write. A changed read means nothing commits
     // and the combinator runs the handler again. Because the check and the
     // write are one state update, no other group's commit can land between them.
@@ -471,7 +471,7 @@ export const make = (handlers: Readonly<Record<string, BackendHandler>>): Effect
       });
 
     // A handler runs against a fresh stage each time it is opened, so a run
-    // after a conflict (#353) starts from the committed state it now reads.
+    // after a conflict starts from the committed state it now reads.
     // A handler still stale after `transaction`'s attempt cap fails
     // transiently, like a serialization failure on PostgreSQL.
     const applyMutations = transaction<BackendHandler, MemoryBatch, MemoryUnit, Stage>({
@@ -480,7 +480,7 @@ export const make = (handlers: Readonly<Record<string, BackendHandler>>): Effect
       maxAttempts: MAX_HANDLER_ATTEMPTS,
       begin: (context, floors) =>
         // The rejections below this push's floors are ones each client has
-        // already seen the outcome of (#355). The snapshot after forgetting is
+        // already seen the outcome of. The snapshot after forgetting is
         // the pre-batch state hints take old values from (ADR-0023).
         Ref.update(state, (s) => forgetRejectionsBelow(s, context.clientGroupId, floors)).pipe(
           Effect.andThen(Ref.get(state)),
@@ -549,7 +549,7 @@ export const make = (handlers: Readonly<Record<string, BackendHandler>>): Effect
           Effect.flatMap((s) => countedOver(s, subset)),
           Effect.map((answer) => answer.entries)
         ),
-      // The total is free here: every matching row is read before the window (#210).
+      // The total is free here: every matching row is read before the window.
       evaluateCounted: (_context, subsets) =>
         Effect.flatMap(Ref.get(state), (s) =>
           Effect.forEach(subsets, (subset) => countedOver(s, subset), { concurrency: 1 })

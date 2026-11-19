@@ -1,5 +1,5 @@
 /**
- * `SqlBackend.evaluateMany` on a real SQLite engine (#505): a pull's subsets
+ * `SqlBackend.evaluateMany` on a real SQLite engine: a pull's subsets
  * in one `UNION ALL` statement, counted at the executor seam, and the same
  * entries as one `evaluate` per subset. The PostgreSQL bound is asserted in
  * `pg-executor.test.ts`; the equivalence over the generated corpus is
@@ -92,7 +92,7 @@ const subsets = [
   }),
 ];
 
-describe("SqlBackend.evaluateMany on SQLite (#505)", () => {
+describe("SqlBackend.evaluateMany on SQLite", () => {
   it.effect("evaluates a pull's subsets in one statement, plus one per Exists node", () =>
     withBackend((backend, statements) =>
       Effect.gen(function* () {

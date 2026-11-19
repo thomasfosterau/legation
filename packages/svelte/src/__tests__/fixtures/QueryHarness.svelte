@@ -28,7 +28,7 @@
   const grouped = useAggregateGrouped(() => read, Aggregate.count, groupBy);
 
   const current = $derived(AsyncResult.getOrElse(rows.current, () => []));
-  // The answer's completeness, beside its rows (#653).
+  // The answer's completeness, beside its rows.
   const completeness = $derived(
     AsyncResult.getOrElse(
       AsyncResult.map(answer.current, (value) => `${value.completeness}/${value.rows.length}`),

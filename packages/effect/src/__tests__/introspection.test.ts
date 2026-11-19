@@ -1,7 +1,7 @@
 /**
- * Introspection (#45): `EngineIntrospection` reflects engine + store state
+ * Introspection: `EngineIntrospection` reflects engine + store state
  * (subscriptions, journal, cookie, collections), the unified `engineEvents`
- * stream emits the sync lifecycle in order, `mutationEvents` (#36) stays a
+ * stream emits the sync lifecycle in order, `mutationEvents` stays a
  * subset of it, the server introspection lists active groups/subsets/CVR
  * sizes, and the new `legation_*` metrics move on a push/pull cycle.
  */
@@ -81,7 +81,7 @@ const makeClient = (handler: ServerHandler, name: string) =>
 
 const allTodos = Subset.make({ collection: "todos" });
 
-describe("EngineIntrospection (#45)", () => {
+describe("EngineIntrospection", () => {
   it.effect("subscriptions/journal/cookie/collections reflect engine state", () =>
     Effect.gen(function* () {
       const handler = yield* makeServer;
@@ -121,10 +121,10 @@ describe("EngineIntrospection (#45)", () => {
       yield* engine.pull;
 
       const events = yield* Fiber.join(collected).pipe(Effect.timeout(Duration.seconds(2)));
-      // No `ViewRebuilt` after `MutationJournaled` (#109): a mutate now
+      // No `ViewRebuilt` after `MutationJournaled`: a mutate now
       // publishes a delta `Patch` onto the cached overlay rather than a
       // `Rebuild`, so it never emits `ViewRebuilt` at all.
-      // The push ack reveals nothing (#286): the applied mutation keeps its
+      // The push ack reveals nothing: the applied mutation keeps its
       // overlay effects until the pull that reports it, which is the rebuild.
       expect(events.map((event: EngineEvent) => event._tag)).toEqual([
         "MutationJournaled",
@@ -140,7 +140,7 @@ describe("EngineIntrospection (#45)", () => {
     })
   );
 
-  it.live("mutationEvents (#36) is a filtered projection of the one hub", () =>
+  it.live("mutationEvents is a filtered projection of the one hub", () =>
     Effect.gen(function* () {
       const handler = yield* makeServer;
       const { engine } = yield* makeClient(handler, "a");
@@ -158,7 +158,7 @@ describe("EngineIntrospection (#45)", () => {
   );
 });
 
-describe("ServerIntrospection (#45)", () => {
+describe("ServerIntrospection", () => {
   it.effect("lists active groups, their subsets, and CVR sizes after a pull", () =>
     Effect.gen(function* () {
       const { handler, introspection } = yield* makeServerWithIntrospection;
@@ -188,7 +188,7 @@ const metricSnapshot = Effect.all(
   { concurrency: 1 }
 );
 
-describe("Introspection metrics (#45)", () => {
+describe("Introspection metrics", () => {
   it.effect("the new legation_* metrics move on a push/pull cycle", () =>
     Effect.gen(function* () {
       const handler = yield* makeServer;

@@ -5,7 +5,7 @@
  * (`src/lib/facade.ts` reflects the read routes for the façade, ADR-0029).
  * One declaration, so the routes the façade answers are the routes the
  * server serves, by construction. The `operations` group is the atomic
- * operations extension over the writable resources (#167), which
+ * operations extension over the writable resources, which
  * `JsonApiSync.inspect` detects for `JsonApiBackend`'s batched push.
  *
  * Each read endpoint declares its query as the node graph's own codec
@@ -74,7 +74,7 @@ const singleRowQuery = (collection: string) => JsonApiQuery.singleRowSchema(node
  * A create payload that accepts the client-generated id every write here
  * carries (JSON:API 1.1 §Client-Generated IDs): the resource's own create
  * payload, its resource object rebuilt with an optional `id`. Since
- * effect-jsonapi 0.18 the default create payload refuses one with 403 (#450),
+ * effect-jsonapi 0.18 the default create payload refuses one with 403,
  * and `Endpoint.create`'s `payload` option is how an endpoint accepts it. The
  * handlers read the id from the request (`clientIdOf`).
  */
@@ -87,7 +87,7 @@ const withClientId = <Data extends Schema.Struct.Fields>(data: Schema.Struct<Dat
  * The atomic request document the operations endpoint accepts: its
  * operations as sent, each decoded by the handler without its client id
  * (`server/jsonapi.ts`, `decodeOperation`). The default document refuses a
- * client id on `add` with 403 (#464), and `Endpoint.operations`' `payload`
+ * client id on `add` with 403, and `Endpoint.operations`' `payload`
  * option is how the endpoint accepts it.
  */
 export const OperationsRequest = Schema.Struct({
@@ -119,7 +119,7 @@ export const api = HttpApi.make("commerce")
     Group.make(
       CartItem,
       Endpoint.list(CartItem, { query: query("cartItems") }),
-      // The row a JsonApiBackend reads before it deletes the row (#372).
+      // The row a JsonApiBackend reads before it deletes the row.
       Endpoint.get(CartItem, { query: singleRowQuery("cartItems"), errors: [NotFound] }),
       Endpoint.create(CartItem, {
         payload: withClientId(CartItem.createPayload.fields.data),

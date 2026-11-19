@@ -68,7 +68,7 @@ export class MutationRejected extends Schema.TaggedError<
 
 /**
  * The server rejected a request because the client's declared `schemaVersion`
- * is not one this build accepts (#48). Unlike a {@link MutationRejected} (a
+ * is not one this build accepts. Unlike a {@link MutationRejected} (a
  * per-mutation, permanent business verdict) this is a *transport-level* "your
  * build is obsolete" condition: it is raised up front, before any mutation is
  * applied or any patch computed, so the journal is never poisoned — the client
@@ -134,7 +134,7 @@ export class QueryError extends Schema.TaggedError<QueryError, { readonly brand:
 /**
  * A Node (or Collection) declared a filterable or sortable field its row does
  * not carry, or a filterable attribute whose literal kind can neither be
- * derived from its schema nor was given explicitly (#154, ADR-0028). A static
+ * derived from its schema nor was given explicitly (ADR-0028). A static
  * definition bug surfaced at setup time, like {@link DuplicateNameError};
  * thrown by the synchronous `Node.make`.
  */

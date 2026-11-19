@@ -419,7 +419,7 @@ describe("ServiceWorkerHost.start", () => {
             mutators,
           });
           yield* mirror.subscribe(allTodos);
-          // Listed once a pull started after the pin has applied (#426).
+          // Listed once a pull started after the pin has applied.
           yield* eventually(
             Effect.map(engine.activeSubscriptions, (subs) => subs.length),
             (count) => count === 1

@@ -11,7 +11,7 @@
  * test advances it, and each wait is for a specific event (a lease
  * registered, a write pushed, a publish routed, a window updated). Nothing
  * waits on wall-clock time, so a loaded machine cannot expire a lease or skip
- * a heartbeat mid-test (#282, #292).
+ * a heartbeat mid-test.
  */
 import { describe, expect, it } from "@effect/vitest";
 import * as Arr from "effect/Array";

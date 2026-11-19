@@ -1,6 +1,6 @@
 /**
  * A push that carries more than the pull-ahead threshold goes in chunks of that size, with a pull
- * between them, so an oversized journal never takes the acknowledged tail past the bound (#429).
+ * between them, so an oversized journal never takes the acknowledged tail past the bound.
  * The log of requests and pulls shows the chunk boundaries, the tail each request found, and the
  * order the server sees the mutations in.
  */
@@ -60,7 +60,7 @@ const authPolicy = Authorization.policy({ counters: Authorization.allowAll });
 const countersSubset = Subset.make({ collection: "counters" });
 
 // With a bound of 8 the threshold is 4; with 16 it is 8. The cases below avoid a push that ends on a
-// full chunk: that would start a pull ahead (#337), which is asynchronous and would show in the log.
+// full chunk: that would start a pull ahead, which is asynchronous and would show in the log.
 const SMALL_LIMIT = 8;
 
 const serverOver = (backend: Backend) =>
@@ -159,7 +159,7 @@ const journaled = (count: number, unpulledLimit?: number) =>
     return { engine, store, log };
   });
 
-describe("a push larger than the pull-ahead threshold (#429)", () => {
+describe("a push larger than the pull-ahead threshold", () => {
   it.effect(
     "with pokes off and no pullInterval, a push past the bound releases nothing early",
     () =>
@@ -310,8 +310,8 @@ describe("a push larger than the pull-ahead threshold (#429)", () => {
   it.effect("an odd bound: a push into a tail at the threshold never takes it past the bound", () =>
     Effect.gen(function* () {
       // Bound 9, threshold 5. The first push's acknowledged tail reaches the threshold, where a pull ahead
-      // would start (#337); pulls are refused until that pull has reached the refusal, so the tail stays at
-      // 5. The second push then has 4 entries of room, not a whole chunk of 5 (#429).
+      // would start; pulls are refused until that pull has reached the refusal, so the tail stays at
+      // 5. The second push then has 4 entries of room, not a whole chunk of 5.
       const server = yield* serverOver(yield* MemoryBackend.make(backendHandlers));
       const store = yield* ClientStoreModule.makeMemory;
       const inner = yield* makeInMemory(server, "group-a");
@@ -345,7 +345,7 @@ describe("a push larger than the pull-ahead threshold (#429)", () => {
       yield* engine.subscribe(countersSubset);
       for (let i = 0; i < 5; i++) yield* engine.mutate("counter/inc", { id: "c" });
       yield* engine.push;
-      // The pull ahead the push started (#337) has reached the refusal, so it has failed; accept pulls again.
+      // The pull ahead the push started has reached the refusal, so it has failed; accept pulls again.
       yield* Deferred.await(refusedCalled);
       yield* Ref.set(pullsRefused, false);
       expect(yield* tailIds(store)).toEqual([1, 2, 3, 4, 5]);
@@ -396,7 +396,7 @@ describe("a push larger than the pull-ahead threshold (#429)", () => {
 
       for (let i = 9; i <= 12; i++) yield* engine.mutate("counter/inc", { id: "c" });
       // The tail has no room and the pull fails: the push stops before it sends anything, and the
-      // one-entry fallback that a full tail used to take is gone (#429).
+      // one-entry fallback that a full tail used to take is gone.
       expect(Exit.isFailure(yield* Effect.exit(engine.push))).toBe(true);
       expect(pushIds(log)).toEqual([`push ${range(1, 4)}`, `push ${range(5, 8)}`]);
       expect(yield* tailIds(store)).toEqual([1, 2, 3, 4, 5, 6, 7, 8]);

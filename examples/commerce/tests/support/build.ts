@@ -1,7 +1,7 @@
 /**
- * The commerce app's production build for the façade's browser test
- * (#168), made once per Vitest run by `global-setup.ts` before any test
- * file starts (#289): a `vite build` is CPU-bound, and run inside the
+ * The commerce app's production build for the façade's browser test,
+ *made once per Vitest run by `global-setup.ts` before any test
+ * file starts: a `vite build` is CPU-bound, and run inside the
  * test's `beforeAll` it competed with every other test file in the
  * parallel phase, so its wall time scaled with host load.
  *

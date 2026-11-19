@@ -1,5 +1,5 @@
 /**
- * Property test (issue #113 acceptance criterion): indexed evaluation must be
+ * Property test: indexed evaluation must be
  * exactly equivalent to full-scan `Subset.apply` for randomized predicates and
  * data — including null/absent fields and type-mismatched comparisons
  * (`Predicate.ts` semantics: `evaluate` under ADR-0028, where absent ≡ NULL

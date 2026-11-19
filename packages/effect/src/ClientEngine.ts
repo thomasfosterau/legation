@@ -120,7 +120,7 @@ export interface WindowRetarget {
 }
 
 /**
- * A reactively-retargetable live window (#133): `rows` is the same live page
+ * A reactively-retargetable live window: `rows` is the same live page
  * stream {@link ClientEngine.observe} would give this subset; `retarget`
  * widens/advances its `limit`/`cursor` in place — reusing `LiveView`'s
  * maintained order (`LiveView.retarget`: no re-subscribe, no rebuild from
@@ -137,7 +137,7 @@ export interface WindowObservation {
 /**
  * A mutation's authoritative (server) outcome: `applied` once the backend
  * acknowledged it with effects, or `rejected` with a reason when the backend
- * permanently refused it (#35). Observed via {@link MutationHandle}.
+ * permanently refused it. Observed via {@link MutationHandle}.
  */
 export type MutationOutcome =
   | { readonly _tag: "applied" }
@@ -150,7 +150,7 @@ export type MutationOutcome =
  * first, so it never hangs.
  *
  * `mutationId` is the id the mutation was journaled under. While the entry is
- * still unpushed a paced compaction (#249) may renumber it to keep the
+ * still unpushed a paced compaction may renumber it to keep the
  * journal gap-free (the backend rejects gaps), so treat the id as a label for
  * *now*: `acknowledged` follows the entry through any renumbering, and
  * `MutationRenumbered` on {@link ClientEngine.engineEvents} reports each move.
@@ -163,7 +163,7 @@ export interface MutationHandle {
 }
 
 /**
- * The form client a form-action Mutation runs under (ADR-0030 #215 §2): a
+ * The form client a form-action Mutation runs under (ADR-0030 §2): a
  * fresh client id minted for one rendered form, with its mutation id (`1`).
  */
 export interface FormClient {
@@ -186,7 +186,7 @@ export type FormRuling =
   | { readonly phase: "rejected"; readonly reason: string };
 
 /**
- * An enhanced form submission's optimistic entry (ADR-0030 #215 §4), from
+ * An enhanced form submission's optimistic entry (ADR-0030 §4), from
  * {@link ClientEngine.beginFormMutation}. Exactly one of `settle` or `abandon`
  * ends it; later calls do nothing.
  */
@@ -211,12 +211,12 @@ export interface FormSubmission {
  * A mutation lifecycle event on {@link ClientEngine.mutationEvents}: emitted
  * when a mutation is `journaled` locally, then when the backend `acknowledged`
  * (applied) or `rejected` it — or, for a still-unpushed entry, when a paced
- * strategy (#117: debounce/throttle/coalesce) `dropped` it via
+ * strategy (debounce/throttle/coalesce) `dropped` it via
  * `dropIfPending` in favour of a newer entry for the same key. Every
  * journaled mutation emits `journaled`, whether it came from `mutate`,
  * `mutateEncoded`, or `mutateWithAck`.
  *
- * A paced compaction's `MutationRenumbered` (#249) is **not** projected onto
+ * A paced compaction's `MutationRenumbered` is **not** projected onto
  * this stream: its `phase` union describes one mutation's lifecycle, and a
  * renumber is not a phase. Consumers that correlate by id read it from
  * {@link ClientEngine.engineEvents}, or just follow `mutationStates` (which
@@ -230,26 +230,26 @@ export interface MutationEvent {
 }
 
 /**
- * A unified sync-lifecycle event on {@link ClientEngine.engineEvents} (#45):
+ * A unified sync-lifecycle event on {@link ClientEngine.engineEvents}:
  * the single source of truth from which {@link ClientEngine.mutationEvents}
- * (#36) is derived. Every variant is emitted from one internal hub, kept
+ * is derived. Every variant is emitted from one internal hub, kept
  * unbounded for the same reason #44 keeps `mutationEventsHub` unbounded:
  * lifecycle events are low-volume, consumer-driven, and must be lossless —
  * they are observability, not reconstructable via pull.
  *
  * - `MutationJournaled` — a mutation was journaled locally (from `mutate`,
  *   `mutateEncoded`, or `mutateWithAck`), or a journal entry a direct store write
- *   (`Hydration.hydrate`) appended was adopted into this engine (#358), once per entry.
+ *   (`Hydration.hydrate`) appended was adopted into this engine, once per entry.
  * - `MutationAcknowledged` — the backend applied a journaled mutation.
  * - `MutationRejected` — the backend permanently refused it, with a `reason`.
  *   Each mutation settles once: a later response that repeats or contradicts
- *   its outcome is ignored (#364), so no second event follows.
- * - `MutationDropped` — a paced strategy (#117) compacted a still-unpushed
+ *   its outcome is ignored, so no second event follows.
+ * - `MutationDropped` — a paced strategy compacted a still-unpushed
  *   entry out of the journal in favour of a newer one for the same key; the
  *   entry never reached the backend.
  * - `MutationRenumbered` — the same compaction moved a surviving, still-
  *   unpushed entry from `previousMutationId` to `mutationId` so the client's
- *   ids stay contiguous (#249). Emitted after the compaction's `MutationDropped`
+ *   ids stay contiguous. Emitted after the compaction's `MutationDropped`
  *   events; an id seen in either may now name a different entry.
  * - `PushStarted` / `PushCompleted` — a push began / finished (with the number
  *   of `mutations` delivered).
@@ -260,13 +260,13 @@ export interface MutationEvent {
  *   resets the whole view, and contributes no `rows` (there is no finite row
  *   list for "everything"). The touched collections and rows drive
  *   collection- and row-scoped reactions such as HTTP-cache tag invalidation
- *   (`@thomasfosterau/legation-browser`'s `HttpCacheInvalidation`, #207), which is why they
+ *   (`@thomasfosterau/legation-browser`'s `HttpCacheInvalidation`), which is why they
  *   are reported even on a client with an empty journal (the common case,
  *   where a pull emits a `Patch` change and no `ViewRebuilt`).
  * - `PokeReceived` — the sync loop observed a poke (with its optional `reason`).
  * - `ViewRebuilt` — the local view was rebuilt (rebase/seed/subscribe), scoped
  *   to the `collections` the shift touched (absent means "any collection").
- * - `UpdateNeeded` — the server rejected this build's `schemaVersion` (#48);
+ * - `UpdateNeeded` — the server rejected this build's `schemaVersion`;
  *   emitted at most once per ongoing rejection (the latch resets on the next
  *   successful push/pull), alongside the `onUpdateNeeded` hook.
  */
@@ -312,7 +312,7 @@ export type EngineEvent =
     };
 
 /**
- * A row-level delta produced by a mutator's local handler (#109): unlike a
+ * A row-level delta produced by a mutator's local handler: unlike a
  * `PatchOp`, it carries no server version — the row is optimistic, not yet
  * confirmed. Structurally interchangeable with `PatchOp`'s `Put`/`Del` for
  * `LiveView` folding, which never reads `version`.
@@ -330,7 +330,7 @@ type OverlayOp =
  * A local-view change. `Patch` carries per-row deltas that drive incremental
  * `LiveView` maintenance: confirmed-row ops from a pull (only when the journal
  * was empty, so they equal the materialized-view deltas) or the ops a mutator's
- * local handler just performed on the optimistic overlay (#109). `Rebuild` is
+ * local handler just performed on the optimistic overlay. `Rebuild` is
  * the conservative fallback when the overlay could have shifted in a way we
  * did not track precisely, so observers re-materialize; its `collections`
  * names exactly which collections the shift touched, so an observer of a
@@ -345,7 +345,7 @@ type ViewChange =
 /** The global rebuild: `collections` undefined, so every observer re-materializes. */
 const REBUILD: ViewChange = { _tag: "Rebuild" };
 
-// What a journaled mutation's local effects are applied onto (#260): the warm
+// What a journaled mutation's local effects are applied onto: the warm
 // overlay cache, or the overlay journal from before the append to replay into
 // a cold one. Read under `overlayLock`, so the journal is only read when the
 // cache is cold.
@@ -358,10 +358,10 @@ const rebuildFor = (collections: ReadonlySet<string> | undefined): ViewChange =>
   collections === undefined ? REBUILD : { _tag: "Rebuild", collections };
 
 /**
- * Most acknowledged-but-unpulled mutations the engine keeps in the overlay
- * (#286). A push acknowledges entries that the next pull reports. The tail
+ * Most acknowledged-but-unpulled mutations the engine keeps in the overlay.
+ *A push acknowledges entries that the next pull reports. The tail
  * never grows past this bound: a push sends only as many mutations as the
- * room left, and a full tail waits for a pull (#429). Nothing releases an
+ * room left, and a full tail waits for a pull. Nothing releases an
  * entry early.
  */
 const UNPULLED_LIMIT = 1024;
@@ -417,8 +417,8 @@ export interface SyncLoopOptions {
 }
 
 /**
- * Retry/backoff policies for the sync loop's network legs (#34). The scheduler
- * (#33) decides *when* to attempt; these `Schedule`s decide *how* an attempt
+ * Retry/backoff policies for the sync loop's network legs. The scheduler
+ * decides *when* to attempt; these `Schedule`s decide *how* an attempt
  * survives transient failure — kept orthogonal to avoid double-retry. Only
  * `TransportError` is retried; `StoreError`/`MutatorError` are not transient and
  * propagate to the failure surface immediately. Unset legs use
@@ -483,7 +483,7 @@ export interface ClientEngineOptions {
   /** Retry/backoff policies for push, pull, and the poke stream. */
   readonly retry?: RetryOptions;
   /**
-   * Capacity of the bounded change hub (#44). A stalled observer cannot make
+   * Capacity of the bounded change hub. A stalled observer cannot make
    * the hub grow without limit: at capacity the hub drops the newest
    * view-changes, and the consumer collapses the resulting seq gap into a
    * lossless `Rebuild` (see {@link make}). Defaults to
@@ -491,10 +491,10 @@ export interface ClientEngineOptions {
    */
   readonly changeHubCapacity?: number;
   /**
-   * Most acknowledged-but-unpulled mutations the overlay keeps (#286). Defaults to 1024. The bound holds
+   * Most acknowledged-but-unpulled mutations the overlay keeps. Defaults to 1024. The bound holds
    * strictly: no entry is released early. A push that takes the tail to half this bound starts a pull
-   * ahead of the bound (#337), so a healthy transport never has to wait, with or without pokes. A push
-   * larger than half the bound goes in chunks of half the bound, with a pull between them (#429), and a
+   * ahead of the bound, so a healthy transport never has to wait, with or without pokes. A push
+   * larger than half the bound goes in chunks of half the bound, with a pull between them, and a
    * chunk never takes the tail past the bound. A tail that is at or above the bound (for example one
    * persisted under a lowered bound) makes a push pull first; if that pull fails, the push fails and the
    * journal stays. An internal seam: a test lowers it to reach the bound with a few mutations. Must be a
@@ -502,7 +502,7 @@ export interface ClientEngineOptions {
    */
   readonly unpulledLimit?: number;
   /**
-   * This build's schema version (#48), sent on every push and pull request. The
+   * This build's schema version, sent on every push and pull request. The
    * server's acceptor may reject an unsupported version; omit it for today's
    * version-less behaviour.
    */
@@ -510,7 +510,7 @@ export interface ClientEngineOptions {
   /**
    * Invoked when the server rejects this build's `schemaVersion`
    * (`VersionNotSupportedError`) — the app's cue to prompt an update. It can run while a pull holds the
-   * pull lock (#412), so it must not await `engine.push` or `engine.pull`: a pull between chunks waits on
+   * pull lock, so it must not await `engine.push` or `engine.pull`: a pull between chunks waits on
    * that lock, and the callback would wait on the push. Fired **exactly once per occurrence**: a latch
    * dedupes a retry storm / repeated pulls so an ongoing rejection refires it only after the next request
    * succeeds. The pending journal is retained across the rejection (a version
@@ -523,7 +523,7 @@ export interface ClientEngineOptions {
     readonly message: string;
   }) => Effect.Effect<void>;
   /**
-   * Declared secondary-index fields per collection (issue #113): `eq`/`In`/
+   * Declared secondary-index fields per collection: `eq`/`In`/
    * range predicates on these fields resolve via an in-memory index instead
    * of a full scan (`Client.make` derives this from the Node/Collection
    * registry's `indexes`). Unset means no declared indexes.
@@ -538,7 +538,7 @@ export interface ClientEngineOptions {
   readonly autoIndex?: boolean;
   /**
    * Retention for terminal (acknowledged/rejected) entries in {@link
-   * ClientEngine.mutationStates} (#116). Unset uses {@link
+   * ClientEngine.mutationStates}. Unset uses {@link
    * MutationState.DEFAULT_MAX_TERMINAL}.
    */
   readonly mutationStateRetention?: MutationState.RetentionOptions;
@@ -562,7 +562,7 @@ interface SeqChange {
 }
 
 /**
- * The built secondary indexes (#113) and the counters that guard installing one (#339). Immutable:
+ * The built secondary indexes and the counters that guard installing one. Immutable:
  * every change makes a new value, so a build can compare the value it started from against the
  * current one inside a single `Ref.modify`.
  */
@@ -580,13 +580,13 @@ interface IndexState {
 
 /**
  * Whether no confirmed-row write or field-set change touching `collection` happened between two
- * states, so an index built from rows read in `from` is still current in `to` (#339).
+ * states, so an index built from rows read in `from` is still current in `to`.
  */
 const indexUnchangedFor = (collection: string, from: IndexState, to: IndexState): boolean =>
   from.clears === to.clears &&
   (from.generations.get(collection) ?? 0) === (to.generations.get(collection) ?? 0);
 
-/** Attempts an index build gets when confirmed-row writes keep racing it; then it full-scans (#339). */
+/** Attempts an index build gets when confirmed-row writes keep racing it; then it full-scans. */
 const MAX_INDEX_BUILD_ATTEMPTS = 3;
 
 /**
@@ -599,12 +599,12 @@ const liveEngines = new WeakMap<ClientStore, Set<Effect.Effect<void>>>();
  * Tell every running {@link ClientEngine} built over `store` that the store was written directly
  * (`Hydration.hydrate`): each drops its built indexes and materialized view and reveals the
  * result. A store with no running engine is a no-op. Without this a direct write leaves an
- * engine's built indexes and view showing the old rows (#350).
+ * engine's built indexes and view showing the old rows.
  */
 export const resyncAttachedEngines = (store: ClientStore): Effect.Effect<void> =>
   // Read the attached set when the effect runs, not when it is built: a caller
   // that builds this before its writes (`Effect.ensuring`) must still reach an
-  // engine attached during them (#350).
+  // engine attached during them.
   Effect.suspend(() =>
     Effect.forEach([...(liveEngines.get(store) ?? [])], (resync) => resync, {
       concurrency: 1,
@@ -615,7 +615,7 @@ export const resyncAttachedEngines = (store: ClientStore): Effect.Effect<void> =
 /** One row of a fallthrough read (ADR-0025). */
 export type ReadRow = ReadResponse["rows"][number];
 
-/** The pull counters {@link ClientEngine.pullCounts} reports (#426). */
+/** The pull counters {@link ClientEngine.pullCounts} reports. */
 export interface PullCounts {
   /** The number of the last pull to start; a pull is numbered as it takes the pull lock. */
   readonly started: number;
@@ -657,7 +657,7 @@ export interface ClientEngine {
     args: unknown
   ) => Effect.Effect<MutationHandle, MutatorError | StoreError>;
   /**
-   * The client half of an enhanced form submit (ADR-0030 #215 §4): apply the
+   * The client half of an enhanced form submit (ADR-0030 §4): apply the
    * mutator's local handler to the overlay under the form client's id,
    * **without journaling it**, because the form action is its delivery and a
    * push would apply it twice. Settle the returned {@link FormSubmission} on
@@ -678,7 +678,7 @@ export interface ClientEngine {
   ) => Effect.Effect<FormSubmission, MutatorError | StoreError>;
   /**
    * {@link beginFormMutation} for args already in encoded (wire) form, as a
-   * mirror forwards them (#536): validated by decoding against the Mutation's
+   * mirror forwards them: validated by decoding against the Mutation's
    * args schema, the counterpart of {@link mutateEncoded}.
    */
   readonly beginFormMutationEncoded: ClientEngine["beginFormMutation"];
@@ -686,11 +686,11 @@ export interface ClientEngine {
    * Mutation lifecycle events: a `journaled` event for every journaled
    * mutation, then `acknowledged` or `rejected` once the backend settles it.
    * The first outcome the client observes is the one emitted: a settled
-   * mutation emits no further settle event (#364).
+   * mutation emits no further settle event.
    */
   readonly mutationEvents: Stream.Stream<MutationEvent>;
   /**
-   * A keyed, reactive mutation-state map (#116) — TanStack Query's
+   * A keyed, reactive mutation-state map — TanStack Query's
    * `useMutationState` analogue: every journaled mutation's current lifecycle
    * state (`pending` → `acknowledged` | `rejected`), keyed by `mutationId`.
    * Seeded from the journal at boot (so a reload shows pending intents) and
@@ -703,7 +703,7 @@ export interface ClientEngine {
    */
   readonly mutationStates: Stream.Stream<MutationState.MutationStateMap>;
   /**
-   * The unified sync-lifecycle event stream (#45): mutation, push, pull, poke,
+   * The unified sync-lifecycle event stream: mutation, push, pull, poke,
    * and view-rebuild events from one hub. {@link mutationEvents} is a filtered
    * projection of this stream. Consumed read-only by `EngineIntrospection`.
    */
@@ -741,7 +741,7 @@ export interface ClientEngine {
    * Drop every confirmed row, then the materialized view and the built indexes with them, and
    * reveal the empty state (devtools' `clearStore`). The journal, cookie and subscriptions are
    * untouched. Use this rather than `ClientStore.clearRows` on a running engine: a direct store
-   * write leaves the view and indexes showing the cleared rows (#350).
+   * write leaves the view and indexes showing the cleared rows.
    */
   readonly clearRows: Effect.Effect<void, StoreError>;
   /**
@@ -803,7 +803,7 @@ export interface ClientEngine {
     (subset: Subset.Subset): Stream.Stream<ReadonlyArray<LocalRow>, StoreError | MutatorError>;
   };
   /**
-   * Reactive window retargeting (#133): like {@link observe}, but returns a
+   * Reactive window retargeting: like {@link observe}, but returns a
    * {@link WindowObservation} whose `retarget` widens/advances the SAME open
    * observation's `limit`/`cursor` — reusing `LiveView`'s maintained order
    * instead of requiring a fresh `observe(widerSubset)` (a re-subscribe and a
@@ -817,7 +817,7 @@ export interface ClientEngine {
     subset: Subset.Subset
   ) => Effect.Effect<WindowObservation, StoreError | MutatorError, Scope.Scope>;
   /**
-   * Row-level deltas of a subset's live window (#115): `enter`/`exit` mark
+   * Row-level deltas of a subset's live window: `enter`/`exit` mark
    * predicate/limit-boundary crossings, `update` a same-membership value
    * change, `move` a same-membership/same-value position change (#112's
    * stable position keys) — batched per view-step (one array per
@@ -870,8 +870,8 @@ export interface ClientEngine {
   /**
    * Live aggregate over a subset: emits now and after every local change.
    * For an unwindowed subset (no `limit`/`cursor`, the common case), the fold
-   * is maintained incrementally from `Patch` row deltas rather than re-scanned
-   * (#110); a windowed subset, or a change too large to diff (`Rebuild`),
+   * is maintained incrementally from `Patch` row deltas rather than re-scanned;
+   *a windowed subset, or a change too large to diff (`Rebuild`),
    * refolds the subset from scratch. Deduped — a change that leaves the
    * aggregate value unchanged does not re-emit. Local tier only, as
    * {@link queryAggregate}.
@@ -888,7 +888,7 @@ export interface ClientEngine {
   ) => Stream.Stream<Record<string, Aggregate.AggregateValue>, StoreError | MutatorError>;
   /**
    * Push pending mutations now. The journal goes out in chunks of at most half the unpulled bound, with
-   * a pull before each chunk after the first (#429), so an oversized journal does not take the
+   * a pull before each chunk after the first, so an oversized journal does not take the
    * acknowledged tail past the bound on a healthy transport. One rule covers every stop: when a pull
    * between chunks fails or is refused, the push fails with a transient `TransportError` (a version
    * rejection by that pull included), and the unsent mutations stay journaled for the next push. A chunk
@@ -896,14 +896,14 @@ export interface ClientEngine {
    * before it is sent, so the tail stays within the bound across concurrent calls too. Do not await `pull`
    * or `push` inside `onUpdateNeeded`: a refused pull runs the callback under the pull lock, so an awaited
    * pull, or a push that has to pull first, waits on itself. Fails with
-   * `VersionNotSupportedError` when the server rejects this build's `schemaVersion` (#48) — the journal
+   * `VersionNotSupportedError` when the server rejects this build's `schemaVersion` — the journal
    * is retained, and `onUpdateNeeded` fires (deduped) as a side effect.
    */
   readonly push: Effect.Effect<void, TransportError | StoreError | VersionNotSupportedError>;
   /**
-   * Compact the unpushed tail of the journal (#117's pacing strategies:
+   * Compact the unpushed tail of the journal (pacing strategies:
    * debounce/throttle/coalesce drop a superseded entry) and **renumber the
-   * survivors so the client's mutation ids stay contiguous** (#249): the
+   * survivors so the client's mutation ids stay contiguous**: the
    * backends reject an id gap (ADR-0008), so a bare drop would leave the
    * journal undrainable. The survivors take consecutive ids, in order,
    * continuing from the last entry that may already have been sent (or from
@@ -930,8 +930,8 @@ export interface ClientEngine {
     mutationIds: ReadonlyArray<number>
   ) => Effect.Effect<CompactionResult, StoreError>;
   /**
-   * Adopt an identity, applying the boundary's transition rule (#212,
-   * CONTEXT.md "Identity boundary") — the same rule the store applies on
+   * Adopt an identity, applying the boundary's transition rule
+   * (CONTEXT.md "Identity boundary") — the same rule the store applies on
    * open, so boot and runtime cannot disagree:
    *
    * - **Unchanged** — the same principal; the replica is untouched.
@@ -972,7 +972,7 @@ export interface ClientEngine {
   readonly discardQuarantine: (identity: Identity.Fingerprint) => Effect.Effect<void, StoreError>;
   /**
    * Pull a patch now and rebase. Fails with `VersionNotSupportedError` when the
-   * server rejects this build's `schemaVersion` (#48); see {@link push}.
+   * server rejects this build's `schemaVersion`; see {@link push}.
    *
    * Pulls run one at a time. A call made while a pull is in flight waits for it,
    * and resolves once a pull that started after the call has been applied, so
@@ -985,14 +985,14 @@ export interface ClientEngine {
     TransportError | StoreError | MutatorError | VersionNotSupportedError
   >;
   /**
-   * The pull counters, read-only (#426): `started` numbers the pulls that have
+   * The pull counters, read-only: `started` numbers the pulls that have
    * begun, `applied` the last pull whose rows and cookie are in the replica. A
    * registration made when `started` reads `n` is pulled once `applied`
    * exceeds `n`: a pull already in flight at that moment may predate it.
    */
   readonly pullCounts: Effect.Effect<PullCounts>;
   /**
-   * Run `body` with pulls held: under the pull lock (#412), so no pull is in
+   * Run `body` with pulls held: under the pull lock, so no pull is in
    * flight while it runs and none starts until it ends, given the pull
    * counters as they stand. It is how a direct store write that must not race
    * a pull is serialised against the engine's pulls (`Hydration.hydrateUnpulled`,
@@ -1006,7 +1006,7 @@ export interface ClientEngine {
     body: (counts: PullCounts) => Effect.Effect<A, E, R>
   ) => Effect.Effect<A, E, R>;
   /**
-   * A subset's **total** as the last applied pull reported it (#210): how many
+   * A subset's **total** as the last applied pull reported it: how many
    * rows the server's subset matches under its auth filter, whatever the
    * window, so a windowed subscription's total is the collection's and not the
    * window's. Found by the subscription with the same collection and the same
@@ -1015,7 +1015,7 @@ export interface ClientEngine {
    * subscription: the server's backend cannot count, the pull middleware
    * changed the subscription list, no pull has applied since the engine
    * started, or an identity reset cleared them. Kept in memory only, like the
-   * pull marks of ADR-0029's #426 amendment.
+   * pull marks of ADR-0029 amendment.
    */
   readonly totalOf: (subset: Subset.Subset) => Effect.Effect<number | undefined>;
   /**
@@ -1039,7 +1039,7 @@ export interface ClientEngine {
    * The most recent terminal sync failures, oldest first: the last
    * {@link RECENT_SYNC_FAILURES} that {@link syncFailures} surfaced since the
    * engine started. A point-in-time read, for introspection over a boundary
-   * that cannot follow the live stream (`Introspection`, #136).
+   * that cannot follow the live stream (`Introspection`).
    */
   readonly recentSyncFailures: Effect.Effect<ReadonlyArray<SyncFailure>>;
 }
@@ -1066,13 +1066,13 @@ export const make = (
         })
       );
     }
-    // The pull-ahead threshold (#337), and the most mutations one push request carries (#429). A push
+    // The pull-ahead threshold, and the most mutations one push request carries. A push
     // that takes the tail to this many starts a pull ahead of the bound; a push larger than this goes
     // in chunks of this size, with a pull between them.
     const pullAheadAt = Math.ceil(unpulledLimit / 2);
     const store = yield* ClientStore;
     const transport = yield* ClientTransport;
-    // The keyed mutation-state map (#116), seeded from the journal so a
+    // The keyed mutation-state map, seeded from the journal so a
     // reload shows pending intents before any push/pull runs. A store read
     // failure here is not fatal to engine construction (mirrors
     // `sampleJournalDepth`'s tolerance elsewhere): the map starts empty and
@@ -1082,7 +1082,7 @@ export const make = (
     );
     // Entries journaled by an earlier session may already have been pushed (and
     // a store written before the sent watermark existed has no record of it),
-    // so freeze them: paced compaction (#249) only ever renumbers entries this
+    // so freeze them: paced compaction only ever renumbers entries this
     // session journaled itself.
     yield* freezePending(store).pipe(
       Effect.catch((error) =>
@@ -1093,7 +1093,7 @@ export const make = (
       )
     );
     const mutationStates = yield* SubscriptionRef.make(MutationState.seed(initialPending));
-    // Track journal entries the map does not know yet as pending (#358): entries a direct store
+    // Track journal entries the map does not know yet as pending: entries a direct store
     // write appended under this engine, or entries whose boot-time read failed (`initialPending`
     // falls back to none). An entry already tracked keeps its phase. Runs on every reload and on
     // every push claim, so an untracked entry is tracked before the push that sends it can settle it.
@@ -1139,7 +1139,7 @@ export const make = (
     );
     const currentClientId: Effect.Effect<string> = Ref.get(clientIdRef);
     const subscriptions = yield* Ref.make<ReadonlyArray<Subset.Subset>>([]);
-    // The last applied pull's totals, beside the subscriptions it sent (#210).
+    // The last applied pull's totals, beside the subscriptions it sent.
     const totals = yield* Ref.make<
       ReadonlyArray<{ readonly subset: Subset.Subset; readonly total: number }>
     >([]);
@@ -1157,7 +1157,7 @@ export const make = (
     const namedSubs = yield* Ref.make<
       ReadonlyArray<{ readonly name: string; readonly argsEncoded: unknown; readonly key: string }>
     >([]);
-    // Bounded, dropping change hub (#44). A stalled observer holds messages in
+    // Bounded, dropping change hub. A stalled observer holds messages in
     // the shared hub; at capacity the hub drops the newest `SeqChange`s rather
     // than growing without limit. Each change carries a monotonic `seq`, so a
     // consumer detects a drop as a seq gap and collapses it into a `Rebuild`
@@ -1175,8 +1175,8 @@ export const make = (
     // invariant the consumer's gap-collapse relies on to skip stale buffered
     // changes after a Rebuild.
     const changeSeq = yield* Ref.make(0);
-    // The single unified event hub (#45): every sync-lifecycle event flows
-    // through here, and `mutationEvents` (#36) is a filtered projection of it.
+    // The single unified event hub: every sync-lifecycle event flows
+    // through here, and `mutationEvents` is a filtered projection of it.
     // Unbounded for the same reason #44 kept `mutationEventsHub` unbounded —
     // lifecycle events are low-volume, consumer-driven, and lossless (they are
     // observability, not reconstructable via pull).
@@ -1185,7 +1185,7 @@ export const make = (
     );
     const emitEngineEvent = (event: EngineEvent): Effect.Effect<void> =>
       Effect.asVoid(PubSub.publish(engineEventsHub, event));
-    // A Rebuild change is a view rebuild; carry its scoped collections (#39).
+    // A Rebuild change is a view rebuild; carry its scoped collections.
     const viewRebuiltEvent = (change: ViewChange): Effect.Effect<void> =>
       change._tag === "Rebuild"
         ? emitEngineEvent({
@@ -1213,7 +1213,7 @@ export const make = (
     const failures = yield* Effect.acquireRelease(PubSub.unbounded<SyncFailure>(), (hub) =>
       PubSub.shutdown(hub)
     );
-    // The last few, for a point-in-time read (`recentSyncFailures`, #136).
+    // The last few, for a point-in-time read (`recentSyncFailures`).
     const recentFailures = yield* Ref.make<ReadonlyArray<SyncFailure>>([]);
     const surfaceFailure = (
       operation: SyncFailure["operation"],
@@ -1235,7 +1235,7 @@ export const make = (
     const acks = yield* Ref.make(new Map<number, Deferred.Deferred<MutationOutcome>>());
     // Count of `push` calls currently between reading their pending snapshot
     // and settling it (ack/reject) — i.e. mutations that MAY already be in
-    // flight to the backend. `dropIfPending` (#117) refuses to compact any
+    // flight to the backend. `dropIfPending` refuses to compact any
     // entry while this is nonzero: a pending id it cannot prove is still
     // untouched by a push is left alone rather than risked (ADR-0008's hard
     // boundary — never mutate or reorder a pushed entry). Retries re-read
@@ -1302,8 +1302,8 @@ export const make = (
       );
     // Sample the journal-depth gauge from the current pending count. Called on
     // every append (a new pending mutation), acknowledge (a trim) and paced
-    // compaction, so it uses the store's count, which reads no pending bodies
-    // (#260), rather than loading the whole journal to take its length.
+    // compaction, so it uses the store's count, which reads no pending bodies,
+    //rather than loading the whole journal to take its length.
     const sampleJournalDepth: Effect.Effect<void> = store.pendingCount.pipe(
       Effect.flatMap((count) => Metric.update(Telemetry.journalDepth, count)),
       Effect.ignore
@@ -1343,7 +1343,7 @@ export const make = (
     // recompute once, not once each.
     const overlayCache = yield* Ref.make<Map<string, Map<RowId, LocalRow>> | undefined>(undefined);
     const overlayLock = yield* Semaphore.make(1);
-    // Invalidation must serialize with the tracked-write path below (#109):
+    // Invalidation must serialize with the tracked-write path below:
     // that path holds the permit for its whole read-modify-write of the
     // cache, so an invalidation racing it outside the lock could be clobbered
     // by a stale `Ref.set` once the tracked write finishes. Going through the
@@ -1354,12 +1354,12 @@ export const make = (
     // to avoid deadlocking on the non-reentrant semaphore.
     const invalidateOverlay = Semaphore.withPermit(overlayLock, Ref.set(overlayCache, undefined));
 
-    // The acknowledged-but-unpulled tail (#286, ADR-0008). A push trims the
+    // The acknowledged-but-unpulled tail (ADR-0008). A push trims the
     // entries the backend applied from the journal, so they are never sent
     // again, but parks them here, oldest first, so the overlay keeps showing
     // their effects until a pull's `lastMutationIds` covers them. That pull's
     // patch carries the effects, and the rebase reveals them in one change.
-    // The store holds the tail too (#336), so a restart before the pull that
+    // The store holds the tail too, so a restart before the pull that
     // reports it still shows its effects. This is the in-memory copy: seeded
     // from the store at boot, written through under the same lock as every
     // change, and reloaded when the store is written directly. Written only
@@ -1380,12 +1380,12 @@ export const make = (
       )
     );
     const unpulled = yield* Ref.make<ReadonlyArray<Mutation>>(bootTail.entries);
-    // Enhanced form submissions awaiting their action's receipt (ADR-0030 #215
+    // Enhanced form submissions awaiting their action's receipt (ADR-0030
     // §4): overlaid, never journaled. Written only under `overlayLock`.
     const formsInFlight = yield* Ref.make<ReadonlyArray<Mutation>>([]);
     // Set while the copy may differ from the store: its boot read failed, or a reload did. The
     // next reader under `overlayLock` re-reads the store first, so a failed read cannot leave the
-    // copy empty for good (#387).
+    // copy empty for good.
     const unpulledStale = yield* Ref.make(bootTail.stale);
     // The tail as the store holds it, for a caller that holds `overlayLock`.
     const tailLocked: Effect.Effect<ReadonlyArray<Mutation>, StoreError> = Effect.gen(function* () {
@@ -1435,7 +1435,7 @@ export const make = (
     // in place (through `ensureCollectionMap`'s lazy seeding) and, when
     // given, report each write via `onPut`/`onDel` — the one seam
     // `replayMutations`' plain replay and `trackedWriter`'s op-recording
-    // variant (#109) both build on, rather than duplicating the put/del/get
+    // variant both build on, rather than duplicating the put/del/get
     // wiring.
     const viewWriter = (
       view: Map<string, Map<RowId, LocalRow>>,
@@ -1497,13 +1497,13 @@ export const make = (
         }
       });
 
-    // Secondary field-value indexes over confirmed rows (issue #113).
+    // Secondary field-value indexes over confirmed rows.
     // `indexFields` is the declared-plus-auto-discovered field set per
     // collection; `indexState` holds the actual `Index.CollectionIndex`es,
     // built lazily from the store and kept current by `applyPatch`/`seed`
     // deltas. An absent `built` entry means "not built yet" (or the
     // collection has no indexed fields) — the next access rebuilds it.
-    // `generations` guard that rebuild against writes racing it (#339).
+    // `generations` guard that rebuild against writes racing it.
     const indexFields = yield* Ref.make(
       new Map<string, Set<string>>(
         Object.entries(options.indexes ?? {}).map(([collection, fields]) => [
@@ -1558,7 +1558,7 @@ export const make = (
             ? Ref.update(indexState, (state) => {
                 const built = new Map(state.built);
                 built.delete(subset.collection); // force a rebuild with the widened field set
-                // An in-flight build over the old field set must not install (#339).
+                // An in-flight build over the old field set must not install.
                 const generations = new Map(state.generations);
                 generations.set(subset.collection, (generations.get(subset.collection) ?? 0) + 1);
                 return { built, generations, clears: state.clears };
@@ -1571,7 +1571,7 @@ export const make = (
     // (Re)build a collection's index from confirmed store rows if it isn't
     // already built for its current declared field set. `undefined` means
     // the collection has no indexed fields, or the build kept losing a race
-    // to a write (#339) — the caller's cue to full-scan.
+    // to a write — the caller's cue to full-scan.
     //
     // The build reads rows, yields, then installs, and a write can land in
     // that window: `updateIndexes` skips a collection with no built index, so
@@ -1619,11 +1619,11 @@ export const make = (
 
     // Indexed evaluation is sound only while a collection's confirmed rows
     // equal its materialized view — i.e. no pending mutation's optimistic
-    // overlay (or acknowledged-but-unpulled tail, #286) could have shifted it
+    // overlay (or acknowledged-but-unpulled tail) could have shifted it
     // (the index tracks confirmed rows only).
-    // Scoped per-collection (#133): a pending mutation's touched collections
+    // Scoped per-collection: a pending mutation's touched collections
     // are already computed for the rebase path (`collectionsTouchedByMutations`,
-    // #109's tracked-write machinery), so a mutation pending against
+    // tracked-write machinery), so a mutation pending against
     // collection A no longer disables index acceleration for a query against
     // untouched collection B. An unscoped result (an unknown mutator,
     // undecodable args — same cases `collectionsTouchedByMutations`'
@@ -1660,7 +1660,7 @@ export const make = (
     // rebuilds fully from the store (which already reflects these deltas) on
     // next access. Every touched collection's generation is bumped, built or
     // not, so a build that read the rows before this write discards its result
-    // rather than installing a snapshot that lacks it (#339). The bump and the
+    // rather than installing a snapshot that lacks it. The bump and the
     // `built` snapshot are one `Ref.modify`, so an install is ordered entirely
     // before or entirely after this write.
     const updateIndexes = (ops: ReadonlyArray<PatchOp>): Effect.Effect<void> => {
@@ -1690,7 +1690,7 @@ export const make = (
       );
     };
 
-    // Drop every confirmed row: the `reset` writer (#350). The store is cleared first and the
+    // Drop every confirmed row: the `reset` writer. The store is cleared first and the
     // indexes second, so a build that read the rows before the clear sees its generation change
     // and discards its result. Under `overlayLock`, so no reader rebuilds the overlay from the
     // half-cleared store.
@@ -1778,8 +1778,8 @@ export const make = (
     // Run a mutator's local handler directly onto `view` (mutating its
     // per-collection maps in place) while recording the `put`/`del` it
     // performs as `OverlayOp`s — the delta an observer folds via the same
-    // `LiveView.put`/`del` machinery a confirmed-row `Patch` already uses
-    // (#109). `get` reads through the same lazily-seeded collection maps as
+    // `LiveView.put`/`del` machinery a confirmed-row `Patch` already uses.
+    //`get` reads through the same lazily-seeded collection maps as
     // `computeOverlay`'s writer, so a read-modify-write handler sees exactly
     // what a fresh replay would show it.
     const trackedWriter = (
@@ -1793,7 +1793,7 @@ export const make = (
       );
 
     // Apply a journaled mutation's local effects onto the cached overlay in
-    // place instead of invalidating it (#109's core optimization): the
+    // place instead of invalidating it: the
     // mutate path then costs one `trackedWriter` run over the rows it
     // touches, not a full journal replay. Must run under `overlayLock` — the
     // caller (`journal`) holds the permit for its whole body, so this
@@ -1813,8 +1813,8 @@ export const make = (
     // permit), so the next `materialize` recomputes from scratch, which
     // already includes this mutation since it is appended before this call.
     //
-    // `base` is what the caller found under the lock it holds throughout
-    // (#260): the warm cache itself, or, only when the cache was cold, the
+    // `base` is what the caller found under the lock it holds throughout:
+    //the warm cache itself, or, only when the cache was cold, the
     // journal snapshot to rebuild it from. Every write of the cache holds
     // `overlayLock`, so the cache the caller saw is the cache this runs on,
     // and a warm cache costs no journal read at all.
@@ -1885,8 +1885,8 @@ export const make = (
     // Route the whole patch through the store's batched bulk write, so a K-op
     // patch on a large collection costs K row-value writes + ~1 index rewrite
     // per touched collection — I/O scales with patch size, not collection size
-    // (#47) — instead of one read-whole/rewrite-whole per op. Also maintains
-    // the secondary field-value indexes (#113) from the same ops.
+    // — instead of one read-whole/rewrite-whole per op. Also maintains
+    // the secondary field-value indexes from the same ops.
     const applyPatch = (ops: ReadonlyArray<PatchOp>): Effect.Effect<void, StoreError> =>
       store.applyRowOps(ops).pipe(Effect.tap(() => updateIndexes(ops)));
 
@@ -1905,7 +1905,7 @@ export const make = (
       );
 
     // Fold every still-`"pending"` mutation state at or below `lastId` to
-    // `"acknowledged"` (#116) — every journaled mutation, not just ones with a
+    // `"acknowledged"` — every journaled mutation, not just ones with a
     // registered `mutateWithAck` deferred — then resolve any deferred that IS
     // registered and emit one `acknowledged` event per newly-settled id.
     // States already settled (e.g. rejected by `settleRejected` moments
@@ -1919,7 +1919,7 @@ export const make = (
               if (id > lastId || state.phase !== "pending") continue;
               settledIds.push(id);
             }
-            // Fold every transition first, evict once (#116's `HashMap`
+            // Fold every transition first, evict once (`HashMap`
             // rationale): retention's scan-and-sort is O(size), so evicting
             // per-id inside a K-mutation ack sweep would cost O(K * size).
             const next = MutationState.acknowledgedMany(
@@ -1944,12 +1944,12 @@ export const make = (
         Effect.asVoid
       );
 
-    // Fold one mutation's permanent rejection in (#116), resolve any
+    // Fold one mutation's permanent rejection in, resolve any
     // registered `mutateWithAck` deferred, and emit `rejected` — regardless of
     // whether it was journaled via `mutate`, `mutateEncoded`, or `mutateWithAck`.
     //
-    // Only a still-`"pending"` entry settles (#364). A response can repeat a
-    // rejection this client already holds (a losing copy's response, #355), or
+    // Only a still-`"pending"` entry settles. A response can repeat a
+    // rejection this client already holds (a losing copy's response), or
     // contradict an outcome it already observed. The first committed outcome
     // stands: a settled entry gets no second state change, no second deferred
     // resolution and no second event. The report is logged at debug and ignored.
@@ -1977,7 +1977,7 @@ export const make = (
           }
           // A repeat of this rejection, or an id already evicted, is harmless. Any other settled
           // phase contradicts the outcome the client already observed: the server commits one
-          // outcome per id (#355), so that means an invariant broke.
+          // outcome per id, so that means an invariant broke.
           if (prior === undefined || prior === "rejected") {
             return Effect.logDebug("ClientEngine: ignoring a repeated or evicted rejection", {
               mutationId: id,
@@ -1992,7 +1992,7 @@ export const make = (
       );
 
     // Resolve deferreds for the mutations this client had permanently rejected. A push
-    // response and a pull response both report them (#365).
+    // response and a pull response both report them.
     const settleRejected = (response: Pick<PushResponse, "rejected">): Effect.Effect<void> =>
       Effect.gen(function* () {
         const mine = yield* currentClientId;
@@ -2012,13 +2012,13 @@ export const make = (
     // Pull ack (ADR-0008). The pull's patch already carries the effects of
     // everything its `lastMutationIds` covers, so the acknowledged tail those
     // entries occupy is released here, under the same invalidation as the
-    // journal trim (#286). The caller holds `overlayLock` for the whole of
+    // journal trim. The caller holds `overlayLock` for the whole of
     // `applyPull`, the patch write included: a read in between would see the
     // new rows with the tail still parked, and replay the tail over them.
     // Takes no lock itself (the lock is not reentrant).
     // The store is written first and the copy second, so a store failure leaves
     // the copy as it was. The store's release also ends the pull's durable
-    // marker (`beginRelease`, #336).
+    // marker (`beginRelease`).
     const acknowledgeLocked = (lastMutationIds: Readonly<Record<string, number>>) =>
       Effect.gen(function* () {
         for (const [clientId, upTo] of Object.entries(lastMutationIds)) {
@@ -2031,16 +2031,16 @@ export const make = (
         yield* sampleJournalDepth; // the trim changed journal depth
       });
 
-    // What a store write that failed part-way leaves behind (#387): the store may hold more or less of
+    // What a store write that failed part-way leaves behind: the store may hold more or less of
     // the tail than the copy, so the copy re-reads it before its next use and the cached overlay is
     // dropped. The store then finishes the release it may have recorded. It seals itself only when that
-    // finish fails after reading the record (#387). Holds `overlayLock`.
+    // finish fails after reading the record. Holds `overlayLock`.
     const settleFailedTail: Effect.Effect<void> = Ref.set(unpulledStale, true).pipe(
       Effect.andThen(Ref.set(overlayCache, undefined)),
       Effect.andThen(store.finishRelease.pipe(Effect.ignore))
     );
 
-    // Push ack (ADR-0008, #286). The backend applied every journal entry the
+    // Push ack (ADR-0008). The backend applied every journal entry the
     // response covers, so trim them from the journal, where they must never be
     // sent again, and park the applied ones at the end of the unpulled tail:
     // their effects stay overlaid until a pull reports them, so the view does
@@ -2049,7 +2049,7 @@ export const make = (
     // to reveal. Holds `overlayLock`, so the store and the copy move together.
     // The store parks the applied entries before it trims the journal, so a
     // crash between the two leaves each entry in both places, which the next
-    // open resolves to the tail alone (#336). It never leaves one in neither.
+    // open resolves to the tail alone. It never leaves one in neither.
     const acknowledgePushed = (
       response: PushResponse
     ): Effect.Effect<ReadonlyArray<Mutation>, StoreError> =>
@@ -2069,7 +2069,7 @@ export const make = (
           // entries about to be added.
           const held = yield* tailLocked;
           if (store.commitAcknowledgement !== undefined) {
-            // The park and the trim are one atomic batch (#393): a failure leaves neither written.
+            // The park and the trim are one atomic batch: a failure leaves neither written.
             yield* store
               .commitAcknowledgement(applied, response.lastMutationIds)
               .pipe(
@@ -2078,7 +2078,7 @@ export const make = (
           } else {
             yield* store.parkUnpulled(applied);
             // A trim that fails part-way leaves a parked entry in the journal as well. The store settles
-            // that in process, as an open does, and the copy re-reads the tail on its next use (#336).
+            // that in process, as an open does, and the copy re-reads the tail on its next use.
             yield* Effect.gen(function* () {
               for (const [clientId, upTo] of Object.entries(response.lastMutationIds)) {
                 yield* store.acknowledge(clientId, upTo);
@@ -2088,7 +2088,7 @@ export const make = (
             );
           }
           // The store now holds the full tail, and the copy takes it. Nothing is released here: the
-          // tail leaves only through a pull (#429), and a push never takes it past the bound, so the
+          // tail leaves only through a pull, and a push never takes it past the bound, so the
           // copy is never over it.
           yield* Ref.set(unpulled, [...held, ...applied]);
           yield* Ref.set(overlayCache, undefined);
@@ -2155,7 +2155,7 @@ export const make = (
                 for (const [to, deferred] of moved) next.set(to, deferred);
                 return [dropped, next] as const;
               });
-              // Fold the drop and the moves into `mutationStates` (#116) — without
+              // Fold the drop and the moves into `mutationStates` — without
               // the drop, a compacted entry's state would never leave `"pending"`,
               // leaving a devtools journal panel showing a phantom in-flight
               // mutation forever.
@@ -2213,7 +2213,7 @@ export const make = (
         if (transition === "Reset") {
           quarantined = yield* store.quarantinePending(current);
           // The unpulled tail's effects belong to the superseded identity's rows,
-          // which are cleared just below, so the tail goes with them (#286).
+          // which are cleared just below, so the tail goes with them.
           yield* Semaphore.withPermit(
             overlayLock,
             store.clearUnpulled.pipe(
@@ -2271,7 +2271,7 @@ export const make = (
         };
       });
 
-    // Latch so an ongoing schema-version rejection (#48) fires `onUpdateNeeded`
+    // Latch so an ongoing schema-version rejection fires `onUpdateNeeded`
     // and the `UpdateNeeded` event exactly once — a retry storm or repeated
     // pulls against the same rejection do not refire it. The latch resets on the
     // next successful request, so a fresh rejection after an interim success
@@ -2308,13 +2308,13 @@ export const make = (
         )
       );
 
-    // Claim the pending set for one push (#249), atomically with respect to
+    // Claim the pending set for one push, atomically with respect to
     // `dropIfPending` and `journal` (all three hold `overlayLock`): read the
     // snapshot, count the push in flight, and durably raise the sent watermark
     // to the highest id per client in it — *before* the request can leave. A
     // failed or interrupted round trip does not prove the backend never
     // applied it, so from here on those ids are frozen: compaction may not
-    // drop or renumber them. A chunked push (#429) claims its whole journal this way, so the chunks it
+    // drop or renumber them. A chunked push claims its whole journal this way, so the chunks it
     // has not sent yet are frozen as well. The counter is released on every path that does
     // not hand the claim to the push body.
     const claimPending: Effect.Effect<ReadonlyArray<Mutation>, StoreError> = Semaphore.withPermit(
@@ -2336,7 +2336,7 @@ export const make = (
       })
     );
 
-    // The room a chunk may take (#429). The bound less the acknowledged tail and the chunks other pushes
+    // The room a chunk may take. The bound less the acknowledged tail and the chunks other pushes
     // have sent and not yet settled. Overlapping pushes share it: a chunk reserves its room under
     // `overlayLock`, so the tail and the reservations together never exceed the bound, and the reservation
     // is given back when the chunk's acknowledgement or failure has settled, or when the chunk is
@@ -2359,7 +2359,7 @@ export const make = (
     const pushClaimed = (pending: ReadonlyArray<Mutation>) =>
       Effect.gen(function* () {
         yield* emitEngineEvent({ _tag: "PushStarted" });
-        // The claimed journal goes out in chunks of at most the pull-ahead threshold (#429), in id order,
+        // The claimed journal goes out in chunks of at most the pull-ahead threshold, in id order,
         // one request at a time. Each chunk reserves the room the tail leaves (see `reserveChunk`), so a
         // chunk never takes the tail past the bound, and an odd bound, or a push that overlaps another,
         // is covered by the same reservation. Before every chunk after the first, a pull releases the tail
@@ -2385,7 +2385,7 @@ export const make = (
                     // rejected id reports `rejected` rather than `applied`.
                     yield* settleRejected(response);
                     // The applied entries keep their overlay effects in the unpulled tail
-                    // until a pull reports them (#286), so the view does not change here.
+                    // until a pull reports them, so the view does not change here.
                     // Only a permanent rejection leaves the overlay now; reveal just those
                     // collections.
                     const rejected = yield* acknowledgePushed(response);
@@ -2419,7 +2419,7 @@ export const make = (
           }
           sent += size;
         }
-        // A tail that has reached half the bound starts a pull ahead of the bound (#337).
+        // A tail that has reached half the bound starts a pull ahead of the bound.
         // The push does not wait for it. A push ended early still gets this check.
         if ((yield* Ref.get(unpulled)).length >= pullAheadAt) yield* pullAhead;
         yield* Metric.update(Telemetry.mutationsPushedTotal, sent);
@@ -2445,7 +2445,7 @@ export const make = (
     // collection the client currently holds (the patch would otherwise wipe
     // them). Put/Del name their collection and row id directly; a `Clear` has
     // no finite row list, so it contributes to `collections` only. Drives
-    // collection- and row-scoped reactions (HTTP-cache tag invalidation, #207)
+    // collection- and row-scoped reactions (HTTP-cache tag invalidation)
     // via the `PullCompleted` event.
     interface PullTouched {
       readonly collections: ReadonlyArray<string>;
@@ -2472,11 +2472,11 @@ export const make = (
         return { collections: [...collections], rows };
       });
 
-    // The in-process roll-forward of a pull whose section failed after its release record (#387).
+    // The in-process roll-forward of a pull whose section failed after its release record.
     // The store finishes the record, as an open would; the copy is re-read before its next use,
     // since the store has released the tail. A failed roll-forward is logged and the pull reports its
     // own error. The store finishes the record on its next write or pull, and seals itself only when
-    // the failure came after its read of the record (#387). Holds `overlayLock`.
+    // the failure came after its read of the record. Holds `overlayLock`.
     const rollForwardPullLocked = (
       lastMutationIds: Readonly<Record<string, number>>
     ): Effect.Effect<void> =>
@@ -2502,9 +2502,9 @@ export const make = (
       Effect.gen(function* () {
         // Settle the entries the pull reports as rejected before its watermark acknowledges
         // them. The watermark covers a rejected id (its bump is what rejects it), so
-        // `settleOwnApplied` below would otherwise fold it as applied (#365). The rejection
+        // `settleOwnApplied` below would otherwise fold it as applied. The rejection
         // is a fact the server committed, so it settles now, before the store is written. A
-        // failure after this point leaves the settlement in place: a repeat is a no-op (#364).
+        // failure after this point leaves the settlement in place: a repeat is a no-op.
         yield* settleRejected(response);
         // With an empty journal the patch ops are exactly the materialized-view
         // deltas, so observers maintain incrementally. With a pending overlay,
@@ -2512,11 +2512,11 @@ export const make = (
         // pending, and the vanishing of whatever just got acknowledged or
         // rejected) could shift any row the patch or those pending-before-this-
         // pull mutations touch — scope a Rebuild to their union rather than
-        // forcing a global one (#109's "stays a scoped Rebuild" rebase path);
+        // forcing a global one ("stays a scoped Rebuild" rebase path);
         // a reset (`Clear`) still forces the unscoped fallback.
         const hasClear = response.patch.some((op) => op._tag === "Clear");
         const touched = yield* pullTouchedCollections(response.patch);
-        // One critical section (#286): the overlay journal before this pull
+        // One critical section: the overlay journal before this pull
         // (the unpulled tail, then pending), the confirmed-row write and the tail
         // release. A read that runs between the row write and the release would
         // otherwise see the new rows with the tail still replayed over them.
@@ -2529,7 +2529,7 @@ export const make = (
           overlayLock,
           Effect.gen(function* () {
             const before = yield* overlayJournalLocked;
-            // With an atomic batch in the store (#393), the release is one commit: the rows, the cookie,
+            // With an atomic batch in the store, the release is one commit: the rows, the cookie,
             // the journal trim and the tail release, with no record. A failure before the commit point
             // leaves the store as it was; a failure reported after it may still have committed, so the
             // outcome is unknown. Either way the copy is re-read and the view rebuilt, as the record path
@@ -2564,12 +2564,12 @@ export const make = (
             // A failure in this scope is rolled forward here, from the same record, as the open does.
             // If that fails too, the store finishes the record on its next write or pull. It seals itself
             // only when the failure came after its read of the record, so no later write runs over a
-            // part-written release (#387). The marker is written inside this scope too: a
+            // part-written release. The marker is written inside this scope too: a
             // `beginRelease` that reports failure may still have written it, so it is finished
-            // either way, and finishing is a no-op when nothing landed (#387).
+            // either way, and finishing is a no-op when nothing landed.
             yield* Effect.gen(function* () {
               // The durable marker goes down before the first row, so a crash mid-section
-              // is finished on the next open rather than double-counting (#336).
+              // is finished on the next open rather than double-counting.
               yield* store.beginRelease({
                 lastMutationIds: response.lastMutationIds,
                 cookie: response.cookie,
@@ -2577,7 +2577,7 @@ export const make = (
               });
               yield* applyPatch(response.patch);
               // The cookie goes down before the release removes the record, so a crash between the
-              // two leaves the next open to write it again, not an old cookie over new rows (#387).
+              // two leaves the next open to write it again, not an old cookie over new rows.
               yield* store.setCookie(response.cookie);
               yield* acknowledgeLocked(response.lastMutationIds);
             }).pipe(
@@ -2608,7 +2608,7 @@ export const make = (
         return touched;
       });
 
-    // Pulls are serialised (#412). Each pull runs in the fibre of the caller that holds `pullLock`,
+    // Pulls are serialised. Each pull runs in the fibre of the caller that holds `pullLock`,
     // so at most one request is in flight and the caller's context and interruption behave as they
     // always have. `pullsStarted` numbers each pull as it starts, and `pullsApplied` holds the number
     // of the last pull that was applied. A caller reads `pullsStarted` on entry and may skip its own
@@ -2645,7 +2645,7 @@ export const make = (
           });
           const touched = yield* applyPull(response);
           // The totals go in before the pull counts as applied, so a window the
-          // marks call pulled has its total (#210). One per subscription sent,
+          // marks call pulled has its total. One per subscription sent,
           // in order; anything else carries none.
           const reported = response.totals;
           yield* Ref.set(
@@ -2715,7 +2715,7 @@ export const make = (
       Effect.gen(function* () {
         const touched = new Set<string>();
         // The row writes run under `overlayLock`, so a pull's release cannot be in flight across
-        // them: the rows it writes and the release it records stay one section (#387).
+        // them: the rows it writes and the release it records stay one section.
         yield* Semaphore.withPermit(
           overlayLock,
           Effect.gen(function* () {
@@ -2743,7 +2743,7 @@ export const make = (
       });
 
     // A direct store write (`Hydration.hydrate`) appends journal entries the map does not track;
-    // adopt them so they settle like a locally journaled mutation (#358). A failed read keeps the
+    // adopt them so they settle like a locally journaled mutation. A failed read keeps the
     // map as it was (logged); the push claim adopts the journal again before it sends anything.
     // The read and the fold run under `overlayLock`, as every other journal writer does: a pull's
     // trim cannot land between them and leave an adopted id with no journal row behind it.
@@ -2761,7 +2761,7 @@ export const make = (
     );
 
     // Reload the tail's in-memory copy from the store, as `adoptJournal` does for the journal: a
-    // direct store write (`Hydration.hydrate`) parks entries the copy does not hold (#336). A failed
+    // direct store write (`Hydration.hydrate`) parks entries the copy does not hold. A failed
     // read keeps the copy as it was, and is logged.
     const adoptUnpulled: Effect.Effect<void> = Semaphore.withPermit(
       overlayLock,
@@ -2794,13 +2794,13 @@ export const make = (
     );
 
     // Drop every confirmed row and reveal the empty view. A direct `store.clearRows` would
-    // leave the view and the indexes showing the cleared rows (#350).
+    // leave the view and the indexes showing the cleared rows.
     const clearRows: ClientEngine["clearRows"] = Semaphore.withPermit(
       overlayLock,
       store.clearRows
     ).pipe(Effect.andThen(reloadFromStore));
 
-    // Register this engine for direct store writes for as long as its scope lasts (#350).
+    // Register this engine for direct store writes for as long as its scope lasts.
     const attached = liveEngines.get(store) ?? new Set<Effect.Effect<void>>();
     attached.add(reloadFromStore);
     liveEngines.set(store, attached);
@@ -2870,7 +2870,7 @@ export const make = (
 
     // A network leg that survives transient failure via its policy, then
     // surfaces (never raises) whatever it could not recover from.
-    // A version rejection (#48) is already handled by `onUpdateNeeded` inside
+    // A version rejection is already handled by `onUpdateNeeded` inside
     // push/pull and is not a transient failure to retry or a terminal
     // `SyncFailure` to surface, so the loop swallows it here (the app was
     // already told to update). The journal is untouched, so pending intents
@@ -2886,7 +2886,7 @@ export const make = (
       Effect.catch((error) => surfaceFailure("pull", error))
     );
 
-    // Pull ahead of the bound (#337). With no pokes and no `pullInterval`, nothing else pulls, so a long
+    // Pull ahead of the bound. With no pokes and no `pullInterval`, nothing else pulls, so a long
     // run of pushes could fill the tail to the bound and stall. A push that takes the tail to half the bound
     // starts one `attemptPull` in the engine's scope, and the push does not wait for it. The flag
     // admits one such pull at a time and is cleared when it ends, failed or not, so a burst of pushes
@@ -2912,7 +2912,7 @@ export const make = (
       )
     );
 
-    // The pull a push runs before a chunk that needs the tail released (#429). Unlike `attemptPull`, it
+    // The pull a push runs before a chunk that needs the tail released. Unlike `attemptPull`, it
     // does not surface its failure: the push fails with it, and the sync loop's push retry and failure
     // surface take it from there. Transient failures are retried under `pullPolicy` first. A version
     // rejection already reached `onUpdateNeeded`, and a pull that is refused is still a stopped push, so
@@ -2939,7 +2939,7 @@ export const make = (
     );
 
     const runSync: ClientEngine["runSync"] = Effect.gen(function* () {
-      // Subscribe to the push trigger here, before anything is forked (#317).
+      // Subscribe to the push trigger here, before anything is forked.
       // `Stream.fromPubSub` would subscribe only once the debounce's forked
       // upstream fibre first pulls, a few scheduler turns after this returns,
       // and a trigger published in between is lost; the connect leg below has
@@ -2963,8 +2963,8 @@ export const make = (
               }).pipe(Effect.as(poke))
             ),
             // While a pull is in flight the consumer below does not take the next poke, so pokes
-            // wait here. The buffer keeps only the newest, so a burst costs one follow-up pull
-            // (#412). That is sound: a dropped poke arrived before the newer one was taken, and the
+            // wait here. The buffer keeps only the newest, so a burst costs one follow-up pull.
+            //That is sound: a dropped poke arrived before the newer one was taken, and the
             // pull the consumer runs next starts after that, so it covers the dropped poke too.
             // Nothing is forked per poke.
             Stream.buffer({ capacity: 1, strategy: "sliding" })
@@ -3046,7 +3046,7 @@ export const make = (
         )
       );
     // Apply a Patch's deltas for one collection to a LiveView — confirmed-row
-    // ops from a pull, or optimistic `OverlayOp`s from a mutate (#109); both
+    // ops from a pull, or optimistic `OverlayOp`s from a mutate; both
     // shapes carry the `_tag`/`collection`/`id`/`value` this only reads.
     const applyOps = (
       view: LiveView.LiveView,
@@ -3169,7 +3169,7 @@ export const make = (
 
     // Shared setup for `observeSubset`/`observeSubsetChanges`: establish the
     // live window a step at a time, so the two observers can never drift in
-    // how they get there. Subscribe BEFORE snapshotting (#84): the hub only
+    // how they get there. Subscribe BEFORE snapshotting: the hub only
     // delivers to live subscribers, so a change published while we
     // materialize must land in this subscription's buffer — subscribing
     // after the snapshot silently loses it, and with no later change to
@@ -3234,7 +3234,7 @@ export const make = (
         })
       );
 
-    // Engine-level reactive window retargeting (#133): unlike `observeSubset`
+    // Engine-level reactive window retargeting: unlike `observeSubset`
     // (whose subset is fixed for the stream's lifetime), this tracks the
     // *current* subset in a `Ref` that `retarget` can widen/advance, and a
     // `retargetTick` that wakes the stream to reslice immediately — without
@@ -3249,7 +3249,7 @@ export const make = (
         const subsetRef = yield* Ref.make(subset);
         const retargetTick = yield* SubscriptionRef.make(0);
         // Subscribe to the retarget tick NOW, not when `rows` is eventually
-        // pulled (#84's "subscribe before snapshotting" discipline, applied
+        // pulled ("subscribe before snapshotting" discipline, applied
         // here too): `SubscriptionRef.changes` builds a lazily-subscribing
         // stream, so a `retarget()` call between `observeWindow` returning
         // and the caller actually consuming `rows` would otherwise publish
@@ -3326,7 +3326,7 @@ export const make = (
     // Route a Patch's ops (this subset's collection only) through an
     // incremental aggregate state. A Patch's ops are confirmed-row deltas
     // from a pull, or optimistic `OverlayOp`s a mutate's local handler just
-    // performed (#109) — both shapes carry the `_tag`/`collection`/`id`/`value`
+    // performed — both shapes carry the `_tag`/`collection`/`id`/`value`
     // this reads. `Put` carries the raw new value — `Aggregate.applyPut`
     // re-tests `subset.where` itself to decide insert/update/remove, exactly
     // as `applyOps` does for `LiveView` above.
@@ -3467,7 +3467,7 @@ export const make = (
     const invalidArgs = (mutator: string) => (cause: unknown) =>
       new MutatorError({ message: `Invalid args for mutator "${mutator}"`, mutator, cause });
     // Journal a mutation and reveal its local effects. The whole body runs
-    // under `overlayLock` (#109): appending to the store then tracking the
+    // under `overlayLock`: appending to the store then tracking the
     // handler's effects directly onto the cached overlay must be atomic with
     // respect to `materialize`'s fill and any other mutation's tracked write,
     // or a concurrent invalidation (push ack, pull, seed) could be clobbered
@@ -3488,7 +3488,7 @@ export const make = (
           // `trackedWriter`). Only a cold overlay cache needs that replay: a
           // warm one already holds the pending set's effects, so the journal
           // (every pending body, on a durable store) is read only when the
-          // cache is cold (#260). The lock held here keeps the cache as found
+          // cache is cold. The lock held here keeps the cache as found
           // until `applyMutationToOverlayLocked` writes it.
           const cachedBefore = yield* Ref.get(overlayCache);
           const base: OverlayBase =
@@ -3497,7 +3497,7 @@ export const make = (
               : { _tag: "Warm", view: cachedBefore };
           const clientId = yield* currentClientId;
           const journaledAt = yield* Clock.currentTimeMillis;
-          // Allocate the id and append as one store step (#258): a refused or
+          // Allocate the id and append as one store step: a refused or
           // failed append must not consume an id, or the next push hits a gap
           // the backends reject.
           const { mutationId } = yield* store.appendNext({
@@ -3507,7 +3507,7 @@ export const make = (
             createdAt: journaledAt,
           });
           // Register the `mutateWithAck` deferred before the lock is released:
-          // a compaction (#249) also takes it, so the id cannot be renumbered
+          // a compaction also takes it, so the id cannot be renumbered
           // between being allocated and being keyed here.
           if (outcome !== undefined) {
             yield* Ref.update(acks, (map) => new Map(map).set(mutationId, outcome));
@@ -3519,7 +3519,7 @@ export const make = (
           yield* emitEvent(mutationId, "journaled");
           // Apply the handler's effects onto the cached overlay in place and
           // publish exactly what it did as a Patch, rather than invalidating
-          // the cache and forcing every observer to re-materialize (#109).
+          // the cache and forcing every observer to re-materialize.
           const change = yield* applyMutationToOverlayLocked(mutator, decodedArgs, base);
           yield* publishChange(change);
           yield* signalPush; // the sync loop may auto-push this (debounced)
@@ -3547,7 +3547,7 @@ export const make = (
         );
       });
 
-    // The client half of an enhanced form submit (ADR-0030 #215 §4). The entry
+    // The client half of an enhanced form submit (ADR-0030 §4). The entry
     // is overlaid under the form client's id but never journaled: the form
     // action delivers it. It holds one place of the tail's bound from the start
     // (`reserveChunk`), so parking it on acknowledgement never takes the tail
@@ -3729,12 +3729,12 @@ export const make = (
       recentSyncFailures: Ref.get(recentFailures),
       engineEvents: Stream.fromPubSub(engineEventsHub),
       activeSubscriptions,
-      // #36's mutation stream, now a filtered projection of the one hub (#45).
+      // mutation stream, now a filtered projection of the one hub.
       mutationEvents: Stream.fromPubSub(engineEventsHub).pipe(
         Stream.map(toMutationEvent),
         Stream.filter((event): event is MutationEvent => event !== undefined)
       ),
-      // #116's keyed mutation-state map: current value now, then every change.
+      // keyed mutation-state map: current value now, then every change.
       mutationStates: SubscriptionRef.changes(mutationStates),
     });
   });

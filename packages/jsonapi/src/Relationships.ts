@@ -14,7 +14,7 @@
  * {@link Related.Strategy} — `targets` derived from `{ type, id }` refs,
  * `resolveRow` via {@link hydrate} over those refs — and reuses the shared
  * machinery, so `query`/`observe`/`related` are thin adapters over it with no
- * behaviour change (audit #10). The linkage extraction stays here; only the
+ * behaviour change. The linkage extraction stays here; only the
  * generic pipeline is shared.
  */
 

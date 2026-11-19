@@ -1,5 +1,5 @@
 /**
- * Paced mutations (#117): debounce/throttle/coalesce strategies over
+ * Paced mutations: debounce/throttle/coalesce strategies over
  * `ClientEngine.mutateWithAck` + `dropIfPending`. Time is driven by TestClock
  * so bursts are deterministic; "bounded overlay replays" is verified via the
  * mutation ids actually consumed (`journal()` assigns one per `mutateWithAck`
@@ -98,7 +98,7 @@ const counting = (store: ClientStore) => {
       counter.appends += 1;
       return store.appendMutation(mutation);
     },
-    // The engine journals through `appendNext` (#258): count those too.
+    // The engine journals through `appendNext`: count those too.
     appendNext: (draft) => {
       counter.appends += 1;
       return store.appendNext(draft);
@@ -186,7 +186,7 @@ const setupLossy = Effect.gen(function* () {
   return { engine, store, applied, backend, mode };
 });
 
-describe("Paced (#117)", () => {
+describe("Paced", () => {
   it.effect("coalesce collapses consecutive same-key calls, leaves other keys alone", () =>
     Effect.gen(function* () {
       const { engine, store, counter } = yield* setup;
@@ -205,7 +205,7 @@ describe("Paced (#117)", () => {
       expect((t2.args as Todo).title).toBe("other");
       // Every call journaled (fully durable): eleven appends, nine of them
       // (t1's v0..v8) compacted away afterwards — and the survivors renumbered
-      // so the ids the backend sees are gap-free (#249).
+      // so the ids the backend sees are gap-free.
       expect(counter.appends).toBe(11);
       expect(t1.mutationId).toBe(1);
       expect(t2.mutationId).toBe(2);
@@ -236,7 +236,7 @@ describe("Paced (#117)", () => {
         // Exactly two `mutateWithAck` calls happened for 50 keystrokes — i.e.
         // exactly two journal writes / overlay invalidations, not fifty:
         // "bounded overlay replays". The survivor was renumbered back to 1 so
-        // the journal stays gap-free (#249).
+        // the journal stays gap-free.
         expect(counter.appends).toBe(2);
         expect(defined(after[0]).mutationId).toBe(1);
       }).pipe(Effect.scoped)
@@ -279,7 +279,7 @@ describe("Paced (#117)", () => {
       expect(pending).toHaveLength(1);
       expect((defined(pending[0]).args as Todo).title).toBe("v2");
       expect(counter.appends).toBe(2);
-      expect(defined(pending[0]).mutationId).toBe(1); // renumbered (#249)
+      expect(defined(pending[0]).mutationId).toBe(1); // renumbered
 
       // More calls arrive in the new window, then it goes quiet.
       yield* paced.call("t1", todo("t1", "v3"));
@@ -377,7 +377,7 @@ describe("Paced (#117)", () => {
           const ids = idsOf(pending.filter((m) => m.clientId === "client-a"));
           // Nothing has been pushed, so the journal is the contiguous run
           // 1..n in journal (array) order: compaction removes entries and
-          // renumbers the survivors (#249) but never reorders them, and never
+          // renumbers the survivors but never reorders them, and never
           // leaves a gap the backend would reject — even under adversarial
           // interleaving of all three strategies.
           expect(ids).toEqual(ids.map((_, i) => i + 1));
@@ -392,7 +392,7 @@ describe("Paced (#117)", () => {
   );
 });
 
-describe("paced compaction renumbers the journal (#249)", () => {
+describe("paced compaction renumbers the journal", () => {
   it.effect("a coalesced journal drains: the survivor is renumbered, not left behind a gap", () =>
     Effect.gen(function* () {
       const { engine, store, applied, backend } = yield* setupLossy;
@@ -721,7 +721,7 @@ const stale = (mutationId: number): Mutation => ({
   createdAt: 0,
 });
 
-describe("a committed compaction is never lost to a failure or an interrupt (#249 review B1)", () => {
+describe("a committed compaction is never lost to a failure or an interrupt", () => {
   /**
    * A durable (KeyValueStore-backed) client store whose backing KVS can be
    * made to fail every write once the compaction intent has landed (an
@@ -909,7 +909,7 @@ describe("a committed compaction is never lost to a failure or an interrupt (#24
   );
 });
 
-describe("entries from before this session are never renumbered (#249 review N3)", () => {
+describe("entries from before this session are never renumbered", () => {
   it.effect("an engine booted over a persisted journal freezes it", () =>
     Effect.gen(function* () {
       const { handler } = yield* makeLoggingServer;
@@ -919,7 +919,7 @@ describe("entries from before this session are never renumbered (#249 review N3)
       const store = yield* ClientStoreModule.makeMemory;
       yield* store.appendMutation(stale(1));
       yield* store.appendMutation(stale(2));
-      // No counter bump needed: ids continue from the journal's highest (#258).
+      // No counter bump needed: ids continue from the journal's highest.
       const engine = yield* makeEngine(transport, store);
 
       yield* engine.mutate("todo/set", todo("n", "new"));

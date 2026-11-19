@@ -7,7 +7,7 @@
  *
  * Both cases run under `it.effect`: every wait advances the `TestClock`, so
  * the debounced auto-push fires when a case moves time past it, and nothing
- * waits on wall-clock time a loaded machine could exhaust (#285).
+ * waits on wall-clock time a loaded machine could exhaust.
  */
 import * as Defined from "../Defined.js";
 import { describe, expect, it } from "@effect/vitest";
@@ -259,8 +259,8 @@ describe("Server", () => {
 
         // The writer journals a mutation; no app code pushes it. Its connect
         // leg has already run, and its debounce fibre has had every scheduler
-        // turn since the writer was built to subscribe to the push trigger
-        // (#317), so only the debounced auto-push can send the mutation:
+        // turn since the writer was built to subscribe to the push trigger,
+        //so only the debounced auto-push can send the mutation:
         // nothing reaches the server inside the debounce window, and the
         // push lands the moment the window closes.
         yield* writer.client.mutate("product/set", { id: "p-1", name: "Pushed" });

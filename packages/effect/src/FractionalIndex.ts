@@ -1,7 +1,7 @@
 /**
  * FractionalIndex
  *
- * Stable position keys for in-window rows (issue #112): a string that sorts
+ * Stable position keys for in-window rows: a string that sorts
  * between any two others, so a row entering, leaving, or moving within a
  * maintained window can be given a key without renumbering its neighbors —
  * the primitive behind expressing a delta as `{ type: "move", key, position

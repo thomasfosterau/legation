@@ -119,7 +119,7 @@ const rootPulled = (pulled: Coverage.Pulled, root: Subset.Subset): boolean =>
     (window) => window.pulled && Coverage.windowKey(window.subset) === Coverage.windowKey(root)
   );
 
-describe("pulled registrations (#426)", () => {
+describe("pulled registrations", () => {
   it.effect("a registration made during an in-flight pull is not marked by that pull", () =>
     Effect.scoped(
       Effect.gen(function* () {
@@ -207,7 +207,7 @@ describe("pulled registrations (#426)", () => {
           const { host } = yield* MirrorChannel.makeLoopbackPair;
           yield* EngineHost.run({ channel: host, engine: observed });
           // A pull applied as soon as the host is up must reach the listener: a forked
-          // listener that had not yet subscribed would miss its `PullCompleted` (#426).
+          // listener that had not yet subscribed would miss its `PullCompleted`.
           expect(listeners).toBe(1);
         })
       )
@@ -282,7 +282,7 @@ const seed = [
   put("sellers", "s-1", { name: "seller one" }),
 ];
 
-describe("pulled windows of a relational registration (#426)", () => {
+describe("pulled windows of a relational registration", () => {
   it.effect(
     "a pulled root does not cover a relational read whose edge windows are not held (B1)",
     () =>

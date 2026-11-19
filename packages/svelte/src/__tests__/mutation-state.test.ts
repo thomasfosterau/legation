@@ -1,5 +1,5 @@
 /**
- * `useMutationState` (#116): the rune-based mutation-state list, mounted in a
+ * `useMutationState`: the rune-based mutation-state list, mounted in a
  * real Svelte 5 component. Reflects a plain `mutate`-journaled mutation
  * (not just `mutateWithAck`) through pending → acknowledged, both the whole
  * map and a reactive per-mutator scope.
@@ -15,7 +15,7 @@ afterEach(() => {
   document.body.innerHTML = "";
 });
 
-describe("useMutationState (#116)", () => {
+describe("useMutationState", () => {
   it("reflects a journaled mutation through pending → acknowledged, whole map and scoped", async () => {
     const runtime = makeClientRuntime();
     const app = mount(RunesMutationStateHarness, { target: document.body, props: { runtime } });

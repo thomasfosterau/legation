@@ -1,5 +1,5 @@
 /**
- * The façade end to end, in a browser (ADR-0029, issue #168): the built
+ * The façade end to end, in a browser (ADR-0029): the built
  * commerce app served with its service worker active (`tests/support/app.ts`),
  * driven with Playwright over the pre-installed Chromium, and plain
  * `fetch()`es of JSON:API URLs issued from the page's main thread — the
@@ -44,7 +44,7 @@
  * offline toggle — the page's fetches fail, and `navigator.onLine` reads
  * false in the page and in the worker. That is the browser's offline
  * signal, not the transport's. The worker has no `online`/`offline` events,
- * so its engine learns of the flip by probing `navigator.onLine` (#328), but
+ * so its engine learns of the flip by probing `navigator.onLine`, but
  * auto-push does not consult that status, and the worker's sync WebSocket
  * stays open under the emulation, so a push goes out over it whatever
  * `navigator.onLine` says. The transport half of §4 is therefore exercised
@@ -216,22 +216,22 @@ const signals = makeSignals();
  * filled: the sign-up round trip and redirect, the signed-in render and the
  * worker taking control. A safety bound on event-driven waits, not a timing
  * assumption. On a 4-core host these steps took 3.5 s at a load average of
- * ~63, and the whole boot test 8 s with the load climbing from 75 to 97
- * (#509); the old 30 s test budget ran out near 105, so this leaves an order
+ * ~63, and the whole boot test 8 s with the load climbing from 75 to 97;
+ *the old 30 s test budget ran out near 105, so this leaves an order
  * of magnitude over what was measured.
  */
 const BOOT_BUDGET_MS = 60_000;
 /**
  * Teardown's budget for closing the browser: a safety bound on Playwright's
  * `browser.close()`, not a timing assumption. On a 4-core host it took
- * 0.3–2.3 s at a load average of 40–60, and 16 s and 22 s at 82–89 (#522),
+ * 0.3–2.3 s at a load average of 40–60, and 16 s and 22 s at 82–89,
  * so this leaves room over the worst measured.
  */
 const BROWSER_CLOSE_BUDGET_MS = 60_000;
 /**
  * Teardown's budget for closing the app. Its sync server shuts down within
  * `NodeHttpServer`'s 20 s graceful-shutdown bound, which it used to reach on
- * every run: the front left the carriers' connections open (#522). With
+ * every run: the front left the carriers' connections open. With
  * them closed first it took 5 ms–2.5 s at a load average of 50–89.
  */
 const APP_CLOSE_BUDGET_MS = 30_000;
@@ -254,7 +254,7 @@ const booted = (): string => {
 /** The network's document for the first catalog page, from demonstration 1. */
 let firstPageFromNetwork: string;
 
-describe("the façade in a browser: plain fetch over the service worker's replica (#168)", () => {
+describe("the façade in a browser: plain fetch over the service worker's replica", () => {
   beforeAll(async () => {
     const executablePath = chromium.executablePath();
     if (!existsSync(executablePath)) {
@@ -356,7 +356,7 @@ describe("the façade in a browser: plain fetch over the service worker's replic
     // The first page: the engine boots on the tab's handshake and pins the
     // shell; a pin's rows land on a pull (a poke, or the 15-second backstop).
     // Until a pull has landed for every registration the page needs, the
-    // façade forwards the request (ADR-0029 section 3, #426), so the network
+    // façade forwards the request (ADR-0029 section 3), so the network
     // answers. Each pull the worker reports is the moment to read the replica:
     // the read is kept once it is served with the network's body, byte for
     // byte, and otherwise the next pull is awaited.

@@ -2,7 +2,7 @@
  * EdgeInvalidation
  *
  * Server-side cache eviction on Cloudflare from the hints a committed write
- * publishes (#206): the `InvalidationSink`s for a Workers KV read-through cache
+ * publishes: the `InvalidationSink`s for a Workers KV read-through cache
  * and for the Workers cache's tag purge, and the hop between the two Workers
  * that a typical deployment has.
  *

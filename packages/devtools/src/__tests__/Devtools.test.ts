@@ -1,5 +1,5 @@
 /**
- * Devtools (#120): the headless core reads live off `Introspection` +
+ * Devtools: the headless core reads live off `Introspection` +
  * `ClientEngine`'s public streams, and its actions drive the same engine
  * effects an app would call directly (`push`/`pull`/`unsubscribe`,
  * `ClientStore.clearRows`) — nothing here is a bespoke wire.
@@ -149,7 +149,7 @@ describe("Devtools.make", () => {
     }).pipe(Effect.scoped)
   );
 
-  it.effect("clearStore also empties the running engine's view, not only the store (#350)", () =>
+  it.effect("clearStore also empties the running engine's view, not only the store", () =>
     Effect.gen(function* () {
       const { engine, devtools } = yield* setup;
       yield* engine.subscribe(allTodos);

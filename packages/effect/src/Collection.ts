@@ -24,7 +24,7 @@ export type RowId = string;
 
 /**
  * A declared relationship from one collection to a foreign collection, by
- * field mapping (ADR-0006, issue #38). The read-side join a `Related` query
+ * field mapping (ADR-0006). The read-side join a `Related` query
  * resolves and an auto-subscription narrows:
  *
  * - `"one"`: the single foreign row whose `foreignField` equals this row's
@@ -91,10 +91,10 @@ export interface Collection<A, I = unknown> {
    * existed.
    */
   readonly identity?: string;
-  /** Declared relationships to other collections (issue #38). */
+  /** Declared relationships to other collections. */
   readonly relationships?: ReadonlyArray<Relationship>;
   /**
-   * Fields eligible for secondary indexing (issue #113): `eq`/`In` predicates
+   * Fields eligible for secondary indexing: `eq`/`In` predicates
    * on a declared field resolve via an in-memory hash index, range
    * `Compare`s via an ordered one, instead of a full collection scan. Purely
    * an engine-level acceleration hint — maintained from row deltas, rebuilt
@@ -103,7 +103,7 @@ export interface Collection<A, I = unknown> {
    */
   readonly indexes?: ReadonlyArray<string>;
   /**
-   * The **filterable set** (ADR-0028 rule d, #154): the fields a client may
+   * The **filterable set** (ADR-0028 rule d): the fields a client may
    * filter by, each with its operators and literal kind. Resolved on the
    * Node (`Node.make`'s `filterable` option plus the identity / `one`-edge
    * key defaults) and carried here so the server enforces it in `authorize`
@@ -112,7 +112,7 @@ export interface Collection<A, I = unknown> {
    * enforced then.
    */
   readonly filterable?: Readonly<Record<string, FilterPolicy.FilterableField>>;
-  /** The fields a client may order by (#154); always includes the identity. */
+  /** The fields a client may order by; always includes the identity. */
   readonly sortable?: ReadonlyArray<string>;
 }
 
@@ -135,7 +135,7 @@ export const make = <A, I>(options: {
 }): Collection<A, I> => options;
 
 /**
- * The filter declaration `authorize` enforces for a collection (#154): the
+ * The filter declaration `authorize` enforces for a collection: the
  * carried `filterable` / `sortable` (every Node-derived collection has
  * them) overlaid on the key defaults — the {@link Collection.identity}
  * attribute plus every `"one"` relationship's local key field by at least
