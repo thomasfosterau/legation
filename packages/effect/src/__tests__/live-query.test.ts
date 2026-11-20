@@ -82,17 +82,19 @@ describe("LiveQuery", () => {
 
       type LiveRow = { readonly id: string; readonly value: unknown };
       const read = Effect.sync(() => registry.get(atom));
-      const await1 = (predicate: (rows: ReadonlyArray<LiveRow>) => boolean) =>
-        Effect.gen(function* () {
-          for (let attempt = 0; attempt < 200; attempt++) {
+      const await1 = (predicate: (rows: ReadonlyArray<LiveRow>) => boolean) => {
+        const poll = (remaining: number): Effect.Effect<ReadonlyArray<LiveRow>> =>
+          Effect.gen(function* () {
             const result = yield* read;
             if (AsyncResult.isSuccess(result) && predicate(result.value)) return result.value;
             yield* sleepReal(5);
-          }
-          return yield* Effect.die(
-            new TestFailure({ message: "atom never reached the expected state" })
-          );
-        });
+            if (remaining > 1) return yield* poll(remaining - 1);
+            return yield* Effect.die(
+              new TestFailure({ message: "atom never reached the expected state" })
+            );
+          });
+        return poll(200);
+      };
 
       // Initial emission: empty collection.
       yield* await1((current) => Arr.isReadonlyArrayEmpty(current));

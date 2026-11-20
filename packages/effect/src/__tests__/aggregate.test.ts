@@ -401,6 +401,6 @@ const checkIncrementalSeed = (seed: number): void => {
 
 describe("Aggregate incremental state", () => {
   it("matches compute/computeGrouped from scratch after every prefix of a randomized delta sequence", () => {
-    for (let seed = 0; seed < 40; seed++) checkIncrementalSeed(seed);
+    Arr.forEach(Arr.range(0, 39), (seed) => checkIncrementalSeed(seed));
   });
 });

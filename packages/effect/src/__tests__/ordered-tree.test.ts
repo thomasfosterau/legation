@@ -81,7 +81,7 @@ describe("OrderedTree", () => {
       state ^= state << 5;
       return (state >>> 0) / 0xffffffff;
     };
-    for (let i = 0; i < 2000; i++) {
+    Arr.forEach(Arr.range(1, 2000), () => {
       if (Arr.isReadonlyArrayEmpty(reference) || next() < 0.6) {
         const value = Math.floor(next() * 10_000);
         if (!reference.includes(value)) {
@@ -97,6 +97,6 @@ describe("OrderedTree", () => {
       }
       expect(OrderedTree.toArray(tree)).toEqual(reference);
       expect(OrderedTree.size(tree)).toBe(reference.length);
-    }
+    });
   });
 });

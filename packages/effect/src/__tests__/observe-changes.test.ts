@@ -197,14 +197,19 @@ const stripPositions = (batch: ReadonlyArray<RowChange.RowChange<ClientEngineMod
   );
 
 /** Poll until `read` passes `until`, bounded — never a fixed-duration guess. */
-const eventually = <A, E>(read: Effect.Effect<A, E>, until: (value: A) => boolean) =>
+const eventually = <A, E>(
+  read: Effect.Effect<A, E>,
+  until: (value: A) => boolean,
+  attemptsLeft = 400
+): Effect.Effect<A> =>
   Effect.gen(function* () {
-    for (let attempt = 0; attempt < 400; attempt++) {
-      const value = yield* read.pipe(Effect.orDie);
-      if (until(value)) return value;
-      yield* sleepReal(5);
+    if (attemptsLeft === 0) {
+      return yield* Effect.die(new TestFailure({ message: "eventually: condition never held" }));
     }
-    return yield* Effect.die(new TestFailure({ message: "eventually: condition never held" }));
+    const value = yield* read.pipe(Effect.orDie);
+    if (until(value)) return value;
+    yield* sleepReal(5);
+    return yield* eventually(read, until, attemptsLeft - 1);
   });
 
 /** Fork a collector and settle once, so its subscription is guaranteed live. */
@@ -568,24 +573,22 @@ const foldChangeBatches = (
   batches: ReadonlyArray<ReadonlyArray<RowChange.RowChange<ClientEngineModule.LocalRow>>>
 ): Map<string, unknown> => {
   const state = new Map<string, unknown>();
-  for (const batch of batches) {
-    for (const change of batch) {
-      Match.value(change).pipe(
-        Match.withReturnType<void>(),
-        Match.tag("reset", () => {
-          state.clear();
-        }),
-        Match.tag("enter", "update", (entered) => {
-          state.set(entered.row.id, entered.row.value);
-        }),
-        Match.tag("exit", (exited) => {
-          state.delete(exited.id);
-        }),
-        Match.tag("move", () => {}),
-        Match.exhaustive
-      );
-    }
-  }
+  Arr.forEach(Arr.flatten(batches), (change) => {
+    Match.value(change).pipe(
+      Match.withReturnType<void>(),
+      Match.tag("reset", () => {
+        state.clear();
+      }),
+      Match.tag("enter", "update", (entered) => {
+        state.set(entered.row.id, entered.row.value);
+      }),
+      Match.tag("exit", (exited) => {
+        state.delete(exited.id);
+      }),
+      Match.tag("move", () => {}),
+      Match.exhaustive
+    );
+  });
   return state;
 };
 
@@ -625,30 +628,37 @@ describe("ClientEngine.observeChanges — randomized property through the real e
                 const pick = <A>(xs: ReadonlyArray<A>): A =>
                   defined(xs[Math.floor(rand() * xs.length)]);
 
-                for (let step = 0; step < 20; step++) {
-                  const action = rand();
-                  const id = pick(IDS);
-                  if (action < 0.15) {
-                    yield* engine.mutate("todo/remove", { id });
-                  } else if (action < 0.35) {
-                    yield* engine.pull; // a pull: Rebuild only if a mutation is still pending
-                  } else {
-                    yield* engine.mutate("todo/set", { id, title: `t-${Math.floor(rand() * 5)}` });
-                  }
-                  // Bursts of rapid mutations occasionally overrun the tiny hub
-                  // bound above, forcing a gap-collapse — exercised by chance
-                  // across seeds/steps rather than a dedicated branch.
+                yield* Effect.forEach(
+                  Arr.range(0, 19),
+                  () =>
+                    Effect.gen(function* () {
+                      const action = rand();
+                      const id = pick(IDS);
+                      if (action < 0.15) {
+                        yield* engine.mutate("todo/remove", { id });
+                      } else if (action < 0.35) {
+                        yield* engine.pull; // a pull: Rebuild only if a mutation is still pending
+                      } else {
+                        yield* engine.mutate("todo/set", {
+                          id,
+                          title: `t-${Math.floor(rand() * 5)}`,
+                        });
+                      }
+                      // Bursts of rapid mutations occasionally overrun the tiny hub
+                      // bound above, forcing a gap-collapse — exercised by chance
+                      // across seeds/steps rather than a dedicated branch.
 
-                  const expected = sortedIdValue(
-                    new Map((yield* engine.query(todos)).map((r) => [r.id, r.value]))
-                  );
-                  // eslint-disable-next-line no-loop-func -- captures `batches` fresh each poll, not stale
-                  const seen = yield* eventually(Ref.get(batches), (candidate) => {
-                    const folded = sortedIdValue(foldChangeBatches(candidate));
-                    return Json.show(folded) === Json.show(expected);
-                  });
-                  expect(sortedIdValue(foldChangeBatches(seen))).toEqual(expected);
-                }
+                      const expected = sortedIdValue(
+                        new Map((yield* engine.query(todos)).map((r) => [r.id, r.value]))
+                      );
+                      const seen = yield* eventually(Ref.get(batches), (candidate) => {
+                        const folded = sortedIdValue(foldChangeBatches(candidate));
+                        return Json.show(folded) === Json.show(expected);
+                      });
+                      expect(sortedIdValue(foldChangeBatches(seen))).toEqual(expected);
+                    }),
+                  { concurrency: 1, discard: true }
+                );
               })
             ),
           { concurrency: 1, discard: true }

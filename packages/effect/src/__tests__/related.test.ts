@@ -652,7 +652,7 @@ describe("Related delta-maintenance", () => {
       });
     };
 
-    for (let step = 0; step < 400; step++) {
+    Arr.forEach(Arr.range(0, 399), (step) => {
       const op = randomOp(rng, truth);
       applyOp(truth, op);
 
@@ -680,6 +680,6 @@ describe("Related delta-maintenance", () => {
           `actual:   ${Json.show(lastResult)}\n` +
           `expected: ${Json.show(expected)}`
       ).toBe(true);
-    }
+    });
   });
 });

@@ -193,7 +193,10 @@ describe("Paced", () => {
       const { engine, store, counter } = yield* setup();
       const paced = yield* Paced.coalesce(engine, "todo/set");
 
-      for (let i = 0; i < 10; i++) yield* paced.call("t1", todo("t1", `v${i}`));
+      yield* Effect.forEach(Arr.range(0, 9), (i) => paced.call("t1", todo("t1", `v${i}`)), {
+        concurrency: 1,
+        discard: true,
+      });
       yield* paced.call("t2", todo("t2", "other"));
 
       const pending = yield* store.pendingMutations;
@@ -220,7 +223,11 @@ describe("Paced", () => {
         const { engine, store, counter } = yield* setup();
         const paced = yield* Paced.debounce(engine, "todo/set", Duration.millis(200));
 
-        for (let i = 0; i < 50; i++) yield* paced.call("t1", todo("t1", `keystroke-${i}`));
+        yield* Effect.forEach(
+          Arr.range(0, 49),
+          (i) => paced.call("t1", todo("t1", `keystroke-${i}`)),
+          { concurrency: 1, discard: true }
+        );
 
         // Still inside the window: only the leading-edge entry exists.
         const during = yield* store.pendingMutations;
@@ -368,21 +375,26 @@ describe("Paced", () => {
           return seed / 0x7fffffff;
         };
 
-        for (let round = 0; round < 300; round++) {
-          const strategy = defined(strategies[Math.floor(next() * strategies.length)]);
-          const key = `k${Math.floor(next() * 4)}`;
-          yield* strategy.call(key, todo(key, `r${round}`));
-          if (next() < 0.25) yield* TestClock.adjust(Duration.millis(10));
+        yield* Effect.forEach(
+          Arr.range(0, 299),
+          (round) =>
+            Effect.gen(function* () {
+              const strategy = defined(strategies[Math.floor(next() * strategies.length)]);
+              const key = `k${Math.floor(next() * 4)}`;
+              yield* strategy.call(key, todo(key, `r${round}`));
+              if (next() < 0.25) yield* TestClock.adjust(Duration.millis(10));
 
-          const pending = yield* store.pendingMutations;
-          const ids = idsOf(pending.filter((m) => m.clientId === "client-a"));
-          // Nothing has been pushed, so the journal is the contiguous run
-          // 1..n in journal (array) order: compaction removes entries and
-          // renumbers the survivors but never reorders them, and never
-          // leaves a gap the backend would reject — even under adversarial
-          // interleaving of all three strategies.
-          expect(ids).toEqual(ids.map((_, i) => i + 1));
-        }
+              const pending = yield* store.pendingMutations;
+              const ids = idsOf(pending.filter((m) => m.clientId === "client-a"));
+              // Nothing has been pushed, so the journal is the contiguous run
+              // 1..n in journal (array) order: compaction removes entries and
+              // renumbers the survivors but never reorders them, and never
+              // leaves a gap the backend would reject — even under adversarial
+              // interleaving of all three strategies.
+              expect(ids).toEqual(ids.map((_, i) => i + 1));
+            }),
+          { concurrency: 1, discard: true }
+        );
 
         // Let every outstanding trailing/periodic timer settle.
         yield* TestClock.adjust(Duration.seconds(1));
@@ -398,7 +410,10 @@ describe("paced compaction renumbers the journal", () => {
     Effect.gen(function* () {
       const { engine, store, applied, backend } = yield* setupLossy();
       const paced = yield* Paced.coalesce(engine, "todo/set");
-      for (let n = 1; n <= 3; n++) yield* paced.call("1", todo("1", `e${n}`));
+      yield* Effect.forEach(Arr.range(1, 3), (n) => paced.call("1", todo("1", `e${n}`)), {
+        concurrency: 1,
+        discard: true,
+      });
 
       // The reproduction from the issue: before the fix this was `[3]`, and
       // the push below failed with "Mutation id gap for client client-a: got
@@ -418,10 +433,15 @@ describe("paced compaction renumbers the journal", () => {
       const { engine, store, applied } = yield* setupLossy();
       const debounced = yield* Paced.debounce(engine, "todo/set", Duration.millis(50));
       const throttled = yield* Paced.throttle(engine, "todo/set", Duration.millis(50));
-      for (let n = 1; n <= 5; n++) {
-        yield* debounced.call("d", todo("d", `d${n}`));
-        yield* throttled.call("t", todo("t", `t${n}`));
-      }
+      yield* Effect.forEach(
+        Arr.range(1, 5),
+        (n) =>
+          Effect.gen(function* () {
+            yield* debounced.call("d", todo("d", `d${n}`));
+            yield* throttled.call("t", todo("t", `t${n}`));
+          }),
+        { concurrency: 1, discard: true }
+      );
       yield* TestClock.adjust(Duration.millis(500));
 
       const pending = yield* store.pendingMutations;
@@ -663,37 +683,44 @@ describe("paced compaction renumbers the journal", () => {
         const lastCall = new Map<string, string>();
         const gapFailures: Array<string> = [];
 
-        for (let round = 0; round < 400; round++) {
-          const which = Math.floor(next() * strategies.length);
-          const strategy = defined(strategies[which]);
-          // Keys are per strategy: a debounce buffer and a coalescer racing on
-          // one key is a different (caller-visible) ordering question than
-          // the gap-free journal this property is about.
-          const key = `s${which}k${Math.floor(next() * 4)}`;
-          const title = `${key}-r${round}`;
-          yield* strategy.call(key, todo(key, title));
-          lastCall.set(key, title);
-          if (next() < 0.3) yield* TestClock.adjust(Duration.millis(10));
+        yield* Effect.forEach(
+          Arr.range(0, 399),
+          (round) =>
+            Effect.gen(function* () {
+              const which = Math.floor(next() * strategies.length);
+              const strategy = defined(strategies[which]);
+              // Keys are per strategy: a debounce buffer and a coalescer racing on
+              // one key is a different (caller-visible) ordering question than
+              // the gap-free journal this property is about.
+              const key = `s${which}k${Math.floor(next() * 4)}`;
+              const title = `${key}-r${round}`;
+              yield* strategy.call(key, todo(key, title));
+              lastCall.set(key, title);
+              if (next() < 0.3) yield* TestClock.adjust(Duration.millis(10));
 
-          const roll = next();
-          if (roll < 0.15) {
-            // A healthy push.
-            const exit = yield* Effect.exit(engine.push);
-            if (Exit.isFailure(exit)) gapFailures.push(String(exit.cause));
-          } else if (roll < 0.25) {
-            // The server applies the push but the client never hears back.
-            yield* Ref.set(mode, next() < 0.5 ? "response-lost" : "request-lost");
-            yield* Effect.exit(engine.push);
-            yield* Ref.set(mode, "ok");
-          }
+              const roll = next();
+              if (roll < 0.15) {
+                // A healthy push.
+                const exit = yield* Effect.exit(engine.push);
+                if (Exit.isFailure(exit)) gapFailures.push(String(exit.cause));
+              } else if (roll < 0.25) {
+                // The server applies the push but the client never hears back.
+                yield* Ref.set(mode, next() < 0.5 ? "response-lost" : "request-lost");
+                yield* Effect.exit(engine.push);
+                yield* Ref.set(mode, "ok");
+              }
 
-          // The invariant that makes the journal drainable: contiguous ids,
-          // in journal order, at every step.
-          const ids = idsOf(
-            (yield* store.pendingMutations).filter((m) => m.clientId === "client-a")
-          );
-          for (let i = 1; i < ids.length; i++) expect(ids[i]).toBe(defined(ids[i - 1]) + 1);
-        }
+              // The invariant that makes the journal drainable: contiguous ids,
+              // in journal order, at every step.
+              const ids = idsOf(
+                (yield* store.pendingMutations).filter((m) => m.clientId === "client-a")
+              );
+              Arr.forEach(Arr.zip(Arr.drop(ids, 1), ids), ([id, previous]) =>
+                expect(id).toBe(previous + 1)
+              );
+            }),
+          { concurrency: 1, discard: true }
+        );
 
         yield* TestClock.adjust(Duration.seconds(1)); // flush every debounce/throttle buffer
         yield* engine.push;
@@ -861,10 +888,15 @@ describe("a committed compaction is never lost to a failure or an interrupt", ()
   it.effect("the memory store's compaction cannot be interrupted between journal and counter", () =>
     Effect.gen(function* () {
       const store = yield* ClientStoreModule.makeMemory;
-      for (let n = 1; n <= 3; n++) {
-        const id = yield* store.nextMutationId("client-a");
-        yield* store.appendMutation({ ...stale(id), mutator: "todo/set" });
-      }
+      yield* Effect.forEach(
+        Arr.range(1, 3),
+        () =>
+          Effect.gen(function* () {
+            const id = yield* store.nextMutationId("client-a");
+            yield* store.appendMutation({ ...stale(id), mutator: "todo/set" });
+          }),
+        { concurrency: 1, discard: true }
+      );
       const caller = yield* Effect.forkChild(store.compactPending("client-a", [1]));
       // The fork runs the compaction up to its internal yield point (journal
       // renumbered, counter not yet); interrupt it right there.

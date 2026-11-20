@@ -324,20 +324,23 @@ const awaitSeen = (
   seen: Ref.Ref<ReadonlyArray<Transport.ConnectionStatus>>,
   count: number,
   maxTurns = 1_000
-) =>
-  Effect.gen(function* () {
-    for (let turn = 0; turn < maxTurns; turn++) {
-      if ((yield* Ref.get(seen)).length >= count) return undefined;
+) => {
+  const turn = (taken: number): Effect.Effect<undefined> =>
+    Effect.gen(function* () {
+      const all = yield* Ref.get(seen);
+      if (all.length >= count) return undefined;
+      if (taken === maxTurns) {
+        return yield* Effect.die(
+          new TestFailure({
+            message: `awaitSeen: ${count} statuses never arrived in ${maxTurns} turns; saw ${all.join()}`,
+          })
+        );
+      }
       yield* Effect.yieldNow;
-    }
-    const all = yield* Ref.get(seen);
-    if (all.length >= count) return undefined;
-    return yield* Effect.die(
-      new TestFailure({
-        message: `awaitSeen: ${count} statuses never arrived in ${maxTurns} turns; saw ${all.join()}`,
-      })
-    );
-  });
+      return yield* turn(taken + 1);
+    });
+  return turn(0);
+};
 
 describe("Transport.simulateOffline", () => {
   it.effect("passes calls through while online, fails them while toggled offline", () =>

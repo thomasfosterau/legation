@@ -12,6 +12,7 @@
  */
 import * as P from "effect/Predicate";
 import { describe, expect, it } from "@effect/vitest";
+import * as Arr from "effect/Array";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Ref from "effect/Ref";
@@ -89,14 +90,19 @@ const sleepReal = (millis: number) =>
   });
 const settle = sleepReal(200);
 
-const eventually = <A, E>(read: Effect.Effect<A, E>, until: (value: A) => boolean) =>
+const eventually = <A, E>(
+  read: Effect.Effect<A, E>,
+  until: (value: A) => boolean,
+  attemptsLeft = 400
+): Effect.Effect<A> =>
   Effect.gen(function* () {
-    for (let attempt = 0; attempt < 400; attempt++) {
-      const value = yield* read.pipe(Effect.orDie);
-      if (until(value)) return value;
-      yield* sleepReal(5);
+    if (attemptsLeft === 0) {
+      return yield* Effect.die(new TestFailure({ message: "eventually: condition never held" }));
     }
-    return yield* Effect.die(new TestFailure({ message: "eventually: condition never held" }));
+    const value = yield* read.pipe(Effect.orDie);
+    if (until(value)) return value;
+    yield* sleepReal(5);
+    return yield* eventually(read, until, attemptsLeft - 1);
   });
 
 const ids = (rows: ReadonlyArray<{ readonly id: string }>) => rows.map((r) => r.id);
@@ -113,9 +119,11 @@ describe("ClientEngine.observeWindow", () => {
 
         // Seed 6 rows on the server, then pull them all locally before ever
         // observing — retargeting from here on is a pure local reslice.
-        for (let i = 0; i < 6; i++) {
-          yield* writer.mutate("item/set", { id: `i${i}`, rank: i });
-        }
+        yield* Effect.forEach(
+          Arr.range(0, 5),
+          (i) => writer.mutate("item/set", { id: `i${i}`, rank: i }),
+          { concurrency: 1, discard: true }
+        );
         yield* writer.push;
         yield* reader.pull;
         yield* eventually(
@@ -177,9 +185,11 @@ describe("ClientEngine.observeWindow", () => {
         const reader = yield* makeClient(handler, "reader-cursor");
         yield* reader.subscribe(Subset.make({ collection: "items" }));
 
-        for (let i = 0; i < 6; i++) {
-          yield* writer.mutate("item/set", { id: `i${i}`, rank: i });
-        }
+        yield* Effect.forEach(
+          Arr.range(0, 5),
+          (i) => writer.mutate("item/set", { id: `i${i}`, rank: i }),
+          { concurrency: 1, discard: true }
+        );
         yield* writer.push;
         yield* reader.pull;
         yield* eventually(
@@ -219,9 +229,11 @@ describe("ClientEngine.observeWindow", () => {
         const reader = yield* makeClient(handler, "reader-mixed");
         yield* reader.subscribe(Subset.make({ collection: "items" }));
 
-        for (let i = 0; i < 4; i++) {
-          yield* writer.mutate("item/set", { id: `i${i}`, rank: i });
-        }
+        yield* Effect.forEach(
+          Arr.range(0, 3),
+          (i) => writer.mutate("item/set", { id: `i${i}`, rank: i }),
+          { concurrency: 1, discard: true }
+        );
         yield* writer.push;
         yield* reader.pull;
         yield* eventually(

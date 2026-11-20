@@ -27,6 +27,7 @@ import {
 } from "@thomasfosterau/legation/internal";
 import { describe, expect, it } from "@effect/vitest";
 import * as Deferred from "effect/Deferred";
+import * as Arr from "effect/Array";
 import * as Effect from "effect/Effect";
 import * as Metric from "effect/Metric";
 import * as Ref from "effect/Ref";
@@ -50,15 +51,13 @@ const sleepReal = (millis: number) =>
     return Effect.sync(() => clearTimeout(timer));
   });
 
-const eventually = <A>(read: Effect.Effect<A>, until: (value: A) => boolean) =>
-  Effect.gen(function* () {
-    for (let attempt = 0; attempt < 400; attempt++) {
-      const value = yield* read;
-      if (until(value)) return value;
-      yield* sleepReal(5);
-    }
-    return yield* Effect.die(new TestFailure({ message: "eventually: condition never held" }));
-  });
+const eventually = <A>(read: Effect.Effect<A>, until: (value: A) => boolean) => {
+  const attempt = (n: number): Effect.Effect<A> =>
+    n === 400
+      ? Effect.die(new TestFailure({ message: "eventually: condition never held" }))
+      : Effect.filterOrElse(read, until, () => Effect.andThen(sleepReal(5), attempt(n + 1)));
+  return attempt(0);
+};
 
 const makeEngine = Effect.fn("makeEngine")(function* () {
   const backend = yield* MemoryBackend.make(
@@ -132,10 +131,15 @@ describe("Mirror backpressure", () => {
       // Late updates after the drain reveal the seq gap → forced refresh. Spread
       // them so at least one lands after the observer has caught up on the four
       // buffered keys (the rest were dropped), exposing the jump in seq.
-      for (let i = 0; i < 6; i++) {
-        yield* sleepReal(25);
-        yield* engine.mutate("todo/set", { id: `final${i}`, title: `final${i}` });
-      }
+      yield* Effect.forEach(
+        Arr.range(0, 5),
+        (i) =>
+          Effect.andThen(
+            sleepReal(25),
+            engine.mutate("todo/set", { id: `final${i}`, title: `final${i}` })
+          ),
+        { concurrency: 1, discard: true }
+      );
 
       // The mirror's Ref holds every row, so a resumed read converges to all 37
       // (m0 + 30 storm + 6 late).

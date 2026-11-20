@@ -462,13 +462,12 @@ const appendMissing = <T extends { readonly clientId: string; readonly mutationI
   incoming: ReadonlyArray<T>
 ): ReadonlyArray<T> => {
   const seen = new Set(held.map(entryKey));
-  const added: Array<T> = [];
-  for (const entry of incoming) {
+  const added = Arr.filter(incoming, (entry) => {
     const key = entryKey(entry);
-    if (seen.has(key)) continue;
+    if (seen.has(key)) return false;
     seen.add(key);
-    added.push(entry);
-  }
+    return true;
+  });
   return [...held, ...added];
 };
 
@@ -485,6 +484,16 @@ const coveredBy = (
   return upTo !== undefined && entry.mutationId <= upTo;
 };
 
+/** The highest of `floor` and the mutation ids `entries` hold for `clientId`. */
+const highestFor = (
+  entries: ReadonlyArray<{ readonly clientId: string; readonly mutationId: number }>,
+  clientId: string,
+  floor: number
+): number =>
+  Arr.reduce(entries, floor, (last, entry) =>
+    entry.clientId === clientId && entry.mutationId > last ? entry.mutationId : last
+  );
+
 /**
  * Freeze everything currently pending: raise each client's sent watermark to
  * its highest pending id, so {@link ClientStore.compactPending} treats it as
@@ -497,10 +506,7 @@ const coveredBy = (
  */
 export const freezePending = (store: ClientStore): Effect.Effect<void, StoreError> =>
   Effect.gen(function* () {
-    const highest = new Map<string, number>();
-    for (const m of yield* store.pendingMutations) {
-      if (m.mutationId > (highest.get(m.clientId) ?? 0)) highest.set(m.clientId, m.mutationId);
-    }
+    const highest = raisedCounterMap(new Map(), yield* store.pendingMutations);
     yield* Effect.forEach(highest, ([clientId, upTo]) => store.markSent(clientId, upTo), {
       concurrency: 1,
       discard: true,
@@ -534,11 +540,9 @@ const raisedCounterMap = (
   current: ReadonlyMap<string, number>,
   entries: ReadonlyArray<Mutation>
 ): Map<string, number> => {
-  const next = new Map(current);
-  for (const m of entries) {
-    if (m.mutationId > (next.get(m.clientId) ?? 0)) next.set(m.clientId, m.mutationId);
-  }
-  return next;
+  return Arr.reduce(entries, new Map(current), (next, m) =>
+    m.mutationId > (next.get(m.clientId) ?? 0) ? next.set(m.clientId, m.mutationId) : next
+  );
 };
 
 /** In-memory implementation (tests, SSR, ephemeral clients). */
@@ -577,10 +581,7 @@ export const makeMemory: Effect.Effect<ClientStore> = Effect.gen(function* () {
     Ref.update(counters, (m) => ((m.get(clientId) ?? 0) >= id ? m : new Map(m).set(clientId, id)));
   /** Raise each client's counter to the highest id among `entries`. */
   const raiseCountersTo = (entries: ReadonlyArray<Mutation>) => {
-    const highest = new Map<string, number>();
-    for (const m of entries) {
-      if (m.mutationId > (highest.get(m.clientId) ?? 0)) highest.set(m.clientId, m.mutationId);
-    }
+    const highest = raisedCounterMap(new Map(), entries);
     return Effect.forEach(highest, ([clientId, id]) => raiseCounter(clientId, id), {
       concurrency: 1,
       discard: true,
@@ -750,12 +751,11 @@ export const makeMemory: Effect.Effect<ClientStore> = Effect.gen(function* () {
         Effect.uninterruptible(
           Effect.gen(function* () {
             const entries = yield* Ref.get(journal);
-            let last = (yield* Ref.get(counters)).get(draft.clientId) ?? 0;
-            for (const entry of entries) {
-              if (entry.clientId === draft.clientId && entry.mutationId > last) {
-                last = entry.mutationId;
-              }
-            }
+            const last = highestFor(
+              entries,
+              draft.clientId,
+              (yield* Ref.get(counters)).get(draft.clientId) ?? 0
+            );
             const mutation: Mutation = { ...draft, mutationId: last + 1 };
             yield* Ref.set(journal, entries.concat(mutation));
             yield* raiseCounter(draft.clientId, mutation.mutationId);
@@ -813,10 +813,7 @@ export const makeMemory: Effect.Effect<ClientStore> = Effect.gen(function* () {
       locked(
         Effect.gen(function* () {
           const entries = yield* Ref.get(journal);
-          let last = (yield* Ref.get(counters)).get(clientId) ?? 0;
-          for (const entry of entries) {
-            if (entry.clientId === clientId && entry.mutationId > last) last = entry.mutationId;
-          }
+          const last = highestFor(entries, clientId, (yield* Ref.get(counters)).get(clientId) ?? 0);
           const next = last + 1;
           yield* raiseCounter(clientId, next);
           return next;
@@ -866,10 +863,9 @@ export const makeMemory: Effect.Effect<ClientStore> = Effect.gen(function* () {
     snapshot: locked(
       Effect.gen(function* () {
         const byCollection = yield* Ref.get(rows);
-        const flat: Array<{ readonly collection: string; readonly row: StoredRow }> = [];
-        for (const [collection, collectionRows] of byCollection) {
-          for (const row of collectionRows.values()) flat.push({ collection, row });
-        }
+        const flat = Arr.flatMap(Arr.fromIterable(byCollection), ([collection, collectionRows]) =>
+          Arr.map(Arr.fromIterable(collectionRows.values()), (row) => ({ collection, row }))
+        );
         return {
           rows: flat,
           cookie: yield* Ref.get(cookie),
@@ -1003,16 +999,15 @@ const sealed = (cause: StoreError): ClientStore => {
  * The messages down a cause chain, outermost first, joined with `: `: the reason a store failure
  * carries, for a sealed store's message. The walk stops at a non-object or after a few links.
  */
-const causeDetail = (error: unknown): string => {
-  const messages: Array<string> = [];
-  let current: unknown = error;
-  for (let depth = 0; depth < 8 && P.isObjectOrArray(current); depth++) {
+const causeDetail = (error: unknown): string =>
+  Arr.unfold({ current: error, depth: 0 }, ({ current, depth }) => {
+    if (depth >= 8 || !P.isObjectOrArray(current)) return Option.none();
     const link = current as { readonly message?: unknown; readonly cause?: unknown };
-    if (P.isString(link.message) && link.message !== "") messages.push(link.message);
-    current = link.cause;
-  }
-  return messages.join(": ");
-};
+    const message = P.isString(link.message) ? link.message : "";
+    return Option.some([message, { current: link.cause, depth: depth + 1 }] as const);
+  })
+    .filter((message) => message !== "")
+    .join(": ");
 
 /**
  * The refusal an append gets for an entry the unpulled tail already holds. A journal copy of a
@@ -1199,10 +1194,10 @@ const appendDistinct = (
 /** The highest mutation id per client among `ids` (empty when none is positive). */
 const highestIds = (ids: ReadonlyArray<JournalIndexEntry>) => {
   const highest: Record<string, number> = {};
-  for (const { clientId, mutationId } of ids) {
-    if (mutationId > (highest[clientId] ?? 0)) highest[clientId] = mutationId;
-  }
-  return highest;
+  return Arr.reduce(ids, highest, (acc, { clientId, mutationId }) => {
+    if (mutationId > (acc[clientId] ?? 0)) acc[clientId] = mutationId;
+    return acc;
+  });
 };
 
 /**
@@ -1213,15 +1208,11 @@ const raisedCounters = (
   counters: Readonly<Record<string, number>>,
   highest: Readonly<Record<string, number>>
 ): Record<string, number> | undefined => {
-  const raised = { ...counters } satisfies Record<string, number>;
-  let changed = false;
-  for (const [clientId, id] of Object.entries(highest)) {
-    if ((raised[clientId] ?? 0) < id) {
-      raised[clientId] = id;
-      changed = true;
-    }
-  }
-  return changed ? raised : undefined;
+  const rising = Arr.filter(
+    R.toEntries(highest),
+    ([clientId, id]) => (counters[clientId] ?? 0) < id
+  );
+  return Arr.isReadonlyArrayEmpty(rising) ? undefined : { ...counters, ...R.fromEntries(rising) };
 };
 
 /** A batch of row ops grouped by collection: `null` marks a deletion. */
@@ -1307,32 +1298,38 @@ const pendingMutationsWith = (
       const legacy = yield* read(LEGACY_JOURNAL_KEY, JournalFromJson);
       return legacy ?? [];
     }
-    const mutations: Array<Mutation> = [];
-    for (const entry of index) {
-      const body = yield* read(journalBodyKey(entry.clientId, entry.mutationId), MutationFromJson);
-      if (body !== undefined) mutations.push(body);
-    }
-    return mutations;
+    const bodies = yield* Effect.forEach(
+      index,
+      (entry) => read(journalBodyKey(entry.clientId, entry.mutationId), MutationFromJson),
+      { concurrency: 1 }
+    );
+    return Arr.filter(bodies, P.isNotUndefined);
   });
 
 const unpulledWith = (read: KeyReader): Effect.Effect<ReadonlyArray<Mutation>, StoreError> =>
   Effect.gen(function* () {
     const index = (yield* read(UNPULLED_INDEX_KEY, JournalIndexFromJson)) ?? [];
-    const mutations: Array<Mutation> = [];
-    for (const entry of index) {
-      const body = yield* read(unpulledBodyKey(entry.clientId, entry.mutationId), MutationFromJson);
-      if (body !== undefined) mutations.push(body);
-    }
-    return mutations;
+    const bodies = yield* Effect.forEach(
+      index,
+      (entry) => read(unpulledBodyKey(entry.clientId, entry.mutationId), MutationFromJson),
+      { concurrency: 1 }
+    );
+    return Arr.filter(bodies, P.isNotUndefined);
   });
 
 // The whole replica, read through `read`: the same reads the members make, in one order.
 const replicaStateWith = (read: KeyReader): Effect.Effect<ReplicaState, StoreError> =>
   Effect.gen(function* () {
-    const rows: Array<{ readonly collection: string; readonly row: StoredRow }> = [];
-    for (const collection of yield* collectionsWith(read)) {
-      for (const row of yield* listRowsWith(read, collection)) rows.push({ collection, row });
-    }
+    const perCollection = yield* Effect.forEach(
+      yield* collectionsWith(read),
+      (collection) =>
+        Effect.map(
+          listRowsWith(read, collection),
+          Arr.map((row) => ({ collection, row }))
+        ),
+      { concurrency: 1 }
+    );
+    const rows = Arr.flatten(perCollection);
     return {
       rows,
       cookie: yield* read("cookie", Schema.String),
@@ -1468,8 +1465,16 @@ export const makeKeyValue = (
     // avoids.)
     const applyCompaction = (intent: typeof CompactionIntentFromJson.Type) =>
       Effect.gen(function* () {
-        for (const id of intent.staleIds) yield* remove(journalBodyKey(intent.clientId, id));
-        for (const m of intent.moved) yield* writeJson(journalBodyKey(m.clientId, m.mutationId), m);
+        yield* Effect.forEach(
+          intent.staleIds,
+          (id) => remove(journalBodyKey(intent.clientId, id)),
+          { concurrency: 1, discard: true }
+        );
+        yield* Effect.forEach(
+          intent.moved,
+          (m) => writeJson(journalBodyKey(m.clientId, m.mutationId), m),
+          { concurrency: 1, discard: true }
+        );
         yield* writeJson("journalIndex", intent.index);
         const counters = (yield* readDecoded("counters", CountersFromJson)) ?? {};
         yield* writeJson("counters", { ...counters, [intent.clientId]: intent.counter });
@@ -1536,7 +1541,11 @@ export const makeKeyValue = (
         if (Arr.isReadonlyArrayEmpty(mutations)) return;
         // A journal copy may be left behind by the trim that follows, so the finish must run.
         yield* Ref.set(finishPending, true);
-        for (const m of mutations) yield* writeJson(unpulledBodyKey(m.clientId, m.mutationId), m);
+        yield* Effect.forEach(
+          mutations,
+          (m) => writeJson(unpulledBodyKey(m.clientId, m.mutationId), m),
+          { concurrency: 1, discard: true }
+        );
         const index = yield* unpulledIndexOf;
         const next = appendMissing(
           index,
@@ -1557,9 +1566,11 @@ export const makeKeyValue = (
       Effect.gen(function* () {
         const index = yield* unpulledIndexOf;
         const released = index.filter((entry) => coveredBy(lastMutationIds, entry));
-        for (const entry of released) {
-          yield* remove(unpulledBodyKey(entry.clientId, entry.mutationId));
-        }
+        yield* Effect.forEach(
+          released,
+          (entry) => remove(unpulledBodyKey(entry.clientId, entry.mutationId)),
+          { concurrency: 1, discard: true }
+        );
         if (Arr.isReadonlyArrayNonEmpty(released)) {
           yield* writeJson(
             UNPULLED_INDEX_KEY,
@@ -1572,9 +1583,11 @@ export const makeKeyValue = (
     const clearUnpulledInner = Effect.fnUntraced(function* (): Effect.fn.Return<void, StoreError> {
       const index = yield* unpulledIndexOf;
       if (Arr.isReadonlyArrayNonEmpty(index)) yield* writeJson(UNPULLED_INDEX_KEY, []);
-      for (const entry of index) {
-        yield* remove(unpulledBodyKey(entry.clientId, entry.mutationId));
-      }
+      yield* Effect.forEach(
+        index,
+        (entry) => remove(unpulledBodyKey(entry.clientId, entry.mutationId)),
+        { concurrency: 1, discard: true }
+      );
       yield* remove(RELEASE_KEY);
     });
 
@@ -1604,9 +1617,11 @@ export const makeKeyValue = (
     // no acknowledgement implied. Only ever called with the entries already
     // safely written to a quarantine.
     const clearJournalInner = Effect.fnUntraced(function* () {
-      for (const entry of yield* journalIndex) {
-        yield* remove(journalBodyKey(entry.clientId, entry.mutationId));
-      }
+      yield* Effect.forEach(
+        yield* journalIndex,
+        (entry) => remove(journalBodyKey(entry.clientId, entry.mutationId)),
+        { concurrency: 1, discard: true }
+      );
       yield* writeJson("journalIndex", []);
       yield* remove(LEGACY_JOURNAL_KEY);
     });
@@ -1623,8 +1638,11 @@ export const makeKeyValue = (
         const dropped = index.filter(drop);
         if (Arr.isReadonlyArrayEmpty(dropped)) return;
         yield* raiseCounters(dropped);
-        for (const entry of dropped)
-          yield* remove(journalBodyKey(entry.clientId, entry.mutationId));
+        yield* Effect.forEach(
+          dropped,
+          (entry) => remove(journalBodyKey(entry.clientId, entry.mutationId)),
+          { concurrency: 1, discard: true }
+        );
         yield* writeJson(
           "journalIndex",
           index.filter((entry) => !drop(entry))
@@ -1675,11 +1693,15 @@ export const makeKeyValue = (
         const entries = yield* quarantinedOf(fingerprint);
         if (Arr.isReadonlyArrayEmpty(entries)) return 0;
         const index = yield* journalIndex;
-        const restored: Array<JournalIndexEntry> = [];
-        for (const entry of entries) {
-          yield* writeJson(journalBodyKey(entry.clientId, entry.mutationId), entry);
-          restored.push({ clientId: entry.clientId, mutationId: entry.mutationId });
-        }
+        yield* Effect.forEach(
+          entries,
+          (entry) => writeJson(journalBodyKey(entry.clientId, entry.mutationId), entry),
+          { concurrency: 1, discard: true }
+        );
+        const restored = Arr.map(entries, (entry) => ({
+          clientId: entry.clientId,
+          mutationId: entry.mutationId,
+        }));
         yield* writeJson("journalIndex", [...index, ...restored]);
         yield* discardQuarantineInner(fingerprint);
         return entries.length;
@@ -1688,11 +1710,20 @@ export const makeKeyValue = (
     // Clear every tracked collection's rows and indexes (unlocked inner form,
     // reused by clearRows, applyRowOps, and the migration reset).
     const clearRowsInner = Effect.fnUntraced(function* () {
-      for (const collection of yield* collections) {
-        for (const id of yield* rowIndex(collection)) yield* remove(rowKey(collection, id));
-        yield* remove(rowIndexKey(collection));
-        yield* remove(legacyRowsKey(collection));
-      }
+      yield* Effect.forEach(
+        yield* collections,
+        (collection) =>
+          Effect.gen(function* () {
+            yield* Effect.forEach(
+              yield* rowIndex(collection),
+              (id) => remove(rowKey(collection, id)),
+              { concurrency: 1, discard: true }
+            );
+            yield* remove(rowIndexKey(collection));
+            yield* remove(legacyRowsKey(collection));
+          }),
+        { concurrency: 1, discard: true }
+      );
       yield* writeJson("collections", []);
     });
 
@@ -1719,8 +1750,11 @@ export const makeKeyValue = (
       Effect.gen(function* () {
         const plan = planRowOps(ops);
         if (plan.clear) yield* clearRowsInner();
-        for (const [collection, changes] of plan.groups)
-          yield* flushCollection(collection, changes);
+        yield* Effect.forEach(
+          plan.groups,
+          ([collection, changes]) => flushCollection(collection, changes),
+          { concurrency: 1, discard: true }
+        );
       });
 
     // Split a legacy whole-collection blob into per-row keys + an id-index.
@@ -1729,7 +1763,10 @@ export const makeKeyValue = (
         const map = yield* readDecoded(legacyRowsKey(collection), RowMapFromJson);
         if (map === undefined) return;
         const ids = Object.keys(map);
-        for (const id of ids) yield* writeJson(rowKey(collection, id), map[id]);
+        yield* Effect.forEach(ids, (id) => writeJson(rowKey(collection, id), map[id]), {
+          concurrency: 1,
+          discard: true,
+        });
         yield* writeJson(rowIndexKey(collection), ids);
         yield* remove(legacyRowsKey(collection));
       });
@@ -1738,12 +1775,14 @@ export const makeKeyValue = (
     const migrateJournal = Effect.fnUntraced(function* () {
       const legacy = yield* readDecoded(LEGACY_JOURNAL_KEY, JournalFromJson);
       if (legacy === undefined) return;
-      const index: Array<JournalIndexEntry> = [];
-      for (const m of legacy) {
-        yield* writeJson(journalBodyKey(m.clientId, m.mutationId), m);
-        index.push({ clientId: m.clientId, mutationId: m.mutationId });
-      }
-      yield* writeJson("journalIndex", index);
+      yield* Effect.forEach(legacy, (m) => writeJson(journalBodyKey(m.clientId, m.mutationId), m), {
+        concurrency: 1,
+        discard: true,
+      });
+      yield* writeJson(
+        "journalIndex",
+        Arr.map(legacy, (m) => ({ clientId: m.clientId, mutationId: m.mutationId }))
+      );
       yield* remove(LEGACY_JOURNAL_KEY);
     });
 
@@ -1761,7 +1800,10 @@ export const makeKeyValue = (
     // the version. Envelope-validated; a corrupt legacy blob takes the
     // destructive fallback rather than wedging the store.
     const migrate = Effect.gen(function* () {
-      for (const collection of yield* collections) yield* migrateCollection(collection);
+      yield* Effect.forEach(yield* collections, migrateCollection, {
+        concurrency: 1,
+        discard: true,
+      });
       yield* migrateJournal();
     }).pipe(Effect.catch(() => resetToEmpty()));
 
@@ -1807,15 +1849,16 @@ export const makeKeyValue = (
     const repairJournalIndex = Effect.fnUntraced(function* () {
       const index = yield* readDecoded("journalIndex", JournalIndexFromJson);
       if (index === undefined) return;
-      const kept: Array<JournalIndexEntry> = [];
-      const orphaned: Array<JournalIndexEntry> = [];
-      for (const entry of index) {
-        const key = journalBodyKey(entry.clientId, entry.mutationId);
-        const present = yield* store
-          .has(key)
-          .pipe(Effect.mapError(storeError(`Failed to read "${key}"`)));
-        (present ? kept : orphaned).push(entry);
-      }
+      const present = yield* Effect.forEach(
+        index,
+        (entry) => {
+          const key = journalBodyKey(entry.clientId, entry.mutationId);
+          return store.has(key).pipe(Effect.mapError(storeError(`Failed to read "${key}"`)));
+        },
+        { concurrency: 1 }
+      );
+      const kept = Arr.filter(index, (_, i) => present[i]);
+      const orphaned = Arr.filter(index, (_, i) => !present[i]);
       if (Arr.isReadonlyArrayEmpty(orphaned)) return;
       yield* raiseCounters(orphaned);
       yield* writeJson("journalIndex", kept);
@@ -2028,7 +2071,7 @@ export const makeKeyValue = (
         const dropped = index.filter(drop);
         if (Arr.isReadonlyArrayEmpty(dropped)) return;
         yield* stagedRaiseCounters(b, dropped);
-        for (const entry of dropped) b.drop(journalBodyKey(entry.clientId, entry.mutationId));
+        Arr.forEach(dropped, (entry) => b.drop(journalBodyKey(entry.clientId, entry.mutationId)));
         b.putJson(
           "journalIndex",
           index.filter((entry) => !drop(entry))
@@ -2040,7 +2083,7 @@ export const makeKeyValue = (
       Effect.gen(function* () {
         const index = (yield* b.read(UNPULLED_INDEX_KEY, JournalIndexFromJson)) ?? [];
         const released = index.filter((entry) => coveredBy(lastMutationIds, entry));
-        for (const entry of released) b.drop(unpulledBodyKey(entry.clientId, entry.mutationId));
+        Arr.forEach(released, (entry) => b.drop(unpulledBodyKey(entry.clientId, entry.mutationId)));
         if (Arr.isReadonlyArrayNonEmpty(released)) {
           b.putJson(
             UNPULLED_INDEX_KEY,
@@ -2053,7 +2096,7 @@ export const makeKeyValue = (
     const stagedPark = (b: Stage, mutations: ReadonlyArray<Mutation>) =>
       Effect.gen(function* () {
         if (Arr.isReadonlyArrayEmpty(mutations)) return;
-        for (const m of mutations) b.putJson(unpulledBodyKey(m.clientId, m.mutationId), m);
+        Arr.forEach(mutations, (m) => b.putJson(unpulledBodyKey(m.clientId, m.mutationId), m));
         const index = (yield* b.read(UNPULLED_INDEX_KEY, JournalIndexFromJson)) ?? [];
         const next = appendMissing(
           index,
@@ -2074,28 +2117,38 @@ export const makeKeyValue = (
         const rowIdsOf = (collection: string) =>
           b.read(rowIndexKey(collection), IdsFromJson).pipe(Effect.map((ids) => ids ?? []));
         if (plan.clear) {
-          for (const collection of yield* collectionList) {
-            for (const id of yield* rowIdsOf(collection)) b.drop(rowKey(collection, id));
-            b.drop(rowIndexKey(collection));
-            b.drop(legacyRowsKey(collection));
-          }
+          yield* Effect.forEach(
+            yield* collectionList,
+            (collection) =>
+              Effect.map(rowIdsOf(collection), (ids) => {
+                Arr.forEach(ids, (id) => b.drop(rowKey(collection, id)));
+                b.drop(rowIndexKey(collection));
+                b.drop(legacyRowsKey(collection));
+              }),
+            { concurrency: 1, discard: true }
+          );
           b.putJson("collections", []);
         }
-        for (const [collection, changes] of plan.groups) {
-          const ids = new Set(yield* rowIdsOf(collection));
-          for (const [id, row] of changes) {
-            if (row === null) {
-              b.drop(rowKey(collection, id));
-              ids.delete(id);
-            } else {
-              b.putJson(rowKey(collection, id), row);
-              ids.add(id);
-            }
-          }
-          b.putJson(rowIndexKey(collection), [...ids]);
-          const list = yield* collectionList;
-          if (!list.includes(collection)) b.putJson("collections", [...list, collection]);
-        }
+        yield* Effect.forEach(
+          plan.groups,
+          ([collection, changes]) =>
+            Effect.gen(function* () {
+              const ids = new Set(yield* rowIdsOf(collection));
+              for (const [id, row] of changes) {
+                if (row === null) {
+                  b.drop(rowKey(collection, id));
+                  ids.delete(id);
+                } else {
+                  b.putJson(rowKey(collection, id), row);
+                  ids.add(id);
+                }
+              }
+              b.putJson(rowIndexKey(collection), [...ids]);
+              const list = yield* collectionList;
+              if (!list.includes(collection)) b.putJson("collections", [...list, collection]);
+            }),
+          { concurrency: 1, discard: true }
+        );
       });
 
     // Commit a staged batch as one seam call. Nothing is written for an empty batch.
@@ -2242,12 +2295,7 @@ export const makeKeyValue = (
                 });
               }
               const counters = (yield* readDecoded("counters", CountersFromJson)) ?? {};
-              let last = counters[draft.clientId] ?? 0;
-              for (const entry of index) {
-                if (entry.clientId === draft.clientId && entry.mutationId > last) {
-                  last = entry.mutationId;
-                }
-              }
+              const last = highestFor(index, draft.clientId, counters[draft.clientId] ?? 0);
               const mutation: Mutation = { ...draft, mutationId: last + 1 };
               yield* writeJson(journalBodyKey(mutation.clientId, mutation.mutationId), mutation);
               yield* writeJson("journalIndex", [
@@ -2282,19 +2330,24 @@ export const makeKeyValue = (
         locked(
           Effect.gen(function* () {
             yield* settleCompaction;
-            const kept: Array<JournalIndexEntry> = [];
-            const dropped: Array<JournalIndexEntry> = [];
-            for (const entry of yield* journalIndex) {
-              if (entry.clientId === clientId && entry.mutationId <= upTo) dropped.push(entry);
-              else kept.push(entry);
-            }
+            const index = yield* journalIndex;
+            const dropped = Arr.filter(
+              index,
+              (entry) => entry.clientId === clientId && entry.mutationId <= upTo
+            );
+            const kept = Arr.filter(
+              index,
+              (entry) => entry.clientId !== clientId || entry.mutationId > upTo
+            );
             // Reserve the ids first: once the entries are gone the index can
             // no longer heal the counter, and a lost counter write would have
             // the next append reissue an acknowledged id.
             yield* raiseCounters(dropped);
-            for (const entry of dropped) {
-              yield* remove(journalBodyKey(entry.clientId, entry.mutationId));
-            }
+            yield* Effect.forEach(
+              dropped,
+              (entry) => remove(journalBodyKey(entry.clientId, entry.mutationId)),
+              { concurrency: 1, discard: true }
+            );
             yield* writeJson("journalIndex", kept);
           })
         ),
@@ -2317,19 +2370,25 @@ export const makeKeyValue = (
               // Plan over the index alone; read only the bodies that move.
               const plan = planCompaction(index, clientId, mutationIds, watermark);
               if (plan === undefined) return NO_COMPACTION;
-              const moved: Array<Mutation> = [];
-              for (const { from, to } of plan.result.renumbered) {
-                const body = yield* readDecoded(journalBodyKey(clientId, from), MutationFromJson);
-                // A missing body cannot be moved, and leaving its index entry
-                // behind would strand an id with nothing to push. Refuse, before
-                // anything is committed, rather than corrupt the run.
-                if (body === undefined) {
-                  return yield* new StoreError({
-                    message: `Journal body missing for mutation ${from} of client ${clientId}; refusing to compact`,
-                  });
-                }
-                moved.push({ ...body, mutationId: to });
-              }
+              const moved = yield* Effect.forEach(
+                plan.result.renumbered,
+                ({ from, to }): Effect.Effect<Mutation, StoreError> =>
+                  readDecoded(journalBodyKey(clientId, from), MutationFromJson).pipe(
+                    Effect.flatMap((body) =>
+                      // A missing body cannot be moved, and leaving its index entry
+                      // behind would strand an id with nothing to push. Refuse, before
+                      // anything is committed, rather than corrupt the run.
+                      body === undefined
+                        ? Effect.fail(
+                            new StoreError({
+                              message: `Journal body missing for mutation ${from} of client ${clientId}; refusing to compact`,
+                            })
+                          )
+                        : Effect.succeed({ ...body, mutationId: to })
+                    )
+                  ),
+                { concurrency: 1 }
+              );
               const intent = {
                 clientId,
                 staleIds: [...plan.result.dropped, ...plan.result.renumbered.map((r) => r.from)],
@@ -2388,10 +2447,7 @@ export const makeKeyValue = (
             const counters = (yield* readDecoded("counters", CountersFromJson)) ?? {};
             // Heal from the live journal, as `appendNext` does, so a counter
             // write that was swallowed cannot hand out an id a live entry holds.
-            let last = counters[clientId] ?? 0;
-            for (const entry of yield* journalIndex) {
-              if (entry.clientId === clientId && entry.mutationId > last) last = entry.mutationId;
-            }
+            const last = highestFor(yield* journalIndex, clientId, counters[clientId] ?? 0);
             const next = last + 1;
             yield* writeJson("counters", { ...counters, [clientId]: next });
             return next;

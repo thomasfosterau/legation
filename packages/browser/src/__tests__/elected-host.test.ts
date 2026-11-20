@@ -57,15 +57,13 @@ const sleepReal = (millis: number) =>
   });
 
 /** Poll until `read` passes `until`, with a bounded number of attempts. */
-const eventually = <A>(read: Effect.Effect<A>, until: (value: A) => boolean) =>
-  Effect.gen(function* () {
-    for (let attempt = 0; attempt < 300; attempt++) {
-      const value = yield* read;
-      if (until(value)) return value;
-      yield* sleepReal(10);
-    }
-    return yield* Effect.die(new TestFailure({ message: "eventually: condition never held" }));
-  });
+const eventually = <A>(read: Effect.Effect<A>, until: (value: A) => boolean) => {
+  const attempt = (n: number): Effect.Effect<A> =>
+    n === 300
+      ? Effect.die(new TestFailure({ message: "eventually: condition never held" }))
+      : Effect.filterOrElse(read, until, () => Effect.andThen(sleepReal(10), attempt(n + 1)));
+  return attempt(0);
+};
 
 /** Every `role` stream's current value (re-reads live — see `SubscriptionRef.changes`). */
 const currentRole = (role: Stream.Stream<Role>) =>

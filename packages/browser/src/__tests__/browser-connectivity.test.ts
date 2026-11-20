@@ -97,17 +97,22 @@ const setVisible = () =>
 // (a status change, a push+pull leg) gets to finish. Time is virtual: the bound
 // is a number of steps, not a wall-clock budget, so machine load cannot
 // exhaust it.
-const advanceUntil = <E>(condition: Effect.Effect<boolean, E>, maxSteps = 200) =>
-  Effect.gen(function* () {
-    for (let attempt = 0; attempt < maxSteps; attempt++) {
-      if (yield* condition) return undefined;
-      yield* TestClock.adjust(Duration.millis(1));
-    }
-    if (yield* condition) return undefined;
-    return yield* Effect.die(
-      new TestFailure({ message: `advanceUntil: condition never held in ${maxSteps} steps` })
+const advanceUntil = <E>(condition: Effect.Effect<boolean, E>, maxSteps = 200) => {
+  // Check, then step, `maxSteps` times; one last check after the final step.
+  const attempt = (n: number): Effect.Effect<undefined, E> =>
+    Effect.flatMap(condition, (held) =>
+      held
+        ? Effect.undefined
+        : n < maxSteps
+          ? Effect.andThen(TestClock.adjust(Duration.millis(1)), attempt(n + 1))
+          : Effect.die(
+              new TestFailure({
+                message: `advanceUntil: condition never held in ${maxSteps} steps`,
+              })
+            )
     );
-  });
+  return attempt(0);
+};
 
 // A service worker's globals: no `window` or `document`, and a `navigator`
 // whose `onLine` the test flips. Restored when the enclosing scope closes.

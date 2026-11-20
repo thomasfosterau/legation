@@ -53,19 +53,21 @@ const mutations = Mutator.registry([
 // lets in-flight work (a connect push + pull, a poke-driven pull) finish and
 // fires the timers due by then. Time is virtual: the bound is a number of
 // steps, not a wall-clock budget, so machine load cannot exhaust it.
-const advanceUntil = <A>(read: Effect.Effect<A>, until: (value: A) => boolean, maxSteps = 200) =>
-  Effect.gen(function* () {
-    for (let attempt = 0; attempt < maxSteps; attempt++) {
+const advanceUntil = <A>(read: Effect.Effect<A>, until: (value: A) => boolean, maxSteps = 200) => {
+  const attempt = (step: number): Effect.Effect<A> =>
+    Effect.gen(function* () {
       const value = yield* read;
       if (until(value)) return value;
+      if (step === maxSteps) {
+        return yield* Effect.die(
+          new TestFailure({ message: `advanceUntil: condition never held in ${maxSteps} steps` })
+        );
+      }
       yield* TestClock.adjust(Duration.millis(1));
-    }
-    const value = yield* read;
-    if (until(value)) return value;
-    return yield* Effect.die(
-      new TestFailure({ message: `advanceUntil: condition never held in ${maxSteps} steps` })
-    );
-  });
+      return yield* attempt(step + 1);
+    });
+  return attempt(0);
+};
 
 describe("Server", () => {
   it.effect("broadcast is the out-of-band verb: bypassed writes reach clients on it", () =>

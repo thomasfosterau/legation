@@ -6,6 +6,7 @@
  * defect — fails closed to anonymous without failing the request.
  */
 import { expect, layer, describe } from "@effect/vitest";
+import * as Arr from "effect/Array";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
@@ -234,7 +235,7 @@ describe("Resolver: the API key plane", () => {
     );
   });
 
-  for (const mode of ["fault", "defect"] as const) {
+  Arr.forEach(["fault", "defect"] as const, (mode) => {
     layer(resolverLayer({ apiKeys: mode }))((faulty) => {
       faulty.effect(`fails closed to anonymous on an API-key-store ${mode}`, () =>
         Effect.gen(function* () {
@@ -242,7 +243,7 @@ describe("Resolver: the API key plane", () => {
         })
       );
     });
-  }
+  });
 
   layer(Resolver.layerSessions().pipe(Layer.provideMerge(authLayer())))((sessionsOnly) => {
     sessionsOnly.effect(

@@ -130,8 +130,8 @@ export default defineConfig({
       // is a defect. Delete a line once its count reaches zero.
       "effect/avoid-native-object-helpers": "warn", // 689 sites
       "effect/require-safety-comment-for-type-assertion": "warn", // 621 sites
-      "effect/imperative-loops": "warn", // 366 sites
-      "effect/yield-in-for-loop": "warn", // 535 sites
+      "effect/imperative-loops": "warn", // 110 sites, per-row and per-change paths in src
+      "effect/yield-in-for-loop": "warn", // 39 sites: per-row writes in src, the op-count-sensitive journal race tests
       "effect/avoid-direct-tag-checks": "warn", // 6 sites, the measured switches in internal/RowDispatch.ts
       "effect/avoid-direct-json": "warn", // 4 sites: Hash.ts (measured hot), a JSON.parse bench, a Svelte panel
       "effect/prefer-effect-fn": "warn", // 7 sites, exported effect values (public API)

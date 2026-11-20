@@ -5,6 +5,7 @@
  * the hook per parent (scoping `where` to a parent id) pages each parent's
  * list independently.
  */
+import * as Arr from "effect/Array";
 import * as P from "effect/Predicate";
 import { afterEach, describe, expect, it } from "vite-plus/test";
 import { mount, unmount } from "svelte";
@@ -22,12 +23,13 @@ afterEach(() => {
 describe("useConnection", () => {
   it("grows the window a page at a time; hasMore tracks the tail; reset collapses", async () => {
     const runtime = makeClientRuntime();
-    for (let i = 1; i <= 5; i++) {
-      // eslint-disable-next-line no-await-in-loop -- deterministic ordered seed
-      await run(runtime, (engine) =>
-        engine.mutate("todo/set", { id: `t${i}`, title: `todo-${i}` })
-      );
-    }
+    await run(runtime, (engine) =>
+      Effect.forEach(
+        Arr.range(1, 5),
+        (i) => engine.mutate("todo/set", { id: `t${i}`, title: `todo-${i}` }),
+        { concurrency: 1, discard: true }
+      )
+    );
 
     const app = mount(RunesConnectionHarness, {
       target: document.body,
@@ -86,16 +88,17 @@ describe("useConnection", () => {
 
   it("pages each parent independently (per-parent connections)", async () => {
     const runtime = makeClientRuntime();
-    for (let i = 1; i <= 5; i++) {
-      // eslint-disable-next-line no-await-in-loop -- deterministic ordered seed
-      await run(runtime, (engine) =>
-        engine.mutate("todo/set", { id: `u1-${i}`, title: `a-${i}`, authorId: "u1" })
-      );
-      // eslint-disable-next-line no-await-in-loop -- deterministic ordered seed
-      await run(runtime, (engine) =>
-        engine.mutate("todo/set", { id: `u2-${i}`, title: `b-${i}`, authorId: "u2" })
-      );
-    }
+    await run(runtime, (engine) =>
+      Effect.forEach(
+        Arr.range(1, 5),
+        (i) =>
+          Effect.andThen(
+            engine.mutate("todo/set", { id: `u1-${i}`, title: `a-${i}`, authorId: "u1" }),
+            engine.mutate("todo/set", { id: `u2-${i}`, title: `b-${i}`, authorId: "u2" })
+          ),
+        { concurrency: 1, discard: true }
+      )
+    );
 
     const a = mount(RunesConnectionHarness, {
       target: document.body,

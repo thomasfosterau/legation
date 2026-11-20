@@ -511,11 +511,10 @@ describe("paced compaction against SqlBackend", () => {
         yield* engine.subscribe(allTodos);
 
         const paced = yield* Paced.coalesce(engine, "todo/set");
-        for (let n = 1; n <= 3; n++)
-          yield* paced.call("1", { id: "1", title: `e${n}`, done: false });
+        const edit = (n: number) => paced.call("1", { id: "1", title: `e${n}`, done: false });
+        yield* Effect.forEach(Arr.range(1, 3), edit, { concurrency: 1, discard: true });
         yield* paced.call("2", { id: "2", title: "other", done: true });
-        for (let n = 4; n <= 5; n++)
-          yield* paced.call("1", { id: "1", title: `e${n}`, done: false });
+        yield* Effect.forEach(Arr.range(4, 5), edit, { concurrency: 1, discard: true });
 
         // Two survivors, contiguous from 1, in journal order (todo 2, then todo 1).
         const pending = yield* store.pendingMutations;

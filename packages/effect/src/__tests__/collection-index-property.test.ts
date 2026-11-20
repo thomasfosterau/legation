@@ -134,7 +134,7 @@ describe("CollectionIndex evaluation ≡ full-scan Subset.apply (property)", () 
     const rng = mulberry32(SEED);
     const index = CollectionIndex.empty(INDEXED_FIELDS);
 
-    for (let trial = 0; trial < TRIALS; trial++) {
+    Arr.forEach(Arr.range(1, TRIALS), () => {
       const rows = makeRows(rng, ROWS_PER_TRIAL);
       const rowsById = new Map(rows.map((r) => [r.id, r]));
       CollectionIndex.rebuild(index, rows);
@@ -146,14 +146,14 @@ describe("CollectionIndex evaluation ≡ full-scan Subset.apply (property)", () 
       const actual = Subset.applyIndexed(rowsById, subset, index);
 
       expect(idsOf(actual)).toEqual(idsOf(expected));
-    }
+    });
   });
 
   it(`matches with orderBy + limit + cursor over ${TRIALS} trials (order-exact)`, () => {
     const rng = mulberry32(SEED + 1);
     const index = CollectionIndex.empty(INDEXED_FIELDS);
 
-    for (let trial = 0; trial < TRIALS; trial++) {
+    Arr.forEach(Arr.range(1, TRIALS), () => {
       const rows = makeRows(rng, ROWS_PER_TRIAL);
       const rowsById = new Map(rows.map((r) => [r.id, r]));
       CollectionIndex.rebuild(index, rows);
@@ -172,7 +172,7 @@ describe("CollectionIndex evaluation ≡ full-scan Subset.apply (property)", () 
       const actual = Subset.applyIndexed(rowsById, subset, index);
 
       expect(actual.map((r) => r.id)).toEqual(expected.map((r) => r.id));
-    }
+    });
   });
 
   it("matches for absent/null fields and cross-type range comparisons specifically", () => {

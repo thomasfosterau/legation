@@ -16,6 +16,7 @@ import * as Effect from "effect/Effect";
 import { awaitPromise } from "./await-promise.js";
 import * as Option from "effect/Option";
 import * as Order from "effect/Order";
+import * as P from "effect/Predicate";
 import * as Ref from "effect/Ref";
 import * as Schema from "effect/Schema";
 import type * as Scope from "effect/Scope";
@@ -253,11 +254,22 @@ const makeFacade = (
     // A relational pin registers its edge windows once its rows are observed, and a pull marks
     // them: pull until the relational pin of the fixture is covered, so the replica holds
     // the rows a covered read links to. Each pull is in memory, so no time passes between them.
-    for (let attempt = 0; attempt < 20; attempt++) {
-      yield* engine.pull;
-      yield* Effect.yieldNow;
-      if ((yield* client.coverageOf(variantsOfProducts))._tag === "Covered") break;
-    }
+    const pullUntilCovered = (
+      attempt: number
+    ): Effect.Effect<
+      void,
+      Effect.Error<typeof engine.pull> | Effect.Error<ReturnType<typeof client.coverageOf>>
+    > =>
+      attempt === 20
+        ? Effect.void
+        : engine.pull.pipe(
+            Effect.andThen(Effect.yieldNow),
+            Effect.andThen(client.coverageOf(variantsOfProducts)),
+            Effect.flatMap((coverage) =>
+              P.isTagged(coverage, "Covered") ? Effect.void : pullUntilCovered(attempt + 1)
+            )
+          );
+    yield* pullUntilCovered(0);
     // A pinned relational read must be covered once the loop has pulled: a silent fall-through
     // here would make the covered-answer tests below pass or fail for the wrong reason.
     const relationalCoverage = pins.includes(RELATIONAL_PIN)

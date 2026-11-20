@@ -10,6 +10,7 @@
  * long it runs, and on trunk a second pull reaches it within a few yields.
  */
 import { describe, expect, it } from "@effect/vitest";
+import * as Arr from "effect/Array";
 import * as Clock from "effect/Clock";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
@@ -327,9 +328,11 @@ describe("pull serialisation", () => {
 
       // The burst arrives while the pull hangs. The poke stream buffers it in one slot, so the
       // burst adds no pull and no fibre per poke; the offers all complete regardless.
-      for (let index = 0; index < BURST; index++) {
-        yield* Queue.offer(pokes, { reason: `burst-${index}` });
-      }
+      yield* Effect.forEach(
+        Arr.range(0, BURST - 1),
+        (index) => Queue.offer(pokes, { reason: `burst-${index}` }),
+        { concurrency: 1, discard: true }
+      );
       yield* settle;
       expect(yield* count).toBe(1);
 

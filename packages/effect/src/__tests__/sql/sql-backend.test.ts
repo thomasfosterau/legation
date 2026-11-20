@@ -1021,7 +1021,7 @@ describe("SqlBackend rejection memory over the mock ledger", () => {
       },
     });
 
-  for (const transactional of [true, false]) {
+  Arr.forEach([true, false], (transactional) => {
     const order = transactional ? "with transactions" : "without transactions";
 
     it.effect(`a replayed copy of a committed rejection reports its reason, ${order}`, () => {
@@ -1051,7 +1051,7 @@ describe("SqlBackend rejection memory over the mock ledger", () => {
         expect(late.lastMutationIds).toEqual({ c1: 2 });
       });
     });
-  }
+  });
 
   // D1's order: the rejection is recorded before the bump, so a
   // bump that fails leaves the rejection stored while the id stays unacknowledged.

@@ -236,14 +236,15 @@ const nowMillis = (): number => DateTime.toEpochMillis(DateTime.nowUnsafe());
  */
 export const until = async (predicate: () => boolean, timeoutMs = 25_000): Promise<void> => {
   const deadline = nowMillis() + timeoutMs;
-  for (;;) {
+  const poll = async (): Promise<void> => {
     flushSync();
     if (predicate()) return;
     if (nowMillis() > deadline)
       throw new TestFailure({ message: "until: timed out waiting for condition" });
-    // eslint-disable-next-line no-await-in-loop -- polling is sequential by nature
     await new Promise((resolve) => setTimeout(resolve, 10));
-  }
+    return poll();
+  };
+  return poll();
 };
 
 /**
@@ -257,14 +258,14 @@ export const untilSubscriptions = async (
   timeoutMs = 5_000
 ): Promise<void> => {
   const deadline = nowMillis() + timeoutMs;
-  for (;;) {
-    // eslint-disable-next-line no-await-in-loop -- polling is sequential by nature
+  const poll = async (): Promise<void> => {
     const subs = await run(runtime, (engine) => engine.activeSubscriptions);
     if (predicate(subs.length)) return;
     if (nowMillis() > deadline) throw new TestFailure({ message: "untilSubscriptions: timed out" });
-    // eslint-disable-next-line no-await-in-loop -- polling is sequential by nature
     await new Promise((resolve) => setTimeout(resolve, 10));
-  }
+    return poll();
+  };
+  return poll();
 };
 
 /** Find a rendered button by its exact label. */

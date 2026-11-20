@@ -47,12 +47,10 @@ const sameResult = <A>(
   expected: ReadonlyMap<string, Row<A>>
 ): boolean => {
   if (actual.size !== expected.size) return false;
-  for (const [id, row] of expected) {
+  return Arr.every(Arr.fromIterable(expected), ([id, row]) => {
     const other = actual.get(id);
-    if (other === undefined) return false;
-    if (Hash.canonicalJson(other.value) !== Hash.canonicalJson(row.value)) return false;
-  }
-  return true;
+    return other !== undefined && Hash.canonicalJson(other.value) === Hash.canonicalJson(row.value);
+  });
 };
 
 const sameOrdered = <A>(actual: ReadonlyArray<Row<A>>, expected: ReadonlyArray<Row<A>>): boolean =>
@@ -112,29 +110,29 @@ const runSingle = <A, B>(options: {
   readonly makeOperator: () => Incremental.Operator<A, B>;
   readonly fromScratch: (rows: ReadonlyArray<Row<A>>) => Map<string, Row<B>>;
   readonly delChance?: number;
-}): Divergence => {
-  for (let seed = 1; seed <= options.seeds; seed++) {
-    const rng = mulberry32(seed);
-    const ground = new Map<string, Row<A>>();
-    const operator = options.makeOperator();
-    const result = new Map<string, Row<B>>();
-    for (let step = 0; step < options.steps; step++) {
-      const delta = stepGround(
-        rng,
-        ground,
-        options.ids,
-        options.makeValue,
-        options.delChance ?? 0.2
-      );
-      Incremental.applyDelta(result, operator.step(delta));
-      const expected = options.fromScratch([...ground.values()]);
-      if (!sameResult(result, expected)) {
-        return divergence(seed, step, [...result.values()], [...expected.values()]);
-      }
-    }
-  }
-  return null;
-};
+}): Divergence =>
+  Option.getOrNull(
+    Arr.findFirst(Arr.range(1, options.seeds), (seed) => {
+      const rng = mulberry32(seed);
+      const ground = new Map<string, Row<A>>();
+      const operator = options.makeOperator();
+      const result = new Map<string, Row<B>>();
+      return Arr.findFirst(Arr.range(0, options.steps - 1), (step) => {
+        const delta = stepGround(
+          rng,
+          ground,
+          options.ids,
+          options.makeValue,
+          options.delChance ?? 0.2
+        );
+        Incremental.applyDelta(result, operator.step(delta));
+        const expected = options.fromScratch([...ground.values()]);
+        return sameResult(result, expected)
+          ? Option.none()
+          : Option.some(divergence(seed, step, [...result.values()], [...expected.values()]));
+      });
+    })
+  );
 
 const runJoin = <L, R, C>(options: {
   readonly seeds: number;
@@ -148,29 +146,29 @@ const runJoin = <L, R, C>(options: {
     left: ReadonlyArray<Row<L>>,
     right: ReadonlyArray<Row<R>>
   ) => Map<string, Row<C>>;
-}): Divergence => {
-  for (let seed = 1; seed <= options.seeds; seed++) {
-    const rng = mulberry32(seed);
-    const left = new Map<string, Row<L>>();
-    const right = new Map<string, Row<R>>();
-    const operator = options.makeOperator();
-    const result = new Map<string, Row<C>>();
-    for (let step = 0; step < options.steps; step++) {
-      if (rng() < 0.5) {
-        const delta = stepGround(rng, left, options.leftIds, options.makeLeft, 0.2);
-        Incremental.applyDelta(result, operator.stepLeft(delta));
-      } else {
-        const delta = stepGround(rng, right, options.rightIds, options.makeRight, 0.2);
-        Incremental.applyDelta(result, operator.stepRight(delta));
-      }
-      const expected = options.fromScratch([...left.values()], [...right.values()]);
-      if (!sameResult(result, expected)) {
-        return divergence(seed, step, [...result.values()], [...expected.values()]);
-      }
-    }
-  }
-  return null;
-};
+}): Divergence =>
+  Option.getOrNull(
+    Arr.findFirst(Arr.range(1, options.seeds), (seed) => {
+      const rng = mulberry32(seed);
+      const left = new Map<string, Row<L>>();
+      const right = new Map<string, Row<R>>();
+      const operator = options.makeOperator();
+      const result = new Map<string, Row<C>>();
+      return Arr.findFirst(Arr.range(0, options.steps - 1), (step) => {
+        if (rng() < 0.5) {
+          const delta = stepGround(rng, left, options.leftIds, options.makeLeft, 0.2);
+          Incremental.applyDelta(result, operator.stepLeft(delta));
+        } else {
+          const delta = stepGround(rng, right, options.rightIds, options.makeRight, 0.2);
+          Incremental.applyDelta(result, operator.stepRight(delta));
+        }
+        const expected = options.fromScratch([...left.values()], [...right.values()]);
+        return sameResult(result, expected)
+          ? Option.none()
+          : Option.some(divergence(seed, step, [...result.values()], [...expected.values()]));
+      });
+    })
+  );
 
 /** An ordered-window test row: a rank to sort by and an optional tie label. */
 interface Ranked {
@@ -185,24 +183,26 @@ const runOrdered = (options: {
   readonly makeValue: (rng: () => number) => Ranked;
   readonly orderBy: ReadonlyArray<Subset.OrderBy>;
   readonly limit?: number;
-}): Divergence => {
-  for (let seed = 1; seed <= options.seeds; seed++) {
-    const rng = mulberry32(seed);
-    const ground = new Map<string, Row<Ranked>>();
-    const window = Incremental.makeOrderedWindow<Ranked>(options.orderBy, options.limit);
-    for (let step = 0; step < options.steps; step++) {
-      const delta = stepGround(rng, ground, options.ids, options.makeValue, 0.2);
-      const paged = window.step(delta);
-      const expected = Incremental.orderedWindowFromScratch(
-        [...ground.values()],
-        options.orderBy,
-        options.limit
-      );
-      if (!sameOrdered(paged, expected)) return divergence(seed, step, paged, expected);
-    }
-  }
-  return null;
-};
+}): Divergence =>
+  Option.getOrNull(
+    Arr.findFirst(Arr.range(1, options.seeds), (seed) => {
+      const rng = mulberry32(seed);
+      const ground = new Map<string, Row<Ranked>>();
+      const window = Incremental.makeOrderedWindow<Ranked>(options.orderBy, options.limit);
+      return Arr.findFirst(Arr.range(0, options.steps - 1), (step) => {
+        const delta = stepGround(rng, ground, options.ids, options.makeValue, 0.2);
+        const paged = window.step(delta);
+        const expected = Incremental.orderedWindowFromScratch(
+          [...ground.values()],
+          options.orderBy,
+          options.limit
+        );
+        return sameOrdered(paged, expected)
+          ? Option.none()
+          : Option.some(divergence(seed, step, paged, expected));
+      });
+    })
+  );
 
 describe("Incremental — delta-in/delta-out equivalence with naive recompute", () => {
   it("filter (arbitrary predicate) — rows crossing in and out on update", () => {
@@ -375,7 +375,7 @@ const runDeltaFromChangesSession = (seed: number, steps: number): string | null 
   const ground = new Map<string, Row<{ readonly n: number }>>();
   const known = new Map<string, Row<{ readonly n: number }>>();
   const ids = ["a", "b", "c", "d", "e", "f"];
-  for (let step = 0; step < steps; step++) {
+  const sessionStep = (step: number): Option.Option<string> => {
     // Occasionally exercise `reset` (a Rebuild/gap-collapse batch) instead of
     // a single-row delta.
     if (rng() < 0.05) {
@@ -390,52 +390,60 @@ const runDeltaFromChangesSession = (seed: number, steps: number): string | null 
       // now — the same "clear then fresh enters" semantics `RowChange.reset`
       // documents.
       if (recovered.removed.length !== knownSizeBefore) {
-        return `seed ${seed} step ${step}: reset removed ${recovered.removed.length}, expected ${knownSizeBefore}`;
+        return Option.some(
+          `seed ${seed} step ${step}: reset removed ${recovered.removed.length}, expected ${knownSizeBefore}`
+        );
       }
       const recoveredIds = recovered.added.map((r) => r.id).toSorted();
       const groundIds = [...ground.keys()].toSorted();
       if (Json.show(recoveredIds) !== Json.show(groundIds)) {
-        return `seed ${seed} step ${step}: reset's added ids didn't match ground truth`;
+        return Option.some(
+          `seed ${seed} step ${step}: reset's added ids didn't match ground truth`
+        );
       }
       if (known.size !== ground.size) {
-        return `seed ${seed} step ${step}: known.size ${known.size} !== ground.size ${ground.size}`;
+        return Option.some(
+          `seed ${seed} step ${step}: known.size ${known.size} !== ground.size ${ground.size}`
+        );
       }
-      continue;
+      return Option.none();
     }
     const delta = stepGround(rng, ground, ids, makeValue, 0.2);
     const batch = changeBatchOf(delta);
     const recovered = Incremental.deltaFromChanges(known, batch);
-    if (Json.show(recovered) !== Json.show(delta)) {
-      return `seed ${seed} step ${step}: recovered ${Json.show(recovered)} !== expected ${Json.show(delta)}`;
-    }
-  }
-  return null;
+    return Json.show(recovered) === Json.show(delta)
+      ? Option.none()
+      : Option.some(
+          `seed ${seed} step ${step}: recovered ${Json.show(recovered)} !== expected ${Json.show(delta)}`
+        );
+  };
+  return Option.getOrNull(Arr.findFirst(Arr.range(0, steps - 1), sessionStep));
 };
 
 describe("Incremental.deltaFromChanges — equivalent to diffing pages, not just plausible", () => {
   it("recovers the exact delta a page-diff would have, every step, including resets", () => {
-    for (let seed = 1; seed <= 20; seed++) {
+    Arr.forEach(Arr.range(1, 20), (seed) => {
       expect(runDeltaFromChangesSession(seed, 200)).toBeNull();
-    }
+    });
   });
 
   it("driving an operator via deltaFromChanges matches the from-scratch recompute", () => {
-    for (let seed = 1; seed <= 16; seed++) {
+    Arr.forEach(Arr.range(1, 16), (seed) => {
       const rng = mulberry32(seed);
       const ground = new Map<string, Row<{ readonly n: number }>>();
       const known = new Map<string, Row<{ readonly n: number }>>();
       const operator = Incremental.makeFilter(geFive);
       const result = new Map<string, Row<{ readonly n: number }>>();
       const ids = ["a", "b", "c", "d", "e", "f"];
-      for (let step = 0; step < 150; step++) {
+      Arr.forEach(Arr.range(0, 149), () => {
         const delta = stepGround(rng, ground, ids, makeValue, 0.2);
         const batch = changeBatchOf(delta);
         const recovered = Incremental.deltaFromChanges(known, batch);
         Incremental.applyDelta(result, operator.step(recovered));
         const expected = Incremental.filterFromScratch([...ground.values()], geFive);
         expect(sameResult(result, expected)).toBe(true);
-      }
-    }
+      });
+    });
   });
 });
 

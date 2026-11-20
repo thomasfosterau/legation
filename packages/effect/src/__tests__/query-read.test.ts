@@ -109,14 +109,19 @@ const sleepReal = (millis: number) =>
     return Effect.sync(() => clearTimeout(timer));
   });
 
-const eventually = <A>(read: Effect.Effect<A>, until: (value: A) => boolean) =>
+const eventually = <A>(
+  read: Effect.Effect<A>,
+  until: (value: A) => boolean,
+  attemptsLeft = 500
+): Effect.Effect<A> =>
   Effect.gen(function* () {
-    for (let attempt = 0; attempt < 500; attempt++) {
-      const value = yield* read;
-      if (until(value)) return value;
-      yield* sleepReal(10);
+    if (attemptsLeft === 0) {
+      return yield* Effect.die(new TestFailure({ message: "eventually: condition never held" }));
     }
-    return yield* Effect.die(new TestFailure({ message: "eventually: condition never held" }));
+    const value = yield* read;
+    if (until(value)) return value;
+    yield* sleepReal(10);
+    return yield* eventually(read, until, attemptsLeft - 1);
   });
 
 const productSet = Mutator.make("product/set", Schema.Unknown);

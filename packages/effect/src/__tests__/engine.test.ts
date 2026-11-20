@@ -4,6 +4,7 @@
  */
 import * as P from "effect/Predicate";
 import { describe, expect, it } from "@effect/vitest";
+import * as Arr from "effect/Array";
 import * as DateTime from "effect/DateTime";
 import * as Deferred from "effect/Deferred";
 import * as Duration from "effect/Duration";
@@ -307,15 +308,17 @@ describe("mutator args validation", () => {
 const settle = Effect.sleep(Duration.millis(200));
 
 /** Poll until `read` passes `until`, bounded, so a missed change fails rather than hangs. */
-const eventually = <A>(read: Effect.Effect<A>, until: (value: A) => boolean) =>
-  Effect.gen(function* () {
-    for (let attempt = 0; attempt < 400; attempt++) {
+const eventually = <A>(read: Effect.Effect<A>, until: (value: A) => boolean) => {
+  const poll = (remaining: number): Effect.Effect<A> =>
+    Effect.gen(function* () {
       const value = yield* read;
       if (until(value)) return value;
       yield* Effect.sleep(Duration.millis(5));
-    }
-    return yield* Effect.die(new TestFailure({ message: "eventually: condition never held" }));
-  });
+      if (remaining > 1) return yield* poll(remaining - 1);
+      return yield* Effect.die(new TestFailure({ message: "eventually: condition never held" }));
+    });
+  return poll(400);
+};
 
 const titleOf = (
   rows: ReadonlyArray<{ readonly id: string; readonly value: unknown }>,
@@ -418,9 +421,11 @@ describe("a push acknowledgement keeps the overlay until a pull reports it", () 
         const handler = yield* makeServer();
         const { engine, store } = yield* makeClient(handler, "a");
         yield* engine.subscribe(allTodos);
-        for (let i = 0; i < count; i++) {
-          yield* engine.mutate("todo/set", { id: String(i), title: `t${i}`, done: false });
-        }
+        yield* Effect.forEach(
+          Arr.range(0, count - 1),
+          (i) => engine.mutate("todo/set", { id: String(i), title: `t${i}`, done: false }),
+          { concurrency: 1, discard: true }
+        );
 
         yield* engine.push;
         // The push goes in chunks with a pull between them: the tail is released as it builds, so it
@@ -536,9 +541,14 @@ const parkedBackend = (inner: Backend, at: ReadPoint, parking: Parking): Backend
 // turns. No wall-clock time: a parked fiber stays unfinished however long it waits.
 const runUntilFinishedOrStalled = <A, E>(fiber: Fiber.Fiber<A, E>) =>
   Effect.gen(function* () {
-    for (let turn = 0; turn < 1000 && fiber.pollUnsafe() === undefined; turn++) {
-      yield* Effect.yieldNow;
-    }
+    let turn = 0;
+    yield* Effect.whileLoop({
+      while: () => turn < 1000 && fiber.pollUnsafe() === undefined,
+      body: () => Effect.yieldNow,
+      step: () => {
+        turn += 1;
+      },
+    });
     return fiber.pollUnsafe();
   });
 
@@ -546,7 +556,7 @@ describe("a push that commits during a pull never double-counts", () => {
   // The pull's watermark and rows must be one snapshot. A push that commits
   // between them would be in the rows but not the watermark, so the client would
   // keep its entry in the tail and replay it over rows that already hold it.
-  for (const at of ["watermark", "evaluate", "rows"] as const) {
+  Arr.forEach(["watermark", "evaluate", "rows"] as const, (at) => {
     it.effect(`a push committed during the pull's ${at} read is counted once`, () =>
       Effect.gen(function* () {
         const parking = yield* makeParking();
@@ -579,7 +589,7 @@ describe("a push that commits during a pull never double-counts", () => {
         expect(yield* store.pendingMutations).toEqual([]);
       })
     );
-  }
+  });
 });
 
 describe("a pull's reveal is atomic with its tail release", () => {
@@ -719,7 +729,7 @@ describe("a pull's watermark and rows are one snapshot", () => {
   // `rows` lands just before the patch's rows are fetched; `rows-returned` lands
   // just after, before the closing watermark read (the revert direction: a
   // watermark read only after the rows would report a push they lack).
-  for (const at of ["watermark", "evaluate", "rows", "rows-returned"] as const) {
+  Arr.forEach(["watermark", "evaluate", "rows", "rows-returned"] as const, (at) => {
     it.effect(
       `a push landing during the pull's ${at} read is in the patch iff the watermark reports it`,
       () =>
@@ -781,5 +791,5 @@ describe("a pull's watermark and rows are one snapshot", () => {
           expect(counted).toEqual([reported]);
         })
     );
-  }
+  });
 });

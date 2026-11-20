@@ -13,6 +13,7 @@
  * Named `*.bench.ts` so `vitest run` (test mode) ignores it; run with
  * `bun run bench` (`vitest bench`). Kept off the coverage/test path.
  */
+import * as Arr from "effect/Array";
 import { describe, test } from "vite-plus/test";
 import * as LiveView from "../LiveView.js";
 import * as Subset from "../Subset.js";
@@ -34,11 +35,10 @@ const churn = (n: number, updates: number): number => {
   // an array-backed view (every update copies the whole array) and the case
   // an ordered tree pays only O(log n + window) for.
   const start = performance.now();
-  let current = view;
-  for (let i = 0; i < updates; i++) {
+  Arr.reduce(Arr.range(0, updates - 1), view, (current, i) => {
     const target = Math.floor((i * (n / updates)) % n);
-    current = LiveView.put(current, { id: `r${target}`, value: { rank: n + i } });
-  }
+    return LiveView.put(current, { id: `r${target}`, value: { rank: n + i } });
+  });
   return performance.now() - start;
 };
 
@@ -60,11 +60,10 @@ describe("LiveView churn (100k rows, single-row updates)", () => {
 
   test("200 single-row updates over a 100k-row maintained set", async ({ bench }) => {
     await bench("200 single-row updates over a 100k-row maintained set", () => {
-      let current = view;
-      for (let i = 0; i < UPDATES; i++) {
+      Arr.reduce(Arr.range(0, UPDATES - 1), view, (current, i) => {
         const target = Math.floor((i * 500) % 100_000);
-        current = LiveView.put(current, { id: `r${target}`, value: { rank: 100_000 + i } });
-      }
+        return LiveView.put(current, { id: `r${target}`, value: { rank: 100_000 + i } });
+      });
     }).run({ time: 1000 });
   });
 

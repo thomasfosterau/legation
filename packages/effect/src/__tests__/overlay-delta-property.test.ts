@@ -247,23 +247,31 @@ describe("optimistic overlay delta-maintenance property", () => {
   it.effect(
     `the cache (via engine.query) matches a from-scratch materialization after every step, across ${SEEDS} randomized mutate/push/pull/reject interleavings`,
     () =>
-      Effect.gen(function* () {
-        for (let seed = 1; seed <= SEEDS; seed++) {
-          const rng = mulberry32(seed * 7919);
-          const handler = yield* makeServer();
-          const store = yield* ClientStoreModule.makeMemory;
-          const engine = yield* makeEngine(handler, store, `seed-${seed}`);
-          yield* engine.subscribe(allTodos);
-          const tail = yield* Ref.make<ReadonlyArray<Mutation>>([]);
+      Effect.forEach(
+        Arr.range(1, SEEDS),
+        (seed) =>
+          Effect.gen(function* () {
+            const rng = mulberry32(seed * 7919);
+            const handler = yield* makeServer();
+            const store = yield* ClientStoreModule.makeMemory;
+            const engine = yield* makeEngine(handler, store, `seed-${seed}`);
+            yield* engine.subscribe(allTodos);
+            const tail = yield* Ref.make<ReadonlyArray<Mutation>>([]);
 
-          for (let step = 0; step < STEPS_PER_SEED; step++) {
-            yield* runTracked(engine, store, tail, randomStep(rng, IDS));
-            const actual = sortRows(yield* engine.query(allTodos));
-            const expected = sortMap(yield* referenceOverlay(store, yield* Ref.get(tail)));
-            expect(actual, `seed ${seed}, step ${step}`).toEqual(expected);
-          }
-        }
-      })
+            yield* Effect.forEach(
+              Arr.range(0, STEPS_PER_SEED - 1),
+              (step) =>
+                Effect.gen(function* () {
+                  yield* runTracked(engine, store, tail, randomStep(rng, IDS));
+                  const actual = sortRows(yield* engine.query(allTodos));
+                  const expected = sortMap(yield* referenceOverlay(store, yield* Ref.get(tail)));
+                  expect(actual, `seed ${seed}, step ${step}`).toEqual(expected);
+                }),
+              { concurrency: 1, discard: true }
+            );
+          }),
+        { concurrency: 1, discard: true }
+      )
   );
 
   // Real clock: `observe`'s changes flow through the change PubSub on a
@@ -272,32 +280,37 @@ describe("optimistic overlay delta-maintenance property", () => {
   it.live(
     "an observer's incrementally-folded LiveView matches the from-scratch materialization after a randomized run",
     () =>
-      Effect.gen(function* () {
-        for (let seed = 1; seed <= 5; seed++) {
-          const rng = mulberry32(seed * 104729);
-          const handler = yield* makeServer();
-          const store = yield* ClientStoreModule.makeMemory;
-          const engine = yield* makeEngine(handler, store, `observer-seed-${seed}`);
-          yield* engine.subscribe(allTodos);
+      Effect.forEach(
+        Arr.range(1, 5),
+        (seed) =>
+          Effect.gen(function* () {
+            const rng = mulberry32(seed * 104729);
+            const handler = yield* makeServer();
+            const store = yield* ClientStoreModule.makeMemory;
+            const engine = yield* makeEngine(handler, store, `observer-seed-${seed}`);
+            yield* engine.subscribe(allTodos);
 
-          const latest = yield* Ref.make<ReadonlyArray<{ id: string; value: unknown }>>([]);
-          yield* Effect.forkScoped(
-            Stream.runForEach(engine.observe(allTodos), (rows) => Ref.set(latest, rows))
-          );
-          yield* Effect.sleep(Duration.millis(20));
+            const latest = yield* Ref.make<ReadonlyArray<{ id: string; value: unknown }>>([]);
+            yield* Effect.forkScoped(
+              Stream.runForEach(engine.observe(allTodos), (rows) => Ref.set(latest, rows))
+            );
+            yield* Effect.sleep(Duration.millis(20));
 
-          const tail = yield* Ref.make<ReadonlyArray<Mutation>>([]);
-          for (let step = 0; step < 40; step++) {
-            yield* runTracked(engine, store, tail, randomStep(rng, IDS));
-          }
-          yield* Effect.sleep(Duration.millis(80));
+            const tail = yield* Ref.make<ReadonlyArray<Mutation>>([]);
+            yield* Effect.forEach(
+              Arr.range(0, 39),
+              () => runTracked(engine, store, tail, randomStep(rng, IDS)),
+              { concurrency: 1, discard: true }
+            );
+            yield* Effect.sleep(Duration.millis(80));
 
-          const observed = sortRows(yield* Ref.get(latest));
-          const queried = sortRows(yield* engine.query(allTodos));
-          const reference = sortMap(yield* referenceOverlay(store, yield* Ref.get(tail)));
-          expect(queried, `seed ${seed}`).toEqual(reference);
-          expect(observed, `seed ${seed}`).toEqual(reference);
-        }
-      })
+            const observed = sortRows(yield* Ref.get(latest));
+            const queried = sortRows(yield* engine.query(allTodos));
+            const reference = sortMap(yield* referenceOverlay(store, yield* Ref.get(tail)));
+            expect(queried, `seed ${seed}`).toEqual(reference);
+            expect(observed, `seed ${seed}`).toEqual(reference);
+          }),
+        { concurrency: 1, discard: true }
+      )
   );
 });

@@ -138,19 +138,12 @@ const timed = async <A>(f: () => Promise<A> | A): Promise<[A, number]> => {
 };
 const median = (xs: ReadonlyArray<number>) => defined(xs.toSorted((a, b) => a - b)[xs.length >> 1]);
 
+const codePoints = (s: string): ReadonlyArray<number> =>
+  Arr.map(Arr.fromIterable(s), (c) => defined(c.codePointAt(0)));
+const byCodePoints = Order.Array(Order.Number);
 /** UTF-8 byte order is code-point order; JS `<` is UTF-16 code-unit order. */
-const compareCodePoints = (a: string, b: string): Ordering.Ordering => {
-  let i = 0;
-  let j = 0;
-  while (i < a.length && j < b.length) {
-    const ca = defined(a.codePointAt(i));
-    const cb = defined(b.codePointAt(j));
-    if (ca !== cb) return ca < cb ? -1 : 1;
-    i += ca > 0xffff ? 2 : 1;
-    j += cb > 0xffff ? 2 : 1;
-  }
-  return a.length - i === b.length - j ? 0 : a.length - i < b.length - j ? -1 : 1;
-};
+const compareCodePoints = (a: string, b: string): Ordering.Ordering =>
+  byCodePoints(codePoints(a), codePoints(b));
 
 /** An in-memory KVS that counts `set` calls and UTF-8 bytes written per key. */
 const countingStore = () => {
@@ -624,8 +617,7 @@ const sectionD = async () => {
     Order.String
   );
   const cursorMatchesCodePoint = walked.every((n, i) => n === byCodePoint[i]);
-  let divergent = 0;
-  for (let i = 0; i < byCodePoint.length; i++) if (byCodePoint[i] !== byCodeUnit[i]) divergent += 1;
+  const divergent = Arr.filter(byCodePoint, (name, i) => name !== byCodeUnit[i]).length;
   table.push({
     what: `ordered walk of name index (${walked.length} rows)`,
     ms: ms(walkMs),

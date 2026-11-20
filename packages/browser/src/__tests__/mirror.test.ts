@@ -84,15 +84,13 @@ const sleepReal = (millis: number) =>
   });
 
 /** Poll until `read` passes `until`, with a bounded number of attempts. */
-const eventually = <A>(read: Effect.Effect<A>, until: (value: A) => boolean) =>
-  Effect.gen(function* () {
-    for (let attempt = 0; attempt < 200; attempt++) {
-      const value = yield* read;
-      if (until(value)) return value;
-      yield* sleepReal(5);
-    }
-    return yield* Effect.die(new TestFailure({ message: "eventually: condition never held" }));
-  });
+const eventually = <A>(read: Effect.Effect<A>, until: (value: A) => boolean) => {
+  const attempt = (n: number): Effect.Effect<A> =>
+    n === 200
+      ? Effect.die(new TestFailure({ message: "eventually: condition never held" }))
+      : Effect.filterOrElse(read, until, () => Effect.andThen(sleepReal(5), attempt(n + 1)));
+  return attempt(0);
+};
 
 // The liveness cases step the TestClock with these.
 
@@ -101,36 +99,36 @@ const eventually = <A>(read: Effect.Effect<A>, until: (value: A) => boolean) =>
  * every heartbeat and sweep due on the way wakes at its own instant and runs
  * (each `TestClock.adjust` yields to the forked fibres) before the next.
  */
-const stepTo = (millis: number) =>
-  Effect.gen(function* () {
-    while ((yield* Clock.currentTimeMillis) < millis) yield* TestClock.adjust("1 millis");
-  });
+const stepTo = (millis: number): Effect.Effect<void> =>
+  Effect.flatMap(Clock.currentTimeMillis, (now) =>
+    now < millis ? Effect.andThen(TestClock.adjust("1 millis"), stepTo(millis)) : Effect.void
+  );
 
 /**
  * Yield to the forked fibres, without moving the clock, until `condition`
  * holds. The bound is a number of scheduler turns, not a time budget.
  */
-const settle = (condition: Effect.Effect<boolean>, maxTurns = 100) =>
-  Effect.gen(function* () {
-    for (let turn = 0; turn < maxTurns; turn++) {
-      if (yield* condition) return undefined;
-      yield* Effect.yieldNow;
-    }
-    if (yield* condition) return undefined;
-    return yield* Effect.die(
-      new TestFailure({ message: `settle: condition never held in ${maxTurns} turns` })
+const settle = (condition: Effect.Effect<boolean>, maxTurns = 100) => {
+  // Check, then yield, `maxTurns` times; one last check after the final turn.
+  const turn = (n: number): Effect.Effect<undefined> =>
+    Effect.flatMap(condition, (held) =>
+      held
+        ? Effect.undefined
+        : n < maxTurns
+          ? Effect.andThen(Effect.yieldNow, turn(n + 1))
+          : Effect.die(
+              new TestFailure({ message: `settle: condition never held in ${maxTurns} turns` })
+            )
     );
-  });
+  return turn(0);
+};
 
 /**
  * Yield to the forked fibres for `turns` scheduler turns without moving the
  * clock, so work already due by now (a sweep that just woke) has finished
  * before a case asserts that something did not happen.
  */
-const drain = (turns = 20) =>
-  Effect.gen(function* () {
-    for (let turn = 0; turn < turns; turn++) yield* Effect.yieldNow;
-  });
+const drain = (turns = 20) => Effect.replicateEffect(Effect.yieldNow, turns, { discard: true });
 
 /** Whether `counter` currently reads `n`. */
 const is = (counter: Ref.Ref<number>, n: number) =>

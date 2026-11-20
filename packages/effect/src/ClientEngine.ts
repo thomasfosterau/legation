@@ -23,6 +23,7 @@ import * as Layer from "effect/Layer";
 import * as Match from "effect/Match";
 import * as Metric from "effect/Metric";
 import * as P from "effect/Predicate";
+import * as R from "effect/Record";
 import * as PubSub from "effect/PubSub";
 import * as Ref from "effect/Ref";
 import * as Schedule from "effect/Schedule";
@@ -1071,18 +1072,14 @@ const timedRebase = <A, E>(effect: Effect.Effect<A, E>): Effect.Effect<A, E> =>
 // decide what `autoIndex` should index — never changes evaluation.
 const indexableFieldsOf = (where: PredicateModule.Predicate): ReadonlyArray<string> => {
   const conjuncts = P.isTagged(where, "And") ? where.predicates : [where];
-  const fields: Array<string> = [];
-  for (const conjunct of conjuncts) {
+  return Arr.flatMap(conjuncts, (conjunct) =>
     // Mirrors `CollectionIndex.conjunctIds`: `IS NOT NULL` never narrows.
-    if (
-      P.isTagged(conjunct, "Compare") ||
-      P.isTagged(conjunct, "In") ||
-      (P.isTagged(conjunct, "IsNull") && conjunct.negated !== true)
-    ) {
-      fields.push(conjunct.field);
-    }
-  }
-  return fields;
+    P.isTagged(conjunct, "Compare") ||
+    P.isTagged(conjunct, "In") ||
+    (P.isTagged(conjunct, "IsNull") && conjunct.negated !== true)
+      ? [conjunct.field]
+      : []
+  );
 };
 
 const infoOf = (error: VersionNotSupportedError) => ({
@@ -1230,7 +1227,10 @@ export const make = (
         const adopted = yield* SubscriptionRef.modify(mutationStates, (map) =>
           MutationState.adopt(map, pending)
         );
-        for (const mutation of adopted) yield* emitEvent(mutation.mutationId, "journaled");
+        yield* Effect.forEach(adopted, (mutation) => emitEvent(mutation.mutationId, "journaled"), {
+          concurrency: 1,
+          discard: true,
+        });
       });
     // With the identity boundary on, the sync-protocol client identity
     // is scoped to the principal. It has to be: mutation ids are a per-client
@@ -1537,10 +1537,12 @@ export const make = (
       Effect.gen(function* () {
         const existing = view.get(collection);
         if (existing !== undefined) return existing;
-        const created = new Map<RowId, LocalRow>();
-        for (const row of yield* store.listRows(collection)) {
-          created.set(row.id, { id: row.id, value: row.value });
-        }
+        const created = new Map<RowId, LocalRow>(
+          Arr.map(
+            yield* store.listRows(collection),
+            (row) => [row.id, { id: row.id, value: row.value }] as const
+          )
+        );
         view.set(collection, created);
         return created;
       });
@@ -1588,27 +1590,32 @@ export const make = (
     ): Effect.Effect<void, StoreError | MutatorError> =>
       Effect.gen(function* () {
         const writer = viewWriter(view);
-        for (const mutation of mutations) {
-          const definition = options.mutators.mutators.get(mutation.mutator);
-          const handler = options.mutators.handlers.get(mutation.mutator);
-          if (definition === undefined || handler === undefined) {
-            return yield* new MutatorError({
-              message: `Unknown mutator: ${mutation.mutator}`,
-              mutator: mutation.mutator,
-            });
-          }
-          const args = yield* Schema.decodeUnknownEffect(definition.args)(mutation.args).pipe(
-            Effect.mapError(
-              (cause) =>
-                new MutatorError({
-                  message: `Invalid journaled args for mutator "${mutation.mutator}"`,
+        yield* Effect.forEach(
+          mutations,
+          (mutation) =>
+            Effect.gen(function* () {
+              const definition = options.mutators.mutators.get(mutation.mutator);
+              const handler = options.mutators.handlers.get(mutation.mutator);
+              if (definition === undefined || handler === undefined) {
+                return yield* new MutatorError({
+                  message: `Unknown mutator: ${mutation.mutator}`,
                   mutator: mutation.mutator,
-                  cause,
-                })
-            )
-          );
-          yield* handler(args, writer);
-        }
+                });
+              }
+              const args = yield* Schema.decodeUnknownEffect(definition.args)(mutation.args).pipe(
+                Effect.mapError(
+                  (cause) =>
+                    new MutatorError({
+                      message: `Invalid journaled args for mutator "${mutation.mutator}"`,
+                      mutator: mutation.mutator,
+                      cause,
+                    })
+                )
+              );
+              return yield* handler(args, writer);
+            }),
+          { concurrency: 1, discard: true }
+        );
         return undefined;
       });
 
@@ -1642,8 +1649,7 @@ export const make = (
       if (Arr.isReadonlyArrayEmpty(discovered)) return Effect.void;
       return Ref.modify(indexFields, (map) => {
         const current = map.get(subset.collection) ?? new Set<string>();
-        const grown = new Set(current);
-        for (const field of discovered) grown.add(field);
+        const grown = new Set([...current, ...discovered]);
         if (grown.size === current.size) return [false, map] as const;
         const next = new Map(map);
         next.set(subset.collection, grown);
@@ -1681,37 +1687,40 @@ export const make = (
     // behind a full-collection `listRows`, and the lock is not reentrant, so a
     // caller that already holds it would deadlock. The generation check keeps
     // reads unblocked and needs no lock.
-    const ensureIndexBuilt = (
-      collection: string
+    const buildIndex = (
+      collection: string,
+      attempt: number
     ): Effect.Effect<Index.CollectionIndex | undefined, StoreError> =>
-      Effect.gen(function* () {
-        for (let attempt = 0; attempt < MAX_INDEX_BUILD_ATTEMPTS; attempt++) {
-          // The generation is read BEFORE the field set. `noteAutoIndexFields` widens the
-          // fields and then bumps the generation, so a widening that lands after this read
-          // bumps past `before` and the install refuses the build. Read the other way round,
-          // a widening between the two reads would install an index over the old field set,
-          // with nothing left to invalidate it (a missed index until the next rebuild).
-          const before = yield* Ref.get(indexState);
-          const fields = (yield* Ref.get(indexFields)).get(collection);
-          if (fields === undefined || fields.size === 0) return undefined;
-          const existing = before.built.get(collection);
-          if (existing !== undefined) return existing;
-          const fresh = Index.empty(fields);
-          Index.rebuild(fresh, yield* store.listRows(collection));
-          const installed = yield* Ref.modify(indexState, (state) => {
-            // Another build installed first; it is kept current like any built index.
-            const current = state.built.get(collection);
-            if (current !== undefined) return [current, state] as const;
-            if (!indexUnchangedFor(collection, before, state)) return [undefined, state] as const;
-            return [
-              fresh,
-              { ...state, built: new Map(state.built).set(collection, fresh) },
-            ] as const;
+      attempt >= MAX_INDEX_BUILD_ATTEMPTS
+        ? Effect.undefined
+        : Effect.gen(function* () {
+            // The generation is read BEFORE the field set. `noteAutoIndexFields` widens the
+            // fields and then bumps the generation, so a widening that lands after this read
+            // bumps past `before` and the install refuses the build. Read the other way round,
+            // a widening between the two reads would install an index over the old field set,
+            // with nothing left to invalidate it (a missed index until the next rebuild).
+            const before = yield* Ref.get(indexState);
+            const fields = (yield* Ref.get(indexFields)).get(collection);
+            if (fields === undefined || fields.size === 0) return undefined;
+            const existing = before.built.get(collection);
+            if (existing !== undefined) return existing;
+            const fresh = Index.empty(fields);
+            Index.rebuild(fresh, yield* store.listRows(collection));
+            const installed = yield* Ref.modify(indexState, (state) => {
+              // Another build installed first; it is kept current like any built index.
+              const current = state.built.get(collection);
+              if (current !== undefined) return [current, state] as const;
+              if (!indexUnchangedFor(collection, before, state)) return [undefined, state] as const;
+              return [
+                fresh,
+                { ...state, built: new Map(state.built).set(collection, fresh) },
+              ] as const;
+            });
+            if (installed !== undefined) return installed;
+            return yield* buildIndex(collection, attempt + 1);
           });
-          if (installed !== undefined) return installed;
-        }
-        return undefined;
-      });
+
+    const ensureIndexBuilt = (collection: string) => buildIndex(collection, 0);
 
     // Indexed evaluation is sound only while a collection's confirmed rows
     // equal its materialized view — i.e. no pending mutation's optimistic
@@ -2008,11 +2017,9 @@ export const make = (
       Clock.currentTimeMillis.pipe(
         Effect.flatMap((now) =>
           SubscriptionRef.modify(mutationStates, (map) => {
-            const settledIds: Array<number> = [];
-            for (const [id, state] of map) {
-              if (id > lastId || state.phase !== "pending") continue;
-              settledIds.push(id);
-            }
+            const settledIds = Arr.flatMap(Arr.fromIterable(map), ([id, state]) =>
+              id > lastId || state.phase !== "pending" ? [] : [id]
+            );
             // Fold every transition first, evict once (as for the
             // `HashMap`): retention's scan-and-sort is O(size), so evicting
             // per-id inside a K-mutation ack sweep would cost O(K * size).
@@ -2090,10 +2097,11 @@ export const make = (
     const settleRejected = (response: Pick<PushResponse, "rejected">): Effect.Effect<void> =>
       Effect.gen(function* () {
         const mine = yield* currentClientId;
-        for (const entry of response.rejected ?? []) {
-          if (entry.clientId !== mine) continue;
-          yield* rejectAck(entry.mutationId, entry.reason);
-        }
+        yield* Effect.forEach(
+          Arr.filter(response.rejected ?? [], (entry) => entry.clientId === mine),
+          (entry) => rejectAck(entry.mutationId, entry.reason),
+          { concurrency: 1, discard: true }
+        );
       });
 
     // Settle this client's own entries that a watermark covers as applied.
@@ -2115,9 +2123,11 @@ export const make = (
     // marker (`beginRelease`).
     const acknowledgeLocked = (lastMutationIds: Readonly<Record<string, number>>) =>
       Effect.gen(function* () {
-        for (const [clientId, upTo] of Object.entries(lastMutationIds)) {
-          yield* store.acknowledge(clientId, upTo);
-        }
+        yield* Effect.forEach(
+          R.toEntries(lastMutationIds),
+          ([clientId, upTo]) => store.acknowledge(clientId, upTo),
+          { concurrency: 1, discard: true }
+        );
         yield* settleOwnApplied(lastMutationIds);
         yield* store.releaseUnpulled(lastMutationIds);
         yield* Ref.update(unpulled, (tail) => tail.filter((m) => !isCoveredBy(lastMutationIds, m)));
@@ -2171,11 +2181,11 @@ export const make = (
             yield* store.parkUnpulled(applied);
             // A trim that fails part-way leaves a parked entry in the journal as well. The store settles
             // that in process, as an open does, and the copy re-reads the tail on its next use.
-            yield* Effect.gen(function* () {
-              for (const [clientId, upTo] of Object.entries(response.lastMutationIds)) {
-                yield* store.acknowledge(clientId, upTo);
-              }
-            }).pipe(Effect.onError(() => settleFailedTail));
+            yield* Effect.forEach(
+              R.toEntries(response.lastMutationIds),
+              ([clientId, upTo]) => store.acknowledge(clientId, upTo),
+              { concurrency: 1, discard: true }
+            ).pipe(Effect.onError(() => settleFailedTail));
           }
           // The store now holds the full tail, and the copy takes it. Nothing is released here: the
           // tail leaves only through a pull, and a push never takes it past the bound, so the
@@ -2228,20 +2238,18 @@ export const make = (
               // a survivor landing on a slot a dropped entry vacated cannot clash.
               const orphans = yield* Ref.modify(acks, (map) => {
                 const next = new Map(map);
-                const dropped: Array<Deferred.Deferred<MutationOutcome>> = [];
-                for (const id of compaction.dropped) {
+                const dropped = Arr.flatMap(compaction.dropped, (id) => {
                   const deferred = next.get(id);
-                  if (deferred !== undefined) dropped.push(deferred);
                   next.delete(id);
-                }
-                const moved: Array<readonly [number, Deferred.Deferred<MutationOutcome>]> = [];
-                for (const { from, to } of compaction.renumbered) {
+                  return deferred === undefined ? [] : [deferred];
+                });
+                const moved = Arr.flatMap(compaction.renumbered, ({ from, to }) => {
                   const deferred = next.get(from);
-                  if (deferred === undefined) continue;
-                  moved.push([to, deferred]);
+                  if (deferred === undefined) return [];
                   next.delete(from);
-                }
-                for (const [to, deferred] of moved) next.set(to, deferred);
+                  return [[to, deferred] as const];
+                });
+                Arr.forEach(moved, ([to, deferred]) => next.set(to, deferred));
                 return [dropped, next] as const;
               });
               // Fold the drop and the moves into `mutationStates` — without
@@ -2405,10 +2413,9 @@ export const make = (
         const pending = yield* store.pendingMutations;
         yield* adoptPending(pending);
         if (Arr.isReadonlyArrayEmpty(pending)) return pending;
-        const highest = new Map<string, number>();
-        for (const m of pending) {
-          if (m.mutationId > (highest.get(m.clientId) ?? 0)) highest.set(m.clientId, m.mutationId);
-        }
+        const highest = Arr.reduce(pending, new Map<string, number>(), (acc, m) =>
+          m.mutationId > (acc.get(m.clientId) ?? 0) ? acc.set(m.clientId, m.mutationId) : acc
+        );
         yield* Ref.update(pushInFlight, (n) => n + 1);
         yield* Effect.forEach(highest, ([clientId, upTo]) => store.markSent(clientId, upTo), {
           concurrency: 1,
@@ -2549,7 +2556,7 @@ export const make = (
           rows.push({ collection: op.collection, id: op.id });
         }
         if (cleared) {
-          for (const collection of yield* store.listCollections) collections.add(collection);
+          Arr.forEach(yield* store.listCollections, (collection) => collections.add(collection));
         }
         return { collections: [...collections], rows };
       });
@@ -3641,12 +3648,8 @@ export const make = (
     > {
       const raw = yield* Ref.get(subscriptions);
       const named = yield* Ref.get(namedSubs);
-      const resolved: Array<Subset.Subset> = [];
-      for (const entry of named) {
-        const subset = yield* resolveNamedSubset(entry);
-        if (subset !== undefined) resolved.push(subset);
-      }
-      return [...raw, ...resolved];
+      const resolved = yield* Effect.forEach(named, resolveNamedSubset, { concurrency: 1 });
+      return [...raw, ...Arr.filter(resolved, P.isNotUndefined)];
     });
 
     const transportRead = transport.read;

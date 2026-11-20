@@ -272,15 +272,15 @@ const titles = (rows: ReadonlyArray<{ readonly value: unknown }>) =>
   rows.map((row) => (row.value as Todo).title).toSorted();
 
 /** Poll `check` until it holds (real time), or fail the test after ~2s. */
-const eventually = <A, E>(read: Effect.Effect<A, E>, check: (value: A) => boolean) =>
-  Effect.gen(function* () {
-    for (let attempt = 0; attempt < 100; attempt++) {
-      const value = yield* read;
-      if (check(value)) return value;
-      yield* Effect.sleep("20 millis");
-    }
-    return yield* Effect.die(new TestFailure({ message: "condition never held" }));
-  });
+const eventually = <A, E>(read: Effect.Effect<A, E>, check: (value: A) => boolean) => {
+  const attempt = (n: number): Effect.Effect<A, E> =>
+    n === 100
+      ? Effect.die(new TestFailure({ message: "condition never held" }))
+      : Effect.filterOrElse(read, check, () =>
+          Effect.andThen(Effect.sleep("20 millis"), attempt(n + 1))
+        );
+  return attempt(0);
+};
 
 const uniqueChannel = () => `legation-bg-${crypto.randomUUID()}`;
 
@@ -404,9 +404,11 @@ describeWrapped("BackgroundSync", (it) => {
           { unpulledLimit: 8, retry: { pull: Schedule.recurs(0) } }
         );
         yield* listener.serve(engine);
-        for (let i = 1; i <= 9; i++) {
-          yield* engine.mutate("todo/set", { id: String(i), title: `title ${i}` });
-        }
+        yield* Effect.forEach(
+          Arr.range(1, 9),
+          (i) => engine.mutate("todo/set", { id: String(i), title: `title ${i}` }),
+          { concurrency: 1, discard: true }
+        );
 
         yield* Ref.set(pullsDown, true);
         const failed = yield* settle(self.dispatch(BackgroundSync.defaultTag, true).held[0]);
@@ -497,9 +499,11 @@ describeWrapped("BackgroundSync", (it) => {
           yield* eventually(store.pendingMutations, (pending) => Arr.isReadonlyArrayEmpty(pending));
           yield* Ref.set(pushes, []);
 
-          for (let n = 1; n <= 5; n++) {
-            yield* engine.mutate("todo/set", { id: "1", title: `edit ${n}` });
-          }
+          yield* Effect.forEach(
+            Arr.range(1, 5),
+            (n) => engine.mutate("todo/set", { id: "1", title: `edit ${n}` }),
+            { concurrency: 1, discard: true }
+          );
           yield* eventually(store.pendingMutations, (pending) => Arr.isReadonlyArrayEmpty(pending));
 
           expect(self.tags).toEqual([]);
@@ -521,9 +525,11 @@ describeWrapped("BackgroundSync", (it) => {
         yield* listener.serve(engine);
         const paced = yield* Paced.coalesce(engine, "todo/set");
 
-        for (let n = 1; n <= 5; n++) {
-          yield* paced.call("1", { id: "1", title: `edit ${n}` });
-        }
+        yield* Effect.forEach(
+          Arr.range(1, 5),
+          (n) => paced.call("1", { id: "1", title: `edit ${n}` }),
+          { concurrency: 1, discard: true }
+        );
         yield* Effect.sleep("50 millis");
 
         expect(self.tags).toEqual([]);

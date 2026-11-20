@@ -101,9 +101,11 @@ const decidedBatches = Metric.value(Telemetry.fanoutLatencyMs).pipe(
  * yields between reads; it never waits on a timer, and a fan-out that never
  * decides the batch fails at the runner's timeout.
  */
-const awaitBatch = (before: number) =>
+const awaitBatch = (before: number): Effect.Effect<void> =>
   Effect.gen(function* () {
-    while ((yield* decidedBatches) <= before) yield* Effect.yieldNow;
+    if ((yield* decidedBatches) > before) return;
+    yield* Effect.yieldNow;
+    yield* awaitBatch(before);
   });
 
 /** Publish one batch, wait for the fan-out to decide it, and return the poke deltas it caused. */

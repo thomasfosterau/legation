@@ -258,17 +258,19 @@ describe("Derive — observable via the standard atom surface", () => {
       );
 
       const read = Effect.sync(() => registry.get(atom));
-      const await1 = (predicate: (rows: ReadonlyArray<Row<unknown>>) => boolean) =>
-        Effect.gen(function* () {
-          for (let attempt = 0; attempt < 200; attempt++) {
+      const await1 = (predicate: (rows: ReadonlyArray<Row<unknown>>) => boolean) => {
+        const poll = (remaining: number): Effect.Effect<ReadonlyArray<Row<unknown>>> =>
+          Effect.gen(function* () {
             const result = yield* read;
             if (AsyncResult.isSuccess(result) && predicate(result.value)) return result.value;
             yield* sleepReal(5);
-          }
-          return yield* Effect.die(
-            new TestFailure({ message: "derived atom never reached the expected state" })
-          );
-        });
+            if (remaining > 1) return yield* poll(remaining - 1);
+            return yield* Effect.die(
+              new TestFailure({ message: "derived atom never reached the expected state" })
+            );
+          });
+        return poll(200);
+      };
 
       yield* await1((rows) => Arr.isReadonlyArrayEmpty(rows));
 
@@ -302,17 +304,19 @@ describe("Derive — observed leaf consumes observeChanges, not page-diff", () =
       );
 
       const read = Effect.sync(() => registry.get(atom));
-      const await1 = (predicate: (rows: ReadonlyArray<Row<unknown>>) => boolean) =>
-        Effect.gen(function* () {
-          for (let attempt = 0; attempt < 200; attempt++) {
+      const await1 = (predicate: (rows: ReadonlyArray<Row<unknown>>) => boolean) => {
+        const poll = (remaining: number): Effect.Effect<ReadonlyArray<Row<unknown>>> =>
+          Effect.gen(function* () {
             const result = yield* read;
             if (AsyncResult.isSuccess(result) && predicate(result.value)) return result.value;
             yield* sleepReal(5);
-          }
-          return yield* Effect.die(
-            new TestFailure({ message: "derived atom never reached the expected state" })
-          );
-        });
+            if (remaining > 1) return yield* poll(remaining - 1);
+            return yield* Effect.die(
+              new TestFailure({ message: "derived atom never reached the expected state" })
+            );
+          });
+        return poll(200);
+      };
 
       // Unlike page-based `observe` (which always emits an initial snapshot,
       // even `[]`), `observeChanges({ includeInitial: true })` stays silent

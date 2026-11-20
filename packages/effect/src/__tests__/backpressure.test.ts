@@ -90,15 +90,17 @@ const sleepReal = (millis: number) =>
   });
 
 /** Poll until `read` passes `until`, bounded. */
-const eventually = <A>(read: Effect.Effect<A>, until: (value: A) => boolean) =>
-  Effect.gen(function* () {
-    for (let attempt = 0; attempt < 400; attempt++) {
+const eventually = <A>(read: Effect.Effect<A>, until: (value: A) => boolean) => {
+  const poll = (remaining: number): Effect.Effect<A> =>
+    Effect.gen(function* () {
       const value = yield* read;
       if (until(value)) return value;
       yield* sleepReal(5);
-    }
-    return yield* Effect.die(new TestFailure({ message: "eventually: condition never held" }));
-  });
+      if (remaining > 1) return yield* poll(remaining - 1);
+      return yield* Effect.die(new TestFailure({ message: "eventually: condition never held" }));
+    });
+  return poll(400);
+};
 
 describe("backpressure — poke hub", () => {
   it.live("a poke storm delivers at most one queued poke per group", () =>

@@ -290,9 +290,14 @@ const seeded = (size: number) =>
     const first = yield* ClientStoreModule.makeKeyValue().pipe(
       Effect.provideService(KeyValueStore.KeyValueStore, kv.store)
     );
-    for (let n = 1; n <= size; n++) {
-      yield* first.appendMutation(numbered(yield* first.nextMutationId("c1")));
-    }
+    yield* Effect.forEach(
+      Arr.range(1, size),
+      () =>
+        Effect.gen(function* () {
+          yield* first.appendMutation(numbered(yield* first.nextMutationId("c1")));
+        }),
+      { concurrency: 1, discard: true }
+    );
     return { kv, first };
   });
 
@@ -355,28 +360,37 @@ describeWrapped("KeyValue journal compaction is crash-safe", (it) => {
       Effect.gen(function* () {
         let committedButUnapplied = 0;
         let ranToCompletion = false;
-        for (let writes = 0; writes < 60 && !ranToCompletion; writes++) {
-          const { kv, first } = yield* seeded(5);
-          kv.budget.writes = writes;
-          const exit = yield* Effect.exit(first.compactPending("c1", [2, 4]));
-          ranToCompletion = kv.budget.writes > 0;
-          const intentLeft = kv.data.has("legation/compactionIntent");
-          kv.budget.writes = Number.POSITIVE_INFINITY;
+        let writes = 0;
+        yield* Effect.whileLoop({
+          while: () => writes < 60 && !ranToCompletion,
+          body: () =>
+            Effect.gen(function* () {
+              const { kv, first } = yield* seeded(5);
+              kv.budget.writes = writes;
+              const exit = yield* Effect.exit(first.compactPending("c1", [2, 4]));
+              ranToCompletion = kv.budget.writes > 0;
+              const intentLeft = kv.data.has("legation/compactionIntent");
+              kv.budget.writes = Number.POSITIVE_INFINITY;
 
-          // Once the intent is durable the compaction is committed: the caller
-          // is told the renumbering even though applying it failed,
-          // so it can move everything it keyed by the old ids.
-          Exit.match(exit, {
-            onSuccess: (renumbering) => expect(renumbering, `writes=${writes}`).toEqual(EXPECTED),
-            onFailure: () => expect(intentLeft).toBe(false),
-          });
-          if (Exit.isSuccess(exit) && intentLeft) committedButUnapplied += 1;
+              // Once the intent is durable the compaction is committed: the caller
+              // is told the renumbering even though applying it failed,
+              // so it can move everything it keyed by the old ids.
+              Exit.match(exit, {
+                onSuccess: (renumbering) =>
+                  expect(renumbering, `writes=${writes}`).toEqual(EXPECTED),
+                onFailure: () => expect(intentLeft).toBe(false),
+              });
+              if (Exit.isSuccess(exit) && intentLeft) committedButUnapplied += 1;
 
-          // The same live store finishes the roll-forward before it appends...
-          yield* expectWhole(yield* reopen(structuredCloneOf(kv)), `restart writes=${writes}`);
-          // ...and so does the one that failed.
-          yield* expectWhole(first, `live writes=${writes}`);
-        }
+              // The same live store finishes the roll-forward before it appends...
+              yield* expectWhole(yield* reopen(structuredCloneOf(kv)), `restart writes=${writes}`);
+              // ...and so does the one that failed.
+              yield* expectWhole(first, `live writes=${writes}`);
+            }),
+          step: () => {
+            writes += 1;
+          },
+        });
         expect(ranToCompletion).toBe(true);
         // The sweep did exercise a committed-but-unapplied state.
         expect(committedButUnapplied).toBeGreaterThan(0);
@@ -386,31 +400,52 @@ describeWrapped("KeyValue journal compaction is crash-safe", (it) => {
   it.effect("a crash during the roll-forward itself is rolled forward again, at every write", () =>
     Effect.gen(function* () {
       let nested = 0;
-      for (let first = 1; first < 60; first++) {
-        // Crash the compaction `first` writes in, after its intent is durable...
-        const probe = yield* seeded(5);
-        probe.kv.budget.writes = first;
-        yield* Effect.exit(probe.first.compactPending("c1", [2, 4]));
-        const left = probe.kv.data.has("legation/compactionIntent");
-        if (probe.kv.budget.writes > 0 && !left) break; // ran to completion: sweep done
-        if (!left) continue;
-        // ...then crash the recovery on the next open `second` writes in.
-        for (let second = 0; second < 40; second++) {
-          const { kv, first: store } = yield* seeded(5);
-          kv.budget.writes = first;
-          yield* Effect.exit(store.compactPending("c1", [2, 4]));
-          kv.budget.writes = second;
-          const recovering = yield* reopen(kv); // open swallows a failed recovery
-          const hitFault = kv.budget.writes <= 0;
-          kv.budget.writes = Number.POSITIVE_INFINITY;
-          if (hitFault) nested += 1;
-          // The half-recovered store and a fresh open both end whole.
-          const restarted = structuredCloneOf(kv);
-          yield* expectWhole(recovering, `recovering first=${first} second=${second}`);
-          yield* expectWhole(yield* reopen(restarted), `reopen first=${first} second=${second}`);
-          if (!hitFault) break;
-        }
-      }
+      let first = 1;
+      let swept = false;
+      yield* Effect.whileLoop({
+        while: () => first < 60 && !swept,
+        body: () =>
+          Effect.gen(function* () {
+            // Crash the compaction `first` writes in, after its intent is durable...
+            const probe = yield* seeded(5);
+            probe.kv.budget.writes = first;
+            yield* Effect.exit(probe.first.compactPending("c1", [2, 4]));
+            const left = probe.kv.data.has("legation/compactionIntent");
+            swept = probe.kv.budget.writes > 0 && !left; // ran to completion: sweep done
+            if (!left) return;
+            // ...then crash the recovery on the next open `second` writes in.
+            let second = 0;
+            let recovered = false;
+            yield* Effect.whileLoop({
+              while: () => second < 40 && !recovered,
+              body: () =>
+                Effect.gen(function* () {
+                  const { kv, first: store } = yield* seeded(5);
+                  kv.budget.writes = first;
+                  yield* Effect.exit(store.compactPending("c1", [2, 4]));
+                  kv.budget.writes = second;
+                  const recovering = yield* reopen(kv); // open swallows a failed recovery
+                  const hitFault = kv.budget.writes <= 0;
+                  kv.budget.writes = Number.POSITIVE_INFINITY;
+                  if (hitFault) nested += 1;
+                  // The half-recovered store and a fresh open both end whole.
+                  const restarted = structuredCloneOf(kv);
+                  yield* expectWhole(recovering, `recovering first=${first} second=${second}`);
+                  yield* expectWhole(
+                    yield* reopen(restarted),
+                    `reopen first=${first} second=${second}`
+                  );
+                  recovered = !hitFault;
+                }),
+              step: () => {
+                second += 1;
+              },
+            });
+          }),
+        step: () => {
+          first += 1;
+        },
+      });
       expect(nested).toBeGreaterThan(0);
     })
   );
@@ -496,63 +531,71 @@ describeWrapped("KeyValue acknowledge leaves no index entry without a body", (it
     Effect.gen(function* () {
       let orphaned = 0;
       let ranToCompletion = false;
-      for (let writes = 0; writes < 20 && !ranToCompletion; writes++) {
-        const { kv, first } = yield* seededTwoClients();
-        kv.budget.writes = writes;
-        yield* Effect.exit(first.acknowledge("c1", 3));
-        ranToCompletion = kv.budget.writes > 0;
-        kv.budget.writes = Number.POSITIVE_INFINITY;
-        const label = `writes=${writes}`;
+      let writes = 0;
+      yield* Effect.whileLoop({
+        while: () => writes < 20 && !ranToCompletion,
+        body: () =>
+          Effect.gen(function* () {
+            const { kv, first } = yield* seededTwoClients();
+            kv.budget.writes = writes;
+            yield* Effect.exit(first.acknowledge("c1", 3));
+            ranToCompletion = kv.budget.writes > 0;
+            kv.budget.writes = Number.POSITIVE_INFINITY;
+            const label = `writes=${writes}`;
 
-        // The crash window: bodies removed, the index not yet rewritten.
-        const crashed = onDisk(kv);
-        if (crashed.withBody < crashed.index.length) orphaned += 1;
+            // The crash window: bodies removed, the index not yet rewritten.
+            const crashed = onDisk(kv);
+            if (crashed.withBody < crashed.index.length) orphaned += 1;
 
-        const restarted = structuredCloneOf(kv);
-        const store = yield* reopen(restarted);
-        const healed = onDisk(restarted);
-        // Every surviving index entry has its body, and the count agrees.
-        expect(healed.withBody, label).toBe(healed.index.length);
-        expect(yield* store.pendingCount, label).toBe(healed.withBody);
-        expect(yield* store.pendingCount, label).toBe((yield* store.pendingMutations).length);
+            const restarted = structuredCloneOf(kv);
+            const store = yield* reopen(restarted);
+            const healed = onDisk(restarted);
+            // Every surviving index entry has its body, and the count agrees.
+            expect(healed.withBody, label).toBe(healed.index.length);
+            expect(yield* store.pendingCount, label).toBe(healed.withBody);
+            expect(yield* store.pendingCount, label).toBe((yield* store.pendingMutations).length);
 
-        // Some prefix of the acknowledged run may survive (re-pushing it is an
-        // idempotent skip), but nothing above `upTo` and nothing of c2 is lost.
-        const c1 = idsOf((yield* store.pendingMutations).filter((m) => m.clientId === "c1"));
-        const c2 = idsOf((yield* store.pendingMutations).filter((m) => m.clientId === "c2"));
-        expect(
-          [
-            [1, 2, 3, 4, 5],
-            [2, 3, 4, 5],
-            [3, 4, 5],
-            [4, 5],
-          ],
-          label
-        ).toContainEqual(c1);
-        expect(c2, label).toEqual([1, 2]);
+            // Some prefix of the acknowledged run may survive (re-pushing it is an
+            // idempotent skip), but nothing above `upTo` and nothing of c2 is lost.
+            const c1 = idsOf((yield* store.pendingMutations).filter((m) => m.clientId === "c1"));
+            const c2 = idsOf((yield* store.pendingMutations).filter((m) => m.clientId === "c2"));
+            expect(
+              [
+                [1, 2, 3, 4, 5],
+                [2, 3, 4, 5],
+                [3, 4, 5],
+                [4, 5],
+              ],
+              label
+            ).toContainEqual(c1);
+            expect(c2, label).toEqual([1, 2]);
 
-        // The pending count is read from the index alone.
-        restarted.reads.length = 0;
-        yield* store.pendingCount;
-        expect(
-          restarted.reads.filter((k) => k.startsWith("legation/journal/")),
-          label
-        ).toEqual([]);
+            // The pending count is read from the index alone.
+            restarted.reads.length = 0;
+            yield* store.pendingCount;
+            expect(
+              restarted.reads.filter((k) => k.startsWith("legation/journal/")),
+              label
+            ).toEqual([]);
 
-        // No acknowledged id is reissued, and a compaction no longer trips
-        // over a missing body.
-        const next = yield* store.appendNext({
-          clientId: "c1",
-          mutator: "noop",
-          args: {},
-          createdAt: 0,
-        });
-        expect(next.mutationId, label).toBe(6);
-        yield* store.compactPending("c1", [4]);
-        expect(
-          idsOf((yield* store.pendingMutations).filter((m) => m.clientId === "c1")).at(-1)
-        ).toBe(5);
-      }
+            // No acknowledged id is reissued, and a compaction no longer trips
+            // over a missing body.
+            const next = yield* store.appendNext({
+              clientId: "c1",
+              mutator: "noop",
+              args: {},
+              createdAt: 0,
+            });
+            expect(next.mutationId, label).toBe(6);
+            yield* store.compactPending("c1", [4]);
+            expect(
+              idsOf((yield* store.pendingMutations).filter((m) => m.clientId === "c1")).at(-1)
+            ).toBe(5);
+          }),
+        step: () => {
+          writes += 1;
+        },
+      });
       expect(ranToCompletion).toBe(true);
       // The sweep did exercise the orphaning window.
       expect(orphaned).toBeGreaterThan(0);

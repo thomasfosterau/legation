@@ -523,6 +523,17 @@ const stateOf = (engine: ClientEngineModule.ClientEngine, mutationId: number) =>
     )
   );
 
+/** Runs `step` until `done` holds, checking before each step. */
+const runUntil = <E, R>(
+  done: Effect.Effect<boolean, E, R>,
+  step: Effect.Effect<unknown, E, R>
+): Effect.Effect<void, E, R> =>
+  Effect.gen(function* () {
+    if (yield* done) return;
+    yield* step;
+    yield* runUntil(done, step);
+  });
+
 /**
  * Subscribes to the engine's events now, before the mutation under test, and
  * returns `read`: every event emitted before its call, once it has returned.
@@ -546,15 +557,18 @@ const openEngineEvents = (engine: ClientEngineModule.ClientEngine) =>
         pull.pipe(Effect.flatMap((chunk) => Ref.update(seen, (prior) => [...prior, ...chunk])))
       )
     );
-    while ((yield* pullsSeen) === 0) {
-      yield* engine.pull;
-      yield* Effect.yieldNow;
-    }
+    yield* runUntil(
+      Effect.map(pullsSeen, (count) => count !== 0),
+      Effect.andThen(engine.pull, Effect.yieldNow)
+    );
     return {
       read: Effect.gen(function* () {
         const before = yield* pullsSeen;
         yield* engine.pull;
-        while ((yield* pullsSeen) === before) yield* Effect.yieldNow;
+        yield* runUntil(
+          Effect.map(pullsSeen, (count) => count !== before),
+          Effect.yieldNow
+        );
         return yield* Ref.get(seen);
       }),
     };

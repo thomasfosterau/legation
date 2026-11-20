@@ -13,6 +13,7 @@ import * as Arr from "effect/Array";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
+import * as Option from "effect/Option";
 import * as R from "effect/Record";
 import * as Ref from "effect/Ref";
 import * as Schema from "effect/Schema";
@@ -74,15 +75,17 @@ const sleepReal = (millis: number) =>
     return Effect.sync(() => clearTimeout(timer));
   });
 
-const eventually = <A>(read: Effect.Effect<A>, until: (value: A) => boolean) =>
-  Effect.gen(function* () {
-    for (let attempt = 0; attempt < 500; attempt++) {
+const eventually = <A>(read: Effect.Effect<A>, until: (value: A) => boolean) => {
+  const poll = (remaining: number): Effect.Effect<A> =>
+    Effect.gen(function* () {
       const value = yield* read;
       if (until(value)) return value;
       yield* sleepReal(10);
-    }
-    return yield* Effect.die(new TestFailure({ message: "eventually: condition never held" }));
-  });
+      if (remaining > 1) return yield* poll(remaining - 1);
+      return yield* Effect.die(new TestFailure({ message: "eventually: condition never held" }));
+    });
+  return poll(500);
+};
 
 const makeHandler = Effect.fn("makeHandler")(function* () {
   const backend = yield* MemoryBackend.make(
@@ -567,19 +570,25 @@ const stubUrls: Client.UrlReads = {
       }
       const where: Record<string, string> = {};
       const include: Record<string, true> = {};
-      for (const [key, value] of searchParams) {
+      const entries = Arr.fromIterable(searchParams);
+      const unsupported = Arr.findFirst(
+        entries,
+        ([key]) => key !== "include" && !/^filter\[(\w+)\]$/.test(key)
+      );
+      if (Option.isSome(unsupported)) {
+        const [key] = unsupported.value;
+        return Effect.fail(
+          new QueryError({ message: `Unsupported ${key}`, query: collection, parameter: key })
+        );
+      }
+      Arr.forEach(entries, ([key, value]) => {
         const filter = /^filter\[(\w+)\]$/.exec(key);
         if (filter !== null) where[defined(filter[1])] = value;
-        else if (key === "include")
+        else
           Arr.forEach(value.split(","), (edge) => {
             include[edge] = true;
           });
-        else {
-          return Effect.fail(
-            new QueryError({ message: `Unsupported ${key}`, query: collection, parameter: key })
-          );
-        }
-      }
+      });
       return Effect.succeed({
         collection,
         ...Defined.fields({ where: R.isEmptyReadonlyRecord(where) ? undefined : where }),
@@ -901,6 +910,20 @@ const makeRacePair = Effect.fn("makeRacePair")(function* () {
   return { reader: yield* make("client-reader"), writer: yield* make("client-writer") };
 });
 
+/** Pulls, then reads the coverage, until it is `Covered` or `attempts` pulls have run. */
+const pullUntilCovered = <E, R>(
+  pull: Effect.Effect<unknown, never, R>,
+  coverage: Effect.Effect<{ readonly _tag: string }, E, R>,
+  attempts: number
+): Effect.Effect<void, E, R> =>
+  Effect.gen(function* () {
+    yield* pull;
+    yield* Effect.yieldNow;
+    if ((yield* coverage)._tag !== "Covered" && attempts > 1) {
+      yield* pullUntilCovered(pull, coverage, attempts - 1);
+    }
+  });
+
 describe("Client.query judges and answers from one snapshot", () => {
   it.effect(
     "a pull between the judgment and the answer cannot serve a root row with unpulled reviews",
@@ -959,11 +982,11 @@ describe("Client.query judges and answers from one snapshot", () => {
 
           // Pin the reviewed products and pull until their root and review windows are pulled.
           yield* client.subscribe(reviewed);
-          for (let attempt = 0; attempt < 20; attempt++) {
-            yield* reader.pull.pipe(Effect.orDie);
-            yield* Effect.yieldNow;
-            if ((yield* client.coverageOf(reviewed))._tag === "Covered") break;
-          }
+          yield* pullUntilCovered(
+            reader.pull.pipe(Effect.orDie),
+            Effect.suspend(() => client.coverageOf(reviewed)),
+            20
+          );
           expect((yield* client.coverageOf(reviewed))._tag).toBe("Covered");
 
           yield* Ref.set(armed, true);
@@ -1002,11 +1025,11 @@ it.effect("a snapshot of another subset is not judged over", () =>
       const client = Client.fromView(nodes, ClientView.fromEngine(reader));
       const reviewed: Query.Read = { collection: "products", include: { reviews: true } };
       yield* client.subscribe(reviewed);
-      for (let attempt = 0; attempt < 20; attempt++) {
-        yield* reader.pull.pipe(Effect.orDie);
-        yield* Effect.yieldNow;
-        if ((yield* client.coverageOf(reviewed))._tag === "Covered") break;
-      }
+      yield* pullUntilCovered(
+        reader.pull.pipe(Effect.orDie),
+        Effect.suspend(() => client.coverageOf(reviewed)),
+        20
+      );
       expect((yield* client.coverageOf(reviewed))._tag).toBe("Covered");
       // p-2 reaches the replica's products without its reviews window: the read now links to a
       // window that is not pulled.

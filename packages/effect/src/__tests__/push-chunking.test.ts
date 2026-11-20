@@ -155,7 +155,9 @@ const journaled = (count: number, unpulledLimit?: number) =>
     const inner = yield* makeInMemory(server, "group-a");
     const engine = yield* engineOver(logged(inner, store, log), store, { unpulledLimit });
     yield* engine.subscribe(countersSubset);
-    for (let i = 0; i < count; i++) yield* engine.mutate("counter/inc", { id: "c" });
+    yield* Effect.replicateEffect(engine.mutate("counter/inc", { id: "c" }), count, {
+      discard: true,
+    });
     return { engine, store, log };
   });
 
@@ -250,7 +252,9 @@ describe("a push larger than the pull-ahead threshold", () => {
         retry: { push: Schedule.recurs(0) },
       });
       yield* engine.subscribe(countersSubset);
-      for (let i = 0; i < 9; i++) yield* engine.mutate("counter/inc", { id: "c" });
+      yield* Effect.replicateEffect(engine.mutate("counter/inc", { id: "c" }), 9, {
+        discard: true,
+      });
 
       expect(Exit.isFailure(yield* Effect.exit(engine.push))).toBe(true);
       // Chunk one is acknowledged, and the pull before chunk two released its tail. Chunk two failed, so
@@ -288,7 +292,9 @@ describe("a push larger than the pull-ahead threshold", () => {
         retry: { pull: Schedule.recurs(0) },
       });
       yield* engine.subscribe(countersSubset);
-      for (let i = 0; i < 9; i++) yield* engine.mutate("counter/inc", { id: "c" });
+      yield* Effect.replicateEffect(engine.mutate("counter/inc", { id: "c" }), 9, {
+        discard: true,
+      });
 
       // The failed pull between the chunks fails the push with a transport error, and the push stops: the
       // unsent mutations stay journaled.
@@ -343,14 +349,18 @@ describe("a push larger than the pull-ahead threshold", () => {
         unpulledLimit: 9,
       });
       yield* engine.subscribe(countersSubset);
-      for (let i = 0; i < 5; i++) yield* engine.mutate("counter/inc", { id: "c" });
+      yield* Effect.replicateEffect(engine.mutate("counter/inc", { id: "c" }), 5, {
+        discard: true,
+      });
       yield* engine.push;
       // The pull ahead the push started has reached the refusal, so it has failed; accept pulls again.
       yield* Deferred.await(refusedCalled);
       yield* Ref.set(pullsRefused, false);
       expect(yield* tailIds(store)).toEqual([1, 2, 3, 4, 5]);
 
-      for (let i = 0; i < 9; i++) yield* engine.mutate("counter/inc", { id: "c" });
+      yield* Effect.replicateEffect(engine.mutate("counter/inc", { id: "c" }), 9, {
+        discard: true,
+      });
       yield* Effect.withLogger(engine.push, logger);
       // The second push sends 4 (filling the tail to the bound), pulls, then sends the last 5.
       expect(pushIds(log)).toEqual([
@@ -385,7 +395,9 @@ describe("a push larger than the pull-ahead threshold", () => {
         retry: { pull: Schedule.recurs(0), push: Schedule.recurs(0) },
       });
       yield* engine.subscribe(countersSubset);
-      for (let i = 0; i < 8; i++) yield* engine.mutate("counter/inc", { id: "c" });
+      yield* Effect.replicateEffect(engine.mutate("counter/inc", { id: "c" }), 8, {
+        discard: true,
+      });
 
       // The first chunk (four) is acknowledged; the pull before the second fails, so the push fails.
       expect(Exit.isFailure(yield* Effect.exit(engine.push))).toBe(true);
@@ -394,7 +406,9 @@ describe("a push larger than the pull-ahead threshold", () => {
       expect(yield* tailIds(store)).toEqual([1, 2, 3, 4, 5, 6, 7, 8]);
       expect(yield* journalIds(store)).toEqual([]);
 
-      for (let i = 9; i <= 12; i++) yield* engine.mutate("counter/inc", { id: "c" });
+      yield* Effect.replicateEffect(engine.mutate("counter/inc", { id: "c" }), 4, {
+        discard: true,
+      });
       // The tail has no room and the pull fails: the push stops before it sends anything, and the
       // one-entry fallback that a full tail used to take is gone.
       expect(Exit.isFailure(yield* Effect.exit(engine.push))).toBe(true);
@@ -440,7 +454,9 @@ describe("a push larger than the pull-ahead threshold", () => {
         unpulledLimit: SMALL_LIMIT,
       });
       yield* engine.subscribe(countersSubset);
-      for (let i = 0; i < 9; i++) yield* engine.mutate("counter/inc", { id: "c" });
+      yield* Effect.replicateEffect(engine.mutate("counter/inc", { id: "c" }), 9, {
+        discard: true,
+      });
 
       yield* Ref.set(silent, true);
       const failure = yield* Effect.flip(engine.push);
@@ -481,7 +497,9 @@ describe("a push larger than the pull-ahead threshold", () => {
         };
         const engine = yield* engineOver(parkedPulls, store, { unpulledLimit: SMALL_LIMIT });
         yield* engine.subscribe(countersSubset);
-        for (let i = 0; i < 9; i++) yield* engine.mutate("counter/inc", { id: "c" });
+        yield* Effect.replicateEffect(engine.mutate("counter/inc", { id: "c" }), 9, {
+          discard: true,
+        });
 
         const fiber = yield* Effect.forkScoped(engine.push);
         yield* Deferred.await(reached);
@@ -528,7 +546,9 @@ describe("a push larger than the pull-ahead threshold", () => {
           retry: { push: Schedule.recurs(0) },
         });
         yield* engine.subscribe(countersSubset);
-        for (let i = 0; i < SMALL_LIMIT; i++) yield* engine.mutate("counter/inc", { id: "c" });
+        yield* Effect.replicateEffect(engine.mutate("counter/inc", { id: "c" }), SMALL_LIMIT, {
+          discard: true,
+        });
 
         expect(Exit.isFailure(yield* Effect.exit(engine.push))).toBe(true);
         expect(Exit.isFailure(yield* Effect.exit(engine.push))).toBe(true);
@@ -581,7 +601,9 @@ describe("a push larger than the pull-ahead threshold", () => {
           unpulledLimit: SMALL_LIMIT,
         });
         yield* engine.subscribe(countersSubset);
-        for (let i = 0; i < SMALL_LIMIT; i++) yield* engine.mutate("counter/inc", { id: "c" });
+        yield* Effect.replicateEffect(engine.mutate("counter/inc", { id: "c" }), SMALL_LIMIT, {
+          discard: true,
+        });
 
         // Both pushes reserve a chunk of four, which fills the bound while they are in flight.
         const first = yield* Effect.forkScoped(engine.push);
@@ -633,14 +655,16 @@ describe("a push larger than the pull-ahead threshold", () => {
         };
         const engine = yield* engineOver(gated, store, { unpulledLimit: SMALL_LIMIT });
         yield* engine.subscribe(countersSubset);
-        for (let i = 0; i < 4 * SMALL_LIMIT; i++) yield* engine.mutate("counter/inc", { id: "c" });
+        yield* Effect.replicateEffect(engine.mutate("counter/inc", { id: "c" }), 4 * SMALL_LIMIT, {
+          discard: true,
+        });
 
         const pushes = yield* Effect.forEach(
           [1, 2, 3],
           () => Effect.forkScoped(Effect.exit(engine.push)),
           { concurrency: 1 }
         );
-        for (let i = 0; i < 20; i++) yield* Effect.yieldNow;
+        yield* Effect.replicateEffect(Effect.yieldNow, 20, { discard: true });
         yield* Deferred.succeed(gate, undefined);
         const exits = yield* Effect.forEach(pushes, Fiber.join, { concurrency: 1 });
 
@@ -668,9 +692,13 @@ describe("a push larger than the pull-ahead threshold", () => {
           unpulledLimit: 16,
         });
         yield* wide.subscribe(countersSubset);
-        for (let i = 0; i < 8; i++) yield* wide.mutate("counter/inc", { id: "c" });
+        yield* Effect.replicateEffect(wide.mutate("counter/inc", { id: "c" }), 8, {
+          discard: true,
+        });
         yield* wide.push;
-        for (let i = 0; i < 4; i++) yield* wide.mutate("counter/inc", { id: "c" });
+        yield* Effect.replicateEffect(wide.mutate("counter/inc", { id: "c" }), 4, {
+          discard: true,
+        });
         yield* wide.push;
         expect(yield* tailIds(store)).toHaveLength(12);
 

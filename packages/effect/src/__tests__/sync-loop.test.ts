@@ -125,17 +125,20 @@ const advanceUntil = <E>(
   condition: Effect.Effect<boolean, E>,
   step: Duration.Input,
   maxSteps = 200
-) =>
-  Effect.gen(function* () {
-    for (let attempt = 0; attempt < maxSteps; attempt++) {
+) => {
+  const attempt = (taken: number): Effect.Effect<undefined, E> =>
+    Effect.gen(function* () {
       if (yield* condition) return undefined;
+      if (taken === maxSteps) {
+        return yield* Effect.die(
+          new TestFailure({ message: `advanceUntil: condition never held in ${maxSteps} steps` })
+        );
+      }
       yield* TestClock.adjust(step);
-    }
-    if (yield* condition) return undefined;
-    return yield* Effect.die(
-      new TestFailure({ message: `advanceUntil: condition never held in ${maxSteps} steps` })
-    );
-  });
+      return yield* attempt(taken + 1);
+    });
+  return attempt(0);
+};
 
 // Wait for a condition without moving the clock. Each step is a zero-length
 // `TestClock.adjust`, which only yields to the forked fibres, so a leg that
@@ -190,8 +193,8 @@ describe("sync-loop scheduling", () => {
   // "before the loop's fibres have run" to "long after they settled". On the
   // TestClock the debounce only elapses when the case advances it, so a
   // missed trigger fails deterministically instead of after a live timeout.
-  for (const forked of [true, false]) {
-    for (let turns = 0; turns <= 8; turns++) {
+  Arr.forEach([true, false], (forked) => {
+    Arr.forEach(Arr.range(0, 8), (turns) => {
       it.effect(
         `auto-pushes a mutation journaled ${turns} turn${turns === 1 ? "" : "s"} after ${forked ? "forking" : "running"} runSync`,
         () =>
@@ -207,7 +210,7 @@ describe("sync-loop scheduling", () => {
             );
             if (forked) yield* Effect.forkScoped(engine.runSync.pipe(Effect.orDie));
             else yield* engine.runSync;
-            for (let turn = 0; turn < turns; turn++) yield* Effect.yieldNow;
+            yield* Effect.replicateEffect(Effect.yieldNow, turns, { discard: true });
 
             yield* engine.mutate("todo/set", { id: "1", title: "late", done: false });
             // Whichever leg takes it (the connect push, or the debounced push
@@ -219,8 +222,8 @@ describe("sync-loop scheduling", () => {
             expect(yield* Ref.get(push)).toBe(1);
           })
       );
-    }
-  }
+    });
+  });
 
   it.effect(
     "pins the default: an unconfigured connected client never auto-pushes a journaled mutation",
@@ -342,9 +345,7 @@ describe("sync-loop scheduling", () => {
       expect(before).toBeGreaterThanOrEqual(4);
       // Ten more intervals of virtual time: no further pulls after the scope
       // closed, because the fibre was interrupted.
-      for (let interval = 0; interval < 10; interval++) {
-        yield* TestClock.adjust(Duration.millis(20));
-      }
+      yield* Effect.replicateEffect(TestClock.adjust(Duration.millis(20)), 10, { discard: true });
       expect(yield* Ref.get(pull)).toBe(before);
     })
   );

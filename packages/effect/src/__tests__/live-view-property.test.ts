@@ -10,6 +10,7 @@
  * Uses a deterministic xorshift32 PRNG (not `Math.random`) so a failure is
  * reproducible from its seed alone.
  */
+import * as Arr from "effect/Array";
 import * as P from "effect/Predicate";
 import { describe, expect, it } from "vite-plus/test";
 import * as LiveView from "../LiveView.js";
@@ -103,12 +104,12 @@ describe("LiveView property: maintained order ≡ Subset.apply after every delta
       const deltas = randomDeltas(next, 200, 5);
       let view = LiveView.make(subset, []);
       let reference = new Map<string, LiveView.Row>();
-      for (let i = 0; i < deltas.length; i++) {
-        ({ view, reference } = step(view, reference, defined(deltas[i])));
+      Arr.forEach(deltas, (delta, i) => {
+        ({ view, reference } = step(view, reference, delta));
         const maintained = LiveView.result(view).map((r) => r.id);
         const expected = Subset.apply([...reference.values()], subset).map((r) => r.id);
-        expect(maintained, `seed ${seed}, step ${i} (${Json.show(deltas[i])})`).toEqual(expected);
-      }
+        expect(maintained, `seed ${seed}, step ${i} (${Json.show(delta)})`).toEqual(expected);
+      });
     });
   });
 });

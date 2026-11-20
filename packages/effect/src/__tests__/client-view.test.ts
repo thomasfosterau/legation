@@ -111,15 +111,17 @@ describe("ClientView.fromEngine / layer, live", () => {
   });
 });
 
-const eventually = <A, E>(read: Effect.Effect<A, E>, until: (value: A) => boolean) =>
-  Effect.gen(function* () {
-    for (let attempt = 0; attempt < 200; attempt++) {
+const eventually = <A, E>(read: Effect.Effect<A, E>, until: (value: A) => boolean) => {
+  const poll = (remaining: number): Effect.Effect<A, E> =>
+    Effect.gen(function* () {
       const value = yield* read;
       if (until(value)) return value;
       yield* Effect.callback<void>((resume) => {
         const timer = setTimeout(() => resume(Effect.void), 5);
         return Effect.sync(() => clearTimeout(timer));
       });
-    }
-    return yield* Effect.die(new TestFailure({ message: "eventually: condition never held" }));
-  });
+      if (remaining > 1) return yield* poll(remaining - 1);
+      return yield* Effect.die(new TestFailure({ message: "eventually: condition never held" }));
+    });
+  return poll(200);
+};

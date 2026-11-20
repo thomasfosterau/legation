@@ -260,13 +260,18 @@ describe("the atomic batch on the key-value store", () => {
       const recordStore = yield* openStore(recorded.kv);
 
       const history = [mutation("c", 1), mutation("c", 2), mutation("c", 3)];
-      for (const store of [batchStore, recordStore]) {
-        yield* Effect.forEach(history, (m) => store.appendMutation(m), {
-          concurrency: 1,
-          discard: true,
-        });
-        yield* store.putRow("counters", { id: "a", version: 1, value: { id: "a", n: 0 } });
-      }
+      yield* Effect.forEach(
+        [batchStore, recordStore],
+        (store) =>
+          Effect.gen(function* () {
+            yield* Effect.forEach(history, (m) => store.appendMutation(m), {
+              concurrency: 1,
+              discard: true,
+            });
+            yield* store.putRow("counters", { id: "a", version: 1, value: { id: "a", n: 0 } });
+          }),
+        { concurrency: 1, discard: true }
+      );
 
       // Acknowledge the first two, then release them with a pull; then release the last one with a
       // pull; then a pull that clears the rows.
@@ -426,7 +431,7 @@ describe("the atomic batch on the key-value store", () => {
       (store) => defined(store.commitAcknowledgement)([mutation("c", 2)], {}),
     ],
   ];
-  for (const [member, call] of batchMemberCalls) {
+  Arr.forEach(batchMemberCalls, ([member, call]) => {
     it.effect(
       `${member} finishes an outstanding release record first, or fails with nothing written`,
       () =>
@@ -447,7 +452,7 @@ describe("the atomic batch on the key-value store", () => {
           expect(data.has(RECORD)).toBe(true);
         })
     );
-  }
+  });
 
   it.effect("a store written through the batch reads back on the record path", () =>
     Effect.gen(function* () {
