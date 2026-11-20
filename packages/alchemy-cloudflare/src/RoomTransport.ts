@@ -102,17 +102,17 @@ export const make = (options: MakeOptions): Transport.ClientTransport => {
         const dial = () => {
           if (closed) return;
           socket = new WebSocket(socketUrl);
-          socket.onmessage = () => {
+          socket.addEventListener("message", () => {
             attempt = 0;
             Queue.offerUnsafe(queue, {});
-          };
-          socket.onclose = () => {
+          });
+          socket.addEventListener("close", () => {
             if (closed) return;
             attempt += 1;
             const delay = Math.min(1000 * attempt, options.maxReconnectDelayMillis ?? 10_000);
             setTimeout(dial, delay);
-          };
-          socket.onerror = () => socket?.close();
+          });
+          socket.addEventListener("error", () => socket?.close());
         };
         dial();
         return () => {

@@ -71,21 +71,21 @@ const openDatabase = (
         return;
       }
       const request = opened.success;
-      request.onupgradeneeded = () => {
+      request.addEventListener("upgradeneeded", () => {
         const db = request.result;
         if (!db.objectStoreNames.contains(ENTRIES_STORE)) {
           db.createObjectStore(ENTRIES_STORE, { keyPath: "key" });
         }
-      };
-      request.onsuccess = () => {
+      });
+      request.addEventListener("success", () => {
         const connection: Connection = { db: request.result, upgraded: false };
-        connection.db.onversionchange = () => {
+        connection.db.addEventListener("versionchange", () => {
           connection.upgraded = true;
           connection.db.close();
-        };
+        });
         resume(Effect.succeed(connection));
-      };
-      request.onerror = () => fail(request.error);
+      });
+      request.addEventListener("error", () => fail(request.error));
     });
   });
 
@@ -157,15 +157,15 @@ const runRequest = <A>(
       return;
     }
     const transaction = began.success;
-    transaction.oncomplete = () => finish(Effect.succeed(result as A));
-    transaction.onerror = () => fail(transaction.error);
-    transaction.onabort = () => fail(transaction.error);
+    transaction.addEventListener("complete", () => finish(Effect.succeed(result as A)));
+    transaction.addEventListener("error", () => fail(transaction.error));
+    transaction.addEventListener("abort", () => fail(transaction.error));
     const issued = Result.try(() => {
       const request = evaluate(transaction.objectStore(ENTRIES_STORE));
-      request.onsuccess = () => {
+      request.addEventListener("success", () => {
         result = request.result;
-      };
-      request.onerror = () => fail(request.error);
+      });
+      request.addEventListener("error", () => fail(request.error));
     });
     if (Result.isFailure(issued)) {
       fail(issued.failure);
@@ -305,9 +305,9 @@ const commitOps = (
     }
     const transaction = began.success;
     const abort = () => abortQuietly(transaction);
-    transaction.oncomplete = () => finish(Effect.void);
-    transaction.onerror = () => fail(transaction.error);
-    transaction.onabort = () => fail(transaction.error);
+    transaction.addEventListener("complete", () => finish(Effect.void));
+    transaction.addEventListener("error", () => fail(transaction.error));
+    transaction.addEventListener("abort", () => fail(transaction.error));
     const issued = Result.try(() => {
       const entries = transaction.objectStore(ENTRIES_STORE);
       // Every request is issued synchronously here: IndexedDB commits a transaction once control

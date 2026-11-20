@@ -142,39 +142,39 @@ const putRawRecord = (
 const createAtVersion2 = (database: string, withEntries: boolean) =>
   new Promise<void>((resolve, reject) => {
     const request = indexedDB.open(database, 2);
-    request.onupgradeneeded = () => {
+    request.addEventListener("upgradeneeded", () => {
       const db = request.result;
       db.createObjectStore(withEntries ? "entries" : "other", { keyPath: "key" });
-    };
-    request.onsuccess = () => {
+    });
+    request.addEventListener("success", () => {
       request.result.close();
       resolve();
-    };
-    request.onerror = () => reject(request.error);
+    });
+    request.addEventListener("error", () => reject(request.error));
   });
 
 /** The version `database` is at, read by opening it without one. */
 const versionOf = (database: string) =>
   new Promise<number>((resolve, reject) => {
     const request = indexedDB.open(database);
-    request.onsuccess = () => {
+    request.addEventListener("success", () => {
       const version = request.result.version;
       request.result.close();
       resolve(version);
-    };
-    request.onerror = () => reject(request.error);
+    });
+    request.addEventListener("error", () => reject(request.error));
   });
 
 /** Asks for `database` at `version`, resolving "upgraded", or "blocked" when an open connection holds it. */
 const upgradeTo = (database: string, version: number) =>
   new Promise<"upgraded" | "blocked">((resolve, reject) => {
     const request = indexedDB.open(database, version);
-    request.onblocked = () => resolve("blocked");
-    request.onsuccess = () => {
+    request.addEventListener("blocked", () => resolve("blocked"));
+    request.addEventListener("success", () => {
       request.result.close();
       resolve("upgraded");
-    };
-    request.onerror = () => reject(request.error);
+    });
+    request.addEventListener("error", () => reject(request.error));
   });
 
 describe("IndexedDbClientStore's atomic batch", () => {

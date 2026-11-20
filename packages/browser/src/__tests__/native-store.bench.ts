@@ -479,14 +479,14 @@ const toRecord = (row: Item): NativeRecord => ({
 
 const request = <A>(r: IDBRequest<A>): Promise<A> =>
   new Promise((resolve, reject) => {
-    r.onsuccess = () => resolve(r.result);
-    r.onerror = () => reject(r.error);
+    r.addEventListener("success", () => resolve(r.result));
+    r.addEventListener("error", () => reject(r.error));
   });
 const complete = (tx: IDBTransaction): Promise<void> =>
   new Promise((resolve, reject) => {
-    tx.oncomplete = () => resolve();
-    tx.onerror = () => reject(tx.error);
-    tx.onabort = () => reject(tx.error);
+    tx.addEventListener("complete", () => resolve());
+    tx.addEventListener("error", () => reject(tx.error));
+    tx.addEventListener("abort", () => reject(tx.error));
   });
 const walk = (
   source: IDBIndex | IDBObjectStore,
@@ -495,18 +495,18 @@ const walk = (
 ): Promise<void> =>
   new Promise((resolve, reject) => {
     const r = source.openCursor(range);
-    r.onsuccess = () => {
+    r.addEventListener("success", () => {
       const cursor = r.result;
       if (cursor === null) return resolve();
       visit(cursor.value as NativeRecord);
       cursor.continue();
-    };
-    r.onerror = () => reject(r.error);
+    });
+    r.addEventListener("error", () => reject(r.error));
   });
 
 const openNative = (factory: IDBFactory): Promise<IDBDatabase> => {
   const r = factory.open("native", 1);
-  r.onupgradeneeded = () => {
+  r.addEventListener("upgradeneeded", () => {
     const db = r.result;
     const items = db.createObjectStore(COLLECTION, { keyPath: "id" });
     items.createIndex("name", "k_name");
@@ -514,7 +514,7 @@ const openNative = (factory: IDBFactory): Promise<IDBDatabase> => {
     items.createIndex("note", "k_note");
     db.createObjectStore("journal", { keyPath: ["clientId", "mutationId"] });
     db.createObjectStore("meta", { keyPath: "key" });
-  };
+  });
   return request(r as IDBRequest<IDBDatabase>);
 };
 
