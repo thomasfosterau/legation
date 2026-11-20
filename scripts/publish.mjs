@@ -1,18 +1,15 @@
 /**
  * The release workflow's publish step (`pnpm run release`, after the build):
  * every public workspace package whose current version is not yet on npm is
- * packed by pnpm, checked, and published by npm.
+ * packed, checked, and published by pnpm.
  *
  * Why not `changeset publish` or `pnpm publish -r`: the tarball that is
  * uploaded must be the one `pack.mjs` checked (publint strict, attw, no exact
  * effect peer, no leftover `workspace:` / `catalog:` specifier, Svelte export
- * conditions packed), so this packs once and uploads that file. Why not bare
- * `npm publish` in the package directory: npm does not understand pnpm's
- * `catalog:` and `workspace:` specifiers and would ship them verbatim.
- * So `pnpm pack` rewrites the specifiers into the tarball and
- * `npm publish <tarball>` authenticates via OIDC trusted publishing (npm >=
- * 11.5.1). Nothing requests provenance: an explicit request fails from a
- * private repository, and npm attaches it by itself only where it is allowed.
+ * conditions packed), so this packs once and publishes that file with
+ * `pnpm publish <tarball>`, which authenticates via OIDC trusted publishing.
+ * Nothing requests provenance: under trusted publishing pnpm attaches it by
+ * itself to a public package from a public repository.
  *
  * `changesets/action` creates the git tags and GitHub releases, but only for
  * what this script reports: one `{"type":"git-tag",…}` line per published
@@ -33,12 +30,16 @@ import { PackError, packAndCheck, packages } from "./pack.mjs";
 
 const dryRun = process.argv.includes("--dry-run");
 
+// pnpm reports a missing version as PACKAGE_NOT_FOUND and a package that was
+// never published as FETCH_404.
+const notOnRegistry = /ERR_PNPM_(PACKAGE_NOT_FOUND|FETCH_404)/;
+
 const isPublished = (name, version) => {
   try {
-    execFileSync("npm", ["view", `${name}@${version}`, "version"], { stdio: "pipe" });
+    execFileSync("pnpm", ["view", `${name}@${version}`, "version"], { stdio: "pipe" });
     return true;
   } catch (error) {
-    if (String(error.stderr ?? "").includes("E404")) return false;
+    if (notOnRegistry.test(String(error.stderr ?? ""))) return false;
     throw error;
   }
 };
@@ -61,8 +62,13 @@ try {
       console.log(`would publish ${name}@${version} (${tarball})`);
       continue;
     }
-    // stdin is inherited so a maintainer's interactive npm 2FA prompt works on a manual run.
-    execFileSync("npm", ["publish", tarball, "--access", "public"], { stdio: "inherit" });
+    // stdin is inherited so a maintainer's interactive 2FA prompt works on a manual run.
+    // The tarball is already checked and the workflow runs on `trunk`, so git checks add nothing.
+    execFileSync(
+      "pnpm",
+      ["publish", tarball, "--access", "public", "--ignore-scripts", "--no-git-checks"],
+      { stdio: "inherit" }
+    );
     console.log(`publish  ${name}@${version}`);
     published += 1;
     if (output !== undefined && output !== "") {

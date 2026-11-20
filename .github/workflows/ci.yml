@@ -83,6 +83,7 @@ jobs:
         uses: voidzero-dev/setup-vp@v1.22.0
         with:
           version-file: pnpm-workspace.yaml
+          node-version: lts
           cache: false
           run-install: false
       # Fails when the image, a feature or `postCreateCommand` fails.
