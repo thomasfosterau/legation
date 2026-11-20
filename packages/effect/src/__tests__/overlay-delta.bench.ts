@@ -1,9 +1,8 @@
 /**
  * Delta-maintained overlay benchmark (acceptance-criteria scenario): a
  * burst of single-row mutates over a large collection with a handful of live
- * queries open. Before #109, every mutate invalidated the shared overlay
- * cache and forced a full journal replay (`ClientEngine.ts`'s old
- * `collectionsTouchedBy` + scoped-`Rebuild` path); now each mutate patches
+ * queries open. A mutate that invalidated the shared overlay cache would
+ * force a full journal replay (a scoped `Rebuild`); instead each mutate patches
  * the cached overlay in place via a tracked writer and publishes the exact
  * ops it performed, so cost is proportional to rows touched, not
  * collection size × journal length (see `overlay-delta-scaling.test.ts` for
@@ -78,7 +77,7 @@ const scenario = Effect.gen(function* () {
   );
   // The burst: each mutate now costs a `trackedWriter` run over the one row
   // it touches (patched onto the already-warm cache) instead of a full
-  // replay of the growing journal — this is the scenario #109 targets.
+  // replay of the growing journal — this is the scenario under measure.
   yield* Effect.forEach(
     Array.from({ length: MUTATIONS }, (_, i) => i),
     (i) => engine.mutate("todo/set", { id: `r${i}`, rank: i }),

@@ -258,8 +258,8 @@ export interface TableMapping {
    */
   readonly kinds?: Sql.Kinds;
   /**
-   * A row matching this predicate is a tombstone, not a live row (issue
-   * #204): `evaluate` drops it from the entries it returns, so it is simply
+   * A row matching this predicate is a tombstone, not a live row:
+   * `evaluate` drops it from the entries it returns, so it is simply
    * absent from the next CVR view and diffs as a delete, the same as a row
    * that vanished from the relation outright. Expressed in the engine's own
    * `Predicate` vocabulary (evaluated with `Predicate.test`) rather than a
@@ -325,7 +325,7 @@ export interface SqlBackendConfig {
   readonly dialect?: Sql.Dialect | undefined;
   /**
    * Per-client mutation-id ledger table. Defaults to `"sync_mutations"`. It must
-   * have the `rejections` column that #366 added: an older table fails the push
+   * have the `rejections` column: an older table fails the push
    * with a `BackendError` naming the migration (see the sql README).
    */
   readonly mutationsTable?: string;
@@ -1161,7 +1161,7 @@ export const make = (config: SqlBackendConfig): Backend.Backend => {
     ReadonlyArray<Backend.ChangeHint>
   >({
     handlers: config.handlers,
-    // Always the executor's transaction, as before #177: an executor without
+    // Always the executor's transaction: an executor without
     // transactions (D1) defines what its `transaction` does.
     atomically,
     // The database isolates a batch (or, on D1, nothing does): a commit never

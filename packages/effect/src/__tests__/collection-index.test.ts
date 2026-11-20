@@ -446,8 +446,7 @@ describe("ClientEngine + CollectionIndex", () => {
       evaluateSpy.mockClear();
 
       // A pending mutation on "items" itself still falls back to a full
-      // scan (the coarse pre-#133 behavior, unchanged for the touched
-      // collection): `evaluate` is NOT consulted.
+      // scan (the coarse behaviour, kept for the touched collection): `evaluate` is NOT consulted.
       yield* engine.mutate("item/set", { id: "i1", priority: 1, done: true });
       const whileItemsPending = yield* doneQuery();
       expect(evaluateSpy).not.toHaveBeenCalled();

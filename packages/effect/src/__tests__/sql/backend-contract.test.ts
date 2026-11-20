@@ -542,8 +542,8 @@ describe("paced compaction against SqlBackend", () => {
 // ─── PostgreSQL ──────────────────────────────────────────────────────────────
 
 /**
- * The same contract over `SqlBackend` on a real PostgreSQL server (guarantee 1,
- * #353): each `applyMutations` runs at SERIALIZABLE, so rule 11's peer and parked
+ * The same contract over `SqlBackend` on a real PostgreSQL server (guarantee 1):
+ * each `applyMutations` runs at SERIALIZABLE, so rule 11's peer and parked
  * calls run on two real transactions. Needs `DATABASE_URL` for a database this
  * test may reset. Its tables and ledger are its own, so it runs beside the
  * overlap suite (`sql-backend-postgres.test.ts`) on one database. Without the

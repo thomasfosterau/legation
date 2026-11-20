@@ -1,5 +1,5 @@
 /**
- * Test 4 of #221 — sign-out clears the replica. Viewer A signs in on a
+ * Sign-out clears the replica. Viewer A signs in on a
  * device and syncs; A signs out; viewer B signs in on the same device (the
  * same profile, the same durable store, the same client group) and cannot
  * read a single row only A was admitted to — not before B's first pull, not

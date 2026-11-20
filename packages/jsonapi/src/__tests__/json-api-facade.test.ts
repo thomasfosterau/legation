@@ -780,9 +780,9 @@ describe("JsonApiFacade", () => {
     )
   );
 
-  // The unit reproduction of #422 (the commerce browser test's first page): the
-  // products pin is pulled, then the variants pin is registered without a pull.
-  // Before #426 the first page was answered from the replica with empty linkage.
+  // The commerce browser test's first page, as a unit test: the products pin is
+  // pulled, then the variants pin is registered without a pull. Answering it
+  // from the replica then would give empty linkage.
   it.effect("does not answer a first page before its variants pin has been pulled", () =>
     Effect.scoped(
       Effect.gen(function* () {

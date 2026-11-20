@@ -57,8 +57,8 @@ const DDL: ReadonlyArray<string> = [
   )`,
 ];
 
-/** The schema before #366: the ledger has no `rejections` column. */
-const DDL_BEFORE_366: ReadonlyArray<string> = [
+/** The older schema: the ledger has no `rejections` column. */
+const DDL_WITHOUT_REJECTIONS: ReadonlyArray<string> = [
   DROP_TABLES,
   `CREATE TABLE todos (id TEXT PRIMARY KEY, title TEXT NOT NULL)`,
   `CREATE TABLE effects (seq INTEGER GENERATED ALWAYS AS IDENTITY PRIMARY KEY, id TEXT NOT NULL)`,
@@ -723,7 +723,7 @@ describePostgres("SqlBackend on PostgreSQL: rejection memory", () => {
             expect(error.message).toContain("Ledger without the `rejections` column");
             expect(yield* applicationsOf(sql, "1")).toBe(0);
           }),
-        DDL_BEFORE_366
+        DDL_WITHOUT_REJECTIONS
       ),
     60_000
   );

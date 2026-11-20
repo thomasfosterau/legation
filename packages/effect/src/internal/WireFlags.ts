@@ -13,8 +13,8 @@ import * as Schema from "effect/Schema";
 /**
  * `hydrated`: the answer to the `hydrate` host-request kind
  * (`Hydration.HydrateOutcome`), whose wire contract names it (ADR-0021
- * amendment §6). Wire schemas describe the wire literally (owner decision,
- * #562), so it is not renamed over the same wire with `Schema.encodeKeys`.
+ * amendment §6). Wire schemas describe the wire literally (an owner
+ * decision), so it is not renamed over the same wire with `Schema.encodeKeys`.
  */
 export const Hydrated = Schema.Struct({ hydrated: Schema.Boolean });
 

@@ -93,7 +93,7 @@ describe("IndexedDbClientStore", () => {
     })
   );
 
-  // #212: a browser replica is a replica on a *device*, so this is the
+  // A browser replica is a replica on a *device*, so this is the
   // shared-device case end to end — A's private rows written by one service
   // worker lifetime, B's lifetime opening the same IndexedDB database next.
   it.effect("an identity change across lifetimes does not serve the previous user's rows", () =>
@@ -159,7 +159,7 @@ const incrementCounter = <E>(
     yield* writer.put("counters", id, { id, n: (current?.n ?? 0) + 1 });
   });
 
-// #336: the acknowledged-but-unpulled tail is durable in IndexedDB, so a
+// The acknowledged-but-unpulled tail is durable in IndexedDB, so a
 // restart between a push acknowledgement and the next pull keeps the effect.
 describe("IndexedDbClientStore: the unpulled tail", () => {
   const counterMutators = Mutator.registry([

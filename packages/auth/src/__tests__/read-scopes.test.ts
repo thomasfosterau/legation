@@ -1,5 +1,5 @@
 /**
- * effect-auth read scopes as legation auth filters (#219 §2, §3): the
+ * effect-auth read scopes as legation auth filters: the
  * translation is its own tested function with typed failures and no throw;
  * field names are explicit and checked when the mapping is built; literals
  * are reconciled explicitly (instants as `Date#toISOString`); every failure

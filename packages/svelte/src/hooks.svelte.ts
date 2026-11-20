@@ -319,7 +319,7 @@ export const useConnection = <const R extends Query.Read>(
   // Svelte's effect tracking never sees, so changing it alone no longer
   // retriggers `useLiveStream`'s interrupt-and-resubscribe. `undefined` when
   // the current base has no engine-level retarget available (falls back to
-  // the pre-#133 behavior).
+  // a resubscribe).
   let retargetHandle:
     | { readonly baseKey: string; readonly retarget: (limit: number) => void }
     | undefined;

@@ -1,8 +1,8 @@
 /**
  * HttpCacheInvalidation
  *
- * Drives HTTP-cache tag invalidation from collection and row changes (issue
- * #49, extended per-row by #207): as synced changes land, evict the cached
+ * Drives HTTP-cache tag invalidation from collection and row changes: as
+ * synced changes land, evict the cached
  * responses tagged for the collections and individual rows that moved. This
  * is the concrete wiring behind the collection-driven invalidation core's
  * `HttpCache` module promises — the missing link between a pull arriving and

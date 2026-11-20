@@ -1,6 +1,6 @@
 /**
  * Coverage soundness as a property (ADR-0029 section 3): for
- * generated `(subscribed, requested)` window pairs over the #153 corpus
+ * generated `(subscribed, requested)` window pairs over the `FilterCorpus`
  * generators and random rows, whenever `Coverage.covers` says the
  * subscription covers the request, evaluating the request over only the
  * rows the subscription holds is exact — the same ids in the same order as

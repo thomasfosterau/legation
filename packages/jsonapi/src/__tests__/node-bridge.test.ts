@@ -367,7 +367,7 @@ describe("NodeBridge filterable set", () => {
   });
 });
 
-// A mutually-recursive pair, authorable since effect-jsonapi#118: one interface per
+// A mutually-recursive pair, authored with one interface per
 // resource in the cycle. The child's key is declared on its relationship, so the
 // bridge needs no `edges` option to discover the parent's inverse.
 const postAttributes = { title: Schema.String };
@@ -513,7 +513,7 @@ describe("sync metadata read off the resource", () => {
     expect(article.filterable["category_ref"]).toMatchObject({ operators: ["eq", "in"] });
   });
 
-  it("bridges a cyclic parent ⇄ child pair with no edges option (#220, effect-jsonapi#118)", () => {
+  it("bridges a cyclic parent ⇄ child pair with no edges option", () => {
     const definition = defined(cyclic.nodes.get("posts"));
     expect(definition.edges["comments"]).toEqual({
       kind: "many",

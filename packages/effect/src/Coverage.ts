@@ -361,8 +361,8 @@ export interface PulledWindow {
 }
 
 /**
- * What a registration's windows hold in the replica (ADR-0029 section 3,
- * #426): every window it holds, the root included, each with its own mark.
+ * What a registration's windows hold in the replica (ADR-0029 section 3):
+ * every window it holds, the root included, each with its own mark.
  * Marked per window by `PullMarks`, so a window added later does not move
  * the others, and a read is judged only by the windows its rows link to.
  */

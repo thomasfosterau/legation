@@ -353,12 +353,11 @@ describe("two rooms over one broker", () => {
         // Nothing pushes explicitly: the writer's sync loop carries each write
         // to room B. r-1 is journaled before the writer's forked `runSync` has
         // run, so its connect leg pushes it; r-2 comes after start-up, and only
-        // the push debounce can push it. Before #317 was fixed, the debounce
-        // subscribed to its trigger a few scheduler turns too late and r-2 was
-        // never pushed. That regression guard relies on the waits below
+        // the push debounce can push it. A debounce that subscribed to its
+        // trigger a few scheduler turns too late would never push r-2. That regression guard relies on the waits below
         // returning without a further clock advance before r-2 is written: a
         // `TestClock.adjust` in between gives the debounce time to subscribe
-        // and lets the pre-#317 engine pass.
+        // and would let that late debounce pass.
         const writer = yield* makeRoomClient(roomB.handler, "group-b");
         yield* writer.client.mutate("review/set", {
           id: "r-1",

@@ -18,7 +18,7 @@
  * `eq ne lt lte gt gte in nin isnull`. `NotIn` is checked as `nin` and
  * `IsNull` (negated or not) as `isnull`; so are their older wire forms,
  * `Not(In)` and a `Compare` against a `null` literal (ADR-0028 §5), which
- * a client built before #155 may still send.
+ * an older client may still send.
  */
 
 import * as Arr from "effect/Array";

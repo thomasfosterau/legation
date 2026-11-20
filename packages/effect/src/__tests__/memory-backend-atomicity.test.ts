@@ -339,7 +339,7 @@ describe("MemoryBackend concurrent applyMutations", () => {
   );
 });
 
-/** The #346 handlers, plus a mutator that rejects at once and a plain set. */
+/** The gated handlers, plus a mutator that rejects at once and a plain set. */
 const outcomeHandlers = (
   gates: Record<GateName, Gate>
 ): Record<string, MemoryBackend.BackendHandler> => ({

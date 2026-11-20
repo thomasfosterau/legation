@@ -16,9 +16,9 @@
  * bounded memory under a mutation storm without a background sweep.
  *
  * Backed by `HashMap` (structural sharing), not the native `Map`: `journal()`
- * folds one entry in on every mutation (ADR/#109's own hot path), so an
+ * folds one entry in on every mutation (the mutate hot path), so an
  * `O(size)` copy per fold would make a burst of N mutations cost `O(N^2)` —
- * exactly the class of regression #109 eliminated for the overlay. `HashMap`
+ * the same regression the overlay avoids by tracking deltas. `HashMap`
  * keeps every fold `O(log N)` regardless of how many mutations are pending.
  */
 

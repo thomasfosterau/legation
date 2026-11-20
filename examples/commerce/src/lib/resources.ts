@@ -11,7 +11,7 @@
  * (`tests/derived-rest.test.ts` bridges these resources through
  * `NodeBridge.registry` and compares): a resource's relationships are the
  * node's edges, its attributes the node's attributes, and its filterable /
- * sortable declarations (ADR-0028, #154 — `Filter.able` / `Sort.able`, or the
+ * sortable declarations (ADR-0028 — `Filter.able` / `Sort.able`, or the
  * `filter` / `sort` sugar of `Resource.attribute`) the node's filterable set.
  * The `list` / `get` endpoints are derived from the node graph
  * (`RestHandlers`), so what a resource declares is what its documents

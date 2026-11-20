@@ -2,10 +2,8 @@
  * ClientEngine.mutationStates: the keyed, reactive mutation-state map
  * — seeded from the journal at boot, folded from journal/ack/reject
  * regardless of whether a mutation went through `mutate`, `mutateEncoded`, or
- * `mutateWithAck` (the previous `mutationEvents` ack/reject events only fired
- * for `mutateWithAck`-registered mutations; #116 fixes that gap since the
- * state map must reflect every journaled mutation), and bounded under a
- * mutation storm.
+ * `mutateWithAck` (the state map must reflect every journaled mutation), and
+ * bounded under a mutation storm.
  */
 import { describe, expect, it } from "@effect/vitest";
 import * as Deferred from "effect/Deferred";
@@ -157,8 +155,8 @@ describe("ClientEngine.mutationStates", () => {
       expect(get(pending, 1)?.phase).toBe("pending");
       expect(get(pending, 1)?.mutator).toBe("todo/set");
 
-      // #116 fixes a gap where only `mutateWithAck`-registered mutations ever
-      // settled; a plain `mutate` must transition too.
+      // Not only `mutateWithAck`-registered mutations settle: a plain
+      // `mutate` must transition too.
       yield* engine.push;
       const settled = yield* snapshot(engine);
       expect(get(settled, 1)?.phase).toBe("acknowledged");

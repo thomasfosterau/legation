@@ -553,7 +553,7 @@ describeWrapped("KeyValue acknowledge leaves no index entry without a body", (it
         ).toBe(5);
       }
       expect(ranToCompletion).toBe(true);
-      // The sweep did exercise the window #294 is about.
+      // The sweep did exercise the orphaning window.
       expect(orphaned).toBeGreaterThan(0);
     })
   );

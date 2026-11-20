@@ -9,7 +9,7 @@
  * Correctness is preserved regardless: a HintSource only pokes, and poke is
  * never a correctness dependency (ADR-0009) — a missed or redundant hint only
  * changes when the next pull happens. A source that publishes value-less hints
- * (no `values`) is matched at the collection level by the #42 fan-out matcher,
+ * (no `values`) is matched at the collection level by the fan-out matcher,
  * which is sound: over-matching a poke costs an empty pull, under-matching would
  * delay convergence, so a hint that names only a collection pokes every group
  * subscribed to it.

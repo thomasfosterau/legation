@@ -15,7 +15,7 @@
  * ADR-0027 §1, on row identity, not `[value, ±multiplicity]` multiset entries.
  * Each engine is a small, pure, Effect-free function that emits the delta to
  * its result, never a refold of the whole input (a refolding version of this
- * tier was explicitly judged not worth shipping, #114 brief) — and being pure
+ * tier was judged not worth shipping) — and being pure
  * and stream-free is what lets a property test drive it against a naive
  * from-scratch recompute after every prefix of a randomized delta sequence.
  *
@@ -600,8 +600,8 @@ const windowSubset = (
 
 /**
  * `orderedWindow` — sort derived rows by an `orderBy` and keep the first
- * `limit`. Reuses `LiveView` (the `OrderedTree` + fractional-index machinery of
- * #112): a delta is folded in as O(log n) `put`/`del`s and the window resliced
+ * `limit`. Reuses `LiveView` (its `OrderedTree` + fractional-index
+ * machinery): a delta is folded in as O(log n) `put`/`del`s and the window resliced
  * without a re-sort, so a change outside the page costs the same as one inside
  * it. Order is `Subset.comparator` — the one ordering authority (ADR-0026), so
  * "no orderBy" still means a stable id-ascending order.

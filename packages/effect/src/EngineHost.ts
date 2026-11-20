@@ -35,8 +35,8 @@
  * the window only when the last registration lets go.
  *
  * A party with no `Client` at all — a page whose only JavaScript is a
- * `postMessage` — registers by URL (`SubscribeUrl`, ADR-0029 section 2,
- * #159): given `nodes` and `urls`, the host parses the URL, plans the read
+ * `postMessage` — registers by URL (`SubscribeUrl`, ADR-0029 section 2):
+ * given `nodes` and `urls`, the host parses the URL, plans the read
  * and registers its root and edge windows under the party's `mirrorId`,
  * exactly as `Subscribe` and `SubscribeRelated` would.
  *

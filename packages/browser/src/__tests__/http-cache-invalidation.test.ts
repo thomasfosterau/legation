@@ -1,5 +1,5 @@
 /**
- * HTTP-cache invalidation tests (extended per-row by #207): a collection
+ * HTTP-cache invalidation tests: a collection
  * or row change drives eviction of the responses tagged for it over the
  * Cache API store, `collectionChanges` projects an engine's events to the
  * touched collections/rows, and `tagsFor` builds a response's tags under the
@@ -123,7 +123,7 @@ describe("invalidateOnChanges", () => {
   );
 
   it.effect(
-    // This is the test that proves #207: a write to row A must not evict a
+    // Row-level invalidation: a write to row A must not evict a
     // cached response that only enumerates row B, even though both rows
     // live in the same collection.
     "a write to row A does not evict a cached response containing only row B",

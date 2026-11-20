@@ -10,7 +10,7 @@
  *
  * The push carries the library's marker (`PushPoke.payload`) and nothing else.
  * The listener recognises it and, by default, **registers a Background Sync**
- * (the flush path of #213), so the browser runs the sync when it judges the
+ * (the Background Sync flush path), so the browser runs the sync when it judges the
  * connection good: the kinder default on a metered connection. An app that
  * wants the replica current at once opts in to `action: "pull"`, which pulls
  * directly. Either way, the pull the poke prompts is where the data travels.

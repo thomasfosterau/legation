@@ -4,8 +4,8 @@
  * Client-local **derived live queries**: a set of bare, composable combinators
  * — `filter`, `map`/`select`, `join`, `groupBy`, `distinct`, `orderedWindow` —
  * over already-observed sources, each incrementally maintained from row deltas
- * by the pure {@link Incremental} engines. This is the expressiveness tier the
- * #114 brief describes: the relational shaping (arbitrary joins, DISTINCT,
+ * by the pure {@link Incremental} engines. This is the expressiveness tier above the
+ * wire language: the relational shaping (arbitrary joins, DISTINCT,
  * row-level group-by, computed/cross-field predicates) that the serializable
  * `Subset`/`Predicate` wire language deliberately does not carry, done here in
  * memory over what the client has already synced.
@@ -138,7 +138,7 @@ const samePage = <A>(a: ReadonlyArray<Row<A>>, b: ReadonlyArray<Row<A>>): boolea
  * {@link CHANGES} tag (built by `observed` over a `ClientView`), read the
  * delta `LiveView` already computed (`Incremental.deltaFromChanges`);
  * otherwise diff each page against the last snapshot
- * ({@link Incremental.diff}), the pre-#115 fallback for a plain page source.
+ * ({@link Incremental.diff}), the fallback for a plain page source.
  * Every combinator funnels through this so the tag needs checking once, not
  * once per combinator.
  */
@@ -352,7 +352,7 @@ const pagesFromChanges = <A, E>(
  * rows actually sync) and observe it, releasing the subscription when the scope
  * closes. A pipeline built from `observed` leaves holds all its sources'
  * subscriptions for its lifetime and drops them together on teardown — the
- * refcounted-lifetime discipline the #114 brief asks for, `Subscriptions`
+ * refcounted-lifetime discipline, with `Subscriptions`
  * doing the reference counting so a shared leaf is synced once.
  *
  * When `view` is a full {@link ClientView.ClientView} (not just the narrower

@@ -416,7 +416,7 @@ export const resourcesOf = (nodes: Node.NodeRegistry): ReadonlyMap<string, Resou
  * The root window's page parameters: `page[limit]` is the read's `first`
  * (a positive integer), `page[after]` its `after` cursor (a row id,
  * opaque on the wire), `page[offset]` its `offset` (a non-negative
- * integer, #209 — every audited app's pagination idiom). `page[offset]`
+ * integer — every audited app's pagination idiom). `page[offset]`
  * and `page[after]` are different pagination idioms; {@link parseParams}
  * rejects a request naming both, and {@link decodedOf} emits `limit` then
  * whichever of `after` / `offset` the read carries — the order the

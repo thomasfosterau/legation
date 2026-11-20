@@ -7,8 +7,8 @@
  * repo's dependency set, so this is a small hand-rolled seeded-PRNG generator:
  * deterministic (fixed seed) so a failure reproduces exactly, with the seed
  * and failing case printed on assertion failure. The last block runs the
- * same equivalence over the differential harness corpus (`FilterCorpus`,
- * #153) with NULL, absent and astral text on — ADR-0028's acceptance
+ * same equivalence over the differential harness corpus (`FilterCorpus`)
+ * with NULL, absent and astral text on — ADR-0028's acceptance
  * criterion for the index.
  */
 import * as Defined from "../Defined.js";

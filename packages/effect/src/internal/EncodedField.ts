@@ -18,7 +18,7 @@ import * as P from "effect/Predicate";
  *
  * Its type is `unknown` because the row is the encoded form, which no schema
  * has decoded: evaluation compares the field as a raw literal (ADR-0028).
- * Typing rows engine-wide is #696. `Predicate.fieldValue` re-exports it.
+ * Rows are not typed engine-wide. `Predicate.fieldValue` re-exports it.
  */
 export const fieldValue = (row: unknown, field: string): unknown =>
   P.isObjectOrArray(row) ? (row as Record<string, unknown>)[field] : undefined;

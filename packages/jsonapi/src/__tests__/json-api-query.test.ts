@@ -177,7 +177,7 @@ describe("JsonApiQuery.fromFilterAst / toFilterAst", () => {
   );
 
   /**
-   * The trap issue #218 names: `FilterCorpus.generatePredicate` (the corpus
+   * The trap: `FilterCorpus.generatePredicate` (the corpus
    * above) generates from `Predicate.Literal`'s closed wire-scalar union, so
    * it can never produce a `Date` and the round trip above never exercises
    * `literalOf`'s `Date → value.toISOString()` encode. A resource that
@@ -749,8 +749,8 @@ describe("JsonApiQuery.parseRead", () => {
     "reads a repeated shorthand filter key as the comma list it spells (effect-jsonapi >= 0.15)",
     () =>
       Effect.gen(function* () {
-        // effect-jsonapi#102 made every list-valued position accept the
-        // repeated-key spelling, so `filter[name]=a&filter[name]=b` is no longer
+        // effect-jsonapi accepts the repeated-key spelling in every
+        // list-valued position, so `filter[name]=a&filter[name]=b` is no longer
         // a 400: it decodes exactly as `filter[name]=a,b` does.
         const read = (url: string) => JsonApiQuery.parseRead(nodes, url);
         const repeated = yield* read("/products?filter[name]=a&filter[name]=b");

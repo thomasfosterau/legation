@@ -35,7 +35,7 @@
  *
  * Auto-push does not consult this status, by design. A push attempted
  * while `disconnected` goes out anyway: `navigator.onLine` is a hint and can be
- * wrong (in #315 it read `false` while the worker's WebSocket still worked),
+ * wrong (it has read `false` while the worker's WebSocket still worked),
  * and a failed push already backs off on its own retry policy. The reconnect
  * edge runs an immediate push and pull, so a journal that a failed push left
  * behind drains as soon as the navigator reports the return, without waiting on

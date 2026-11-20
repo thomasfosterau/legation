@@ -3,8 +3,8 @@
  *
  * The **mutation status URL** of a façade write (ADR-0030 §2):
  * `{prefix}/_legation/mutations/{mutationId}`, a `GET` the façade answers
- * from the engine's mutation-state map (`ClientEngine.mutationStates`,
- * #116) and never forwards — the server has no such resource. Where a
+ * from the engine's mutation-state map (`ClientEngine.mutationStates`)
+ * and never forwards — the server has no such resource. Where a
  * plain-fetch caller learns whether the intent its `202` receipt named was
  * applied, or permanently rejected and why.
  *

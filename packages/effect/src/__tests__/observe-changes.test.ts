@@ -5,8 +5,8 @@
  * machinery (`backpressure.test.ts`, `incremental.test.ts`) so these tests
  * exercise the same three paths at the delta level:
  *
- * - an empty-journal pull, or a plain local mutation (#109 tracks a
- *   mutator's local handler directly onto the cached overlay and publishes
+ * - an empty-journal pull, or a plain local mutation (the engine tracks
+ *   a mutator's local handler directly onto the cached overlay and publishes
  *   exactly what it did), applies a `Patch` → a diffed batch (enter/update/exit);
  * - a pull that races a still-pending mutation — or any other change the
  *   overlay could have shifted in a way that isn't tracked precisely (an
@@ -302,7 +302,7 @@ describe("ClientEngine.observeChanges", () => {
         yield* engine.mutate("todo/set", { id: "1", title: "optimistic" });
         yield* eventually(Ref.get(batches), (seen) => seen.length === 1);
 
-        // #109 tracks a mutator's local handler directly onto the cached
+        // The engine tracks a mutator's local handler directly onto the cached
         // overlay and publishes exactly what it did as a Patch, rather than
         // invalidating the cache and forcing a full Rebuild — so a plain
         // mutate is a precise enter, the same shape a confirmed-row Patch

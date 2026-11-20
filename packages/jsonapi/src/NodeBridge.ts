@@ -196,7 +196,7 @@ export interface FromResourceOptions {
   readonly hintKeys?: ReadonlyArray<string>;
   /**
    * Overrides and additions to the resource's own filterable declaration
-   * (ADR-0028, #154; see the module doc), by row field: the operators
+   * (ADR-0028; see the module doc), by row field: the operators
    * alone (the literal kind is derived from the attribute schema), or
    * `{ operators, kind }` where the schema cannot tell the kind (an
    * `instant` stored as text). An entry replaces the resource's declaration

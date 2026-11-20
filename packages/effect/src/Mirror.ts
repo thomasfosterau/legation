@@ -122,7 +122,7 @@ const hostPredatesFormMutations = new TransportError({
 });
 
 /**
- * What a host that predates #536 answers a form begin with: its engine's
+ * What a host that predates enhanced form submits answers a form begin with: its engine's
  * unknown-mutator message for {@link MirrorProtocol.FORM_MUTATION_MUTATOR}.
  * That host's code is fixed, so its wording is too.
  */
@@ -689,7 +689,7 @@ export const make = (options: MirrorOptions): Effect.Effect<Mirror, never, Scope
       Match.tag("MutateError", (message) => {
         // A host-side failure (never journaled): fail whichever caller
         // is waiting — `mutate` or `mutateWithAck`. Only a host that
-        // predates #536 answers a form begin this way, with exactly
+        // predates enhanced form submits answers a form begin this way, with exactly
         // this message; it carries no mirror id, but every tab whose
         // begin it answers is talking to the same old host.
         if (message.message === unknownFormMutator) {
