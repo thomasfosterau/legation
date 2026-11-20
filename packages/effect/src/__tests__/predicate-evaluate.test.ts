@@ -206,11 +206,11 @@ describe("Predicate.evaluate (ADR-0028)", () => {
         Predicate.not(Predicate.isIn("d", [null]))
       );
       const encoded = Schema.encodeUnknownSync(Predicate.PredicateSchema)(predicate);
-      const decoded = Schema.decodeUnknownSync(Predicate.PredicateSchema)(encoded);
+      const decoded = Schema.decodeSync(Predicate.PredicateSchema)(encoded);
       expect(decoded).toEqual(predicate);
       // An encoding from before the two nodes existed still decodes.
       expect(
-        Schema.decodeUnknownSync(Predicate.PredicateSchema)({
+        Schema.decodeSync(Predicate.PredicateSchema)({
           _tag: "Compare",
           op: "eq",
           field: "s",

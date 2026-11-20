@@ -48,7 +48,7 @@ const Review = Node.make("reviews", {
 
 describe("Node model", () => {
   it("derives the row schema: id + attributes + one-edge key fields", () => {
-    const decoded = Schema.decodeUnknownSync(Review.row)({
+    const decoded = Schema.decodeSync(Review.row)({
       id: "r-1",
       body: "great",
       createdAt: "2026-07-03",
@@ -65,7 +65,7 @@ describe("Node model", () => {
     const productId: typeof Product.Id.Type = Product.Id.make("p-1");
     expect(productId).toBe("p-1");
     // One-edge key fields carry the TARGET type's brand.
-    const row = Schema.decodeUnknownSync(Review.row)({
+    const row = Schema.decodeSync(Review.row)({
       id: "r-1",
       body: "b",
       createdAt: "t",
@@ -76,7 +76,7 @@ describe("Node model", () => {
   });
 
   it("keeps AnyNode's Id a string-encoded branded id schema", () => {
-    const decoded: string = Schema.decodeUnknownSync(Product.Id)("p-1");
+    const decoded: string = Schema.decodeSync(Product.Id)("p-1");
     expectTypeOf<Node.AnyNode["Id"]["Type"]>().toExtend<string>();
     expectTypeOf<Node.AnyNode["Id"]["Encoded"]>().toEqualTypeOf<string>();
     expectTypeOf(Product).toExtend<Node.AnyNode>();
@@ -159,7 +159,7 @@ describe("Node identity attribute", () => {
 
   it("drops the synthetic id from the row: the declared attribute carries it", () => {
     expect(Object.keys(Author.row.fields)).toEqual(["username", "bio"]);
-    const decoded = Schema.decodeUnknownSync(Post.row)({
+    const decoded = Schema.decodeSync(Post.row)({
       slug: "hello-world",
       title: "Hello",
       authorName: "ada",

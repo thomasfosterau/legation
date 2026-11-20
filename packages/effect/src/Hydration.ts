@@ -237,7 +237,7 @@ export const dehydrate = (store: ClientStore): Effect.Effect<Snapshot, StoreErro
  */
 export const hydrate = (store: ClientStore, snapshot: Snapshot): Effect.Effect<void, StoreError> =>
   Effect.gen(function* () {
-    const decoded = yield* Schema.decodeUnknownEffect(Snapshot)(snapshot).pipe(
+    const decoded = yield* Schema.decodeEffect(Snapshot)(snapshot).pipe(
       Effect.mapError(storeError("Invalid snapshot"))
     );
     yield* Effect.gen(function* () {

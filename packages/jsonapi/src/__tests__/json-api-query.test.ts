@@ -1090,7 +1090,7 @@ describe("JsonApiQuery.resourcesOf", () => {
 describe("JsonApiQuery.querySchema", () => {
   it("is the codec parseParams decodes with: the key-field spelling, sort by id, the page window", () => {
     const schema = JsonApiQuery.querySchema(nodes, "products");
-    const decoded = Schema.decodeUnknownSync(schema)({
+    const decoded = Schema.decodeSync(schema)({
       "filter[categoryId]": "c-audio",
       sort: "id",
       "page[limit]": "4",
@@ -1101,8 +1101,8 @@ describe("JsonApiQuery.querySchema", () => {
     expect(decoded.page).toEqual({ limit: 4 });
     expect(decoded.include).toEqual(["variants"]);
     // The relationship-name spelling is the resource grammar's, not the graph's.
-    expect(() => Schema.decodeUnknownSync(schema)({ "filter[category]": "c-audio" })).toThrow();
-    expect(() => Schema.decodeUnknownSync(schema)({ sort: "description" })).toThrow();
+    expect(() => Schema.decodeSync(schema)({ "filter[category]": "c-audio" })).toThrow();
+    expect(() => Schema.decodeSync(schema)({ sort: "description" })).toThrow();
     expect(JsonApiQuery.querySchema(nodes, "products")).toBe(schema);
   });
 
@@ -1114,7 +1114,7 @@ describe("JsonApiQuery.querySchema", () => {
 describe("JsonApiQuery.singleRowSchema", () => {
   it("takes include and fields[…] as the graph declares them, and nothing else", () => {
     const schema = JsonApiQuery.singleRowSchema(nodes, "products");
-    const decoded = Schema.decodeUnknownSync(schema)({
+    const decoded = Schema.decodeSync(schema)({
       include: "variants,category",
       "fields[products]": "name",
     });
@@ -1122,15 +1122,15 @@ describe("JsonApiQuery.singleRowSchema", () => {
       include: ["variants", "category"],
       fields: { products: ["name"] },
     });
-    expect(() => Schema.decodeUnknownSync(schema)({ include: "nope" })).toThrow();
-    expect(() => Schema.decodeUnknownSync(schema)({ include: "variants.product" })).toThrow();
-    expect(() => Schema.decodeUnknownSync(schema)({ "fields[products]": "nope" })).toThrow();
+    expect(() => Schema.decodeSync(schema)({ include: "nope" })).toThrow();
+    expect(() => Schema.decodeSync(schema)({ include: "variants.product" })).toThrow();
+    expect(() => Schema.decodeSync(schema)({ "fields[products]": "nope" })).toThrow();
     // Memoised per registry and collection.
     expect(JsonApiQuery.singleRowSchema(nodes, "products")).toBe(schema);
     // A node without edges declares no `include` at all: the key is not part
     // of the contract (the handler's own parse then rejects it).
     expect(
-      Schema.decodeUnknownSync(JsonApiQuery.singleRowSchema(nodes, "categories"))({
+      Schema.decodeSync(JsonApiQuery.singleRowSchema(nodes, "categories"))({
         include: "x",
       })
     ).toEqual({});
