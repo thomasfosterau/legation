@@ -38,7 +38,7 @@ catalog:
   # and tsgolint 7.0.2005–7.0.2007. Check the `components` table in
   # node_modules/@effect/tsgo/dist/effect-tsgo.cjs before bumping it,
   # `@typescript/native` or `vite-plus`.
-  "@effect/tsgo": 0.69.0
+  "@effect/tsgo": 0.70.0
   "@electric-sql/pglite": ^0.5.17
   "@enfect/oxlint": 0.10.0
   "@sveltejs/adapter-node": ^6.0.5
@@ -51,7 +51,7 @@ catalog:
   "@types/better-sqlite3": ^9.6.0
   "@types/node": ^26.6.6
   # Must equal the vitest vite-plus bundles.
-  "@vitest/coverage-v8": 5.1.0
+  "@vitest/coverage-v8": 5.1.1
   better-auth: ^1.7.26
   better-sqlite3: ^13.2.0
   fake-indexeddb: ^6.2.8
@@ -68,9 +68,9 @@ catalog:
   typescript: "npm:@typescript/typescript6@6.0.2"
   "@typescript/native": "npm:typescript@7.0.2"
   # vite-plus pins oxlint, oxfmt and vitest; `vite` is its aliased core.
-  vite-plus: 1.6.0
+  vite-plus: 1.7.0
   vite: npm:@voidzero-dev/vite-plus-core@1.6.0
-  vitest: 5.1.0
+  vitest: 5.1.1
 
 # The published peer ranges (`pnpm pack` writes them into the tarball). Never
 # exact. `effect` is `^4.0.0` unless a package's own dependency requires more;
