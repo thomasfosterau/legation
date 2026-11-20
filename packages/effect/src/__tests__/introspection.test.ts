@@ -42,11 +42,11 @@ const mutators = Mutator.registry([
   },
 ]);
 
-const backendHandlers: Record<string, MemoryBackend.BackendHandler> = {
+const backendHandlers = {
   "todo/set": (args, writer) => Effect.asVoid(writer.put("todos", (args as Todo).id, args)),
-};
+} satisfies Record<string, MemoryBackend.BackendHandler>;
 
-const makeServerWithIntrospection = Effect.gen(function* () {
+const makeServerWithIntrospection = Effect.fn("makeServerWithIntrospection")(function* () {
   const backend = yield* MemoryBackend.make(backendHandlers);
   const cvrStore = yield* Cvr.makeMemoryStore;
   const bus = yield* InvalidationBus.makeInProcess;
@@ -62,7 +62,7 @@ const makeServerWithIntrospection = Effect.gen(function* () {
 });
 
 const makeServer: Effect.Effect<ServerHandler, never, Scope.Scope> =
-  makeServerWithIntrospection.pipe(Effect.map((built) => built.handler));
+  makeServerWithIntrospection().pipe(Effect.map((built) => built.handler));
 
 const makeClient = (handler: ServerHandler, name: string) =>
   Effect.gen(function* () {
@@ -160,7 +160,7 @@ describe("EngineIntrospection", () => {
 describe("ServerIntrospection", () => {
   it.effect("lists active groups, their subsets, and CVR sizes after a pull", () =>
     Effect.gen(function* () {
-      const { handler, introspection } = yield* makeServerWithIntrospection;
+      const { handler, introspection } = yield* makeServerWithIntrospection();
       const { engine } = yield* makeClient(handler, "a");
 
       yield* engine.subscribe(allTodos);

@@ -56,6 +56,7 @@ import * as HttpServerResponse from "effect/http/HttpServerResponse";
 import * as Option from "effect/Option";
 import * as Ref from "effect/Ref";
 import * as Scope from "effect/Scope";
+import * as Schema from "effect/Schema";
 import {
   Authorization,
   Backend,
@@ -195,6 +196,8 @@ const onRoomClock = <A, E, R>(
 /** What a protocol request can fail with: an undecodable body, or the handler's own errors. */
 type AnswerError = ProtocolError | TransportError | VersionNotSupportedError;
 
+const encodeJson = Schema.encodeSync(Schema.fromJsonString(Schema.Unknown));
+
 /** A failed protocol request, answered as a 400 carrying the error's message. */
 const badRequest = (error: AnswerError) =>
   Effect.succeed(HttpServerResponse.jsonUnsafe({ error: error.message }, { status: 400 }));
@@ -251,7 +254,7 @@ export const make = <R>(
 
           /** Every poke socket gets one contentless frame. */
           const nudgeSockets = Effect.flatMap(state.getWebSockets(), (sockets) =>
-            Effect.forEach(sockets, (socket) => socket.send(JSON.stringify(pokeFrame)), {
+            Effect.forEach(sockets, (socket) => socket.send(encodeJson(pokeFrame)), {
               concurrency: "unbounded",
               discard: true,
             })

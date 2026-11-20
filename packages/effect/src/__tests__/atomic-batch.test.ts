@@ -7,6 +7,7 @@
  * would. Without the seam the release-record path is unchanged
  * (unpulled-tail.test.ts).
  */
+import * as P from "effect/Predicate";
 import { describe, expect, it } from "@effect/vitest";
 import * as Arr from "effect/Array";
 import * as Clock from "effect/Clock";
@@ -30,6 +31,7 @@ import * as SyncServer from "../SyncServer.js";
 import { ClientTransport, makeInMemory } from "../Transport.js";
 import { defined } from "./defined.js";
 import { TestFailure } from "./test-failure.js";
+import * as Json from "../internal/Json.js";
 
 // ─── Harness ─────────────────────────────────────────────────────────────────
 
@@ -108,7 +110,7 @@ const batchOver = (
         const commit = Effect.sync(() => {
           Arr.forEach(ops, (op) => {
             writes.push(op.key);
-            if (op._tag === "Set") data.set(op.key, op.value);
+            if (P.isTagged(op, "Set")) data.set(op.key, op.value);
             else data.delete(op.key);
           });
           state.afterCommit?.();
@@ -234,7 +236,7 @@ describe("the atomic batch on the key-value store", () => {
       expect(writes).toEqual(keys);
       // The cookie and the row values are what the pull carried, the last write of `a` winning.
       expect(data.get("legation/cookie")).toBe("cookie-1");
-      expect(JSON.parse(data.get(ROW_A) ?? "null")).toEqual({
+      expect(Json.parse(data.get(ROW_A) ?? "null")).toEqual({
         id: "a",
         version: 1,
         value: { id: "a", n: 3 },
@@ -402,7 +404,7 @@ describe("the atomic batch on the key-value store", () => {
         // A later row write finishes whatever is still outstanding.
         yield* store.putRow("counters", { id: "c", version: 1, value: { id: "c", n: 0 } });
 
-        expect(JSON.parse(data.get(ROW_A) ?? "null")).toMatchObject({ value: { n: 2 } });
+        expect(Json.parse(data.get(ROW_A) ?? "null")).toMatchObject({ value: { n: 2 } });
         expect(data.get("legation/cookie")).toBe("k2");
         expect(data.has(RECORD)).toBe(false);
       })
@@ -664,9 +666,9 @@ const counterMutators = Mutator.registry([
   },
 ]);
 
-const backendHandlers: Record<string, MemoryBackend.BackendHandler> = {
+const backendHandlers = {
   "counter/inc": (args, writer) => incrementCounter(writer, (args as { readonly id: string }).id),
-};
+} satisfies Record<string, MemoryBackend.BackendHandler>;
 
 const authPolicy = Authorization.policy({ counters: Authorization.allowAll });
 const countersSubset = Subset.make({ collection: "counters" });

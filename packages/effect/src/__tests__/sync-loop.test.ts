@@ -49,16 +49,20 @@ const setTodo = Mutator.registry([
   },
 ]);
 
-const backendHandlers: Record<string, MemoryBackend.BackendHandler> = {
+const backendHandlers = {
   "todo/set": (args, writer) => {
     const todo = args as Todo;
     return Effect.asVoid(writer.put("todos", todo.id, todo));
   },
-};
+} satisfies Record<string, MemoryBackend.BackendHandler>;
 
 const authPolicy = Authorization.policy({ todos: Authorization.allowAll });
 
-const makeServer: Effect.Effect<ServerHandler, never, Scope.Scope> = Effect.gen(function* () {
+const makeServer = Effect.fn("makeServer")(function* (): Effect.fn.Return<
+  ServerHandler,
+  never,
+  Scope.Scope
+> {
   const backend = yield* MemoryBackend.make(backendHandlers);
   const cvrStore = yield* Cvr.makeMemoryStore;
   const bus = yield* InvalidationBus.makeInProcess;
@@ -149,7 +153,7 @@ const atLeast = (counter: Ref.Ref<number>, n: number) =>
 describe("sync-loop scheduling", () => {
   it.effect("auto-pushes a mutation with no app-level push call", () =>
     Effect.gen(function* () {
-      const handler = yield* makeServer;
+      const handler = yield* makeServer();
       const push = yield* Ref.make(0);
       const pull = yield* Ref.make(0);
       const { engine, store } = yield* makeClient(
@@ -192,7 +196,7 @@ describe("sync-loop scheduling", () => {
         `auto-pushes a mutation journaled ${turns} turn${turns === 1 ? "" : "s"} after ${forked ? "forking" : "running"} runSync`,
         () =>
           Effect.gen(function* () {
-            const handler = yield* makeServer;
+            const handler = yield* makeServer();
             const push = yield* Ref.make(0);
             const pull = yield* Ref.make(0);
             const { engine, store } = yield* makeClient(
@@ -222,7 +226,7 @@ describe("sync-loop scheduling", () => {
     "pins the default: an unconfigured connected client never auto-pushes a journaled mutation",
     () =>
       Effect.gen(function* () {
-        const handler = yield* makeServer;
+        const handler = yield* makeServer();
         const push = yield* Ref.make(0);
         const pull = yield* Ref.make(0);
         // No `syncLoop` options at all — the documented default.
@@ -248,7 +252,7 @@ describe("sync-loop scheduling", () => {
 
   it.effect("coalesces a burst of mutations into a single push", () =>
     Effect.gen(function* () {
-      const handler = yield* makeServer;
+      const handler = yield* makeServer();
       const push = yield* Ref.make(0);
       const pull = yield* Ref.make(0);
       const { engine, store } = yield* makeClient(
@@ -279,7 +283,7 @@ describe("sync-loop scheduling", () => {
 
   it.effect("converges on remote changes over interval pull alone (no pokes)", () =>
     Effect.gen(function* () {
-      const handler = yield* makeServer;
+      const handler = yield* makeServer();
       const push = yield* Ref.make(0);
       const pull = yield* Ref.make(0);
       const a = yield* makeClient(handler, "a");
@@ -313,7 +317,7 @@ describe("sync-loop scheduling", () => {
 
   it.effect("interrupts scheduling fibres when the engine scope closes", () =>
     Effect.gen(function* () {
-      const handler = yield* makeServer;
+      const handler = yield* makeServer();
       const push = yield* Ref.make(0);
       const pull = yield* Ref.make(0);
       const scope = yield* Scope.make();

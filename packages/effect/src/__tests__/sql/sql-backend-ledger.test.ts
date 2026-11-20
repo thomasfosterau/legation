@@ -409,7 +409,7 @@ describe("SqlBackend ledger on SQLite", () => {
  * A rejecting handler: it writes, then fails permanently with a reason that
  * names its mutation, so a test can tell which rejection a response reports.
  */
-const rejectingHandlers: Record<string, SqlBackend.SqlHandler> = {
+const rejectingHandlers = {
   "todo/set": (raw, tx) => applyWrite(tx, raw as Args),
   "todo/reject": (raw, tx) => {
     const args = raw as Args;
@@ -417,7 +417,7 @@ const rejectingHandlers: Record<string, SqlBackend.SqlHandler> = {
       Effect.andThen(Effect.fail(new MutationRejected({ reason: `forbidden ${args.id}` })))
     );
   },
-};
+} satisfies Record<string, SqlBackend.SqlHandler>;
 
 const rejected = (mutationId: number) => ({
   clientId: CLIENT,

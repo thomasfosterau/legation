@@ -18,6 +18,7 @@ import * as FilterCorpus from "../FilterCorpus.js";
 import * as Predicate from "../Predicate.js";
 import { defined } from "./defined.js";
 import { TestFailure } from "./test-failure.js";
+import * as Json from "../internal/Json.js";
 
 const kindOf = (literal: Predicate.Literal, column: FilterCorpus.Column): boolean =>
   Match.value(column.kind).pipe(
@@ -71,7 +72,7 @@ const disagrees = (candidate: FilterCorpus.Case) =>
   Effect.sync(() => {
     const hasNe =
       Arr.isReadonlyArrayNonEmpty(leaves(candidate.predicate)) &&
-      JSON.stringify(candidate.predicate).includes('"op":"ne"');
+      Json.show(candidate.predicate).includes('"op":"ne"');
     return hasNe && candidate.rows.some((row) => row.value.s === null);
   });
 

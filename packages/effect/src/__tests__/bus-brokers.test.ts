@@ -22,6 +22,7 @@ import * as BusBrokers from "../BusBrokers.js";
 import * as InvalidationBus from "../InvalidationBus.js";
 import { defined } from "./defined.js";
 import { TestFailure } from "./test-failure.js";
+import * as Json from "../internal/Json.js";
 
 const hint: ChangeHint = { collection: "todos", ids: ["1"] };
 
@@ -63,8 +64,8 @@ describe("makeWebSocketBroker (Durable Object relay pattern)", () => {
       const subscription = yield* busB.subscribe;
 
       raw.send("not json at all");
-      raw.send(JSON.stringify({ not: "an array of hints" }));
-      raw.send(JSON.stringify([hint]));
+      raw.send(Json.stringify({ not: "an array of hints" }));
+      raw.send(Json.stringify([hint]));
       expect(yield* subscription.take).toEqual([hint]);
     }).pipe(Effect.scoped)
   );
@@ -98,7 +99,7 @@ const seqOf = (id: string) => Number(id.split("-")[0]);
 const subscribe = () =>
   Effect.die(new TestFailure({ message: "the Streams broker never subscribes" }));
 
-const makeFakeRedis = Effect.gen(function* () {
+const makeFakeRedis = Effect.fn("makeFakeRedis")(function* () {
   const entries = yield* Ref.make<Array<{ readonly id: string; readonly payload: string }>>([]);
   const signal = yield* PubSub.unbounded<void>();
   const events = yield* Queue.unbounded<string>();
@@ -229,7 +230,7 @@ const makeFakeRedis = Effect.gen(function* () {
 describe("makeRedisBroker (Redis Streams)", () => {
   it.effect("carries a hint between two buses over a shared stream", () =>
     Effect.gen(function* () {
-      const { redis, readerParked } = yield* makeFakeRedis;
+      const { redis, readerParked } = yield* makeFakeRedis();
       const make = BusBrokers.makeRedisBroker({ stream: "test:hints", block: "200 millis" }).pipe(
         Effect.provideService(Redis.Redis, redis)
       );
@@ -249,7 +250,7 @@ describe("makeRedisBroker (Redis Streams)", () => {
   // returns, so a publish made right after it is never missed.
   it.effect("subscribe then publish at once is delivered", () =>
     Effect.gen(function* () {
-      const { redis } = yield* makeFakeRedis;
+      const { redis } = yield* makeFakeRedis();
       const make = BusBrokers.makeRedisBroker({ stream: "test:hints", block: "200 millis" }).pipe(
         Effect.provideService(Redis.Redis, redis)
       );
@@ -267,7 +268,7 @@ describe("makeRedisBroker (Redis Streams)", () => {
   // XREAD fall before the new "$", so this subscriber never reads it.
   it.effect("a publish between a BLOCK timeout and the re-issued XREAD is delivered", () =>
     Effect.gen(function* () {
-      const fake = yield* makeFakeRedis;
+      const fake = yield* makeFakeRedis();
       const make = BusBrokers.makeRedisBroker({ stream: "test:hints", block: "200 millis" }).pipe(
         Effect.provideService(Redis.Redis, fake.redis)
       );
@@ -294,7 +295,7 @@ describe("makeRedisBroker (Redis Streams)", () => {
   // Once Redis recovers, the reader catches up and a publish reaches it.
   it.effect("subscribe returns while Redis is down, and delivers once Redis recovers", () =>
     Effect.gen(function* () {
-      const fake = yield* makeFakeRedis;
+      const fake = yield* makeFakeRedis();
       yield* fake.setDown(true);
       const make = BusBrokers.makeRedisBroker({ stream: "test:hints", block: "200 millis" }).pipe(
         Effect.provideService(Redis.Redis, fake.redis)
@@ -320,7 +321,7 @@ describe("makeRedisBroker (Redis Streams)", () => {
   // `subscribe` returns after 500 ms rather than waiting on Redis.
   it.effect("subscribe returns at its bound while Redis hangs", () =>
     Effect.gen(function* () {
-      const fake = yield* makeFakeRedis;
+      const fake = yield* makeFakeRedis();
       yield* fake.setHung(true);
       const make = BusBrokers.makeRedisBroker({ stream: "test:hints", block: "200 millis" }).pipe(
         Effect.provideService(Redis.Redis, fake.redis)
@@ -336,7 +337,7 @@ describe("makeRedisBroker (Redis Streams)", () => {
   // refusal is timestamped on the TestClock, so the gaps are exact.
   it.effect("reader back-off doubles from 200 ms to a 5 s cap", () =>
     Effect.gen(function* () {
-      const fake = yield* makeFakeRedis;
+      const fake = yield* makeFakeRedis();
       yield* fake.setDown(true);
       const make = BusBrokers.makeRedisBroker({ stream: "test:hints", block: "200 millis" }).pipe(
         Effect.provideService(Redis.Redis, fake.redis)
@@ -371,7 +372,7 @@ describe("makeRedisBroker (Redis Streams)", () => {
       lines.push({ level: options.logLevel, message: String(options.message) });
     });
     return Effect.gen(function* () {
-      const fake = yield* makeFakeRedis;
+      const fake = yield* makeFakeRedis();
       yield* fake.setDown(true);
       const make = BusBrokers.makeRedisBroker({ stream: "test:hints", block: "200 millis" }).pipe(
         Effect.provideService(Redis.Redis, fake.redis)
@@ -409,7 +410,7 @@ describe("makeRedisBroker (Redis Streams)", () => {
       lines.push({ level: options.logLevel, message: String(options.message) });
     });
     return Effect.gen(function* () {
-      const fake = yield* makeFakeRedis;
+      const fake = yield* makeFakeRedis();
       yield* fake.setDown(true);
       const make = BusBrokers.makeRedisBroker({ stream: "test:hints", block: "200 millis" }).pipe(
         Effect.provideService(Redis.Redis, fake.redis)
@@ -489,7 +490,7 @@ describe("makeRedisBroker (Redis Streams)", () => {
         lines.push({ level: options.logLevel, message: String(options.message) });
       });
       return Effect.gen(function* () {
-        const fake = yield* makeFakeRedis;
+        const fake = yield* makeFakeRedis();
         yield* fake.setHung(true);
         const make = BusBrokers.makeRedisBroker({ stream: "test:hints", block: "200 millis" }).pipe(
           Effect.provideService(Redis.Redis, fake.redis)
@@ -536,7 +537,7 @@ describe("makeRedisBroker (Redis Streams)", () => {
       lines.push({ level: options.logLevel, message: String(options.message) });
     });
     return Effect.gen(function* () {
-      const fake = yield* makeFakeRedis;
+      const fake = yield* makeFakeRedis();
       yield* fake.setXreadHung(true);
       const make = BusBrokers.makeRedisBroker({ stream: "test:hints", block: "200 millis" }).pipe(
         Effect.provideService(Redis.Redis, fake.redis)
@@ -587,7 +588,7 @@ describe("makeRedisBroker (Redis Streams)", () => {
     "a publish during a hung XREAD is delivered once the read is abandoned and retried",
     () =>
       Effect.gen(function* () {
-        const fake = yield* makeFakeRedis;
+        const fake = yield* makeFakeRedis();
         yield* fake.setXreadHung(true);
         const make = BusBrokers.makeRedisBroker({ stream: "test:hints", block: "200 millis" }).pipe(
           Effect.provideService(Redis.Redis, fake.redis)
@@ -616,7 +617,7 @@ describe("makeRedisBroker (Redis Streams)", () => {
       lines.push({ level: options.logLevel, message: String(options.message) });
     });
     return Effect.gen(function* () {
-      const fake = yield* makeFakeRedis;
+      const fake = yield* makeFakeRedis();
       const make = BusBrokers.makeRedisBroker({ stream: "test:hints", block: "200 millis" }).pipe(
         Effect.provideService(Redis.Redis, fake.redis)
       );
@@ -651,7 +652,7 @@ describe("makeRedisBroker (Redis Streams)", () => {
       lines.push({ level: options.logLevel, message: String(options.message) });
     });
     return Effect.gen(function* () {
-      const fake = yield* makeFakeRedis;
+      const fake = yield* makeFakeRedis();
       const make = BusBrokers.makeRedisBroker({ stream: "test:hints", block: 0 }).pipe(
         Effect.provideService(Redis.Redis, fake.redis)
       );

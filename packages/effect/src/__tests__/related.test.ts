@@ -5,6 +5,7 @@
  * untouched, `related`'s auto-subscription + scope teardown, and client-side
  * `Predicate.exists` rendering.
  */
+import * as P from "effect/Predicate";
 import { describe, expect, it } from "@effect/vitest";
 import * as Arr from "effect/Array";
 import * as Effect from "effect/Effect";
@@ -34,6 +35,7 @@ import * as SyncServer from "../SyncServer.js";
 import { ClientTransport, makeInMemory, type ServerHandler } from "../Transport.js";
 import { defined } from "./defined.js";
 import { TestFailure } from "./test-failure.js";
+import * as Json from "../internal/Json.js";
 
 interface Issue {
   readonly id: string;
@@ -111,12 +113,12 @@ const mutators = Mutator.registry([
   { mutator: Mutator.make("person/set", Schema.Unknown), local: setRow("people") },
 ]);
 
-const backendHandlers: Record<string, MemoryBackend.BackendHandler> = {
+const backendHandlers = {
   "issue/set": (args, writer) => Effect.asVoid(writer.put("issues", (args as Issue).id, args)),
   "comment/set": (args, writer) =>
     Effect.asVoid(writer.put("comments", (args as CommentRow).id, args)),
   "person/set": (args, writer) => Effect.asVoid(writer.put("people", (args as Person).id, args)),
-};
+} satisfies Record<string, MemoryBackend.BackendHandler>;
 
 const authPolicy = Authorization.policy({
   issues: Authorization.allowAll,
@@ -124,7 +126,11 @@ const authPolicy = Authorization.policy({
   people: Authorization.allowAll,
 });
 
-const makeServer: Effect.Effect<ServerHandler, never, Scope.Scope> = Effect.gen(function* () {
+const makeServer = Effect.fn("makeServer")(function* (): Effect.fn.Return<
+  ServerHandler,
+  never,
+  Scope.Scope
+> {
   const backend = yield* MemoryBackend.make(backendHandlers);
   const cvrStore = yield* Cvr.makeMemoryStore;
   const bus = yield* InvalidationBus.makeInProcess;
@@ -185,7 +191,7 @@ const waitForEmissions = <A>(
   seen: SubscriptionRef.SubscriptionRef<A>,
   until: (emissions: A) => boolean,
   failure: string,
-  show: (emissions: A) => string = (emissions) => JSON.stringify(emissions)
+  show: (emissions: A) => string = (emissions) => Json.show(emissions)
 ): Effect.Effect<A> =>
   SubscriptionRef.changes(seen).pipe(
     Stream.filter(until),
@@ -236,7 +242,7 @@ describe("Collection.registry relationship validation", () => {
 describe("Related.query / observe", () => {
   it.effect("resolves a `one` and a `many` relationship from the mirror", () =>
     Effect.gen(function* () {
-      const handler = yield* makeServer;
+      const handler = yield* makeServer();
       const { engine } = yield* makeClient(handler, "a");
       yield* seed(engine);
       yield* syncAll(engine);
@@ -258,7 +264,7 @@ describe("Related.query / observe", () => {
     () =>
       Effect.scoped(
         Effect.gen(function* () {
-          const handler = yield* makeServer;
+          const handler = yield* makeServer();
           const { engine } = yield* makeClient(handler, "a");
           yield* seed(engine);
           yield* syncAll(engine);
@@ -273,7 +279,7 @@ describe("Related.query / observe", () => {
             failure: string
           ) =>
             waitForEmissions(seen, until, failure, (emissions) =>
-              JSON.stringify(emissions.map(i1Bodies))
+              Json.stringify(emissions.map(i1Bodies))
             );
           yield* Effect.forkScoped(
             Stream.runForEach(
@@ -303,7 +309,7 @@ describe("Related.query / observe", () => {
           const emissions = yield* emitted(
             (acc) =>
               acc.length >= 2 &&
-              JSON.stringify(i1Bodies(defined(acc[acc.length - 1]))) === JSON.stringify(settled),
+              Json.show(i1Bodies(defined(acc[acc.length - 1]))) === Json.show(settled),
             "the join never re-emitted the pulled edit"
           );
           const firstI1 = defined(defined(emissions[0]).find((r) => r.id === "i1"));
@@ -333,7 +339,7 @@ describe("Related.query / observe", () => {
     () =>
       Effect.scoped(
         Effect.gen(function* () {
-          const handler = yield* makeServer;
+          const handler = yield* makeServer();
           const { engine } = yield* makeClient(handler, "race");
           yield* seed(engine);
           yield* syncAll(engine);
@@ -375,7 +381,7 @@ describe("Related.query / observe", () => {
 describe("Related.related", () => {
   it.effect("auto-subscribes narrowed foreign subsets and tears them down with the scope", () =>
     Effect.gen(function* () {
-      const handler = yield* makeServer;
+      const handler = yield* makeServer();
       const { engine } = yield* makeClient(handler, "a");
       yield* seed(engine); // rows exist server-side; related does its own subscribe+pull
 
@@ -395,7 +401,7 @@ describe("Related.related", () => {
         "comments",
       ]).pipe(Effect.provideService(Scope.Scope, scope));
       const head = yield* Stream.runHead(stream);
-      const i1 = defined((head._tag === "Some" ? head.value : []).find((r) => r.id === "i1"));
+      const i1 = defined((Option.isSome(head) ? head.value : []).find((r) => r.id === "i1"));
       expect((i1.related.author as Person).name).toBe("Ada");
       expect(commentBodies(i1)).toEqual(["first", "second"]);
 
@@ -421,7 +427,7 @@ describe("Related.related", () => {
 describe("Related.resolveExistsLocally", () => {
   it.effect("renders a client-side `Predicate.exists` over a synced foreign collection", () =>
     Effect.gen(function* () {
-      const handler = yield* makeServer;
+      const handler = yield* makeServer();
       const { engine } = yield* makeClient(handler, "a");
       yield* seed(engine);
       yield* syncAll(engine);
@@ -609,7 +615,7 @@ const idsOf = (values: ReadonlyArray<unknown>) =>
  * as sets; `one` and the base row compare directly. */
 const relatedValuesEqual = (a: Related.RelatedValue, b: Related.RelatedValue): boolean => {
   if (Array.isArray(a) && Array.isArray(b)) {
-    return JSON.stringify(idsOf(a)) === JSON.stringify(idsOf(b));
+    return Json.show(idsOf(a)) === Json.show(idsOf(b));
   }
   return a === b;
 };
@@ -651,7 +657,7 @@ describe("Related delta-maintenance", () => {
       applyOp(truth, op);
 
       let removedTargets: ReadonlyArray<string> = [];
-      if (op._tag === "putIssue" || op._tag === "deleteIssue") {
+      if (P.isTagged(op, "putIssue") || P.isTagged(op, "deleteIssue")) {
         const { added, removed, result } = engine.applyBase([...truth.issues.values()]);
         removedTargets = removed;
         if (result !== undefined) lastResult = result;
@@ -670,9 +676,9 @@ describe("Related delta-maintenance", () => {
       expect(
         sameJoinUnordered(lastResult, expected),
         `step ${step} (seed ${rngSeed}) diverged from from-scratch hydrate:\n` +
-          `op: ${JSON.stringify(op)}\n` +
-          `actual:   ${JSON.stringify(lastResult)}\n` +
-          `expected: ${JSON.stringify(expected)}`
+          `op: ${Json.show(op)}\n` +
+          `actual:   ${Json.show(lastResult)}\n` +
+          `expected: ${Json.show(expected)}`
       ).toBe(true);
     }
   });

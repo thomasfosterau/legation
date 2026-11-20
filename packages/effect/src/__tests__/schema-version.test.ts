@@ -6,6 +6,7 @@
  * `storeVersion` buster clears the cache while preserving the journal, and a
  * fleet cookie-namespace bump forces every old cookie to a reset patch.
  */
+import * as P from "effect/Predicate";
 import * as Defined from "../Defined.js";
 import { describeWrapped, expect, layer, describe } from "@effect/vitest";
 import * as Effect from "effect/Effect";
@@ -43,12 +44,12 @@ const mutators = Mutator.registry([
   },
 ]);
 
-const backendHandlers: Record<string, MemoryBackend.BackendHandler> = {
+const backendHandlers = {
   "todo/set": (args, writer) => {
     const todo = args as Todo;
     return Effect.asVoid(writer.put("todos", todo.id, todo));
   },
-};
+} satisfies Record<string, MemoryBackend.BackendHandler>;
 
 const authPolicy = Authorization.policy({ todos: Authorization.allowAll });
 const allTodos = Subset.make({ collection: "todos" });
@@ -65,7 +66,7 @@ const provideServer = <A, E, R>(
     Effect.provideService(InvalidationBus.InvalidationBus, services.bus)
   );
 
-const makeServices = Effect.gen(function* () {
+const makeServices = Effect.fn("makeServices")(function* () {
   const backend = yield* MemoryBackend.make(backendHandlers);
   const cvrStore = yield* Cvr.makeMemoryStore;
   const bus = yield* InvalidationBus.makeInProcess;
@@ -75,7 +76,7 @@ const makeServices = Effect.gen(function* () {
 const makeServer = (
   options?: SyncServer.SyncServerOptions
 ): Effect.Effect<ServerHandler, never, Scope.Scope> =>
-  makeServices.pipe(
+  makeServices().pipe(
     Effect.flatMap((services) => provideServer(SyncServer.makeWith(options), services))
   );
 
@@ -302,7 +303,7 @@ describe("storeVersion buster", () => {
 describeWrapped("fleet cookie-reset via CVR namespace bump", (it) => {
   it.effect("a pull with a pre-bump cookie is a reset patch (Clear present)", () =>
     Effect.gen(function* () {
-      const services = yield* makeServices;
+      const services = yield* makeServices();
       const serverA = yield* provideServer(SyncServer.makeWith({ cookieNamespace: "A" }), services);
 
       // Commit a row and take a cookie under namespace A.
@@ -321,7 +322,7 @@ describeWrapped("fleet cookie-reset via CVR namespace bump", (it) => {
       const pull1 = yield* serverA.handlePull({ clientGroupId: "g", subscriptions: [allTodos] });
       const oldCookie = pull1.cookie;
       // First pull (no cookie presented) is not a reset.
-      expect(pull1.patch.some((op) => op._tag === "Clear")).toBe(false);
+      expect(pull1.patch.some((op) => P.isTagged(op, "Clear"))).toBe(false);
 
       // Same namespace, known cookie → minimal (empty) patch, no reset.
       const sameNs = yield* serverA.handlePull({
@@ -329,7 +330,7 @@ describeWrapped("fleet cookie-reset via CVR namespace bump", (it) => {
         cookie: oldCookie,
         subscriptions: [allTodos],
       });
-      expect(sameNs.patch.some((op) => op._tag === "Clear")).toBe(false);
+      expect(sameNs.patch.some((op) => P.isTagged(op, "Clear"))).toBe(false);
 
       // Bump the fleet namespace: a new server over the same CVR + backend now
       // treats the pre-bump cookie as unknown → a reset patch.
@@ -339,9 +340,9 @@ describeWrapped("fleet cookie-reset via CVR namespace bump", (it) => {
         cookie: oldCookie,
         subscriptions: [allTodos],
       });
-      expect(afterBump.patch.some((op) => op._tag === "Clear")).toBe(true);
+      expect(afterBump.patch.some((op) => P.isTagged(op, "Clear"))).toBe(true);
       // The reset still re-sends the row as a full put.
-      expect(afterBump.patch.some((op) => op._tag === "Put")).toBe(true);
+      expect(afterBump.patch.some((op) => P.isTagged(op, "Put"))).toBe(true);
     })
   );
 });

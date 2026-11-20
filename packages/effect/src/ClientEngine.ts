@@ -11,6 +11,7 @@
  * atomically through a single changes event.
  */
 
+import * as Exit from "effect/Exit";
 import * as Defined from "./Defined.js";
 import * as Arr from "effect/Array";
 import * as Clock from "effect/Clock";
@@ -325,6 +326,10 @@ type OverlayOp =
       readonly value: unknown;
     }
   | { readonly _tag: "Del"; readonly collection: string; readonly id: RowId };
+
+/** Narrows an op to the patch's `Clear`, the one variant that names no row. */
+const isClear = (op: PatchOp | OverlayOp): op is Extract<PatchOp, { readonly _tag: "Clear" }> =>
+  P.isTagged(op, "Clear");
 
 /**
  * A local-view change. `Patch` carries per-row deltas that drive incremental
@@ -1065,14 +1070,14 @@ const timedRebase = <A, E>(effect: Effect.Effect<A, E>): Effect.Effect<A, E> =>
 // (or top-level-`And`) `Compare`/`In` conjuncts' fields. Used only to
 // decide what `autoIndex` should index — never changes evaluation.
 const indexableFieldsOf = (where: PredicateModule.Predicate): ReadonlyArray<string> => {
-  const conjuncts = where._tag === "And" ? where.predicates : [where];
+  const conjuncts = P.isTagged(where, "And") ? where.predicates : [where];
   const fields: Array<string> = [];
   for (const conjunct of conjuncts) {
     // Mirrors `CollectionIndex.conjunctIds`: `IS NOT NULL` never narrows.
     if (
-      conjunct._tag === "Compare" ||
-      conjunct._tag === "In" ||
-      (conjunct._tag === "IsNull" && conjunct.negated !== true)
+      P.isTagged(conjunct, "Compare") ||
+      P.isTagged(conjunct, "In") ||
+      (P.isTagged(conjunct, "IsNull") && conjunct.negated !== true)
     ) {
       fields.push(conjunct.field);
     }
@@ -1087,7 +1092,8 @@ const infoOf = (error: VersionNotSupportedError) => ({
 
 // Retry only transient (transport) failures; store/mutator errors are not
 // transient and go straight to the failure surface.
-const isTransient = (error: { readonly _tag: string }): boolean => error._tag === "TransportError";
+const isTransient = (error: { readonly _tag: string }): boolean =>
+  P.isTagged(error, "TransportError");
 
 const namedKey = (name: string, argsEncoded: unknown) =>
   `${name}:${Hash.canonicalJson(argsEncoded)}`;
@@ -1102,11 +1108,10 @@ const applyOps = (
 ): LiveView.LiveView => {
   let next = view;
   for (const op of ops) {
-    if (op._tag === "Clear" || op.collection !== collection) continue;
-    next =
-      op._tag === "Put"
-        ? LiveView.put(next, { id: op.id, value: op.value })
-        : LiveView.del(next, op.id);
+    if (isClear(op) || op.collection !== collection) continue;
+    next = P.isTagged(op, "Put")
+      ? LiveView.put(next, { id: op.id, value: op.value })
+      : LiveView.del(next, op.id);
   }
   return next;
 };
@@ -1115,7 +1120,7 @@ const applyOps = (
 // moved it, so the observer keeps its page (and `changesWith` dedups the
 // re-emit). An unscoped rebuild (collections undefined) always recomputes.
 const rebuildSkips = (change: ViewChange, collection: string): boolean =>
-  change._tag === "Rebuild" &&
+  P.isTagged(change, "Rebuild") &&
   change.collections !== undefined &&
   !change.collections.has(collection);
 
@@ -1134,11 +1139,10 @@ const applyAggregatePatch = (
 ): Aggregate.State => {
   let next = state;
   for (const op of ops) {
-    if (op._tag === "Clear" || op.collection !== subset.collection) continue;
-    next =
-      op._tag === "Put"
-        ? Aggregate.applyPut(next, agg, subset.where, op.id, op.value)
-        : Aggregate.applyDel(next, agg, op.id);
+    if (isClear(op) || op.collection !== subset.collection) continue;
+    next = P.isTagged(op, "Put")
+      ? Aggregate.applyPut(next, agg, subset.where, op.id, op.value)
+      : Aggregate.applyDel(next, agg, op.id);
   }
   return next;
 };
@@ -1152,11 +1156,10 @@ const applyAggregateGroupedPatch = (
 ): Aggregate.GroupedState => {
   let next = state;
   for (const op of ops) {
-    if (op._tag === "Clear" || op.collection !== subset.collection) continue;
-    next =
-      op._tag === "Put"
-        ? Aggregate.applyGroupedPut(next, agg, subset.where, groupBy, op.id, op.value)
-        : Aggregate.applyGroupedDel(next, agg, op.id);
+    if (isClear(op) || op.collection !== subset.collection) continue;
+    next = P.isTagged(op, "Put")
+      ? Aggregate.applyGroupedPut(next, agg, subset.where, groupBy, op.id, op.value)
+      : Aggregate.applyGroupedDel(next, agg, op.id);
   }
   return next;
 };
@@ -1166,7 +1169,7 @@ const invalidArgs = (mutator: string) => (cause: unknown) =>
 
 const isVersionNotSupported = (error: {
   readonly _tag: string;
-}): error is VersionNotSupportedError => error._tag === "VersionNotSupportedError";
+}): error is VersionNotSupportedError => P.isTagged(error, "VersionNotSupportedError");
 
 /**
  * Build a {@link ClientEngine} over the `ClientStore` and `ClientTransport` in context; the engine
@@ -1304,7 +1307,7 @@ export const make = (
       Effect.asVoid(PubSub.publish(engineEventsHub, event));
     // A Rebuild change is a view rebuild; carry its scoped collections.
     const viewRebuiltEvent = (change: ViewChange): Effect.Effect<void> =>
-      change._tag === "Rebuild"
+      P.isTagged(change, "Rebuild")
         ? emitEngineEvent({
             _tag: "ViewRebuilt",
             ...Defined.fields({
@@ -1495,7 +1498,10 @@ export const make = (
     // copy empty for good.
     const unpulledStale = yield* Ref.make(bootTail.stale);
     // The tail as the store holds it, for a caller that holds `overlayLock`.
-    const tailLocked: Effect.Effect<ReadonlyArray<Mutation>, StoreError> = Effect.gen(function* () {
+    const tailLocked = Effect.fnUntraced(function* (): Effect.fn.Return<
+      ReadonlyArray<Mutation>,
+      StoreError
+    > {
       if (yield* Ref.get(unpulledStale)) {
         yield* Ref.set(unpulled, yield* store.unpulled);
         yield* Ref.set(unpulledStale, false);
@@ -1506,15 +1512,16 @@ export const make = (
     // The journal the overlay replays: the unpulled tail, the enhanced form
     // submissions awaiting their receipt, then the pending
     // journal. The caller holds `overlayLock`.
-    const overlayJournalLocked: Effect.Effect<ReadonlyArray<Mutation>, StoreError> = Effect.gen(
-      function* () {
-        const tail = yield* tailLocked;
-        const forms = yield* Ref.get(formsInFlight);
-        return [...tail, ...forms, ...(yield* store.pendingMutations)];
-      }
-    );
+    const overlayJournalLocked = Effect.fnUntraced(function* (): Effect.fn.Return<
+      ReadonlyArray<Mutation>,
+      StoreError
+    > {
+      const tail = yield* tailLocked();
+      const forms = yield* Ref.get(formsInFlight);
+      return [...tail, ...forms, ...(yield* store.pendingMutations)];
+    });
     // The same snapshot, for a caller that does not already hold the lock.
-    const overlayJournal = Semaphore.withPermit(overlayLock, overlayJournalLocked);
+    const overlayJournal = Semaphore.withPermit(overlayLock, overlayJournalLocked());
 
     // Ensure `view` holds a live, mutable map for `collection`, seeding it
     // lazily from confirmed rows the first time it's touched. Shared by
@@ -1758,7 +1765,7 @@ export const make = (
         let clears = state.clears;
         const generations = new Map(state.generations);
         for (const op of ops) {
-          if (op._tag === "Clear") clears++;
+          if (isClear(op)) clears++;
           else generations.set(op.collection, (generations.get(op.collection) ?? 0) + 1);
         }
         return [state.built, { built: state.built, generations, clears }] as const;
@@ -1766,13 +1773,13 @@ export const make = (
         Effect.map((built) => {
           if (built.size === 0) return;
           for (const op of ops) {
-            if (op._tag === "Clear") {
+            if (isClear(op)) {
               for (const index of built.values()) Index.clear(index);
               continue;
             }
             const index = built.get(op.collection);
             if (index === undefined) continue;
-            if (op._tag === "Put") Index.upsertRow(index, op.id, op.value);
+            if (P.isTagged(op, "Put")) Index.upsertRow(index, op.id, op.value);
             else Index.deleteRow(index, op.id);
           }
         })
@@ -1789,12 +1796,12 @@ export const make = (
     ).pipe(Effect.andThen(invalidateAllIndexes));
 
     /** Confirmed rows + the overlay journal (unpulled tail, then pending) replayed on top. */
-    const computeOverlay: Effect.Effect<
+    const computeOverlay = Effect.fnUntraced(function* (): Effect.fn.Return<
       Map<string, Map<RowId, LocalRow>>,
       StoreError | MutatorError
-    > = Effect.gen(function* () {
+    > {
       const view = new Map<string, Map<RowId, LocalRow>>();
-      yield* replayMutations(view, yield* overlayJournalLocked);
+      yield* replayMutations(view, yield* overlayJournalLocked());
       return view;
     });
 
@@ -1810,7 +1817,7 @@ export const make = (
       overlayLock,
       Ref.get(overlayCache).pipe(
         Effect.filterOrElse(P.isNotUndefined, () =>
-          timedRebase(computeOverlay).pipe(Effect.tap((view) => Ref.set(overlayCache, view)))
+          timedRebase(computeOverlay()).pipe(Effect.tap((view) => Ref.set(overlayCache, view)))
         )
       )
     );
@@ -1917,7 +1924,7 @@ export const make = (
           return REBUILD;
         }
         let view: Map<string, Map<RowId, LocalRow>>;
-        if (base._tag === "Warm") {
+        if (P.isTagged(base, "Warm")) {
           view = base.view;
         } else {
           const journalBefore = base.journalBefore;
@@ -1930,7 +1937,7 @@ export const make = (
               })
             )
           );
-          if (filled._tag === "Failure") {
+          if (Exit.isFailure(filled)) {
             yield* Ref.set(overlayCache, undefined);
             return REBUILD;
           }
@@ -1938,7 +1945,7 @@ export const make = (
         }
         const ops: Array<PatchOp | OverlayOp> = [];
         const ran = yield* Effect.exit(handler(decodedArgs, trackedWriter(view, ops)));
-        if (ran._tag === "Failure") {
+        if (Exit.isFailure(ran)) {
           yield* Ref.set(overlayCache, undefined);
           const touched = yield* collectionsTouchedBy(mutator, decodedArgs);
           return rebuildFor(touched);
@@ -2154,7 +2161,7 @@ export const make = (
           const applied = covered.filter((m) => !isRejected(m));
           // Read before the park, so a reload of a stale copy cannot already hold the
           // entries about to be added.
-          const held = yield* tailLocked;
+          const held = yield* tailLocked();
           if (store.commitAcknowledgement !== undefined) {
             // The park and the trim are one atomic batch: a failure leaves neither written.
             yield* store
@@ -2422,7 +2429,7 @@ export const make = (
       Semaphore.withPermit(
         overlayLock,
         Effect.gen(function* () {
-          const tail = yield* tailLocked;
+          const tail = yield* tailLocked();
           const room = unpulledLimit - tail.length - (yield* Ref.get(reservedRoom));
           const size = Math.max(0, Math.min(pullAheadAt, room, remaining));
           yield* Ref.update(reservedRoom, (n) => n + size);
@@ -2534,7 +2541,7 @@ export const make = (
         const rows: Array<{ readonly collection: string; readonly id: RowId }> = [];
         let cleared = false;
         for (const op of patch) {
-          if (op._tag === "Clear") {
+          if (isClear(op)) {
             cleared = true;
             continue;
           }
@@ -2589,7 +2596,7 @@ export const make = (
         // pull mutations touch — scope a Rebuild to their union rather than
         // forcing a global one ("stays a scoped Rebuild" rebase path);
         // a reset (`Clear`) still forces the unscoped fallback.
-        const hasClear = response.patch.some((op) => op._tag === "Clear");
+        const hasClear = response.patch.some(isClear);
         const touched = yield* pullTouchedCollections(response.patch);
         // One critical section: the overlay journal before this pull
         // (the unpulled tail, then pending), the confirmed-row write and the tail
@@ -2603,7 +2610,7 @@ export const make = (
         const journalBefore = yield* Semaphore.withPermit(
           overlayLock,
           Effect.gen(function* () {
-            const before = yield* overlayJournalLocked;
+            const before = yield* overlayJournalLocked();
             // With an atomic batch in the store, the release is one commit: the rows, the cookie,
             // the journal trim and the tail release, with no record. A failure before the commit point
             // leaves the store as it was; a failure reported after it may still have committed, so the
@@ -2998,7 +3005,11 @@ export const make = (
       })
     );
 
-    const runSync: ClientEngine["runSync"] = Effect.gen(function* () {
+    const runSync = Effect.fnUntraced(function* (): Effect.fn.Return<
+      void,
+      TransportError | StoreError | MutatorError,
+      Scope.Scope
+    > {
       // Subscribe to the push trigger here, before anything is forked.
       // `Stream.fromPubSub` would subscribe only once the debounce's forked
       // upstream fibre first pulls, a few scheduler turns after this returns,
@@ -3394,23 +3405,24 @@ export const make = (
             Effect.gen(function* () {
               const state = yield* Ref.get(stateRef);
               if (rebuildSkips(change, subset.collection)) return reducer.value(state);
-              const next =
-                change._tag === "Rebuild"
-                  ? reducer.init(yield* collectionRowsArray(subset.collection))
-                  : reducer.applyOps(state, change.ops);
+              const next = P.isTagged(change, "Rebuild")
+                ? reducer.init(yield* collectionRowsArray(subset.collection))
+                : reducer.applyOps(state, change.ops);
               yield* Ref.set(stateRef, next);
               return reducer.value(next);
             });
 
-          const collapseAggregateToRebuild: Effect.Effect<V, StoreError | MutatorError> =
-            Effect.gen(function* () {
-              yield* Metric.update(Telemetry.changeCollapsesTotal, 1);
-              const latest = yield* Ref.get(changeSeq);
-              const next = reducer.init(yield* collectionRowsArray(subset.collection));
-              yield* Ref.set(stateRef, next);
-              yield* Ref.set(lastSeenRef, latest);
-              return reducer.value(next);
-            });
+          const collapseAggregateToRebuild = Effect.fnUntraced(function* (): Effect.fn.Return<
+            V,
+            StoreError | MutatorError
+          > {
+            yield* Metric.update(Telemetry.changeCollapsesTotal, 1);
+            const latest = yield* Ref.get(changeSeq);
+            const next = reducer.init(yield* collectionRowsArray(subset.collection));
+            yield* Ref.set(stateRef, next);
+            yield* Ref.set(lastSeenRef, latest);
+            return reducer.value(next);
+          });
 
           const stepAggregateView = (
             item: SeqChange
@@ -3422,7 +3434,7 @@ export const make = (
                 yield* Ref.set(lastSeenRef, item.seq);
                 return yield* applyContiguousAgg(item.change);
               }
-              return yield* collapseAggregateToRebuild;
+              return yield* collapseAggregateToRebuild();
             });
 
           return Stream.concat(
@@ -3482,7 +3494,7 @@ export const make = (
           const cachedBefore = yield* Ref.get(overlayCache);
           const base: OverlayBase =
             cachedBefore === undefined
-              ? { _tag: "Cold", journalBefore: yield* overlayJournalLocked }
+              ? { _tag: "Cold", journalBefore: yield* overlayJournalLocked() }
               : { _tag: "Warm", view: cachedBefore };
           const clientId = yield* currentClientId;
           const journaledAt = yield* Clock.currentTimeMillis;
@@ -3562,7 +3574,7 @@ export const make = (
             const cachedBefore = yield* Ref.get(overlayCache);
             const base: OverlayBase =
               cachedBefore === undefined
-                ? { _tag: "Cold", journalBefore: yield* overlayJournalLocked }
+                ? { _tag: "Cold", journalBefore: yield* overlayJournalLocked() }
                 : { _tag: "Warm", view: cachedBefore };
             yield* Ref.update(formsInFlight, (forms) => [...forms, entry]);
             return yield* applyMutationToOverlayLocked(mutator, args.decoded, base);
@@ -3583,7 +3595,7 @@ export const make = (
               Effect.gen(function* () {
                 yield* Ref.update(formsInFlight, (forms) => forms.filter((m) => m !== entry));
                 if (park && reserved > 0) {
-                  const held = yield* tailLocked;
+                  const held = yield* tailLocked();
                   yield* store.parkUnpulled([entry]);
                   yield* Ref.set(unpulled, [...held, entry]);
                 }
@@ -3624,18 +3636,18 @@ export const make = (
     // Read-only snapshot of every active subset: raw subscriptions plus each
     // named subscription resolved through its local factory. The introspection
     // seam — reads the Refs internally, exposes only the resolved subsets.
-    const activeSubscriptions: Effect.Effect<ReadonlyArray<Subset.Subset>> = Effect.gen(
-      function* () {
-        const raw = yield* Ref.get(subscriptions);
-        const named = yield* Ref.get(namedSubs);
-        const resolved: Array<Subset.Subset> = [];
-        for (const entry of named) {
-          const subset = yield* resolveNamedSubset(entry);
-          if (subset !== undefined) resolved.push(subset);
-        }
-        return [...raw, ...resolved];
+    const activeSubscriptions = Effect.fnUntraced(function* (): Effect.fn.Return<
+      ReadonlyArray<Subset.Subset>
+    > {
+      const raw = yield* Ref.get(subscriptions);
+      const named = yield* Ref.get(namedSubs);
+      const resolved: Array<Subset.Subset> = [];
+      for (const entry of named) {
+        const subset = yield* resolveNamedSubset(entry);
+        if (subset !== undefined) resolved.push(subset);
       }
-    );
+      return [...raw, ...resolved];
+    });
 
     const transportRead = transport.read;
     return ClientEngine.of({
@@ -3713,11 +3725,11 @@ export const make = (
                   ...Defined.fields({ schemaVersion: options.schemaVersion }),
                 }).pipe(Effect.map((response) => response.rows)),
       }),
-      runSync,
+      runSync: runSync(),
       syncFailures: Stream.fromPubSub(failures),
       recentSyncFailures: Ref.get(recentFailures),
       engineEvents: Stream.fromPubSub(engineEventsHub),
-      activeSubscriptions,
+      activeSubscriptions: activeSubscriptions(),
       // mutation stream, now a filtered projection of the one hub.
       mutationEvents: Stream.fromPubSub(engineEventsHub).pipe(
         Stream.map(toMutationEvent),

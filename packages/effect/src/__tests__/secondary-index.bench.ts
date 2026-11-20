@@ -15,6 +15,7 @@
  * numbers read slightly high. See
  * https://vitest.dev/guide/benchmarking#module-runner-overhead.
  */
+import * as P from "effect/Predicate";
 import * as Defined from "../Defined.js";
 import { describe, it } from "@effect/vitest";
 import * as Arr from "effect/Array";
@@ -73,14 +74,14 @@ const makeBulkSeededStore = (
       applyRowOps: (ops: ReadonlyArray<PatchOp>) =>
         Effect.sync(() => {
           Arr.forEach(ops, (op) => {
-            if (op._tag === "Clear") collections.clear();
-            else if (op._tag === "Put")
+            if (P.isTagged(op, "Put"))
               collectionOf(op.collection).set(op.id, {
                 id: op.id,
                 version: op.version,
                 value: op.value,
               });
-            else collections.get(op.collection)?.delete(op.id);
+            else if (P.isTagged(op, "Del")) collections.get(op.collection)?.delete(op.id);
+            else collections.clear();
           });
         }),
       appendMutation: (mutation) => Effect.sync(() => void (journal = journal.concat(mutation))),

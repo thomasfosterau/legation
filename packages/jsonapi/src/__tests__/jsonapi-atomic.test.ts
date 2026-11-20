@@ -29,6 +29,10 @@ import * as JsonApiSync from "../JsonApiSync.js";
 import { defined } from "./defined.js";
 import { withLayer } from "./with-layer.js";
 
+const JsonText = Schema.fromJsonString(Schema.Unknown);
+const encodeJson = Schema.encodeSync(JsonText);
+const decodeJson = Schema.decodeSync(JsonText);
+
 // A conventional JSON:API surface for `todos`, plus an atomic operations
 // endpoint declared with a plain HttpApiEndpoint: what makes it atomic is its
 // `atomic:operations` payload, not its path or the library that built it.
@@ -61,12 +65,12 @@ interface Recorded {
 const atomicHeaders = { "Content-Type": Atomic.MEDIA_TYPE };
 const jsonHeaders = { "Content-Type": "application/vnd.api+json" };
 const respond = (status: number, document: unknown, headers = atomicHeaders) =>
-  new Response(JSON.stringify(document), { status, headers });
+  new Response(encodeJson(document), { status, headers });
 const empty = (status: number) => new Response(null, { status });
 const readBody = (request: { readonly body: unknown }): any => {
   const b = request.body as { _tag?: string; body?: Uint8Array };
   return b?._tag === "Uint8Array" && b.body
-    ? JSON.parse(new TextDecoder().decode(b.body))
+    ? decodeJson(new TextDecoder().decode(b.body))
     : undefined;
 };
 
@@ -113,7 +117,7 @@ const makeServer = (
   } = {}
 ) => {
   const requests: Array<Recorded> = [];
-  const rows: Record<string, StoredRow> = { ...options.rows };
+  const rows = { ...options.rows } satisfies Record<string, StoredRow>;
   const readStatuses = [...(options.readStatuses ?? [])];
   const readDocuments = [...(options.readDocuments ?? [])];
   let writes = 0;
@@ -299,10 +303,10 @@ describe("Convention.reflectAtomic", () => {
 });
 
 /** The rows the server holds before `three` is pushed: the update's and the delete's targets. */
-const threeRows: Rows = {
+const threeRows = {
   "2": { attributes: { title: "old second", done: false } },
   "3": { attributes: { title: "old third" } },
-};
+} satisfies Rows;
 const threeServer = (script: (request: Recorded, index: number) => Response) =>
   makeServer(script, { rows: threeRows });
 
@@ -1399,7 +1403,7 @@ const makeStatefulServer = () => {
 
 describe("JsonApiSync.layer atomic detection", () => {
   const all = Subset.make({ collection: "todos" });
-  const createAndSync = Effect.gen(function* () {
+  const createAndSync = Effect.fn("createAndSync")(function* () {
     const engine = yield* ClientEngine.ClientEngine;
     yield* engine.subscribe(all);
     yield* engine.mutate("todos/create", {
@@ -1415,7 +1419,7 @@ describe("JsonApiSync.layer atomic detection", () => {
   it.effect("pushes through the reflected operations endpoint", () =>
     Effect.gen(function* () {
       const server = makeStatefulServer();
-      const titles = yield* createAndSync.pipe(
+      const titles = yield* createAndSync().pipe(
         withLayer(
           JsonApiSync.layer(api, {
             baseUrl: "http://api.test",
@@ -1434,7 +1438,7 @@ describe("JsonApiSync.layer atomic detection", () => {
   it.effect("`atomic: false` keeps one request per mutation", () =>
     Effect.gen(function* () {
       const server = makeStatefulServer();
-      const titles = yield* createAndSync.pipe(
+      const titles = yield* createAndSync().pipe(
         withLayer(
           JsonApiSync.layer(api, {
             baseUrl: "http://api.test",

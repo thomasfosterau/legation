@@ -15,6 +15,9 @@ import * as JsonApiBackend from "../JsonApiBackend.js";
 import * as JsonApiSync from "../JsonApiSync.js";
 import * as Ledger from "../Ledger.js";
 
+const JsonText = Schema.fromJsonString(Schema.Unknown);
+const encodeJson = Schema.encodeSync(JsonText);
+
 const group: Ledger.GroupLedger = {
   lastMutationIds: { "client-1": 3, "client-2": 1 },
   rejections: [{ clientId: "client-1", mutationId: 2, reason: "title taken" }],
@@ -63,10 +66,7 @@ describe("Ledger.keyValue", () => {
           const store = Ledger.keyValue(kv);
           const notJson = yield* Effect.flip(store.read("g"));
           expect(notJson).toBeInstanceOf(BackendError);
-          yield* kv.set(
-            "legation-jsonapi:ledger:g",
-            JSON.stringify({ lastMutationIds: { a: "x" } })
-          );
+          yield* kv.set("legation-jsonapi:ledger:g", encodeJson({ lastMutationIds: { a: "x" } }));
           const notLedger = yield* Effect.flip(store.read("g"));
           expect(notLedger).toBeInstanceOf(BackendError);
         })
@@ -102,7 +102,7 @@ const boundApi = HttpApi.make("app").add(
 const boundInspected = JsonApiSync.inspect(boundApi);
 
 const json = (status: number, document: unknown) =>
-  new Response(JSON.stringify(document), {
+  new Response(encodeJson(document), {
     status,
     headers: { "Content-Type": "application/vnd.api+json" },
   });

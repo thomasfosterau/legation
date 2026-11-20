@@ -29,6 +29,9 @@ import * as JsonApiBackend from "../JsonApiBackend.js";
 import * as Ledger from "../Ledger.js";
 import { flakyLedger } from "./flaky-ledger.js";
 
+const JsonText = Schema.fromJsonString(Schema.Unknown);
+const encodeJson = Schema.encodeSync(JsonText);
+
 const COLLECTION = "contract";
 const EVAL_COLLECTION = `${COLLECTION}_eval`;
 const JSON_API = { "Content-Type": "application/vnd.api+json" };
@@ -80,7 +83,7 @@ const documentOf = (row: Stored) => ({
 });
 
 const respond = (status: number, document?: unknown) =>
-  new Response(document === undefined ? null : JSON.stringify(document), {
+  new Response(document === undefined ? null : encodeJson(document), {
     status,
     headers: JSON_API,
   });

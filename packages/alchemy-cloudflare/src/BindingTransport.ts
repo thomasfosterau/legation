@@ -37,6 +37,7 @@
  */
 
 import * as Effect from "effect/Effect";
+import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
 import {
   TransportError,
@@ -80,8 +81,10 @@ export interface MakeOptions {
   readonly headers?: Readonly<Record<string, string>>;
 }
 
+const encodeJson = Schema.encodeSync(Schema.fromJsonString(Schema.Unknown));
+
 /** The headers a binding call carries over from the inbound request. */
-const forwarded = (request: InboundRequest): Record<string, string> => {
+const forwarded = (request: InboundRequest) => {
   const headers: Record<string, string> = {};
   const cookie = request.headers.get("cookie");
   if (cookie !== null && cookie !== "") headers.cookie = cookie;
@@ -109,7 +112,7 @@ export const make = (options: MakeOptions): Transport.ClientTransport => {
           const response = await options.binding.fetch(
             new Request(`${prefix}${route}`, {
               method: "POST",
-              body: JSON.stringify(body),
+              body: encodeJson(body),
               headers: { "content-type": "application/json", ...carried, ...options.headers },
             })
           );

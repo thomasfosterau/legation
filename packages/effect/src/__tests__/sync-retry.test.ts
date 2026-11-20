@@ -4,6 +4,7 @@
  * failed poke stream, and surfaces terminal failures. Backoff *timing* is
  * verified with TestClock; the loop-integration cases use `it.live`.
  */
+import * as P from "effect/Predicate";
 import { assert, describe, expect, it } from "@effect/vitest";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
@@ -49,16 +50,20 @@ const setTodo = Mutator.registry([
   },
 ]);
 
-const backendHandlers: Record<string, MemoryBackend.BackendHandler> = {
+const backendHandlers = {
   "todo/set": (args, writer) => {
     const todo = args as Todo;
     return Effect.asVoid(writer.put("todos", todo.id, todo));
   },
-};
+} satisfies Record<string, MemoryBackend.BackendHandler>;
 
 const authPolicy = Authorization.policy({ todos: Authorization.allowAll });
 
-const makeServer: Effect.Effect<ServerHandler, never, Scope.Scope> = Effect.gen(function* () {
+const makeServer = Effect.fn("makeServer")(function* (): Effect.fn.Return<
+  ServerHandler,
+  never,
+  Scope.Scope
+> {
   const backend = yield* MemoryBackend.make(backendHandlers);
   const cvrStore = yield* Cvr.makeMemoryStore;
   const bus = yield* InvalidationBus.makeInProcess;
@@ -71,7 +76,8 @@ const makeServer: Effect.Effect<ServerHandler, never, Scope.Scope> = Effect.gen(
 });
 
 const allTodos = Subset.make({ collection: "todos" });
-const isTransient = (error: { readonly _tag: string }): boolean => error._tag === "TransportError";
+const isTransient = (error: { readonly _tag: string }): boolean =>
+  P.isTagged(error, "TransportError");
 const fast: Schedule.Schedule<unknown> = Schedule.max([
   Schedule.spaced(Duration.millis(10)),
   Schedule.recurs(5),
@@ -81,13 +87,13 @@ describe("retry/backoff timing", () => {
   it.effect("default policy backs off exponentially (1s then 2s)", () =>
     Effect.gen(function* () {
       const attempts = yield* Ref.make(0);
-      const flaky = Effect.gen(function* () {
+      const flaky = Effect.fn("flaky")(function* () {
         const n = yield* Ref.updateAndGet(attempts, (x) => x + 1);
         if (n < 3) return yield* new TransportError({ message: "transient" });
         return "ok";
       });
       const fiber = yield* Effect.forkChild(
-        flaky.pipe(
+        flaky().pipe(
           Effect.retry({ schedule: ClientEngineModule.defaultRetryPolicy, while: isTransient })
         )
       );
@@ -104,12 +110,12 @@ describe("retry/backoff timing", () => {
   it.effect("a non-transient error is not retried", () =>
     Effect.gen(function* () {
       const attempts = yield* Ref.make(0);
-      const failing = Effect.gen(function* () {
+      const failing = Effect.fn("failing")(function* () {
         yield* Ref.update(attempts, (x) => x + 1);
         return yield* new StoreError({ message: "permanent" });
       });
       const exit = yield* Effect.exit(
-        failing.pipe(
+        failing().pipe(
           Effect.retry({ schedule: ClientEngineModule.defaultRetryPolicy, while: isTransient })
         )
       );
@@ -122,7 +128,7 @@ describe("retry/backoff timing", () => {
 describe("retry integration", () => {
   it.live("a pull that fails twice then succeeds converges without app intervention", () =>
     Effect.gen(function* () {
-      const handler = yield* makeServer;
+      const handler = yield* makeServer();
       // Commit a remote write first so a successful pull has something to bring.
       const writer = yield* Effect.gen(function* () {
         const store = yield* ClientStoreModule.makeMemory;
@@ -182,7 +188,7 @@ describe("retry integration", () => {
 
   it.live("retry exhaustion is observable via syncFailures and the metric", () =>
     Effect.gen(function* () {
-      const handler = yield* makeServer;
+      const handler = yield* makeServer();
       const store = yield* ClientStoreModule.makeMemory;
       const base = yield* makeInMemory(handler, "group-down");
       // A transport whose pull never recovers.
@@ -224,7 +230,7 @@ describe("retry integration", () => {
 
   it.live("a failed poke stream re-establishes and a later poke triggers a pull", () =>
     Effect.gen(function* () {
-      const handler = yield* makeServer;
+      const handler = yield* makeServer();
       // Remote write to converge on once the poke lands.
       const w = yield* Effect.gen(function* () {
         const store = yield* ClientStoreModule.makeMemory;

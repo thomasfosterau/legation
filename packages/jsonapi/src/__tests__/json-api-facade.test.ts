@@ -44,6 +44,9 @@ import * as ReplicaDocuments from "../ReplicaDocuments.js";
 import * as RestHandlers from "../RestHandlers.js";
 import { defined } from "./defined.js";
 
+const JsonText = Schema.fromJsonString(Schema.Unknown);
+const encodeJson = Schema.encodeSync(JsonText);
+
 // ─── The graph ───────────────────────────────────────────────────────────────
 
 const categories = Node.make("categories", { attributes: { name: Schema.String } });
@@ -67,7 +70,7 @@ interface SeedRow {
   readonly [field: string]: Schema.Json;
 }
 
-const seed: Readonly<Record<string, ReadonlyArray<SeedRow>>> = {
+const seed = {
   categories: [
     { id: "c-audio", name: "Audio" },
     { id: "c-desk", name: "Desk" },
@@ -82,7 +85,7 @@ const seed: Readonly<Record<string, ReadonlyArray<SeedRow>>> = {
     { id: "v-2", productId: "p-1", sku: "DSK-2" },
     { id: "v-3", productId: "p-2", sku: "LMP-1" },
   ],
-};
+} satisfies Readonly<Record<string, ReadonlyArray<SeedRow>>>;
 
 // ─── The api the façade reflects: read routes only, mounted at /jsonapi ─────
 
@@ -141,7 +144,7 @@ const allowEverything = Authorization.policy(
   { collections: nodes.collections }
 );
 
-const makeReplica = Effect.gen(function* () {
+const makeReplica = Effect.fn("makeReplica")(function* () {
   const backend = yield* MemoryBackend.make({
     "seed/put": (args, writer) => {
       const { collection, value } = args as { collection: string; value: { id: string } };
@@ -245,7 +248,7 @@ const makeFacade = (
   options: Partial<Pick<JsonApiFacade.Options<string, never>, "baseUrl" | "totalOf">> = {}
 ): Effect.Effect<Facade, never, Scope.Scope> =>
   Effect.gen(function* () {
-    const { client, engine, store, arm, rootReads, racePut, backend } = yield* makeReplica;
+    const { client, engine, store, arm, rootReads, racePut, backend } = yield* makeReplica();
     yield* Effect.forEach(pins, (url) => client.subscribe(url), { concurrency: 1, discard: true });
     // A relational pin registers its edge windows once its rows are observed, and a pull marks
     // them: pull until the relational pin of the fixture is covered, so the replica holds
@@ -283,7 +286,7 @@ const jsonApi = (url: string, init: RequestInit = {}): Request =>
     ...init,
   });
 
-const bytes = (document: unknown) => JSON.stringify(document);
+const bytes = (document: unknown) => encodeJson(document);
 
 const body = (response: Response) => awaitPromise(() => response.json() as Promise<unknown>);
 
@@ -742,7 +745,7 @@ describe("JsonApiFacade", () => {
   it.effect("forwards a read the replica has registered but not pulled, then serves it", () =>
     Effect.scoped(
       Effect.gen(function* () {
-        const { client, engine, store } = yield* makeReplica;
+        const { client, engine, store } = yield* makeReplica();
         yield* client.subscribe("/jsonapi/categories");
         const handler = JsonApiFacade.fetchHandler({
           nodes,
@@ -779,7 +782,7 @@ describe("JsonApiFacade", () => {
   it.effect("does not answer a first page before its variants pin has been pulled", () =>
     Effect.scoped(
       Effect.gen(function* () {
-        const { client, engine, store } = yield* makeReplica;
+        const { client, engine, store } = yield* makeReplica();
         yield* client.subscribe("/jsonapi/products");
         yield* engine.pull.pipe(Effect.orDie);
         yield* client.subscribe("/jsonapi/variants");

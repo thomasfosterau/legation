@@ -56,7 +56,7 @@ const ALPHABET: ReadonlyArray<string> = [
   "\uDFFF",
 ];
 
-const randomString: Effect.Effect<string> = Effect.gen(function* () {
+const randomString = Effect.fn("randomString")(function* (): Effect.fn.Return<string> {
   const length = yield* Random.nextIntBetween(0, 5, { halfOpen: true });
   const chars = yield* Random.choice(ALPHABET).pipe(Effect.orDie, Effect.replicateEffect(length));
   return chars.join("");
@@ -67,7 +67,7 @@ const SEED = 20260903;
 
 /** `TRIALS` random string pairs, deterministic for `SEED`. */
 const randomPairs: Effect.Effect<ReadonlyArray<readonly [string, string]>> = Effect.all(
-  [randomString, randomString],
+  [randomString(), randomString()],
   { concurrency: 1 }
 ).pipe(Effect.replicateEffect(TRIALS), Random.withSeed(SEED));
 

@@ -510,7 +510,7 @@ export const makeWithIntrospectionWith = (
     const cvrStore = yield* Cvr.CvrStore;
     const bus = yield* InvalidationBus;
     const middleware = (yield* Effect.serviceOption(SyncMiddleware)).pipe((option) =>
-      option._tag === "Some" ? option.value : passthroughMiddleware
+      Option.isSome(option) ? option.value : passthroughMiddleware
     );
     // Optional: resolve named-query subscriptions to subsets (Query.ts).
     const resolverOption = yield* Effect.serviceOption(Query.QueryResolver);
@@ -653,7 +653,7 @@ export const makeWithIntrospectionWith = (
     // Monotonic cookie minting, scoped to this handler instead of a module
     // global. The Clock makes the timestamp injectable (TestClock in tests).
     const cookieCounter = yield* Ref.make(0);
-    const freshCookie = Effect.gen(function* () {
+    const freshCookie = Effect.fnUntraced(function* () {
       const now = yield* Clock.currentTimeMillis;
       const seq = yield* Ref.updateAndGet(cookieCounter, (n) => n + 1);
       const body = `cvr-${now}-${seq}`;
@@ -770,7 +770,7 @@ export const makeWithIntrospectionWith = (
       context: SyncContext,
       named: { readonly name: string; readonly args: unknown }
     ) =>
-      resolverOption._tag === "None"
+      Option.isNone(resolverOption)
         ? new TransportError({
             message: `No QueryResolver registered for named subscription "${named.name}"`,
           })
@@ -974,7 +974,7 @@ export const makeWithIntrospectionWith = (
               (entry) => entry.mutationId <= (lastMutationIds[entry.clientId] ?? 0)
             );
 
-            const minted = yield* freshCookie;
+            const minted = yield* freshCookie();
             const cookie = epoch === "" ? minted : `${minted}${COOKIE_EPOCH_SEP}${epoch}`;
             yield* cvrStore.set(cookie, { rows: next.rows });
             // Track this group's latest view so fan-out can match a delete against

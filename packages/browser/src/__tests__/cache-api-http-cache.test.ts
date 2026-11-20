@@ -10,6 +10,10 @@ import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
 import { awaitPromise } from "./await-promise.js";
 import * as CacheApiHttpCache from "../CacheApiHttpCache.js";
+import * as Schema from "effect/Schema";
+
+const JsonText = Schema.fromJsonString(Schema.Unknown);
+const encodeJson = Schema.encodeSync(JsonText);
 
 /** Minimal in-memory Cache API fake, keyed by request URL. */
 const makeFakeCache = (): CacheApiHttpCache.CacheLike & {
@@ -44,7 +48,7 @@ describe("CacheApiHttpCache store", () => {
       const request = new Request("https://api.test/todos");
       yield* store.put(
         request,
-        new Response(JSON.stringify([{ id: "1" }]), { status: 200 }),
+        new Response(encodeJson([{ id: "1" }]), { status: 200 }),
         meta({ tags: ["todos"] })
       );
 

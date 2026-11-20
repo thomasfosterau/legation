@@ -111,7 +111,7 @@ const eventually = <A>(read: Effect.Effect<A>, until: (value: A) => boolean) =>
     return yield* Effect.die(new TestFailure({ message: "eventually: condition never held" }));
   });
 
-const makeEngine = Effect.gen(function* () {
+const makeEngine = Effect.fn("makeEngine")(function* () {
   const backend = yield* MemoryBackend.make(
     MemoryBackend.validatedHandlers([
       MemoryBackend.handler(todoSet, (args, writer) =>
@@ -151,7 +151,7 @@ describe("EngineHost ↔ Mirror extensions", () => {
     "a named query registers through the host and mirrors its filtered rows",
     () =>
       Effect.gen(function* () {
-        const engine = yield* makeEngine;
+        const engine = yield* makeEngine();
         const { host, mirror: mirrorChannel } = yield* MirrorChannel.makeLoopbackPair;
         yield* EngineHost.run({ channel: host, engine, registry: collections });
         const mirror = yield* Mirror.make({ channel: mirrorChannel, mutators });
@@ -185,7 +185,7 @@ describe("EngineHost ↔ Mirror extensions", () => {
     () =>
       Effect.scoped(
         Effect.gen(function* () {
-          const engine = yield* makeEngine;
+          const engine = yield* makeEngine();
           const { host, mirror: mirrorChannel } = yield* MirrorChannel.makeLoopbackPair;
           yield* EngineHost.run({ channel: host, engine, registry: collections });
           const mirror = yield* Mirror.make({ channel: mirrorChannel, mutators });
@@ -231,7 +231,7 @@ describe("EngineHost ↔ Mirror extensions", () => {
     "releasing the last related tab tears the host registration down",
     () =>
       Effect.gen(function* () {
-        const engine = yield* makeEngine;
+        const engine = yield* makeEngine();
         const { host, mirror: mirrorChannel } = yield* MirrorChannel.makeLoopbackPair;
         yield* EngineHost.run({ channel: host, engine, registry: collections });
         const mirror = yield* Mirror.make({ channel: mirrorChannel, mutators });
@@ -263,7 +263,7 @@ describe("Mirror interest ledger", () => {
     "observing auto-registers the subset and releases it when the stream ends",
     () =>
       Effect.gen(function* () {
-        const engine = yield* makeEngine;
+        const engine = yield* makeEngine();
         const { host, mirror: mirrorChannel } = yield* MirrorChannel.makeLoopbackPair;
         yield* EngineHost.run({ channel: host, engine, registry: collections });
         const mirror = yield* Mirror.make({ channel: mirrorChannel, mutators });
@@ -299,7 +299,7 @@ describe("Mirror interest ledger", () => {
     "an explicit subscribe pins the subset beyond any observer's lifetime",
     () =>
       Effect.gen(function* () {
-        const engine = yield* makeEngine;
+        const engine = yield* makeEngine();
         const { host, mirror: mirrorChannel } = yield* MirrorChannel.makeLoopbackPair;
         yield* EngineHost.run({ channel: host, engine, registry: collections });
         const mirror = yield* Mirror.make({ channel: mirrorChannel, mutators });
@@ -332,7 +332,7 @@ describe("ServiceWorkerHost", () => {
     () =>
       Effect.scoped(
         Effect.gen(function* () {
-          const engine = yield* makeEngine;
+          const engine = yield* makeEngine();
           const name = `legation-swh-${crypto.randomUUID()}`;
           // The host wires its channel inside the forked fiber; give it a
           // beat before the mirror posts (BroadcastChannel drops unheard
@@ -372,7 +372,7 @@ describe("HostReady replay", () => {
     "a tab that subscribed before the host started hydrates once the host announces",
     () =>
       Effect.gen(function* () {
-        const engine = yield* makeEngine;
+        const engine = yield* makeEngine();
         const { host, mirror: mirrorChannel } = yield* MirrorChannel.makeLoopbackPair;
 
         // The tab races ahead of the host: these registrations go nowhere.
@@ -403,7 +403,7 @@ describe("ServiceWorkerHost.start", () => {
     () =>
       Effect.scoped(
         Effect.gen(function* () {
-          const engine = yield* makeEngine;
+          const engine = yield* makeEngine();
           const name = `legation-swh-start-${crypto.randomUUID()}`;
           const host = yield* ServiceWorkerHost.start({
             channelName: name,

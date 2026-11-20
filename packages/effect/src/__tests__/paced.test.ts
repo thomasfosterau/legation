@@ -58,11 +58,15 @@ const mutators = Mutator.registry([
   },
 ]);
 
-const backendHandlers: Record<string, MemoryBackend.BackendHandler> = {
+const backendHandlers = {
   "todo/set": (args, writer) => Effect.asVoid(writer.put("todos", (args as Todo).id, args)),
-};
+} satisfies Record<string, MemoryBackend.BackendHandler>;
 
-const makeServer: Effect.Effect<ServerHandler, never, Scope.Scope> = Effect.gen(function* () {
+const makeServer = Effect.fn("makeServer")(function* (): Effect.fn.Return<
+  ServerHandler,
+  never,
+  Scope.Scope
+> {
   const backend = yield* MemoryBackend.make(backendHandlers);
   const cvrStore = yield* Cvr.makeMemoryStore;
   const bus = yield* InvalidationBus.makeInProcess;
@@ -107,8 +111,8 @@ const counting = (store: ClientStore) => {
   return { wrapped, counter };
 };
 
-const setup = Effect.gen(function* () {
-  const handler = yield* makeServer;
+const setup = Effect.fn("setup")(function* () {
+  const handler = yield* makeServer();
   const transport = yield* makeInMemory(handler, "group-a");
   const inner = yield* ClientStoreModule.makeMemory;
   const { wrapped: store, counter } = counting(inner);
@@ -127,7 +131,7 @@ const idsOf = (mutations: ReadonlyArray<{ readonly mutationId: number }>) =>
  * mutations never reach a handler, so the log is exactly "what the server
  * applied".
  */
-const makeLoggingServer = Effect.gen(function* () {
+const makeLoggingServer = Effect.fn("makeLoggingServer")(function* () {
   const applied: Array<string> = [];
   const backend = yield* MemoryBackend.make({
     "todo/set": (args, writer) =>
@@ -172,8 +176,8 @@ const lossyAfterApply = (base: CT, mode: Ref.Ref<"ok" | "response-lost" | "reque
     ),
 });
 
-const setupLossy = Effect.gen(function* () {
-  const { handler, applied, backend } = yield* makeLoggingServer;
+const setupLossy = Effect.fn("setupLossy")(function* () {
+  const { handler, applied, backend } = yield* makeLoggingServer();
   const base = yield* makeInMemory(handler, "group-a");
   const mode = yield* Ref.make<"ok" | "response-lost" | "request-lost">("ok");
   const transport = lossyAfterApply(base, mode);
@@ -186,7 +190,7 @@ const setupLossy = Effect.gen(function* () {
 describe("Paced", () => {
   it.effect("coalesce collapses consecutive same-key calls, leaves other keys alone", () =>
     Effect.gen(function* () {
-      const { engine, store, counter } = yield* setup;
+      const { engine, store, counter } = yield* setup();
       const paced = yield* Paced.coalesce(engine, "todo/set");
 
       for (let i = 0; i < 10; i++) yield* paced.call("t1", todo("t1", `v${i}`));
@@ -213,7 +217,7 @@ describe("Paced", () => {
     "debounce: a 50-keystroke burst journals only a leading + trailing entry, bounded replays",
     () =>
       Effect.gen(function* () {
-        const { engine, store, counter } = yield* setup;
+        const { engine, store, counter } = yield* setup();
         const paced = yield* Paced.debounce(engine, "todo/set", Duration.millis(200));
 
         for (let i = 0; i < 50; i++) yield* paced.call("t1", todo("t1", `keystroke-${i}`));
@@ -241,7 +245,7 @@ describe("Paced", () => {
 
   it.effect("debounce: an isolated call (no burst) journals once, no wasted trailing flush", () =>
     Effect.gen(function* () {
-      const { engine, store, counter } = yield* setup;
+      const { engine, store, counter } = yield* setup();
       const paced = yield* Paced.debounce(engine, "todo/set", Duration.millis(200));
 
       yield* paced.call("t1", todo("t1", "only"));
@@ -258,7 +262,7 @@ describe("Paced", () => {
 
   it.effect("throttle: periodic flushes while calls keep arriving, at most one per window", () =>
     Effect.gen(function* () {
-      const { engine, store, counter } = yield* setup;
+      const { engine, store, counter } = yield* setup();
       const paced = yield* Paced.throttle(engine, "todo/set", Duration.millis(100));
 
       // Leading edge.
@@ -297,7 +301,7 @@ describe("Paced", () => {
 
   it.effect("dropIfPending never compacts an entry while a push may still have it in flight", () =>
     Effect.gen(function* () {
-      const handler = yield* makeServer;
+      const handler = yield* makeServer();
       const base = yield* makeInMemory(handler, "group-gate");
       const store = yield* ClientStoreModule.makeMemory;
       const started = yield* Deferred.make<void>();
@@ -349,7 +353,7 @@ describe("Paced", () => {
     "property: mutation ids stay contiguous from 1 and journal-ordered across randomized paced bursts",
     () =>
       Effect.gen(function* () {
-        const { engine, store } = yield* setup;
+        const { engine, store } = yield* setup();
         const debounced = yield* Paced.debounce(engine, "todo/set", Duration.millis(30));
         const throttled = yield* Paced.throttle(engine, "todo/set", Duration.millis(30));
         const coalesced = yield* Paced.coalesce(engine, "todo/set");
@@ -392,7 +396,7 @@ describe("Paced", () => {
 describe("paced compaction renumbers the journal", () => {
   it.effect("a coalesced journal drains: the survivor is renumbered, not left behind a gap", () =>
     Effect.gen(function* () {
-      const { engine, store, applied, backend } = yield* setupLossy;
+      const { engine, store, applied, backend } = yield* setupLossy();
       const paced = yield* Paced.coalesce(engine, "todo/set");
       for (let n = 1; n <= 3; n++) yield* paced.call("1", todo("1", `e${n}`));
 
@@ -411,7 +415,7 @@ describe("paced compaction renumbers the journal", () => {
 
   it.effect("debounce and throttle journals drain too", () =>
     Effect.gen(function* () {
-      const { engine, store, applied } = yield* setupLossy;
+      const { engine, store, applied } = yield* setupLossy();
       const debounced = yield* Paced.debounce(engine, "todo/set", Duration.millis(50));
       const throttled = yield* Paced.throttle(engine, "todo/set", Duration.millis(50));
       for (let n = 1; n <= 5; n++) {
@@ -431,7 +435,7 @@ describe("paced compaction renumbers the journal", () => {
 
   it.effect("preserves journal order across interleaved keys", () =>
     Effect.gen(function* () {
-      const { engine, store, applied } = yield* setupLossy;
+      const { engine, store, applied } = yield* setupLossy();
       const paced = yield* Paced.coalesce(engine, "todo/set");
       yield* Effect.forEach(
         [
@@ -459,7 +463,7 @@ describe("paced compaction renumbers the journal", () => {
 
   it.effect("renumbers from the last acknowledged id, not from 1", () =>
     Effect.gen(function* () {
-      const { engine, store, applied, backend } = yield* setupLossy;
+      const { engine, store, applied, backend } = yield* setupLossy();
       const paced = yield* Paced.coalesce(engine, "todo/set");
       yield* paced.call("a", todo("a", "a1"));
       yield* paced.call("a", todo("a", "a2"));
@@ -484,7 +488,7 @@ describe("paced compaction renumbers the journal", () => {
     "compaction during an in-flight push leaves the claimed entry alone and stays gap-free",
     () =>
       Effect.gen(function* () {
-        const { handler, applied } = yield* makeLoggingServer;
+        const { handler, applied } = yield* makeLoggingServer();
         const base = yield* makeInMemory(handler, "group-gate");
         const started = yield* Deferred.make<void>();
         const release = yield* Deferred.make<void>();
@@ -534,7 +538,7 @@ describe("paced compaction renumbers the journal", () => {
     "an entry a failed push may have delivered keeps its id (renumbering it would drop a write)",
     () =>
       Effect.gen(function* () {
-        const { engine, store, applied, mode } = yield* setupLossy;
+        const { engine, store, applied, mode } = yield* setupLossy();
         const paced = yield* Paced.coalesce(engine, "todo/set");
         yield* paced.call("a", todo("a", "a1"));
         yield* paced.call("b", todo("b", "b1"));
@@ -562,7 +566,7 @@ describe("paced compaction renumbers the journal", () => {
 
   it.effect("a push that never reached the server freezes its entries too, and still drains", () =>
     Effect.gen(function* () {
-      const { engine, store, applied, mode } = yield* setupLossy;
+      const { engine, store, applied, mode } = yield* setupLossy();
       const paced = yield* Paced.coalesce(engine, "todo/set");
       yield* paced.call("a", todo("a", "a1"));
       yield* paced.call("b", todo("b", "b1"));
@@ -582,7 +586,7 @@ describe("paced compaction renumbers the journal", () => {
 
   it.effect("mutateWithAck handles and mutation states follow a renumbering", () =>
     Effect.gen(function* () {
-      const { engine, store } = yield* setupLossy;
+      const { engine, store } = yield* setupLossy();
       const a = yield* engine.mutateWithAck("todo/set", todo("a", "a1"));
       const b = yield* engine.mutateWithAck("todo/set", todo("b", "b1"));
       const c = yield* engine.mutateWithAck("todo/set", todo("c", "c1"));
@@ -603,7 +607,7 @@ describe("paced compaction renumbers the journal", () => {
       expect(Exit.isFailure(yield* Fiber.join(aOutcome))).toBe(true);
 
       const states = yield* Stream.runHead(engine.mutationStates);
-      const map = states._tag === "Some" ? states.value : HashMap.empty();
+      const map = Option.isSome(states) ? states.value : HashMap.empty();
       const phaseAt = (id: number) => Option.getOrUndefined(HashMap.get(map, id));
       expect(phaseAt(1)).toMatchObject({ phase: "pending", mutationId: 1 });
       expect(phaseAt(1)).toMatchObject({ args: { title: "b1" } });
@@ -620,7 +624,7 @@ describe("paced compaction renumbers the journal", () => {
 
   it.effect("several paced instances on one engine keep each other's ids current", () =>
     Effect.gen(function* () {
-      const { engine, store, applied } = yield* setupLossy;
+      const { engine, store, applied } = yield* setupLossy();
       const p = yield* Paced.coalesce(engine, "todo/set");
       const q = yield* Paced.coalesce(engine, "todo/set");
 
@@ -644,7 +648,7 @@ describe("paced compaction renumbers the journal", () => {
     "property: randomized paced traffic with pushes and lost pushes always drains without a gap",
     () =>
       Effect.gen(function* () {
-        const { engine, store, applied, mode } = yield* setupLossy;
+        const { engine, store, applied, mode } = yield* setupLossy();
         const debounced = yield* Paced.debounce(engine, "todo/set", Duration.millis(30));
         const throttled = yield* Paced.throttle(engine, "todo/set", Duration.millis(30));
         const coalesced = yield* Paced.coalesce(engine, "todo/set");
@@ -725,7 +729,7 @@ describe("a committed compaction is never lost to a failure or an interrupt", ()
    * IndexedDB quota error or aborted transaction mid-apply), and to run a hook
    * right after the intent lands (to interrupt the caller there).
    */
-  const faultyDurable = Effect.gen(function* () {
+  const faultyDurable = Effect.fn("faultyDurable")(function* () {
     const data = new Map<string, string>();
     const fault = {
       failAfterIntent: false,
@@ -758,10 +762,10 @@ describe("a committed compaction is never lost to a failure or an interrupt", ()
     return { store, fault };
   });
 
-  const durableSetup = Effect.gen(function* () {
-    const { handler, applied } = yield* makeLoggingServer;
+  const durableSetup = Effect.fn("durableSetup")(function* () {
+    const { handler, applied } = yield* makeLoggingServer();
     const transport = yield* makeInMemory(handler, "group-a");
-    const { store, fault } = yield* faultyDurable;
+    const { store, fault } = yield* faultyDurable();
     const engine = yield* makeEngine(transport, store);
     yield* engine.subscribe(allTodos);
     return { engine, store, fault, applied };
@@ -769,7 +773,7 @@ describe("a committed compaction is never lost to a failure or an interrupt", ()
 
   it.effect("an apply failure after the commit point does not lose the newest paced write", () =>
     Effect.gen(function* () {
-      const { engine, store, fault, applied } = yield* durableSetup;
+      const { engine, store, fault, applied } = yield* durableSetup();
       const paced = yield* Paced.coalesce(engine, "todo/set");
       yield* paced.call("k", todo("k", "e1"));
 
@@ -796,7 +800,7 @@ describe("a committed compaction is never lost to a failure or an interrupt", ()
 
   it.effect("handles follow a renumbering the store had not finished applying", () =>
     Effect.gen(function* () {
-      const { engine, store, fault, applied } = yield* durableSetup;
+      const { engine, store, fault, applied } = yield* durableSetup();
       const a = yield* engine.mutateWithAck("todo/set", todo("a", "a1"));
       const b = yield* engine.mutateWithAck("todo/set", todo("b", "b1"));
       const aOutcome = yield* Effect.forkChild(Effect.exit(a.acknowledged));
@@ -821,7 +825,7 @@ describe("a committed compaction is never lost to a failure or an interrupt", ()
     "dropIfPending itself survives an interrupt between the store commit and the re-key",
     () =>
       Effect.gen(function* () {
-        const { engine, store, fault, applied } = yield* durableSetup;
+        const { engine, store, fault, applied } = yield* durableSetup();
         const a = yield* engine.mutateWithAck("todo/set", todo("a", "a1"));
         const b = yield* engine.mutateWithAck("todo/set", todo("b", "b1"));
 
@@ -843,7 +847,7 @@ describe("a committed compaction is never lost to a failure or an interrupt", ()
         // b's handle and state are keyed by the new id, not left on 2.
         expect(idsOf(yield* store.pendingMutations)).toEqual([1]);
         const states = yield* Stream.runHead(engine.mutationStates);
-        const map = states._tag === "Some" ? states.value : HashMap.empty();
+        const map = Option.isSome(states) ? states.value : HashMap.empty();
         expect(Option.getOrUndefined(HashMap.get(map, 1))).toMatchObject({
           phase: "pending",
           args: { title: "b1" },
@@ -875,7 +879,7 @@ describe("a committed compaction is never lost to a failure or an interrupt", ()
 
   it.effect("an interrupt between the store commit and the re-key loses nothing", () =>
     Effect.gen(function* () {
-      const { engine, store, fault, applied } = yield* durableSetup;
+      const { engine, store, fault, applied } = yield* durableSetup();
       const paced = yield* Paced.coalesce(engine, "todo/set");
       yield* paced.call("k", todo("k", "e1"));
 
@@ -907,7 +911,7 @@ describe("a committed compaction is never lost to a failure or an interrupt", ()
 describe("entries from before this session are never renumbered", () => {
   it.effect("an engine booted over a persisted journal freezes it", () =>
     Effect.gen(function* () {
-      const { handler } = yield* makeLoggingServer;
+      const { handler } = yield* makeLoggingServer();
       const transport = yield* makeInMemory(handler, "group-a");
       // A journal left by an earlier session or a release with no sent
       // watermark: its entries may well have been pushed already.

@@ -27,6 +27,10 @@ import * as JsonApiSync from "../JsonApiSync.js";
 import { defined } from "./defined.js";
 import { withLayer } from "./with-layer.js";
 
+const JsonText = Schema.fromJsonString(Schema.Unknown);
+const encodeJson = Schema.encodeSync(JsonText);
+const decodeJson = Schema.decodeSync(JsonText);
+
 const idParam = { params: Schema.Struct({ id: Schema.String }) };
 const body = { payload: Schema.Unknown, success: Schema.Unknown };
 const crud = (type: string) =>
@@ -49,7 +53,7 @@ interface Stored {
 const readBody = (request: { readonly body: unknown }): any => {
   const b = request.body as { _tag?: string; body?: Uint8Array };
   return b?._tag === "Uint8Array" && b.body
-    ? JSON.parse(new TextDecoder().decode(b.body))
+    ? decodeJson(new TextDecoder().decode(b.body))
     : undefined;
 };
 
@@ -65,7 +69,7 @@ const makeServer = (seed: ReadonlyArray<Stored>) => {
   const store = new Map(seed.map((r) => [`${r.type}:${r.id}`, r]));
   const requests: Array<string> = [];
   const headers = { "Content-Type": "application/vnd.api+json" };
-  const doc = (data: unknown) => new Response(JSON.stringify({ data }), { status: 200, headers });
+  const doc = (data: unknown) => new Response(encodeJson({ data }), { status: 200, headers });
   const empty = (status: number) => new Response(null, { status, headers });
 
   // The grammar's shorthand: `filter[f]=v` (eq), `filter[f]=a,b` (in), or
@@ -92,7 +96,7 @@ const makeServer = (seed: ReadonlyArray<Stored>) => {
         });
       });
     });
-    return new Response(JSON.stringify({ data: rows, included: [...seen.values()] }), {
+    return new Response(encodeJson({ data: rows, included: [...seen.values()] }), {
       status: 200,
       headers,
     });
@@ -228,7 +232,7 @@ describe("Relationships", () => {
 
         // observe's first emission matches a one-shot query.
         const first = yield* Stream.runHead(Relationships.observe(engine, issues, ["comments"]));
-        const initial = defined((first._tag === "Some" ? first.value : [])[0]);
+        const initial = defined((Option.isSome(first) ? first.value : [])[0]);
         expect(
           (initial.related.comments as ReadonlyArray<JsonApiRow>).map((c) => attr(c, "body"))
         ).toEqual([Option.some("first"), Option.some("second")]);
@@ -291,7 +295,7 @@ describe("Relationships", () => {
           // (and a push ack briefly re-emits the pre-edit join), so wait
           // for the latest one to match rather than reading a snapshot.
           const latest = yield* emitted(
-            (acc) => acc.length >= 2 && JSON.stringify(acc.at(-1)) === JSON.stringify(settled)
+            (acc) => acc.length >= 2 && encodeJson(acc.at(-1)) === encodeJson(settled)
           );
           assert(Option.isSome(latest));
           const emissions = latest.value;
@@ -316,7 +320,7 @@ describe("Relationships", () => {
         // No manual subscribe of comments/people — related() does it.
         const stream = yield* Relationships.related(engine, issues, ["author", "comments"]);
         const head = yield* Stream.runHead(stream);
-        const issue = defined((head._tag === "Some" ? head.value : [])[0]);
+        const issue = defined((Option.isSome(head) ? head.value : [])[0]);
 
         expect(attr(issue.related.author as JsonApiRow, "name")).toEqual(Option.some("Ada"));
         expect(
@@ -339,7 +343,7 @@ describe("Relationships", () => {
         const engine = yield* ClientEngine.ClientEngine;
         const stream = yield* Relationships.related(engine, issues, ["author", "comments"]);
         const head = yield* Stream.runHead(stream);
-        const issue = defined((head._tag === "Some" ? head.value : [])[0]);
+        const issue = defined((Option.isSome(head) ? head.value : [])[0]);
 
         expect(
           (issue.related.comments as ReadonlyArray<JsonApiRow>).map((c) => attr(c, "body"))

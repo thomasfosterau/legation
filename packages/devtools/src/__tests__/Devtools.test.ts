@@ -4,6 +4,7 @@
  * effects an app would call directly (`push`/`pull`/`unsubscribe`,
  * `ClientStore.clearRows`) — nothing here is a bespoke wire.
  */
+import * as Option from "effect/Option";
 import { describe, expect, it } from "@effect/vitest";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
@@ -41,14 +42,14 @@ const mutators = Mutator.registry([
   },
 ]);
 
-const backendHandlers: Record<string, MemoryBackend.BackendHandler> = {
+const backendHandlers = {
   "todo/set": (args, writer) => Effect.asVoid(writer.put("todos", (args as Todo).id, args)),
-};
+} satisfies Record<string, MemoryBackend.BackendHandler>;
 
 const allTodos = Subset.make({ collection: "todos" });
 
 /** The real in-process stack (server + client engine + store), scoped. */
-const setup = Effect.gen(function* () {
+const setup = Effect.fn("setup")(function* () {
   const backend = yield* MemoryBackend.make(backendHandlers);
   const cvr = yield* Cvr.makeMemoryStore;
   const bus = yield* InvalidationBus.makeInProcess;
@@ -78,7 +79,7 @@ const setup = Effect.gen(function* () {
 describe("Devtools.make", () => {
   it.effect("subscriptions/cookie/collections read the same substrate Introspection does", () =>
     Effect.gen(function* () {
-      const { engine, devtools } = yield* setup;
+      const { engine, devtools } = yield* setup();
       yield* engine.subscribe(allTodos);
       yield* engine.mutate("todo/set", { id: "1", title: "t", done: false });
       yield* engine.push;
@@ -97,14 +98,14 @@ describe("Devtools.make", () => {
 
   it.effect("mutationStates streams the journal/mutation timeline, including a settled entry", () =>
     Effect.gen(function* () {
-      const { engine, devtools } = yield* setup;
+      const { engine, devtools } = yield* setup();
       yield* engine.subscribe(allTodos);
       yield* engine.mutate("todo/set", { id: "1", title: "t", done: false });
       yield* engine.push;
 
       const states = yield* Stream.runHead(devtools.mutationStates);
       expect(states._tag).toBe("Some");
-      if (states._tag !== "Some") return;
+      if (Option.isNone(states)) return;
       const entry = [...HashMap.values(states.value)].find((s) => s.mutationId === 1);
       expect(entry?.phase).toBe("acknowledged");
     }).pipe(Effect.scoped)
@@ -112,7 +113,7 @@ describe("Devtools.make", () => {
 
   it.effect("forcePush/forcePull drive the same engine effects an app would call directly", () =>
     Effect.gen(function* () {
-      const { engine, devtools } = yield* setup;
+      const { engine, devtools } = yield* setup();
       yield* engine.subscribe(allTodos);
       yield* engine.mutate("todo/set", { id: "1", title: "t", done: false });
 
@@ -126,7 +127,7 @@ describe("Devtools.make", () => {
 
   it.effect("dropSubscription unsubscribes; a later subscriptions read no longer lists it", () =>
     Effect.gen(function* () {
-      const { engine, devtools } = yield* setup;
+      const { engine, devtools } = yield* setup();
       yield* engine.subscribe(allTodos);
       expect(yield* devtools.subscriptions).toHaveLength(1);
 
@@ -137,7 +138,7 @@ describe("Devtools.make", () => {
 
   it.effect("clearStore empties every confirmed row (the destructive action)", () =>
     Effect.gen(function* () {
-      const { engine, devtools } = yield* setup;
+      const { engine, devtools } = yield* setup();
       yield* engine.subscribe(allTodos);
       yield* engine.mutate("todo/set", { id: "1", title: "t", done: false });
       yield* engine.push;
@@ -151,7 +152,7 @@ describe("Devtools.make", () => {
 
   it.effect("clearStore also empties the running engine's view, not only the store", () =>
     Effect.gen(function* () {
-      const { engine, devtools } = yield* setup;
+      const { engine, devtools } = yield* setup();
       yield* engine.subscribe(allTodos);
       yield* engine.mutate("todo/set", { id: "1", title: "t", done: false });
       yield* engine.push;
@@ -165,7 +166,7 @@ describe("Devtools.make", () => {
 
   it.effect("an offline control passed to `make` is exposed on the core unchanged", () =>
     Effect.gen(function* () {
-      const { engine, store } = yield* setup;
+      const { engine, store } = yield* setup();
       const offline = {
         setOffline: (_next: boolean) => Effect.void,
         isOffline: Effect.succeed(false),
@@ -183,7 +184,7 @@ describe("Devtools.make", () => {
   // mutation-states-engine.test.ts's own live-collector pattern).
   it.live("events surfaces the sync-lifecycle log live, not as a one-shot read", () =>
     Effect.gen(function* () {
-      const { engine, devtools } = yield* setup;
+      const { engine, devtools } = yield* setup();
       yield* engine.subscribe(allTodos);
 
       const collected = yield* Effect.forkChild(Stream.runCollect(Stream.take(devtools.events, 1)));

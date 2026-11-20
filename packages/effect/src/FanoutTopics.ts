@@ -62,10 +62,10 @@ const isLiteral = (value: unknown): value is string | number | boolean =>
 const eqConjuncts = (
   predicate: Predicate.Predicate
 ): ReadonlyArray<{ readonly field: string; readonly value: string | number | boolean }> => {
-  if (predicate._tag === "Compare" && predicate.op === "eq" && isLiteral(predicate.value)) {
+  if (P.isTagged(predicate, "Compare") && predicate.op === "eq" && isLiteral(predicate.value)) {
     return [{ field: predicate.field, value: predicate.value }];
   }
-  if (predicate._tag === "And") return predicate.predicates.flatMap(eqConjuncts);
+  if (P.isTagged(predicate, "And")) return predicate.predicates.flatMap(eqConjuncts);
   return [];
 };
 

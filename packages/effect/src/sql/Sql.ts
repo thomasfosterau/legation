@@ -260,11 +260,11 @@ const compileCompare = (node: CompareNode, compilation: Compilation): string =>
 
 /** `In` / `NotIn`: an empty list is the constant `FALSE` / `TRUE` (ADR-0028 §3). */
 const compileList = (node: ListNode, compilation: Compilation): string => {
-  if (Arr.isReadonlyArrayEmpty(node.values)) return node._tag === "In" ? "1 = 0" : "1 = 1";
+  if (Arr.isReadonlyArrayEmpty(node.values)) return P.isTagged(node, "In") ? "1 = 0" : "1 = 1";
   const placeholders = bindableList(compilation, node.field, node.values)
     .map((value) => bindLiteral(compilation, node.field, value))
     .join(", ");
-  return `${operand(compilation, node.field)} ${node._tag === "In" ? "IN" : "NOT IN"} (${placeholders})`;
+  return `${operand(compilation, node.field)} ${P.isTagged(node, "In") ? "IN" : "NOT IN"} (${placeholders})`;
 };
 
 /** Correlated set membership: `localField IN (SELECT foreignField FROM … WHERE …)`. */

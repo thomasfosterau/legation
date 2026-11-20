@@ -357,6 +357,12 @@ export interface JoinEngine {
   ) => { readonly result: ReadonlyArray<RelatedRow> | undefined };
 }
 
+/** The collections a target diff starts and stops observing. */
+interface TargetDiff {
+  readonly added: ReadonlyArray<string>;
+  readonly removed: ReadonlyArray<string>;
+}
+
 /** One targeted foreign collection's incrementally-maintained state. */
 interface ForeignState {
   target: Target;
@@ -468,9 +474,7 @@ export const makeJoinEngine = (strategy: Strategy): JoinEngine => {
    * start observing newly-targeted collections, stop observing stale ones,
    * leave already-targeted ones (with the same join field) untouched.
    */
-  const diffTargets = (
-    nextTargets: ReadonlyMap<string, Target>
-  ): { readonly added: ReadonlyArray<string>; readonly removed: ReadonlyArray<string> } => {
+  const diffTargets = (nextTargets: ReadonlyMap<string, Target>): TargetDiff => {
     const added: Array<string> = [];
     const removed: Array<string> = [];
     for (const [collection, target] of nextTargets) {
@@ -697,7 +701,7 @@ export const observeWith = (
         Effect.forever(
           Queue.take(events).pipe(
             Effect.flatMap((event) =>
-              event._tag === "base"
+              P.isTagged(event, "base")
                 ? Effect.gen(function* () {
                     const { added, removed, result } = engine.applyBase(event.rows);
                     for (const collection of removed) yield* stopCollection(collection);
@@ -853,7 +857,7 @@ const trackWith = (
       )
     );
     const pullSoon = yield* makePullSoon(engine, scope);
-    const refresh = Effect.gen(function* () {
+    const refresh = Effect.fnUntraced(function* () {
       const base = yield* engine.query(subset).pipe(Effect.orDie);
       const changed = yield* reconcile(engine, subscribed, desiredSubsets(strategy, base));
       if (changed) yield* pullSoon;
@@ -861,9 +865,9 @@ const trackWith = (
     // The base syncs in the background; the derivation runs over what the
     // replica holds now and again on every change to the base rows.
     yield* pullSoon;
-    yield* refresh;
+    yield* refresh();
     yield* Effect.forkIn(
-      Stream.runForEach(engine.observe(subset).pipe(Stream.orDie), () => refresh),
+      Stream.runForEach(engine.observe(subset).pipe(Stream.orDie), () => refresh()),
       scope
     );
   });

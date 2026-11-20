@@ -6,6 +6,7 @@
  * starts the sync loop itself; Client.connect drives a worker-hosted
  * engine over a channel with identical component-facing behavior.
  */
+import * as P from "effect/Predicate";
 import * as Defined from "../Defined.js";
 import { describe, expect, it } from "@effect/vitest";
 import * as Arr from "effect/Array";
@@ -83,7 +84,7 @@ const eventually = <A>(read: Effect.Effect<A>, until: (value: A) => boolean) =>
     return yield* Effect.die(new TestFailure({ message: "eventually: condition never held" }));
   });
 
-const makeHandler = Effect.gen(function* () {
+const makeHandler = Effect.fn("makeHandler")(function* () {
   const backend = yield* MemoryBackend.make(
     MemoryBackend.validatedHandlers([
       MemoryBackend.handler(productSet, (args, writer) =>
@@ -108,8 +109,8 @@ const makeHandler = Effect.gen(function* () {
   );
 });
 
-const makeEngine = Effect.gen(function* () {
-  const handler = yield* makeHandler;
+const makeEngine = Effect.fn("makeEngine")(function* () {
+  const handler = yield* makeHandler();
   const store = yield* ClientStore.makeMemory;
   const transport = yield* Transport.makeInMemory(handler, "group-client");
   const engine = yield* ClientEngine.make({
@@ -127,7 +128,7 @@ describe("Client over an owned engine", () => {
   it.effect("observing subscribes; the ledger keeps one voice per window", () =>
     Effect.scoped(
       Effect.gen(function* () {
-        const { engine } = yield* makeEngine;
+        const { engine } = yield* makeEngine();
         const client = Client.fromView(nodes, ClientView.fromEngine(engine));
         const read = { collection: "products" };
 
@@ -159,7 +160,7 @@ describe("Client over an owned engine", () => {
   it.effect("an explicit subscribe pins the window beyond observers", () =>
     Effect.scoped(
       Effect.gen(function* () {
-        const { engine } = yield* makeEngine;
+        const { engine } = yield* makeEngine();
         const client = Client.fromView(nodes, ClientView.fromEngine(engine));
         const read = { collection: "products" };
 
@@ -183,7 +184,7 @@ describe("Client over an owned engine", () => {
   it.effect("includes resolve with edge windows applied", () =>
     Effect.scoped(
       Effect.gen(function* () {
-        const { engine } = yield* makeEngine;
+        const { engine } = yield* makeEngine();
         const client = Client.fromView(nodes, ClientView.fromEngine(engine));
 
         yield* client.mutate("product/set", { id: "p-1", name: "Desk" });
@@ -215,7 +216,7 @@ describe("Client over an owned engine", () => {
   it.effect("Client.make starts the sync loop itself (the journal drains)", () =>
     Effect.scoped(
       Effect.gen(function* () {
-        const handler = yield* makeHandler;
+        const handler = yield* makeHandler();
         const store = yield* ClientStore.makeMemory;
         const transport = yield* Transport.makeInMemory(handler, "group-auto");
         const { client } = yield* Client.make({
@@ -240,8 +241,8 @@ describe("Client over an owned engine", () => {
 });
 
 /** An engine whose transport counts the fallthrough reads it carries. */
-const makeCountingEngine = Effect.gen(function* () {
-  const handler = yield* makeHandler;
+const makeCountingEngine = Effect.fn("makeCountingEngine")(function* () {
+  const handler = yield* makeHandler();
   const store = yield* ClientStore.makeMemory;
   const transport = yield* Transport.makeInMemory(handler, "group-coverage");
   const reads = yield* Ref.make(0);
@@ -294,7 +295,7 @@ describe("Client.query coverage (ADR-0029: conjunct subsumption with strict wind
   it.effect("the shell's windowed subscription does not cover productPage({ categoryId })", () =>
     Effect.scoped(
       Effect.gen(function* () {
-        const { engine, reads } = yield* makeCountingEngine;
+        const { engine, reads } = yield* makeCountingEngine();
         const client = Client.fromView(nodes, ClientView.fromEngine(engine));
         yield* client.mutate("product/set", { id: "p-1", name: "Desk", categoryId: "c-audio" });
         yield* client.mutate("product/set", { id: "p-2", name: "Lamp", categoryId: "c-light" });
@@ -326,7 +327,7 @@ describe("Client.query coverage (ADR-0029: conjunct subsumption with strict wind
   it.effect("an unwindowed products subscription covers productPage({ categoryId }) locally", () =>
     Effect.scoped(
       Effect.gen(function* () {
-        const { engine, reads } = yield* makeCountingEngine;
+        const { engine, reads } = yield* makeCountingEngine();
         const client = Client.fromView(nodes, ClientView.fromEngine(engine));
         const whole = { collection: "products" };
         yield* client.subscribe(whole);
@@ -363,7 +364,7 @@ describe("Client.query coverage (ADR-0029: conjunct subsumption with strict wind
     () =>
       Effect.scoped(
         Effect.gen(function* () {
-          const { engine } = yield* makeCountingEngine;
+          const { engine } = yield* makeCountingEngine();
           const client = Client.fromView(nodes, ClientView.fromEngine(engine));
           yield* client.subscribe({ collection: "products", after: "p-50" });
           yield* pulled(engine);
@@ -381,7 +382,7 @@ describe("Client.query coverage (ADR-0029: conjunct subsumption with strict wind
   it.effect("an explicit pin registers its edge windows, so a read with include is covered", () =>
     Effect.scoped(
       Effect.gen(function* () {
-        const { engine } = yield* makeCountingEngine;
+        const { engine } = yield* makeCountingEngine();
         const client = Client.fromView(nodes, ClientView.fromEngine(engine));
         yield* client.mutate("product/set", { id: "p-1", name: "Desk" });
         yield* client.mutate("product/set", { id: "p-2", name: "Lamp" });
@@ -447,7 +448,7 @@ describe("Client.query coverage (ADR-0029: conjunct subsumption with strict wind
   it.effect("releasing an edged pin never drops a root another registration still holds", () =>
     Effect.scoped(
       Effect.gen(function* () {
-        const { engine } = yield* makeCountingEngine;
+        const { engine } = yield* makeCountingEngine();
         const client = Client.fromView(nodes, ClientView.fromEngine(engine));
         yield* client.mutate("product/set", { id: "p-1", name: "Desk" });
         const plain = { collection: "products" };
@@ -487,7 +488,7 @@ describe("Client.query coverage (ADR-0029: conjunct subsumption with strict wind
   it.effect("an unsubscribe racing an in-flight subscribe of the same read leaks nothing", () =>
     Effect.scoped(
       Effect.gen(function* () {
-        const { engine } = yield* makeCountingEngine;
+        const { engine } = yield* makeCountingEngine();
         // A view whose edge registration waits on a gate: the subscribe is
         // mid-registration when the unsubscribe arrives.
         const gate = yield* Deferred.make<void>();
@@ -523,7 +524,7 @@ describe("Client.query coverage (ADR-0029: conjunct subsumption with strict wind
   it.effect("two pins sharing a root are released one at a time", () =>
     Effect.scoped(
       Effect.gen(function* () {
-        const { engine } = yield* makeCountingEngine;
+        const { engine } = yield* makeCountingEngine();
         const client = Client.fromView(nodes, ClientView.fromEngine(engine));
         const plain = { collection: "products" };
         const withInclude: Query.Read = { collection: "products", include: { reviews: true } };
@@ -615,7 +616,7 @@ describe("Client.subscribe(url) (ADR-0029 section 2: URL-keyed subscriptions)", 
   it.effect("subscribe(url) and subscribe(read) of one query share one ledger entry", () =>
     Effect.scoped(
       Effect.gen(function* () {
-        const { engine } = yield* makeCountingEngine;
+        const { engine } = yield* makeCountingEngine();
         const client = Client.fromView(nodes, ClientView.fromEngine(engine), { urls: stubUrls });
         const read: Query.Read = {
           collection: "products",
@@ -654,7 +655,7 @@ describe("Client.subscribe(url) (ADR-0029 section 2: URL-keyed subscriptions)", 
   it.effect("a URL the bridge refuses fails with a QueryError and registers nothing", () =>
     Effect.scoped(
       Effect.gen(function* () {
-        const { engine } = yield* makeCountingEngine;
+        const { engine } = yield* makeCountingEngine();
         const client = Client.fromView(nodes, ClientView.fromEngine(engine), { urls: stubUrls });
         const unknown = yield* Effect.flip(client.subscribe("/widgets"));
         expect(unknown._tag).toBe("QueryError");
@@ -672,7 +673,7 @@ describe("Client.subscribe(url) (ADR-0029 section 2: URL-keyed subscriptions)", 
   it.effect("a Client built without URL reads fails a URL call with a QueryError", () =>
     Effect.scoped(
       Effect.gen(function* () {
-        const { engine } = yield* makeCountingEngine;
+        const { engine } = yield* makeCountingEngine();
         const client = Client.fromView(nodes, ClientView.fromEngine(engine));
         const error = yield* Effect.flip(client.subscribe("/products"));
         expect(error._tag).toBe("QueryError");
@@ -688,7 +689,7 @@ describe("Client.subscribe(url) (ADR-0029 section 2: URL-keyed subscriptions)", 
   it.effect("the URL leaves with the last pin, even while an observer keeps the entry", () =>
     Effect.scoped(
       Effect.gen(function* () {
-        const { engine } = yield* makeCountingEngine;
+        const { engine } = yield* makeCountingEngine();
         const client = Client.fromView(nodes, ClientView.fromEngine(engine), { urls: stubUrls });
         const read: Query.Read = { collection: "products" };
         yield* Effect.forkScoped(
@@ -700,14 +701,14 @@ describe("Client.subscribe(url) (ADR-0029 section 2: URL-keyed subscriptions)", 
         expect(yield* client.subscriptions).toEqual(["/products"]);
         yield* pulled(engine);
         const pinned = yield* client.coverageOf(read);
-        expect(pinned._tag === "Covered" ? pinned.url : pinned).toBe("/products");
+        expect(P.isTagged(pinned, "Covered") ? pinned.url : pinned).toBe("/products");
 
         // The observer keeps the entry (and the window); the pin's identity goes.
         yield* client.unsubscribe("/products");
         expect(yield* client.subscriptions).toEqual([]);
         const observed = yield* client.coverageOf(read);
         expect(observed._tag).toBe("Covered");
-        expect(observed._tag === "Covered" ? observed.url : "listed").toBeUndefined();
+        expect(P.isTagged(observed, "Covered") ? observed.url : "listed").toBeUndefined();
         expect(yield* rootHashes(engine)).toHaveLength(1);
 
         // Pinning again names it again.
@@ -720,7 +721,7 @@ describe("Client.subscribe(url) (ADR-0029 section 2: URL-keyed subscriptions)", 
   it.effect("a pin whose read has no URL form is held but not listed", () =>
     Effect.scoped(
       Effect.gen(function* () {
-        const { engine } = yield* makeCountingEngine;
+        const { engine } = yield* makeCountingEngine();
         const client = Client.fromView(nodes, ClientView.fromEngine(engine), { urls: stubUrls });
         yield* client.subscribe({ collection: "products", include: { reviews: { first: 2 } } });
         yield* client.subscribe({ collection: "products" });
@@ -731,7 +732,7 @@ describe("Client.subscribe(url) (ADR-0029 section 2: URL-keyed subscriptions)", 
           include: { reviews: { first: 1 } },
         });
         expect(verdict._tag).toBe("Covered");
-        expect(verdict._tag === "Covered" ? verdict.url : "listed").toBeUndefined();
+        expect(P.isTagged(verdict, "Covered") ? verdict.url : "listed").toBeUndefined();
       })
     )
   );
@@ -764,7 +765,7 @@ describe("Client.make defaults (zero wiring)", () => {
   it.effect("store and transport as options: the sync loop drains the journal", () =>
     Effect.scoped(
       Effect.gen(function* () {
-        const handler = yield* makeHandler;
+        const handler = yield* makeHandler();
         const store = yield* ClientStore.makeMemory;
         const transport = yield* Transport.makeInMemory(handler, "group-options");
         // No context provides anywhere: everything arrives as options.
@@ -788,7 +789,7 @@ describe("Client.make defaults (zero wiring)", () => {
   it.effect("options win over context", () =>
     Effect.scoped(
       Effect.gen(function* () {
-        const handler = yield* makeHandler;
+        const handler = yield* makeHandler();
         const optionStore = yield* ClientStore.makeMemory;
         const contextStore = yield* ClientStore.makeMemory;
         const transport = yield* Transport.makeInMemory(handler, "group-precedence");
@@ -847,7 +848,7 @@ describe("Client.connect over a hosted engine", () => {
   it.effect("the same reads work over the channel, resolved host-side", () =>
     Effect.scoped(
       Effect.gen(function* () {
-        const { engine } = yield* makeEngine;
+        const { engine } = yield* makeEngine();
         const pair = yield* MirrorChannel.makeLoopbackPair;
         yield* EngineHost.run({ channel: pair.host, engine, registry: nodes.collections });
         const client = yield* Client.connect({ nodes, mutations, channel: pair.mirror });
@@ -882,8 +883,8 @@ describe("Client.connect over a hosted engine", () => {
 // ─── a read judges and answers from one snapshot of its root ───────────
 
 /** Two engines over one server: `reader` is the replica under test; `writer` puts rows it has not pulled. */
-const makeRacePair = Effect.gen(function* () {
-  const handler = yield* makeHandler;
+const makeRacePair = Effect.fn("makeRacePair")(function* () {
+  const handler = yield* makeHandler();
   const make = (clientId: string) =>
     Effect.gen(function* () {
       const store = yield* ClientStore.makeMemory;
@@ -906,7 +907,7 @@ describe("Client.query judges and answers from one snapshot", () => {
     () =>
       Effect.scoped(
         Effect.gen(function* () {
-          const { reader, writer } = yield* makeRacePair;
+          const { reader, writer } = yield* makeRacePair();
           yield* writer.mutate("product/set", { id: "p-1", name: "Desk" });
           yield* writer.mutate("product/set", { id: "p-2", name: "Lamp" });
           yield* writer.mutate("review/set", {
@@ -989,7 +990,7 @@ describe("Client.query judges and answers from one snapshot", () => {
 it.effect("a snapshot of another subset is not judged over", () =>
   Effect.scoped(
     Effect.gen(function* () {
-      const { reader, writer } = yield* makeRacePair;
+      const { reader, writer } = yield* makeRacePair();
       yield* writer.mutate("product/set", { id: "p-1", name: "Desk" });
       yield* writer.mutate("review/set", {
         id: "r-1",

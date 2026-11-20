@@ -57,17 +57,21 @@ const setTodo = Mutator.registry([
   },
 ]);
 
-const backendHandlers: Record<string, MemoryBackend.BackendHandler> = {
+const backendHandlers = {
   "todo/set": (args, writer) => {
     const todo = args as Todo;
     return Effect.asVoid(writer.put("todos", todo.id, todo));
   },
   "todo/remove": (args, writer) => Effect.asVoid(writer.del("todos", (args as { id: string }).id)),
-};
+} satisfies Record<string, MemoryBackend.BackendHandler>;
 
 const authPolicy = Authorization.policy({ todos: Authorization.allowAll });
 
-const makeServer: Effect.Effect<ServerHandler, never, Scope.Scope> = Effect.gen(function* () {
+const makeServer = Effect.fn("makeServer")(function* (): Effect.fn.Return<
+  ServerHandler,
+  never,
+  Scope.Scope
+> {
   const backend = yield* MemoryBackend.make(backendHandlers);
   const cvrStore = yield* Cvr.makeMemoryStore;
   const bus = yield* InvalidationBus.makeInProcess;
@@ -113,7 +117,7 @@ const create = (id: string): Undo.UndoEntry => ({
 describe("Undo", () => {
   it.effect("basic undo/redo tracks stacks and a new run clears redo", () =>
     Effect.gen(function* () {
-      const handler = yield* makeServer;
+      const handler = yield* makeServer();
       const transport = yield* makeInMemory(handler, "group-basic");
       const { engine, manager } = yield* makeManaged(transport, "basic");
       yield* engine.subscribe(allTodos);
@@ -164,7 +168,7 @@ describe("Undo", () => {
 
   it.effect("delete-then-undo restores the pre-delete value captured at run time", () =>
     Effect.gen(function* () {
-      const handler = yield* makeServer;
+      const handler = yield* makeServer();
       const transport = yield* makeInMemory(handler, "group-del");
       const { engine, manager } = yield* makeManaged(transport, "del");
       yield* engine.subscribe(allTodos);
@@ -195,7 +199,7 @@ describe("Undo", () => {
 
   it.effect("offline undo then reconnect: both flow through journal → push → rebase", () =>
     Effect.gen(function* () {
-      const handler = yield* makeServer;
+      const handler = yield* makeServer();
       const base = yield* makeInMemory(handler, "group-offline");
       const online = yield* Ref.make(false);
       // A transport that fails push/pull while "offline" (like the demo + the
@@ -247,7 +251,7 @@ describe("Undo", () => {
 
   it.effect("group coalesces runs into a single undo step", () =>
     Effect.gen(function* () {
-      const handler = yield* makeServer;
+      const handler = yield* makeServer();
       const transport = yield* makeInMemory(handler, "group-grp");
       const { engine, manager } = yield* makeManaged(transport, "grp");
       yield* engine.subscribe(allTodos);
@@ -283,7 +287,7 @@ describe("Undo", () => {
 
   it.effect("undo/redo built from a Client, not a ClientEngine", () =>
     Effect.gen(function* () {
-      const handler = yield* makeServer;
+      const handler = yield* makeServer();
       const transport = yield* makeInMemory(handler, "group-client");
       const store = yield* ClientStoreModule.makeMemory;
       // The engine is held here only to pull: a pinned read answers locally

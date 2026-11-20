@@ -166,24 +166,26 @@ const todoSet = Mutator.make("todo/set", TodoArgs);
 const mutators = Mutator.registry([
   { mutator: todoSet, local: (args, writer) => writer.put("todos", (args as Todo).id, args) },
 ]);
-const handlers: Record<string, MemoryBackend.BackendHandler> = {
+const handlers = {
   "todo/set": (args, writer) => Effect.asVoid(writer.put("todos", (args as Todo).id, args)),
-};
+} satisfies Record<string, MemoryBackend.BackendHandler>;
 
-const makeServer: Effect.Effect<ServerHandler, never, import("effect").Scope.Scope> = Effect.gen(
-  function* () {
-    const backend = yield* MemoryBackend.make(handlers);
-    return yield* SyncServer.make.pipe(
-      Effect.provideService(Backend, backend),
-      Effect.provideService(
-        Authorization.AuthPolicy,
-        Authorization.policy({ todos: Authorization.allowAll })
-      ),
-      Effect.provideService(Cvr.CvrStore, yield* Cvr.makeMemoryStore),
-      Effect.provideService(InvalidationBus.InvalidationBus, yield* InvalidationBus.makeInProcess)
-    );
-  }
-);
+const makeServer = Effect.fn("makeServer")(function* (): Effect.fn.Return<
+  ServerHandler,
+  never,
+  import("effect").Scope.Scope
+> {
+  const backend = yield* MemoryBackend.make(handlers);
+  return yield* SyncServer.make.pipe(
+    Effect.provideService(Backend, backend),
+    Effect.provideService(
+      Authorization.AuthPolicy,
+      Authorization.policy({ todos: Authorization.allowAll })
+    ),
+    Effect.provideService(Cvr.CvrStore, yield* Cvr.makeMemoryStore),
+    Effect.provideService(InvalidationBus.InvalidationBus, yield* InvalidationBus.makeInProcess)
+  );
+});
 
 const makeClient = (handler: ServerHandler) =>
   Effect.gen(function* () {
@@ -211,7 +213,7 @@ const sleepReal = (millis: number) =>
 describe("Derive — refcounted subscription lifetime", () => {
   it.effect("observed leaf releases its subscription when its scope closes", () =>
     Effect.gen(function* () {
-      const engine = yield* makeClient(yield* makeServer);
+      const engine = yield* makeClient(yield* makeServer());
       yield* engine.mutate("todo/set", { id: "1", title: "a" });
       yield* engine.push;
       const subs = yield* Subscriptions.make(engine, { ttl: Duration.minutes(5) });
@@ -242,7 +244,7 @@ describe("Derive — refcounted subscription lifetime", () => {
 describe("Derive — observable via the standard atom surface", () => {
   it.effect("a derived (filtered) pipeline re-emits over the engine change stream", () =>
     Effect.gen(function* () {
-      const engine = yield* makeClient(yield* makeServer);
+      const engine = yield* makeClient(yield* makeServer());
       yield* engine.subscribe(allTodos);
 
       const pipeline = Derive.filter(engine.observe(allTodos), (v) =>
@@ -283,7 +285,7 @@ describe("Derive — observable via the standard atom surface", () => {
 describe("Derive — observed leaf consumes observeChanges, not page-diff", () => {
   it.effect("a pipeline built on Derive.observed stays correct across enter/update/exit", () =>
     Effect.gen(function* () {
-      const engine = yield* makeClient(yield* makeServer);
+      const engine = yield* makeClient(yield* makeServer());
       const subs = yield* Subscriptions.make(engine, { ttl: Duration.minutes(5) });
       const view = ClientView.fromEngine(engine);
 

@@ -28,12 +28,12 @@ const mutators = Mutator.registry([
   },
 ]);
 
-const handlers: Record<string, MemoryBackend.BackendHandler> = {
+const handlers = {
   "todo/set": (args, writer) =>
     Effect.asVoid(writer.put("todos", (args as { id: string }).id, args)),
-};
+} satisfies Record<string, MemoryBackend.BackendHandler>;
 
-const makeServer = Effect.gen(function* () {
+const makeServer = Effect.fn("makeServer")(function* () {
   const backend = yield* MemoryBackend.make(handlers);
   const cvrStore = yield* Cvr.makeMemoryStore;
   const bus = yield* InvalidationBus.makeInProcess;
@@ -62,7 +62,7 @@ const counts = Effect.all(
 describe("Telemetry", () => {
   it.effect("records client + server pull/push metrics", () =>
     Effect.gen(function* () {
-      const handler = yield* makeServer;
+      const handler = yield* makeServer();
       const store = yield* ClientStoreModule.makeMemory;
       const transport = yield* makeInMemory(handler, "group-1");
       const engine = yield* ClientEngineModule.make({

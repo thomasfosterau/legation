@@ -305,6 +305,8 @@ class RequestBodyUnreadable extends Schema.TaggedError<
   cause: Schema.optional(Schema.Defect()),
 }) {}
 
+const encodeBody = Schema.encodeSync(Schema.fromJsonString(Schema.Unknown));
+
 /** Every response the façade synthesises: JSON:API, never cached, marked as served locally. */
 const respondWith = (
   status: number,
@@ -312,7 +314,7 @@ const respondWith = (
   cookie: Option.Option<string>,
   headers: Readonly<Record<string, string>> = {}
 ): Response =>
-  new Response(JSON.stringify(body), {
+  new Response(encodeBody(body), {
     status,
     headers: {
       ...headers,
@@ -655,7 +657,9 @@ export const fetchHandler = <Id extends string, Groups extends HttpApiGroup.Cons
     Effect.forEach(reads, (read) => coverageOf(read, { snapshot }), { concurrency: 1 }).pipe(
       Effect.map((verdicts) => {
         const first = verdicts[0];
-        return first?._tag === "Covered" && verdicts.every((verdict) => verdict._tag === "Covered")
+        return first !== undefined &&
+          P.isTagged(first, "Covered") &&
+          verdicts.every((verdict) => P.isTagged(verdict, "Covered"))
           ? Option.some(first)
           : Option.none();
       })

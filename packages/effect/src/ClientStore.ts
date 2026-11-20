@@ -32,7 +32,12 @@ import { AtomicKeyValue, type KeyValueEntry, type KeyValueOp } from "./AtomicKey
 import type { RowId } from "./Collection.js";
 import { StoreError } from "./Errors.js";
 import * as Identity from "./Identity.js";
+import * as Json from "./internal/Json.js";
 import { Mutation, PatchOp } from "./Protocol.js";
+
+/** Narrows a patch op to `Clear`, the one variant that names no row. */
+const isClear = (op: PatchOp): op is Extract<PatchOp, { readonly _tag: "Clear" }> =>
+  P.isTagged(op, "Clear");
 
 /**
  * A confirmed row as persisted: encoded value + authoritative version. The
@@ -589,13 +594,13 @@ export const makeMemory: Effect.Effect<ClientStore> = Effect.gen(function* () {
   const applyOpsTo = (map: Map<string, Map<RowId, StoredRow>>, ops: ReadonlyArray<PatchOp>) => {
     let next = map;
     for (const op of ops) {
-      if (op._tag === "Clear") {
+      if (isClear(op)) {
         next = new Map();
         continue;
       }
       const source = next === map ? new Map(map) : next;
       const c = new Map(collectionMap(source, op.collection));
-      if (op._tag === "Put") c.set(op.id, { id: op.id, version: op.version, value: op.value });
+      if (P.isTagged(op, "Put")) c.set(op.id, { id: op.id, version: op.version, value: op.value });
       else c.delete(op.id);
       source.set(op.collection, c);
       next = source;
@@ -607,7 +612,7 @@ export const makeMemory: Effect.Effect<ClientStore> = Effect.gen(function* () {
   // Then settle the tail the way the key-value store's open does: a journal copy of a
   // parked entry is dropped, so the entry is neither replayed twice nor pushed again. Runs under
   // the lock, and is a no-op on the journal when the tail holds no parked copy.
-  const finishInner = Effect.gen(function* () {
+  const finishInner = Effect.fnUntraced(function* () {
     const pending = yield* Ref.get(outstanding);
     if (pending !== undefined) {
       yield* Ref.update(rows, (map) => applyOpsTo(map, pending.patch));
@@ -632,15 +637,15 @@ export const makeMemory: Effect.Effect<ClientStore> = Effect.gen(function* () {
   // record first, as a row write does, computes every new value from the current state, then
   // writes them together. Nothing is recorded, so the memory store cannot be left mid-release. The
   // writes run uninterruptible, so an interrupt cannot land between them.
-  const finishOutstanding = Effect.gen(function* () {
-    if ((yield* Ref.get(outstanding)) !== undefined) yield* finishInner;
+  const finishOutstanding = Effect.fnUntraced(function* () {
+    if ((yield* Ref.get(outstanding)) !== undefined) yield* finishInner();
   });
 
   const commitPull = (release: PullRelease) =>
     locked(
       Effect.uninterruptible(
         Effect.gen(function* () {
-          yield* finishOutstanding;
+          yield* finishOutstanding();
           const currentJournal = yield* Ref.get(journal);
           const nextRows = applyOpsTo(yield* Ref.get(rows), release.patch);
           const nextCounters = raisedCounterMap(
@@ -667,7 +672,7 @@ export const makeMemory: Effect.Effect<ClientStore> = Effect.gen(function* () {
     locked(
       Effect.uninterruptible(
         Effect.gen(function* () {
-          yield* finishOutstanding;
+          yield* finishOutstanding();
           const currentJournal = yield* Ref.get(journal);
           const nextTail = appendMissing(yield* Ref.get(tail), parked);
           // The parked entries and the trimmed ones both keep the counters at their high-water mark.
@@ -695,7 +700,7 @@ export const makeMemory: Effect.Effect<ClientStore> = Effect.gen(function* () {
     // `applyRowOps`, which does not finish.
     putRow: (collection, row) =>
       locked(
-        finishInner.pipe(
+        finishInner().pipe(
           Effect.andThen(
             Ref.update(rows, (m) => {
               const next = new Map(m);
@@ -709,7 +714,7 @@ export const makeMemory: Effect.Effect<ClientStore> = Effect.gen(function* () {
       ),
     delRow: (collection, id) =>
       locked(
-        finishInner.pipe(
+        finishInner().pipe(
           Effect.andThen(
             Ref.update(rows, (m) => {
               const next = new Map(m);
@@ -722,7 +727,7 @@ export const makeMemory: Effect.Effect<ClientStore> = Effect.gen(function* () {
         )
       ),
     // An outstanding release is finished first, so its patch cannot land over the cleared rows.
-    clearRows: locked(finishInner.pipe(Effect.andThen(Ref.set(rows, new Map())))),
+    clearRows: locked(finishInner().pipe(Effect.andThen(Ref.set(rows, new Map())))),
     applyRowOps: (ops) => locked(Ref.update(rows, (map) => applyOpsTo(map, ops))),
 
     // Refused for an id the tail holds (see `ClientStore.appendMutation`), as the key-value store refuses it.
@@ -843,7 +848,7 @@ export const makeMemory: Effect.Effect<ClientStore> = Effect.gen(function* () {
     beginRelease: (release) =>
       locked(
         Ref.get(outstanding).pipe(
-          Effect.flatMap((pending) => (pending === undefined ? Effect.void : finishInner)),
+          Effect.flatMap((pending) => (pending === undefined ? Effect.void : finishInner())),
           Effect.andThen(Ref.set(outstanding, release))
         )
       ),
@@ -853,7 +858,7 @@ export const makeMemory: Effect.Effect<ClientStore> = Effect.gen(function* () {
           Effect.andThen(Ref.set(outstanding, undefined))
         )
       ),
-    finishRelease: locked(finishInner),
+    finishRelease: locked(finishInner()),
     // Drops the release record with the tail, as the key-value store removes its record.
     clearUnpulled: locked(Ref.set(tail, []).pipe(Effect.andThen(Ref.set(outstanding, undefined)))),
 
@@ -1192,7 +1197,7 @@ const appendDistinct = (
 };
 
 /** The highest mutation id per client among `ids` (empty when none is positive). */
-const highestIds = (ids: ReadonlyArray<JournalIndexEntry>): Record<string, number> => {
+const highestIds = (ids: ReadonlyArray<JournalIndexEntry>) => {
   const highest: Record<string, number> = {};
   for (const { clientId, mutationId } of ids) {
     if (mutationId > (highest[clientId] ?? 0)) highest[clientId] = mutationId;
@@ -1208,7 +1213,7 @@ const raisedCounters = (
   counters: Readonly<Record<string, number>>,
   highest: Readonly<Record<string, number>>
 ): Record<string, number> | undefined => {
-  const raised: Record<string, number> = { ...counters };
+  const raised = { ...counters } satisfies Record<string, number>;
   let changed = false;
   for (const [clientId, id] of Object.entries(highest)) {
     if ((raised[clientId] ?? 0) < id) {
@@ -1236,7 +1241,7 @@ const planRowOps = (ops: ReadonlyArray<PatchOp>): RowOpPlan => {
   const groups = new Map<string, RowChanges>();
   let clear = false;
   for (const op of ops) {
-    if (op._tag === "Clear") {
+    if (isClear(op)) {
       clear = true;
       groups.clear();
       continue;
@@ -1245,7 +1250,7 @@ const planRowOps = (ops: ReadonlyArray<PatchOp>): RowOpPlan => {
     groups.set(op.collection, changes);
     changes.set(
       op.id,
-      op._tag === "Put" ? { id: op.id, version: op.version, value: op.value } : null
+      P.isTagged(op, "Put") ? { id: op.id, version: op.version, value: op.value } : null
     );
   }
   return { clear, groups };
@@ -1412,7 +1417,7 @@ export const makeKeyValue = (
       );
     const writeJson = (key: string, value: unknown): Effect.Effect<void, StoreError> =>
       store
-        .set(key, JSON.stringify(value))
+        .set(key, Json.stringify(value))
         .pipe(Effect.mapError(storeError(`Failed to write "${key}"`)));
     const remove = (key: string): Effect.Effect<void, StoreError> =>
       store.remove(key).pipe(Effect.mapError(storeError(`Failed to remove "${key}"`)));
@@ -1474,13 +1479,13 @@ export const makeKeyValue = (
     // finishes it first (an earlier apply can fail without a crash, and an
     // append landing before the replay would be clobbered by it).
     let compactionPending = false;
-    const recoverCompaction = Effect.gen(function* () {
+    const recoverCompaction = Effect.fnUntraced(function* () {
       const intent = yield* readDecoded(COMPACTION_KEY, CompactionIntentFromJson);
       if (intent !== undefined) yield* applyCompaction(intent);
       compactionPending = false;
     });
     const settleCompaction: Effect.Effect<void, StoreError> = Effect.suspend(() =>
-      compactionPending ? recoverCompaction : Effect.void
+      compactionPending ? recoverCompaction() : Effect.void
     );
     const sentMarks = readDecoded(SENT_KEY, CountersFromJson).pipe(
       Effect.map((marks) => marks ?? {})
@@ -1496,7 +1501,7 @@ export const makeKeyValue = (
 
     // `pendingMutationsOf`'s count from the index alone: one read, no bodies.
     //A store not yet migrated holds the legacy blob instead.
-    const pendingCountOf: Effect.Effect<number, StoreError> = Effect.gen(function* () {
+    const pendingCountOf = Effect.fnUntraced(function* (): Effect.fn.Return<number, StoreError> {
       const index = yield* readDecoded("journalIndex", JournalIndexFromJson);
       if (index !== undefined) return index.length;
       const legacy = yield* readDecoded(LEGACY_JOURNAL_KEY, JournalFromJson);
@@ -1564,7 +1569,7 @@ export const makeKeyValue = (
         yield* remove(RELEASE_KEY);
       });
 
-    const clearUnpulledInner: Effect.Effect<void, StoreError> = Effect.gen(function* () {
+    const clearUnpulledInner = Effect.fnUntraced(function* (): Effect.fn.Return<void, StoreError> {
       const index = yield* unpulledIndexOf;
       if (Arr.isReadonlyArrayNonEmpty(index)) yield* writeJson(UNPULLED_INDEX_KEY, []);
       for (const entry of index) {
@@ -1598,7 +1603,7 @@ export const makeKeyValue = (
     // Empty the journal outright — bodies, index, and any legacy blob — with
     // no acknowledgement implied. Only ever called with the entries already
     // safely written to a quarantine.
-    const clearJournalInner = Effect.gen(function* () {
+    const clearJournalInner = Effect.fnUntraced(function* () {
       for (const entry of yield* journalIndex) {
         yield* remove(journalBodyKey(entry.clientId, entry.mutationId));
       }
@@ -1645,7 +1650,7 @@ export const makeKeyValue = (
         }
         // Ids leaving the journal stay reserved (see `raiseCounters`).
         yield* raiseCounters(pending);
-        yield* clearJournalInner;
+        yield* clearJournalInner();
         return pending.length;
       });
 
@@ -1682,7 +1687,7 @@ export const makeKeyValue = (
 
     // Clear every tracked collection's rows and indexes (unlocked inner form,
     // reused by clearRows, applyRowOps, and the migration reset).
-    const clearRowsInner = Effect.gen(function* () {
+    const clearRowsInner = Effect.fnUntraced(function* () {
       for (const collection of yield* collections) {
         for (const id of yield* rowIndex(collection)) yield* remove(rowKey(collection, id));
         yield* remove(rowIndexKey(collection));
@@ -1713,7 +1718,7 @@ export const makeKeyValue = (
     const applyRowOpsInner = (ops: ReadonlyArray<PatchOp>) =>
       Effect.gen(function* () {
         const plan = planRowOps(ops);
-        if (plan.clear) yield* clearRowsInner;
+        if (plan.clear) yield* clearRowsInner();
         for (const [collection, changes] of plan.groups)
           yield* flushCollection(collection, changes);
       });
@@ -1730,7 +1735,7 @@ export const makeKeyValue = (
       });
 
     // Split the legacy whole-journal array into per-mutation bodies + an index.
-    const migrateJournal = Effect.gen(function* () {
+    const migrateJournal = Effect.fnUntraced(function* () {
       const legacy = yield* readDecoded(LEGACY_JOURNAL_KEY, JournalFromJson);
       if (legacy === undefined) return;
       const index: Array<JournalIndexEntry> = [];
@@ -1745,8 +1750,8 @@ export const makeKeyValue = (
     // Last resort when a legacy blob is corrupt beyond recovery: the store is a
     // cache of server state, so drop the rows + journal and reset the cookie,
     // leaving the client able to re-pull from scratch (counters survive).
-    const resetToEmpty = Effect.gen(function* () {
-      yield* clearRowsInner;
+    const resetToEmpty = Effect.fnUntraced(function* () {
+      yield* clearRowsInner();
       yield* remove(LEGACY_JOURNAL_KEY);
       yield* remove("journalIndex");
       yield* remove("cookie");
@@ -1757,8 +1762,8 @@ export const makeKeyValue = (
     // destructive fallback rather than wedging the store.
     const migrate = Effect.gen(function* () {
       for (const collection of yield* collections) yield* migrateCollection(collection);
-      yield* migrateJournal;
-    }).pipe(Effect.catch(() => resetToEmpty));
+      yield* migrateJournal();
+    }).pipe(Effect.catch(() => resetToEmpty()));
 
     // Transparent forward-migration on first open. Each collection migrates
     // atomically — the id-index is written only after every row value, and the
@@ -1768,20 +1773,20 @@ export const makeKeyValue = (
     // Kept infallible at construction (like the original zero-I/O open): a
     // transient store error here is swallowed, and reads still resolve through
     // the legacy fallback until the next open re-migrates.
-    const openMigration = Effect.gen(function* () {
+    const openMigration = Effect.fnUntraced(function* () {
       const version = yield* store.get(LAYOUT_KEY);
       if (version !== CURRENT_LAYOUT) {
         yield* locked(migrate.pipe(Effect.andThen(store.set(LAYOUT_KEY, CURRENT_LAYOUT))));
       }
     });
-    yield* openMigration.pipe(
+    yield* openMigration().pipe(
       Effect.catchTag(["KeyValueStoreError", "StoreError"], () => Effect.void)
     );
 
     // Finish a compaction a previous run was interrupted in. Kept
     // infallible at construction like the opens around it: if recovery fails
     // here the flag stays set, and the first journal operation retries it.
-    yield* locked(recoverCompaction).pipe(
+    yield* locked(recoverCompaction()).pipe(
       Effect.catchTag("StoreError", () =>
         Effect.sync(() => {
           compactionPending = true;
@@ -1799,7 +1804,7 @@ export const makeKeyValue = (
     // stay reserved, as `acknowledge` keeps them (see `raiseCounters`). Runs
     // after the compaction roll-forward, whose index supersedes this one, and
     // writes nothing when every body is present.
-    const repairJournalIndex = Effect.gen(function* () {
+    const repairJournalIndex = Effect.fnUntraced(function* () {
       const index = yield* readDecoded("journalIndex", JournalIndexFromJson);
       if (index === undefined) return;
       const kept: Array<JournalIndexEntry> = [];
@@ -1818,7 +1823,7 @@ export const makeKeyValue = (
     // Infallible at construction like the opens around it: a failed repair
     // leaves the index as it was (reads still skip the missing bodies), and
     // the next open retries.
-    yield* locked(settleCompaction.pipe(Effect.andThen(repairJournalIndex))).pipe(Effect.ignore);
+    yield* locked(settleCompaction.pipe(Effect.andThen(repairJournalIndex()))).pipe(Effect.ignore);
 
     // Finish a pull release, or drop the journal copies of a park, that a
     // crash interrupted. Not swallowed: the tail and the journal then
@@ -1837,7 +1842,7 @@ export const makeKeyValue = (
         yield* trimJournal((entry) => coveredBy(release.lastMutationIds, entry));
         yield* releaseUnpulledInner(release.lastMutationIds);
       });
-    const finishReleaseInner: Effect.Effect<void, StoreError> = Effect.gen(function* () {
+    const finishReleaseInner = Effect.fnUntraced(function* (): Effect.fn.Return<void, StoreError> {
       const release = yield* readDecoded(RELEASE_KEY, ReleaseIntentFromJson);
       if (release !== undefined) yield* rollForward(release);
     });
@@ -1845,7 +1850,7 @@ export const makeKeyValue = (
     // after the roll-forward, which releases entries from the tail. A failed trim seals the store even
     // with no record outstanding: a copy left in both the journal and the tail would be double-counted
     // by reads and pushed again.
-    const trimParkedCopies: Effect.Effect<void, StoreError> = Effect.gen(function* () {
+    const trimParkedCopies = Effect.fnUntraced(function* (): Effect.fn.Return<void, StoreError> {
       const parked = yield* unpulledIndexOf;
       if (Arr.isReadonlyArrayNonEmpty(parked)) {
         const keys = new Set(parked.map(entryKey));
@@ -1854,11 +1859,11 @@ export const makeKeyValue = (
     });
     // The tail settle: the roll-forward, then the journal copies of whatever is still parked. The
     // open runs this one body, so it leaves the same state as the in-process finish.
-    const settleTailInner = Effect.gen(function* () {
-      yield* finishReleaseInner;
-      yield* trimParkedCopies;
+    const settleTailInner = Effect.fnUntraced(function* () {
+      yield* finishReleaseInner();
+      yield* trimParkedCopies();
     });
-    const tailFailure = yield* locked(settleTailInner).pipe(
+    const tailFailure = yield* locked(settleTailInner()).pipe(
       Effect.as<StoreError | undefined>(undefined),
       Effect.catchTag("StoreError", (error) => Effect.succeed<StoreError | undefined>(error))
     );
@@ -1870,7 +1875,7 @@ export const makeKeyValue = (
       Effect.gen(function* () {
         yield* Effect.gen(function* () {
           if (release !== undefined) yield* rollForward(release);
-          yield* trimParkedCopies;
+          yield* trimParkedCopies();
         }).pipe(Effect.tapError((error) => Ref.set(sealedBy, error)));
         yield* Ref.set(finishPending, false);
       });
@@ -1879,7 +1884,7 @@ export const makeKeyValue = (
     // fails the call alone: nothing has been written. Every failure after that read seals the store,
     // because a roll-forward or a journal trim may have part-way written what the record describes,
     // and no later write may run over it. The open then finishes it from the same record.
-    const finishOrSeal = Effect.gen(function* () {
+    const finishOrSeal = Effect.fnUntraced(function* () {
       if (!(yield* Ref.get(finishPending))) return;
       yield* finishRead(yield* readDecoded(RELEASE_KEY, ReleaseIntentFromJson));
     });
@@ -1888,7 +1893,7 @@ export const makeKeyValue = (
     // cookie (so the next pull rehydrates fully) but preserves the journal, then
     // stamps the new version. Kept infallible at construction, like the
     // migration open above.
-    const openStoreVersion = Effect.gen(function* () {
+    const openStoreVersion = Effect.fnUntraced(function* () {
       const desired = options?.storeVersion;
       if (desired === undefined) return;
       const current = yield* store.get(STORE_VERSION_KEY);
@@ -1897,14 +1902,14 @@ export const makeKeyValue = (
         .set(STORE_VERSION_KEY, desired)
         .pipe(Effect.mapError(storeError(`Failed to write "${STORE_VERSION_KEY}"`)));
       yield* locked(
-        clearRowsInner.pipe(
+        clearRowsInner().pipe(
           Effect.andThen(remove("cookie")),
           // Journal deliberately untouched: pending intents survive the buster.
           Effect.andThen(stampVersion)
         )
       );
     });
-    yield* openStoreVersion.pipe(Effect.ignore);
+    yield* openStoreVersion().pipe(Effect.ignore);
 
     // The identity boundary on open: compare the configured
     // fingerprint with the replica's stamp and apply `Identity.transitionOf`.
@@ -1921,7 +1926,7 @@ export const makeKeyValue = (
     // Unset `identity` means the boundary is off — no stamp, no comparison,
     // behaviour identical to before. Kept infallible at construction, like
     // the migration and store-version opens above.
-    const openIdentity = Effect.gen(function* () {
+    const openIdentity = Effect.fnUntraced(function* () {
       const next = options?.identity;
       if (next === undefined) return;
       const stamped = yield* store
@@ -1936,8 +1941,8 @@ export const makeKeyValue = (
         Effect.gen(function* () {
           if (transition === "Reset") {
             yield* quarantinePendingInner(current);
-            yield* clearRowsInner;
-            yield* clearUnpulledInner;
+            yield* clearRowsInner();
+            yield* clearUnpulledInner();
             yield* remove("cookie");
           }
           if (transition !== "Unchanged") yield* stamp;
@@ -1949,7 +1954,7 @@ export const makeKeyValue = (
     // could not be established must not be reported as established. The store
     // is sealed instead (see {@link sealed}) — nothing served, nothing pushed,
     // nothing destroyed, and the next open retries.
-    const boundaryFailure = yield* openIdentity.pipe(
+    const boundaryFailure = yield* openIdentity().pipe(
       Effect.as<StoreError | undefined>(undefined),
       Effect.catchTag("StoreError", (error) => Effect.succeed<StoreError | undefined>(error))
     );
@@ -1986,7 +1991,7 @@ export const makeKeyValue = (
         read,
         /** A JSON value, as the record path's `writeJson` writes it. */
         putJson: (key: string, value: unknown) => {
-          staged.set(key, JSON.stringify(value));
+          staged.set(key, Json.stringify(value));
         },
         /** A value written verbatim, as the cookie is (`setCookie`). */
         putRaw: (key: string, raw: string) => {
@@ -2113,7 +2118,7 @@ export const makeKeyValue = (
             commitPull: (release) =>
               locked(
                 Effect.gen(function* () {
-                  yield* finishOrSeal;
+                  yield* finishOrSeal();
                   yield* settleCompaction;
                   const b = stageBatch();
                   yield* stagedRows(b, release.patch);
@@ -2126,7 +2131,7 @@ export const makeKeyValue = (
             commitAcknowledgement: (parked, lastMutationIds) =>
               locked(
                 Effect.gen(function* () {
-                  yield* finishOrSeal;
+                  yield* finishOrSeal();
                   yield* settleCompaction;
                   const b = stageBatch();
                   yield* stagedPark(b, parked);
@@ -2168,7 +2173,7 @@ export const makeKeyValue = (
       putRow: (collection, row) =>
         locked(
           Effect.gen(function* () {
-            yield* finishOrSeal;
+            yield* finishOrSeal();
             yield* writeJson(rowKey(collection, row.id), row);
             const ids = yield* rowIndex(collection);
             if (!ids.includes(row.id)) yield* writeJson(rowIndexKey(collection), [...ids, row.id]);
@@ -2178,7 +2183,7 @@ export const makeKeyValue = (
       delRow: (collection, id) =>
         locked(
           Effect.gen(function* () {
-            yield* finishOrSeal;
+            yield* finishOrSeal();
             yield* remove(rowKey(collection, id));
             const ids = yield* rowIndex(collection);
             if (ids.includes(id))
@@ -2189,7 +2194,7 @@ export const makeKeyValue = (
           })
         ),
       // An outstanding release is finished under the same lock, before the rows go.
-      clearRows: locked(finishOrSeal.pipe(Effect.andThen(clearRowsInner))),
+      clearRows: locked(finishOrSeal().pipe(Effect.andThen(clearRowsInner()))),
       applyRowOps: (ops) => locked(applyRowOpsInner(ops)),
 
       // Refused for an id the tail holds (see `ClientStore.appendMutation`): a copy written here would
@@ -2272,7 +2277,7 @@ export const makeKeyValue = (
       pendingMutations: locked(settleCompaction.pipe(Effect.andThen(pendingMutationsOf))),
       // The index alone, no bodies. Settling a compaction first matters:
       // a committed but unapplied intent's index is the one that counts.
-      pendingCount: locked(settleCompaction.pipe(Effect.andThen(pendingCountOf))),
+      pendingCount: locked(settleCompaction.pipe(Effect.andThen(pendingCountOf()))),
       acknowledge: (clientId, upTo) =>
         locked(
           Effect.gen(function* () {
@@ -2427,8 +2432,8 @@ export const makeKeyValue = (
           )
         ),
       releaseUnpulled: (lastMutationIds) => locked(releaseUnpulledInner(lastMutationIds)),
-      finishRelease: locked(finishOrSeal),
-      clearUnpulled: locked(clearUnpulledInner),
+      finishRelease: locked(finishOrSeal()),
+      clearUnpulled: locked(clearUnpulledInner()),
 
       getCookie: unsealed(
         store.get("cookie").pipe(Effect.mapError(storeError(`Failed to read "cookie"`)))

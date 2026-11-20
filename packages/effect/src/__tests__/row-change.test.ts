@@ -21,6 +21,7 @@
  * convention of a tiny seeded PRNG instead, so a failure prints a
  * reproducible seed.
  */
+import * as P from "effect/Predicate";
 import * as Arr from "effect/Array";
 import * as Match from "effect/Match";
 import { describe, expect, it } from "vite-plus/test";
@@ -29,6 +30,7 @@ import * as Predicate from "../Predicate.js";
 import * as RowChange from "../RowChange.js";
 import * as Subset from "../Subset.js";
 import { defined } from "./defined.js";
+import * as Json from "../internal/Json.js";
 
 /** mulberry32: tiny deterministic PRNG so a failing seed is reproducible. */
 const mulberry32 = (seed: number) => {
@@ -110,9 +112,9 @@ const applyMutation = (
   }
   const after = LiveView.result(next);
   Arr.forEach(RowChange.diff(before, after), (change) => {
-    if (change._tag === "enter" || change._tag === "update")
+    if (P.isTagged(change, "enter") || P.isTagged(change, "update"))
       folded.set(change.row.id, change.row.value);
-    else if (change._tag === "exit") folded.delete(change.id);
+    else if (P.isTagged(change, "exit")) folded.delete(change.id);
   });
   return next;
 };
@@ -129,7 +131,7 @@ interface LateObserver {
 const seedLateObserver = (view: LiveView.LiveView, startedAtStep: number): LateObserver => {
   const folded = new Map<string, unknown>();
   Arr.forEach(RowChange.enters(LiveView.result(view)), (change) => {
-    if (change._tag === "enter") folded.set(change.row.id, change.row.value);
+    if (P.isTagged(change, "enter")) folded.set(change.row.id, change.row.value);
   });
   return { startedAtStep, folded };
 };
@@ -222,12 +224,12 @@ const checkSession = (
 ): Mismatch | undefined => {
   const page = pageEntries(LiveView.result(state.view));
   const foldedEntries = sortedEntries(state.folded);
-  if (JSON.stringify(foldedEntries) !== JSON.stringify(page)) {
+  if (Json.show(foldedEntries) !== Json.show(page)) {
     return { label: `${label} (seed=${seed})`, folded: foldedEntries, page };
   }
   if (lateObserver === undefined) return undefined;
   const lateEntries = sortedEntries(lateObserver.folded);
-  if (JSON.stringify(lateEntries) === JSON.stringify(page)) return undefined;
+  if (Json.show(lateEntries) === Json.show(page)) return undefined;
   return {
     label: `${label} (seed=${seed}, late observer since step ${lateObserver.startedAtStep})`,
     folded: lateEntries,

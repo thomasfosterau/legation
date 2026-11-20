@@ -33,10 +33,10 @@ const put =
   (args, writer) =>
     Effect.asVoid(writer.put(collection, (args as { id: string }).id, args));
 
-const backendHandlers: Record<string, MemoryBackend.BackendHandler> = {
+const backendHandlers = {
   "todo/set": put("todos"),
   "user/set": put("users"),
-};
+} satisfies Record<string, MemoryBackend.BackendHandler>;
 const mutators = Mutator.registry([
   {
     mutator: Mutator.make("todo/set", Schema.Unknown),
@@ -48,7 +48,7 @@ const mutators = Mutator.registry([
   },
 ]);
 
-const makeServer = Effect.gen(function* () {
+const makeServer = Effect.fn("makeServer")(function* () {
   const backend = yield* MemoryBackend.make(backendHandlers);
   const cvrStore = yield* Cvr.makeMemoryStore;
   const bus = yield* InvalidationBus.makeInProcess;
@@ -102,7 +102,7 @@ const observeInto = (
 describe("write-path selective re-evaluation", () => {
   it.live("a mutate does not re-emit an observer of an untouched collection", () =>
     Effect.gen(function* () {
-      const { engine } = yield* makeClient(yield* makeServer, "w");
+      const { engine } = yield* makeClient(yield* makeServer(), "w");
       const todosCount = yield* Ref.make(0);
       const usersCount = yield* Ref.make(0);
       yield* observeInto(engine, todos, todosCount);
@@ -120,7 +120,7 @@ describe("write-path selective re-evaluation", () => {
 
   it.live("a push acknowledgement does not rebuild an observer of an untouched collection", () =>
     Effect.gen(function* () {
-      const { engine } = yield* makeClient(yield* makeServer, "w");
+      const { engine } = yield* makeClient(yield* makeServer(), "w");
       const todosCount = yield* Ref.make(0);
       const usersCount = yield* Ref.make(0);
       yield* observeInto(engine, todos, todosCount);
@@ -138,7 +138,7 @@ describe("write-path selective re-evaluation", () => {
 
   it.live("a mutate on a warm cache patches the overlay in place, with no replay", () =>
     Effect.gen(function* () {
-      const { engine, listRowsCount } = yield* makeClient(yield* makeServer, "w");
+      const { engine, listRowsCount } = yield* makeClient(yield* makeServer(), "w");
       yield* Effect.forEach(
         Array.from({ length: 5 }),
         () => Effect.forkScoped(Stream.runForEach(engine.observe(todos), () => Effect.void)),
@@ -158,7 +158,7 @@ describe("write-path selective re-evaluation", () => {
 
   it.live("a mutate on a cold cache replays once, then patches in place after", () =>
     Effect.gen(function* () {
-      const { engine, listRowsCount } = yield* makeClient(yield* makeServer, "w");
+      const { engine, listRowsCount } = yield* makeClient(yield* makeServer(), "w");
       // No observer has materialized yet, so the cache starts cold.
       yield* engine.mutate("todo/set", { id: "t1", title: "x" });
       expect(yield* Ref.get(listRowsCount)).toBe(1); // one fallback replay fills the cache

@@ -5,6 +5,7 @@
  * only), reading rows with no transport call and converging on the first pull
  * without a reset.
  */
+import * as P from "effect/Predicate";
 import { describe, expect, it } from "@effect/vitest";
 import type { Cookies } from "@sveltejs/kit";
 import * as Effect from "effect/Effect";
@@ -66,29 +67,31 @@ const mutations = Mutation.registry([
 
 const nodes = Node.registry([Node.make("todos", { attributes: { title: Schema.String } })]);
 
-const handlers: Record<string, MemoryBackend.BackendHandler> = {
+const handlers = {
   "todo/set": (args, writer) => Effect.asVoid(writer.put("todos", (args as Todo).id, args)),
-};
+} satisfies Record<string, MemoryBackend.BackendHandler>;
 
-const makeServer: Effect.Effect<Transport.ServerHandler, never, Scope.Scope> = Effect.gen(
-  function* () {
-    const backend = yield* MemoryBackend.make(handlers);
-    const cvrStore = yield* Cvr.makeMemoryStore;
-    const bus = yield* InvalidationBus.makeInProcess;
-    return yield* SyncServer.make.pipe(
-      Effect.provideService(Backend.Backend, backend),
-      Effect.provideService(
-        Authorization.AuthPolicy,
-        Authorization.policy({ todos: Authorization.allowAll })
-      ),
-      Effect.provideService(Cvr.CvrStore, cvrStore),
-      Effect.provideService(InvalidationBus.InvalidationBus, bus)
-    );
-  }
-);
+const makeServer = Effect.fn("makeServer")(function* (): Effect.fn.Return<
+  Transport.ServerHandler,
+  never,
+  Scope.Scope
+> {
+  const backend = yield* MemoryBackend.make(handlers);
+  const cvrStore = yield* Cvr.makeMemoryStore;
+  const bus = yield* InvalidationBus.makeInProcess;
+  return yield* SyncServer.make.pipe(
+    Effect.provideService(Backend.Backend, backend),
+    Effect.provideService(
+      Authorization.AuthPolicy,
+      Authorization.policy({ todos: Authorization.allowAll })
+    ),
+    Effect.provideService(Cvr.CvrStore, cvrStore),
+    Effect.provideService(InvalidationBus.InvalidationBus, bus)
+  );
+});
 
 /** A minimal fake of Kit's `Cookies` backed by a Map, recording sets. */
-const fakeCookies = (): { cookies: Cookies; sets: Array<{ name: string; value: string }> } => {
+const fakeCookies = () => {
   const jar = new Map<string, string>();
   const sets: Array<{ name: string; value: string }> = [];
   const cookies: Cookies = {
@@ -132,7 +135,7 @@ describe("clientGroupId", () => {
 describe("loadSnapshot + clientRuntime", () => {
   it.effect("SSR snapshot boots a Client that reads without transport and pulls no reset", () =>
     Effect.gen(function* () {
-      const handler = yield* makeServer;
+      const handler = yield* makeServer();
 
       // Authoritative rows exist server-side.
       const writerStore = yield* ClientStore.makeMemory;
@@ -208,7 +211,7 @@ describe("loadSnapshot + clientRuntime", () => {
       // The backend is somewhere else entirely (another Worker): the `load`
       // holds a carrier to it, not the handler. Nothing is provided to this
       // effect — `ServerHandler` never enters the load's context.
-      const handler = yield* makeServer;
+      const handler = yield* makeServer();
       const writerStore = yield* ClientStore.makeMemory;
       const writerTransport = yield* Transport.makeInMemory(handler, "group-writer");
       const writer = yield* ClientEngine.make({
@@ -258,7 +261,7 @@ describe("loadSnapshot + clientRuntime", () => {
         cookie: loaded.snapshot.cookie,
         subscriptions: [allTodosSubset],
       });
-      expect(patch.patch.some((op) => op._tag === "Clear")).toBe(false);
+      expect(patch.patch.some((op) => P.isTagged(op, "Clear"))).toBe(false);
       expect(patch.patch).toEqual([]);
     })
   );

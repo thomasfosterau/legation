@@ -5,6 +5,7 @@
  * `Backend.evaluate` — while the auth filter's own predicate and a named
  * query's server-resolved subset stay exempt.
  */
+import * as P from "effect/Predicate";
 import { describe, expect, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as Ref from "effect/Ref";
@@ -486,7 +487,7 @@ describe("FilterPolicy: authorize", () => {
 // ─── On the server: pull and read fail before Backend.evaluate ───────────────
 
 /** A backend that records whether `evaluate` was ever reached. */
-const recordingBackend = Effect.gen(function* () {
+const recordingBackend = Effect.fn("recordingBackend")(function* () {
   const evaluations = yield* Ref.make(0);
   const backend: Backend.Backend = {
     applyMutations: () => Effect.succeed({ lastMutationIds: {}, hints: [] }),
@@ -511,7 +512,7 @@ describe("FilterPolicy: on SyncServer", () => {
   it.effect("an inadmissible subscription fails the pull before Backend.evaluate", () =>
     Effect.scoped(
       Effect.gen(function* () {
-        const { backend, evaluations } = yield* recordingBackend;
+        const { backend, evaluations } = yield* recordingBackend();
         const server = yield* Server.make({ backend, auth: { policy: policy() } });
         const pull = (where: Predicate.Predicate, orderBy: ReadonlyArray<Subset.OrderBy> = []) =>
           server.handler.handlePull({
@@ -565,7 +566,7 @@ describe("FilterPolicy: on SyncServer", () => {
   it.effect("a read request is checked the same way", () =>
     Effect.scoped(
       Effect.gen(function* () {
-        const { backend, evaluations } = yield* recordingBackend;
+        const { backend, evaluations } = yield* recordingBackend();
         const server = yield* Server.make({ backend, auth: { policy: policy() } });
         const error = yield* Effect.flip(
           server.handler.handleRead({
@@ -589,7 +590,7 @@ describe("FilterPolicy: on SyncServer", () => {
   it.effect("the auth filter and a named query's resolved subset are exempt", () =>
     Effect.scoped(
       Effect.gen(function* () {
-        const { backend, evaluations } = yield* recordingBackend;
+        const { backend, evaluations } = yield* recordingBackend();
         const topRated = Query.named("products/topRated", Schema.Struct({ min: Schema.Finite }));
         const server = yield* Server.make({
           backend,
@@ -628,7 +629,7 @@ describe("FilterPolicy: on SyncServer", () => {
   it.effect("what middleware ANDs into a subset is server-authored: checked before rewrite", () =>
     Effect.scoped(
       Effect.gen(function* () {
-        const { backend, evaluations } = yield* recordingBackend;
+        const { backend, evaluations } = yield* recordingBackend();
         // A tenancy middleware scoping every window by a field no client may
         // filter, with a relational test on read.
         const tenant = Predicate.eq("rating", 5);
@@ -724,7 +725,9 @@ describe("FilterPolicy: on SyncServer", () => {
             }),
           ],
         });
-        expect(response.patch.map((op) => (op._tag === "Put" ? op.id : op._tag))).toEqual(["p-1"]);
+        expect(response.patch.map((op) => (P.isTagged(op, "Put") ? op.id : op._tag))).toEqual([
+          "p-1",
+        ]);
       })
     )
   );

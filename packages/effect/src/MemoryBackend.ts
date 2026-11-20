@@ -42,6 +42,7 @@
  * already requires.
  */
 
+import * as P from "effect/Predicate";
 import * as Arr from "effect/Array";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
@@ -266,7 +267,7 @@ const commitMutation = (
     const collectionRows =
       working.get(collection) ?? new Map<string, MemoryRow>(s.rows.get(collection) ?? []);
     working.set(collection, collectionRows);
-    if (write._tag === "put") {
+    if (P.isTagged(write, "put")) {
       versionCounter += 1;
       collectionRows.set(id, { id, version: versionCounter, value: write.value });
     } else {
@@ -370,7 +371,7 @@ const foldStage = (
     Arr.forEach(writes, ([id, write]) => {
       ids.add(id);
       const values = puts.get(collection) ?? new Map<string, unknown>();
-      if (write._tag === "put") {
+      if (P.isTagged(write, "put")) {
         values.set(id, write.value);
       } else {
         values.delete(id);
@@ -415,7 +416,7 @@ export const make = (handlers: Readonly<Record<string, BackendHandler>>): Effect
       get: (collection, id) => {
         const staged = stage.overlay.get(collection)?.get(id);
         if (staged !== undefined) {
-          return Effect.succeed(staged._tag === "put" ? staged.value : undefined);
+          return Effect.succeed(P.isTagged(staged, "put") ? staged.value : undefined);
         }
         return Ref.get(state).pipe(
           Effect.map((s) => {
@@ -455,18 +456,17 @@ export const make = (handlers: Readonly<Record<string, BackendHandler>>): Effect
           return [{ _tag: "Replayed", rejection: Option.fromUndefinedOr(rejection) }, s];
         }
         if (readsStale(s, unit.reads)) return [{ _tag: "Conflicted" }, s];
-        const log = outcome._tag === "Applied" ? outcome.staged.log : [];
+        const log = P.isTagged(outcome, "Applied") ? outcome.staged.log : [];
         const next = commitMutation(s, context, mutation, log);
-        const committed =
-          outcome._tag === "Rejected"
-            ? withRejection(
-                next,
-                context.clientGroupId,
-                mutation.clientId,
-                mutation.mutationId,
-                outcome.reason
-              )
-            : next;
+        const committed = P.isTagged(outcome, "Rejected")
+          ? withRejection(
+              next,
+              context.clientGroupId,
+              mutation.clientId,
+              mutation.mutationId,
+              outcome.reason
+            )
+          : next;
         return [{ _tag: "Committed" }, committed];
       });
 

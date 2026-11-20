@@ -1134,9 +1134,7 @@ const viewOptions = (options: ViewOptions): ViewOptions =>
   options.urls === undefined ? {} : { urls: options.urls };
 
 /** The `indexes` declared on each of `nodes`' collections, by collection name. */
-const declaredIndexes = (
-  nodes: Node.NodeRegistry
-): Readonly<Record<string, ReadonlyArray<string>>> => {
+const declaredIndexes = (nodes: Node.NodeRegistry) => {
   const indexes: Record<string, ReadonlyArray<string>> = {};
   Arr.forEach(nodes.collections, ([name, collection]) => {
     if (collection.indexes !== undefined && Arr.isReadonlyArrayNonEmpty(collection.indexes)) {

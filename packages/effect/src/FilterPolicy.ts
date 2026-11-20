@@ -27,6 +27,7 @@ import * as Option from "effect/Option";
 import * as P from "effect/Predicate";
 import * as SchemaAST from "effect/SchemaAST";
 import { AuthorizationError, FilterDeclarationError } from "./Errors.js";
+import * as Json from "./internal/Json.js";
 import type { Literal, Predicate } from "./Predicate.js";
 import type { OrderBy } from "./Subset.js";
 
@@ -112,7 +113,7 @@ const INT_CHECK_ID = "effect/schema/isInt";
 const hasIntCheck = (checks: SchemaAST.Checks | undefined): boolean =>
   checks !== undefined &&
   checks.some((check) =>
-    check._tag === "FilterGroup"
+    P.isTagged(check, "FilterGroup")
       ? hasIntCheck(check.checks)
       : check.annotations?.representation?.id === INT_CHECK_ID
   );
@@ -130,7 +131,7 @@ const kindOfLiteral: (literal: SchemaAST.LiteralValue) => LiteralKind | undefine
 /** The one kind shared by a union's non-null members (`NullOr`, `optional`, `Literals`). */
 const kindOfUnion = (members: ReadonlyArray<SchemaAST.AST>): LiteralKind | undefined => {
   const kinds = members
-    .filter((member) => member._tag !== "Null" && member._tag !== "Undefined")
+    .filter((member) => !P.isTagged(member, "Null") && !P.isTagged(member, "Undefined"))
     .map(kindOfAst);
   if (kinds.includes(undefined)) return undefined;
   const distinct = new Set(kinds);
@@ -350,7 +351,7 @@ const literalCheck = (
     ? undefined
     : deny(
         collection,
-        `literal ${JSON.stringify(value)} for field "${field}" ("${operator}") does not match its kind "${kind}"`
+        `literal ${Json.stringify(value)} for field "${field}" ("${operator}") does not match its kind "${kind}"`
       );
 };
 
@@ -470,8 +471,8 @@ const notCheck = (
   declaration: FilterDeclaration,
   inner: Predicate
 ): AuthorizationError | undefined => {
-  if (inner._tag === "In") return inCheck(collection, declaration, inner, "nin");
-  if (inner._tag === "Compare" && isNullTest(inner)) {
+  if (P.isTagged(inner, "In")) return inCheck(collection, declaration, inner, "nin");
+  if (P.isTagged(inner, "Compare") && isNullTest(inner)) {
     return fieldCheck(collection, declaration, inner.field, "isnull");
   }
   return checkWhere(collection, declaration, inner);

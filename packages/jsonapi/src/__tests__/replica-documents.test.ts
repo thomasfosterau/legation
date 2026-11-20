@@ -9,6 +9,7 @@
  * or the node graph's synthetic resources), `toCover`, the single-resource
  * shape of `/{type}/{id}`, and the grammar's rejection of a bad URL.
  */
+import * as Cause from "effect/Cause";
 import { assert, describe, expect, it } from "@effect/vitest";
 import * as Arr from "effect/Array";
 import * as Effect from "effect/Effect";
@@ -31,6 +32,9 @@ import * as JsonApiQuery from "../JsonApiQuery.js";
 import * as ReplicaDocuments from "../ReplicaDocuments.js";
 import * as RestHandlers from "../RestHandlers.js";
 import { defined } from "./defined.js";
+
+const JsonText = Schema.fromJsonString(Schema.Unknown);
+const encodeJson = Schema.encodeSync(JsonText);
 
 // ─── The graph ───────────────────────────────────────────────────────────────
 
@@ -70,7 +74,11 @@ interface SeedRow {
   readonly [field: string]: Schema.Json;
 }
 
-const seed: Readonly<Record<string, ReadonlyArray<SeedRow>>> = {
+interface Seed {
+  readonly [collection: string]: ReadonlyArray<SeedRow>;
+}
+
+const seed: Seed = {
   categories: [{ id: "c-audio", name: "Audio" }],
   products: [
     { id: "p-1", categoryId: "c-audio", name: "Desk", priceCents: 300 },
@@ -155,7 +163,7 @@ const restGet = (rest: RestHandlers.RestHandlers, resource: Resource.Any, url: s
     request: HttpServerRequest.fromWeb(new Request(`http://shop.test${url}`)),
   });
 
-const bytes = (document: unknown) => JSON.stringify(document);
+const bytes = (document: unknown) => encodeJson(document);
 
 /**
  * A collection URL's total over this replica: its filter over every row
@@ -390,7 +398,7 @@ describe("ReplicaDocuments over the replica", () => {
       assert(Exit.isFailure(exit));
       const error = defined(exit.cause.reasons[0]);
       expect(error._tag).toBe("Fail");
-      assert(error._tag === "Fail");
+      assert(Cause.isFailReason(error));
       expect(error.error).toBeInstanceOf(QueryError);
       expect(error.error.parameter).toBe("filter[name]");
     })
@@ -446,7 +454,7 @@ describe("ReplicaDocuments over the replica", () => {
         });
         // Nothing died: the failures were typed, so a façade can route the request on.
         const exit = yield* Effect.exit(docs.fromUrl(view, "/reviews"));
-        expect(Exit.isFailure(exit) && exit.cause.reasons.every((r) => r._tag === "Fail")).toBe(
+        expect(Exit.isFailure(exit) && exit.cause.reasons.every((r) => Cause.isFailReason(r))).toBe(
           true
         );
       })

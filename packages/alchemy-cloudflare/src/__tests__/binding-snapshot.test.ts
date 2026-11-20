@@ -16,6 +16,7 @@
  * bottom drops the inbound cookie and shows the rows arriving exactly as
  * before while the conversation is lost.
  */
+import * as P from "effect/Predicate";
 import { describe, expect, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import { awaitPromise } from "./await-promise.js";
@@ -56,6 +57,9 @@ import { routeOf, routes } from "../RoomProtocol.js";
 import { routeSync } from "../Worker.js";
 import { defined } from "./defined.js";
 
+const JsonText = Schema.fromJsonString(Schema.Unknown);
+const encodeJson = Schema.encodeSync(JsonText);
+
 // ─── The app ─────────────────────────────────────────────────────────────────
 
 const Product = Node.make("products", { attributes: { name: Schema.String } });
@@ -72,10 +76,10 @@ const mutations = Mutation.registry([
   },
 ]);
 
-const backendHandlers: Record<string, MemoryBackend.BackendHandler> = {
+const backendHandlers = {
   "product/set": (args, writer) =>
     Effect.asVoid(writer.put("products", (args as { id: string }).id, args)),
-};
+} satisfies Record<string, MemoryBackend.BackendHandler>;
 
 // ─── The API Worker ──────────────────────────────────────────────────────────
 
@@ -104,7 +108,7 @@ const sessionOf = (cookie: string | undefined): string | undefined => {
 };
 
 const json = (body: unknown): Response =>
-  new Response(JSON.stringify(body), { headers: { "content-type": "application/json" } });
+  new Response(encodeJson(body), { headers: { "content-type": "application/json" } });
 
 interface Api {
   /** The bound Worker's fetch handler — what `env.API.fetch` reaches. */
@@ -114,7 +118,7 @@ interface Api {
 }
 
 const badRequest = (error: TransportError | VersionNotSupportedError) =>
-  Effect.succeed(new Response(JSON.stringify({ error: error.message }), { status: 400 }));
+  Effect.succeed(new Response(encodeJson({ error: error.message }), { status: 400 }));
 
 /**
  * The API Worker: one sync server per room (its own CVR store), all over one
@@ -122,7 +126,7 @@ const badRequest = (error: TransportError | VersionNotSupportedError) =>
  * back to a public `anonymous` room rather than a 401 — a browsable catalogue,
  * and the reason a dropped cookie fails *quietly* instead of loudly.
  */
-const makeApi: Effect.Effect<Api, never, Scope.Scope> = Effect.gen(function* () {
+const makeApi = Effect.fn("makeApi")(function* (): Effect.fn.Return<Api, never, Scope.Scope> {
   const backend = yield* MemoryBackend.make(backendHandlers);
   const policy = Authorization.policy({ products: Authorization.allowAll });
   const handlers = new Map<string, Transport.ServerHandler>();
@@ -243,12 +247,12 @@ const makeEngine = (
 const putsIn = (patches: ReadonlyArray<ReadonlyArray<Protocol.PatchOp>>): ReadonlyArray<string> =>
   patches
     .flat()
-    .filter((op): op is Extract<Protocol.PatchOp, { _tag: "Put" }> => op._tag === "Put")
+    .filter((op): op is Extract<Protocol.PatchOp, { _tag: "Put" }> => P.isTagged(op, "Put"))
     .map((op) => op.id)
     .toSorted();
 
 const hasClear = (patches: ReadonlyArray<ReadonlyArray<Protocol.PatchOp>>): boolean =>
-  patches.flat().some((op) => op._tag === "Clear");
+  patches.flat().some((op) => P.isTagged(op, "Clear"));
 
 // ─── Tests ───────────────────────────────────────────────────────────────────
 
@@ -308,7 +312,7 @@ describe("BindingTransport", () => {
   it.effect("maps an HTTP failure onto a TransportError carrying the server's reason", () =>
     Effect.gen(function* () {
       const binding = {
-        fetch: async () => new Response(JSON.stringify({ error: "nope" }), { status: 400 }),
+        fetch: async () => new Response(encodeJson({ error: "nope" }), { status: 400 }),
       };
       const transport = BindingTransport.make({ binding, request: inbound(SESSION) });
       const failure = yield* Effect.flip(
@@ -333,7 +337,7 @@ describe("BindingTransport", () => {
 describe("Hydration.snapshot over a service binding", () => {
   it.effect("the first client pull continues the CVR conversation, without a reset", () =>
     Effect.gen(function* () {
-      const api = yield* makeApi;
+      const api = yield* makeApi();
       const binding = { fetch: api.fetch };
       const request = inbound(`${SESSION}; legation-client-group=${GROUP}`);
 
@@ -394,7 +398,7 @@ describe("Hydration.snapshot over a service binding", () => {
 
   it.effect("control: dropping the inbound cookie still renders rows, but resets the client", () =>
     Effect.gen(function* () {
-      const api = yield* makeApi;
+      const api = yield* makeApi();
       const binding = { fetch: api.fetch };
       const request = inbound(`${SESSION}; legation-client-group=${GROUP}`);
 

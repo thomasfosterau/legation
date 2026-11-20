@@ -45,12 +45,12 @@ const mutators = Mutator.registry([
   },
 ]);
 
-const handlers: Record<string, MemoryBackend.BackendHandler> = {
+const handlers = {
   "todo/set": (args, writer) =>
     Effect.asVoid(writer.put("todos", (args as { id: string }).id, args)),
-};
+} satisfies Record<string, MemoryBackend.BackendHandler>;
 
-const makeServer = Effect.gen(function* () {
+const makeServer = Effect.fn("makeServer")(function* () {
   const backend = yield* MemoryBackend.make(handlers);
   const cvrStore = yield* Cvr.makeMemoryStore;
   const bus = yield* InvalidationBus.makeInProcess;
@@ -162,7 +162,7 @@ describe("backpressure — invalidation bus", () => {
 describe("backpressure — engine change hub", () => {
   it.live("a stalled observer bounds its queue and resumes with a correct Rebuild", () =>
     Effect.gen(function* () {
-      const handler = yield* makeServer;
+      const handler = yield* makeServer();
       const engine = yield* makeClient(handler, 4); // small bound → forced drops
 
       const pages = yield* Ref.make<Array<ReadonlyArray<string>>>([]);

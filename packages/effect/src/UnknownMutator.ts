@@ -29,9 +29,8 @@ export const make = (mutator: string): BackendError =>
  * the typed unknown-mutator cause, whatever its message says.
  */
 export const isError = (error: unknown): boolean => {
-  if (!P.isObjectOrArray(error)) return false;
-  if (!("_tag" in error) || error._tag !== "BackendError") return false;
+  if (!P.isObjectOrArray(error) || !P.isTagged(error, "BackendError")) return false;
   if (!("cause" in error)) return false;
   const cause = error.cause;
-  return P.isObjectOrArray(cause) && "_tag" in cause && cause._tag === "UnknownMutator";
+  return P.isObjectOrArray(cause) && P.isTagged(cause, "UnknownMutator");
 };

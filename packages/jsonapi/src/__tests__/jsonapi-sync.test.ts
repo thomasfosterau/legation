@@ -28,6 +28,10 @@ import * as Ledger from "../Ledger.js";
 import { defined } from "./defined.js";
 import { withLayer } from "./with-layer.js";
 
+const JsonText = Schema.fromJsonString(Schema.Unknown);
+const encodeJson = Schema.encodeSync(JsonText);
+const decodeJson = Schema.decodeSync(JsonText);
+
 // A conventional JSON:API surface for one resource type, `todos`.
 const idParam = { params: Schema.Struct({ id: Schema.String }) };
 const body = { payload: Schema.Unknown, success: Schema.Unknown };
@@ -47,12 +51,12 @@ interface StoredResource {
 }
 
 const headers = { "Content-Type": "application/vnd.api+json" };
-const doc = (data: unknown) => new Response(JSON.stringify({ data }), { status: 200, headers });
+const doc = (data: unknown) => new Response(encodeJson({ data }), { status: 200, headers });
 const empty = (status: number) => new Response(null, { status, headers });
 const readBody = (request: { readonly body: unknown }): any => {
   const b = request.body as { _tag?: string; body?: Uint8Array };
   return b?._tag === "Uint8Array" && b.body
-    ? JSON.parse(new TextDecoder().decode(b.body))
+    ? decodeJson(new TextDecoder().decode(b.body))
     : undefined;
 };
 

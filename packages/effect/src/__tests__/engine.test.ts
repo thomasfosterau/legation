@@ -2,6 +2,7 @@
  * End-to-end engine tests: client mutates optimistically → journal → push →
  * memory backend applies authoritatively → CVR diff → pull patch → rebase.
  */
+import * as P from "effect/Predicate";
 import { describe, expect, it } from "@effect/vitest";
 import * as DateTime from "effect/DateTime";
 import * as Deferred from "effect/Deferred";
@@ -82,7 +83,7 @@ const counterMutators = Mutator.registry([
   },
 ]);
 
-const backendHandlers: Record<string, MemoryBackend.BackendHandler> = {
+const backendHandlers = {
   "counter/inc": (args, writer) => incrementCounter(writer, (args as { readonly id: string }).id),
   "todo/set": (args, writer) => {
     const todo = args as Todo;
@@ -90,14 +91,18 @@ const backendHandlers: Record<string, MemoryBackend.BackendHandler> = {
   },
   "todo/remove": (args, writer) => Effect.asVoid(writer.del("todos", (args as { id: string }).id)),
   "todo/reject": () => Effect.fail(new MutationRejected({ reason: "refused by the backend" })),
-};
+} satisfies Record<string, MemoryBackend.BackendHandler>;
 
 const authPolicy = Authorization.policy({
   todos: Authorization.allowAll,
   counters: Authorization.allowAll,
 });
 
-const makeServer: Effect.Effect<ServerHandler, never, Scope.Scope> = Effect.gen(function* () {
+const makeServer = Effect.fn("makeServer")(function* (): Effect.fn.Return<
+  ServerHandler,
+  never,
+  Scope.Scope
+> {
   const backend = yield* MemoryBackend.make(backendHandlers);
   const cvrStore = yield* Cvr.makeMemoryStore;
   const bus = yield* InvalidationBus.makeInProcess;
@@ -129,7 +134,7 @@ const allTodos = Subset.make({ collection: "todos" });
 describe("ClientEngine ↔ SyncServer end to end", () => {
   it.effect("optimistic write → push → pull → confirmed (journal drained)", () =>
     Effect.gen(function* () {
-      const handler = yield* makeServer;
+      const handler = yield* makeServer();
       const { engine, store } = yield* makeClient(handler, "a");
       yield* engine.subscribe(allTodos);
 
@@ -157,7 +162,7 @@ describe("ClientEngine ↔ SyncServer end to end", () => {
 
   it.effect("a second client group pulls the first group's committed writes", () =>
     Effect.gen(function* () {
-      const handler = yield* makeServer;
+      const handler = yield* makeServer();
       const a = yield* makeClient(handler, "a");
       const b = yield* makeClient(handler, "b");
       yield* a.engine.subscribe(allTodos);
@@ -174,7 +179,7 @@ describe("ClientEngine ↔ SyncServer end to end", () => {
 
   it.effect("subscriptions narrow by predicate; departed rows are deleted", () =>
     Effect.gen(function* () {
-      const handler = yield* makeServer;
+      const handler = yield* makeServer();
       const { engine, store } = yield* makeClient(handler, "a");
       const openOnly = Subset.make({ collection: "todos", where: Predicate.eq("done", false) });
       yield* engine.subscribe(openOnly);
@@ -195,7 +200,7 @@ describe("ClientEngine ↔ SyncServer end to end", () => {
 
   it.effect("rebase: pending local mutations stay visible over pulled state", () =>
     Effect.gen(function* () {
-      const handler = yield* makeServer;
+      const handler = yield* makeServer();
       const a = yield* makeClient(handler, "a");
       yield* a.engine.subscribe(allTodos);
       yield* a.engine.mutate("todo/set", { id: "1", title: "v1", done: false });
@@ -213,7 +218,7 @@ describe("ClientEngine ↔ SyncServer end to end", () => {
 
   it.effect("unauthorized collections are denied by default", () =>
     Effect.gen(function* () {
-      const handler = yield* makeServer;
+      const handler = yield* makeServer();
       const { engine } = yield* makeClient(handler, "a");
       yield* engine.subscribe(Subset.make({ collection: "secrets" }));
       const result = yield* Effect.exit(engine.pull);
@@ -238,8 +243,8 @@ describe("mutator args validation", () => {
     },
   ]);
 
-  const makeTypedClient = Effect.gen(function* () {
-    const handler = yield* makeServer;
+  const makeTypedClient = Effect.fn("makeTypedClient")(function* () {
+    const handler = yield* makeServer();
     const store = yield* ClientStoreModule.makeMemory;
     const transport = yield* makeInMemory(handler, "group-a");
     const engine = yield* ClientEngineModule.make({
@@ -255,7 +260,7 @@ describe("mutator args validation", () => {
 
   it.effect("rejects args that fail the mutator schema", () =>
     Effect.gen(function* () {
-      const { engine, store } = yield* makeTypedClient;
+      const { engine, store } = yield* makeTypedClient();
       const failure = yield* Effect.flip(
         engine.mutate("todo/schedule", {
           id: "1",
@@ -270,7 +275,7 @@ describe("mutator args validation", () => {
 
   it.effect("journals encoded args and replays handlers with decoded args", () =>
     Effect.gen(function* () {
-      const { engine, store } = yield* makeTypedClient;
+      const { engine, store } = yield* makeTypedClient();
       yield* engine.mutate("todo/schedule", {
         id: "1",
         title: "ship",
@@ -291,7 +296,7 @@ describe("mutator args validation", () => {
 
   it.effect("rejects unknown mutators", () =>
     Effect.gen(function* () {
-      const { engine } = yield* makeTypedClient;
+      const { engine } = yield* makeTypedClient();
       const failure = yield* Effect.flip(engine.mutate("todo/unknown", {}));
       expect(failure._tag).toBe("MutatorError");
     })
@@ -320,7 +325,7 @@ const titleOf = (
 describe("a push acknowledgement keeps the overlay until a pull reports it", () => {
   it.live("an observer never sees an acknowledged mutation revert before its pull", () =>
     Effect.gen(function* () {
-      const handler = yield* makeServer;
+      const handler = yield* makeServer();
       const { engine, store } = yield* makeClient(handler, "a");
       yield* engine.subscribe(allTodos);
       yield* engine.mutate("todo/set", { id: "1", title: "first", done: false });
@@ -359,7 +364,7 @@ describe("a push acknowledgement keeps the overlay until a pull reports it", () 
 
   it.effect("once a pull reports a push, a later write by another client shows through", () =>
     Effect.gen(function* () {
-      const handler = yield* makeServer;
+      const handler = yield* makeServer();
       const a = yield* makeClient(handler, "a");
       const b = yield* makeClient(handler, "b");
       yield* a.engine.subscribe(allTodos);
@@ -380,7 +385,7 @@ describe("a push acknowledgement keeps the overlay until a pull reports it", () 
 
   it.effect("a permanent rejection leaves the view at its push, since nothing was applied", () =>
     Effect.gen(function* () {
-      const handler = yield* makeServer;
+      const handler = yield* makeServer();
       const { engine } = yield* makeClient(handler, "a");
       yield* engine.subscribe(allTodos);
       yield* engine.mutate("todo/reject", { id: "1", title: "refused", done: false });
@@ -393,7 +398,7 @@ describe("a push acknowledgement keeps the overlay until a pull reports it", () 
 
   it.effect("an identity reset drops the unpulled tail along with the rows under it", () =>
     Effect.gen(function* () {
-      const handler = yield* makeServer;
+      const handler = yield* makeServer();
       const { engine } = yield* makeClient(handler, "a");
       yield* engine.subscribe(allTodos);
       yield* engine.mutate("todo/set", { id: "1", title: "signed-in", done: false });
@@ -410,7 +415,7 @@ describe("a push acknowledgement keeps the overlay until a pull reports it", () 
     () =>
       Effect.gen(function* () {
         const count = 1100;
-        const handler = yield* makeServer;
+        const handler = yield* makeServer();
         const { engine, store } = yield* makeClient(handler, "a");
         yield* engine.subscribe(allTodos);
         for (let i = 0; i < count; i++) {
@@ -484,7 +489,7 @@ interface Parking {
   readonly release: Deferred.Deferred<void>;
 }
 
-const makeParking = Effect.gen(function* () {
+const makeParking = Effect.fn("makeParking")(function* () {
   const parking: Parking = {
     armed: yield* Ref.make(false),
     reached: yield* Deferred.make<void>(),
@@ -544,7 +549,7 @@ describe("a push that commits during a pull never double-counts", () => {
   for (const at of ["watermark", "evaluate", "rows"] as const) {
     it.effect(`a push committed during the pull's ${at} read is counted once`, () =>
       Effect.gen(function* () {
-        const parking = yield* makeParking;
+        const parking = yield* makeParking();
         const inner = yield* MemoryBackend.make(backendHandlers);
         const server = yield* serverOver(parkedBackend(inner, at, parking));
         const store = yield* ClientStoreModule.makeMemory;
@@ -580,7 +585,7 @@ describe("a push that commits during a pull never double-counts", () => {
 describe("a pull's reveal is atomic with its tail release", () => {
   it.effect("a read between the pull's store commit and its copy update sees the true count", () =>
     Effect.gen(function* () {
-      const parking = yield* makeParking;
+      const parking = yield* makeParking();
       const server = yield* serverOver(yield* MemoryBackend.make(backendHandlers));
       const inner = yield* ClientStoreModule.makeMemory;
       // The pull parks after the store has committed its confirmed rows and released the acknowledged
@@ -621,7 +626,7 @@ describe("a pull's reveal is atomic with its tail release", () => {
     "a pull computed before a push is delivered after its ack keeps that push's overlay",
     () =>
       Effect.gen(function* () {
-        const parking = yield* makeParking;
+        const parking = yield* makeParking();
         const server = yield* serverOver(yield* MemoryBackend.make(backendHandlers));
         // The pull's response is computed, then parked before it reaches the client.
         const delayed: ServerHandler = {
@@ -697,7 +702,7 @@ describe("a pull's watermark and rows are one snapshot", () => {
       });
       const reported = Object.values(response.lastMutationIds).reduce((sum, upTo) => sum + upTo, 0);
       const counted = response.patch.flatMap((op) =>
-        op._tag === "Put" && op.collection === "counters" ? [(op.value as Counter).n] : []
+        P.isTagged(op, "Put") && op.collection === "counters" ? [(op.value as Counter).n] : []
       );
       // The rows may trail the watermark (a transient revert until the next pull),
       // but never carry a push it does not report: that would double-apply.
@@ -771,7 +776,7 @@ describe("a pull's watermark and rows are one snapshot", () => {
             0
           );
           const counted = response.patch.flatMap((op) =>
-            op._tag === "Put" && op.collection === "counters" ? [(op.value as Counter).n] : []
+            P.isTagged(op, "Put") && op.collection === "counters" ? [(op.value as Counter).n] : []
           );
           expect(counted).toEqual([reported]);
         })

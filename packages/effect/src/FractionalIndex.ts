@@ -27,6 +27,7 @@
  */
 
 import * as Schema from "effect/Schema";
+import * as Json from "./internal/Json.js";
 
 /** Thrown by `generateBetween` when `lo` does not sort before `hi`. */
 class InvalidBounds extends Schema.TaggedError<InvalidBounds, { readonly brand: unique symbol }>()(
@@ -64,7 +65,7 @@ export const compare = (a: string, b: string): number => {
 export const generateBetween = (lo?: string, hi?: string): string => {
   if (lo !== undefined && hi !== undefined && compare(lo, hi) >= 0) {
     throw new InvalidBounds({
-      message: `FractionalIndex.generateBetween: lo (${JSON.stringify(lo)}) must sort before hi (${JSON.stringify(hi)})`,
+      message: `FractionalIndex.generateBetween: lo (${Json.stringify(lo)}) must sort before hi (${Json.stringify(hi)})`,
     });
   }
   const digits: Array<number> = [];

@@ -57,11 +57,15 @@ const mutators = Mutator.registry([
     local: (args, writer) => writer.put("todos", (args as Todo).id, args),
   },
 ]);
-const backendHandlers: Record<string, MemoryBackend.BackendHandler> = {
+const backendHandlers = {
   "todo/set": (args, writer) => Effect.asVoid(writer.put("todos", (args as Todo).id, args)),
-};
+} satisfies Record<string, MemoryBackend.BackendHandler>;
 
-const makeServer: Effect.Effect<ServerHandler, never, Scope.Scope> = Effect.gen(function* () {
+const makeServer = Effect.fn("makeServer")(function* (): Effect.fn.Return<
+  ServerHandler,
+  never,
+  Scope.Scope
+> {
   const backend = yield* MemoryBackend.make(backendHandlers);
   return yield* SyncServer.make.pipe(
     Effect.provideService(Backend, backend),
@@ -74,8 +78,8 @@ const makeServer: Effect.Effect<ServerHandler, never, Scope.Scope> = Effect.gen(
   );
 });
 
-const makeEngine = Effect.gen(function* () {
-  const handler = yield* makeServer;
+const makeEngine = Effect.fn("makeEngine")(function* () {
+  const handler = yield* makeServer();
   const store = yield* ClientStoreModule.makeMemory;
   const transport = yield* makeInMemory(handler, "group-a");
   const engine = yield* ClientEngineModule.make({
@@ -191,7 +195,7 @@ describe("canonical arg keys", () => {
 describe("typed subset builder + reads", () => {
   it.effect("Subset.for(...).make flows the row type through query without casts", () =>
     Effect.gen(function* () {
-      const { engine } = yield* makeEngine;
+      const { engine } = yield* makeEngine();
       const openTodos = Subset.for(todos).make({
         where: (p) => p.eq("isDone", false),
         orderBy: [{ field: "title", direction: "asc" }],
@@ -240,7 +244,7 @@ describe("observe select projection", () => {
 
   it.effect("re-emits only when the projected value changes", () =>
     Effect.gen(function* () {
-      const { engine } = yield* makeEngine;
+      const { engine } = yield* makeEngine();
       yield* engine.subscribe(allTodos);
 
       const emissions = yield* Ref.make<ReadonlyArray<string>>([]);

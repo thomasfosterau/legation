@@ -24,6 +24,7 @@ import * as SyncServer from "../SyncServer.js";
 import { ClientTransport, makeInMemory } from "../Transport.js";
 import type { Mutation } from "../Protocol.js";
 import { defined } from "./defined.js";
+import * as Json from "../internal/Json.js";
 
 const mutation = (mutationId: number): Mutation => ({
   clientId: "c1",
@@ -81,7 +82,7 @@ describe("ClientStore.makeKeyValue", () => {
         const store = yield* ClientStoreModule.makeKeyValue();
 
         // Valid JSON, wrong shape: journal entries that aren't Mutations.
-        yield* kv.set("legation/journal", JSON.stringify([{ nope: true }]));
+        yield* kv.set("legation/journal", Json.stringify([{ nope: true }]));
         const journalError = yield* Effect.flip(store.pendingMutations);
         expect(journalError._tag).toBe("StoreError");
 
@@ -328,7 +329,7 @@ const expectWhole = (store: ClientStoreModule.ClientStore, label: string) =>
 
 /** The journal index on disk, and how many of its entries still have a body. */
 const onDisk = (kv: Faulty) => {
-  const index = JSON.parse(kv.data.get("legation/journalIndex") ?? "[]") as Array<{
+  const index = Json.parse(kv.data.get("legation/journalIndex") ?? "[]") as Array<{
     clientId: string;
     mutationId: number;
   }>;
@@ -464,7 +465,7 @@ describeWrapped("KeyValue journal compaction is crash-safe", (it) => {
       expect(kv.data.has("legation/compactionIntent")).toBe(false);
       // The index is untouched: still the full run, nothing half-renumbered.
       expect(idsOf(yield* first.pendingMutations)).toEqual([1, 2, 4, 5]);
-      expect(JSON.parse(defined(kv.data.get("legation/journalIndex")))).toHaveLength(5);
+      expect(Json.parse(defined(kv.data.get("legation/journalIndex")))).toHaveLength(5);
     })
   );
 
@@ -484,7 +485,7 @@ describeWrapped("KeyValue journal compaction is crash-safe", (it) => {
 
 describeWrapped("KeyValue acknowledge leaves no index entry without a body", (it) => {
   /** c1 holds 1..5 and c2 holds 1..2; the acknowledgement under test is c1 up to 3. */
-  const seededTwoClients = Effect.gen(function* () {
+  const seededTwoClients = Effect.fn("seededTwoClients")(function* () {
     const { kv, first } = yield* seeded(5);
     yield* first.appendMutation(numbered(yield* first.nextMutationId("c2"), "c2"));
     yield* first.appendMutation(numbered(yield* first.nextMutationId("c2"), "c2"));
@@ -496,7 +497,7 @@ describeWrapped("KeyValue acknowledge leaves no index entry without a body", (it
       let orphaned = 0;
       let ranToCompletion = false;
       for (let writes = 0; writes < 20 && !ranToCompletion; writes++) {
-        const { kv, first } = yield* seededTwoClients;
+        const { kv, first } = yield* seededTwoClients();
         kv.budget.writes = writes;
         yield* Effect.exit(first.acknowledge("c1", 3));
         ranToCompletion = kv.budget.writes > 0;
@@ -560,12 +561,12 @@ describeWrapped("KeyValue acknowledge leaves no index entry without a body", (it
 
   it.effect("an open drops an index entry whose body is missing, reserving its id", () =>
     Effect.gen(function* () {
-      const { kv } = yield* seededTwoClients;
+      const { kv } = yield* seededTwoClients();
       // A store damaged by an earlier release's crash: the bodies of c1's 4 and
       // 5 are gone, the index still lists them, and the counter never saw 5.
       kv.data.delete("legation/journal/c1/4");
       kv.data.delete("legation/journal/c1/5");
-      kv.data.set("legation/counters", JSON.stringify({ c1: 3, c2: 2 }));
+      kv.data.set("legation/counters", Json.stringify({ c1: 3, c2: 2 }));
       expect(onDisk(kv)).toMatchObject({ withBody: 5 });
       expect(onDisk(kv).index).toHaveLength(7);
 
@@ -579,7 +580,7 @@ describeWrapped("KeyValue acknowledge leaves no index entry without a body", (it
 
   it.effect("an open of a healthy journal writes nothing", () =>
     Effect.gen(function* () {
-      const { kv } = yield* seededTwoClients;
+      const { kv } = yield* seededTwoClients();
       // Every successful write spends one from the budget.
       kv.budget.writes = 1000;
       const store = yield* reopen(kv);

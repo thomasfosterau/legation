@@ -168,13 +168,13 @@ describe("IndexedDbClientStore: the unpulled tail", () => {
       local: (args, writer) => incrementCounter(writer, (args as { readonly id: string }).id),
     },
   ]);
-  const backendHandlers: Record<string, MemoryBackend.BackendHandler> = {
+  const backendHandlers = {
     "counter/inc": (args, writer) => incrementCounter(writer, (args as { readonly id: string }).id),
-  };
+  } satisfies Record<string, MemoryBackend.BackendHandler>;
   const countersSubset = Subset.make({ collection: "counters" });
   const authPolicy = Authorization.policy({ counters: Authorization.allowAll });
 
-  const makeServer = Effect.gen(function* () {
+  const makeServer = Effect.fn("makeServer")(function* () {
     const backend = yield* MemoryBackend.make(backendHandlers);
     return yield* SyncServer.make.pipe(
       Effect.provideService(Backend.Backend, backend),
@@ -206,7 +206,7 @@ describe("IndexedDbClientStore: the unpulled tail", () => {
 
   it.effect("a restart before the pull keeps the acknowledged effect; the pull releases it", () =>
     Effect.gen(function* () {
-      const handler = yield* makeServer;
+      const handler = yield* makeServer();
       yield* Effect.gen(function* () {
         const store = yield* ClientStore.ClientStore;
         const engine = yield* makeEngine(handler);

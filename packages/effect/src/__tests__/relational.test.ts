@@ -12,12 +12,12 @@ import * as Predicate from "../Predicate.js";
 import * as Subset from "../Subset.js";
 import type { Mutation } from "../Protocol.js";
 
-const handlers: Record<string, MemoryBackend.BackendHandler> = {
+const handlers = {
   "issue/set": (args, writer) =>
     Effect.asVoid(writer.put("issues", (args as { id: string }).id, args)),
   "membership/set": (args, writer) =>
     Effect.asVoid(writer.put("memberships", (args as { id: string }).id, args)),
-};
+} satisfies Record<string, MemoryBackend.BackendHandler>;
 
 const mutation = (mutationId: number, mutator: string, args: unknown): Mutation => ({
   clientId: "seed",

@@ -32,26 +32,28 @@ const setTodo = Mutator.make("todo/set", Schema.Unknown);
 const mutators = Mutator.registry([
   { mutator: setTodo, local: (args, writer) => writer.put("todos", (args as Todo).id, args) },
 ]);
-const handlers: Record<string, MemoryBackend.BackendHandler> = {
+const handlers = {
   "todo/set": (args, writer) => Effect.asVoid(writer.put("todos", (args as Todo).id, args)),
-};
+} satisfies Record<string, MemoryBackend.BackendHandler>;
 
-const makeServer: Effect.Effect<ServerHandler, never, import("effect").Scope.Scope> = Effect.gen(
-  function* () {
-    const backend = yield* MemoryBackend.make(handlers);
-    const cvrStore = yield* Cvr.makeMemoryStore;
-    const bus = yield* InvalidationBus.makeInProcess;
-    return yield* SyncServer.make.pipe(
-      Effect.provideService(Backend, backend),
-      Effect.provideService(
-        Authorization.AuthPolicy,
-        Authorization.policy({ todos: Authorization.allowAll })
-      ),
-      Effect.provideService(Cvr.CvrStore, cvrStore),
-      Effect.provideService(InvalidationBus.InvalidationBus, bus)
-    );
-  }
-);
+const makeServer = Effect.fn("makeServer")(function* (): Effect.fn.Return<
+  ServerHandler,
+  never,
+  import("effect").Scope.Scope
+> {
+  const backend = yield* MemoryBackend.make(handlers);
+  const cvrStore = yield* Cvr.makeMemoryStore;
+  const bus = yield* InvalidationBus.makeInProcess;
+  return yield* SyncServer.make.pipe(
+    Effect.provideService(Backend, backend),
+    Effect.provideService(
+      Authorization.AuthPolicy,
+      Authorization.policy({ todos: Authorization.allowAll })
+    ),
+    Effect.provideService(Cvr.CvrStore, cvrStore),
+    Effect.provideService(InvalidationBus.InvalidationBus, bus)
+  );
+});
 
 const makeClient = (handler: ServerHandler) =>
   Effect.gen(function* () {
@@ -70,8 +72,8 @@ const makeClient = (handler: ServerHandler) =>
 const allTodos = Subset.make({ collection: "todos" });
 const ids = (rows: ReadonlyArray<{ readonly id: string }>) => rows.map((r) => r.id);
 
-const setup = Effect.gen(function* () {
-  const engine = yield* makeClient(yield* makeServer);
+const setup = Effect.fn("setup")(function* () {
+  const engine = yield* makeClient(yield* makeServer());
   yield* engine.mutate("todo/set", { id: "1", title: "a" });
   yield* engine.push;
   const subs = yield* Subscriptions.make(engine, { ttl: Duration.minutes(5) });
@@ -81,7 +83,7 @@ const setup = Effect.gen(function* () {
 describe("Subscriptions", () => {
   it.effect("drops a released subscription after the TTL grace", () =>
     Effect.gen(function* () {
-      const { engine, subs } = yield* setup;
+      const { engine, subs } = yield* setup();
 
       const handle = yield* subs.acquire(allTodos);
       yield* engine.pull;
@@ -101,7 +103,7 @@ describe("Subscriptions", () => {
 
   it.effect("re-acquiring within the grace window cancels the drop", () =>
     Effect.gen(function* () {
-      const { engine, subs } = yield* setup;
+      const { engine, subs } = yield* setup();
 
       const first = yield* subs.acquire(allTodos);
       yield* engine.pull;
@@ -117,7 +119,7 @@ describe("Subscriptions", () => {
 
   it.effect("preload pins a subscription for the session", () =>
     Effect.gen(function* () {
-      const { engine, subs } = yield* setup;
+      const { engine, subs } = yield* setup();
 
       yield* subs.preload(allTodos);
       yield* engine.pull;
@@ -133,7 +135,7 @@ describe("Subscriptions.counted", () => {
     "holds a window until its last registration releases; unknown windows pass through",
     () =>
       Effect.gen(function* () {
-        const { engine } = yield* setup;
+        const { engine } = yield* setup();
         const counted = Subscriptions.counted(engine);
         const hashes = () =>
           Effect.map(engine.activeSubscriptions, (subs) => subs.map(Subset.hash));

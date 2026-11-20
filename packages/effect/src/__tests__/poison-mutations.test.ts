@@ -43,16 +43,20 @@ const mutators = Mutator.registry([
   },
 ]);
 
-const backendHandlers: Record<string, MemoryBackend.BackendHandler> = {
+const backendHandlers = {
   "todo/set": (args, writer) => Effect.asVoid(writer.put("todos", (args as Todo).id, args)),
   "todo/forbidden": (args, writer) =>
     // Write, then reject: proves the staged effect is rolled back.
     writer
       .put("todos", (args as Todo).id, args)
       .pipe(Effect.andThen(Effect.fail(new MutationRejected({ reason: "permission revoked" })))),
-};
+} satisfies Record<string, MemoryBackend.BackendHandler>;
 
-const makeServer: Effect.Effect<ServerHandler, never, Scope.Scope> = Effect.gen(function* () {
+const makeServer = Effect.fn("makeServer")(function* (): Effect.fn.Return<
+  ServerHandler,
+  never,
+  Scope.Scope
+> {
   const backend = yield* MemoryBackend.make(backendHandlers);
   const cvrStore = yield* Cvr.makeMemoryStore;
   const bus = yield* InvalidationBus.makeInProcess;
@@ -72,7 +76,7 @@ const allTodos = Subset.make({ collection: "todos" });
 describe("permanent mutation rejection", () => {
   it.effect("a poison mutation's optimistic effect vanishes; the one behind it applies", () =>
     Effect.gen(function* () {
-      const handler = yield* makeServer;
+      const handler = yield* makeServer();
       const store = yield* ClientStoreModule.makeMemory;
       const transport = yield* makeInMemory(handler, "group-a");
       const engine = yield* ClientEngineModule.make({

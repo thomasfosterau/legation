@@ -313,7 +313,7 @@ const commitOps = (
       // Every request is issued synchronously here: IndexedDB commits a transaction once control
       // returns to the event loop with no request pending, so nothing may await between them.
       Arr.forEach(ops, (op) => {
-        if (op._tag === "Set") entries.put({ key: op.key, value: op.value });
+        if (P.isTagged(op, "Set")) entries.put({ key: op.key, value: op.value });
         else entries.delete(op.key);
       });
     });

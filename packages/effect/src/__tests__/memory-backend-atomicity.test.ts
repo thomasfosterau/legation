@@ -8,6 +8,7 @@
  * the committed outcome a losing copy reports, at the backend and
  * through a ClientEngine whose two push responses arrive in either order.
  */
+import * as P from "effect/Predicate";
 import { describe, expect, it } from "@effect/vitest";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
@@ -57,53 +58,54 @@ const handlersFor = (hooks: {
   readonly written: Deferred.Deferred<void>;
   readonly release: Deferred.Deferred<void>;
   readonly observed: Ref.Ref<ReadonlyArray<unknown>>;
-}): Record<string, MemoryBackend.BackendHandler> => ({
-  "test/set": (raw, writer) => {
-    const { id, n } = argsOf(raw);
-    return writer.put(rows, id, { n });
-  },
-  // Write, then park before returning: the window a pull or evaluate can hit.
-  "test/park": (raw, writer) => {
-    const { id, n } = argsOf(raw);
-    return writer
-      .put(rows, id, { n })
-      .pipe(
-        Effect.andThen(Deferred.succeed(hooks.written, undefined)),
-        Effect.andThen(Deferred.await(hooks.release))
-      );
-  },
-  // Write, park, then reject permanently.
-  "test/park-reject": (raw, writer) => {
-    const { id, n } = argsOf(raw);
-    return writer
-      .put(rows, id, { n })
-      .pipe(
-        Effect.andThen(Deferred.succeed(hooks.written, undefined)),
-        Effect.andThen(Deferred.await(hooks.release)),
-        Effect.andThen(Effect.fail(new MutationRejected({ reason: "parked and rejected" })))
-      );
-  },
-  // Write, then fail transiently.
-  "test/fail-after-write": (raw, writer) => {
-    const { id, n } = argsOf(raw);
-    return writer
-      .put(rows, id, { n })
-      .pipe(Effect.andThen(Effect.fail(new BackendError({ message: "transient after write" }))));
-  },
-  // Write, read it back, delete it, read again.
-  "test/read-back": (raw, writer) => {
-    const { id, n } = argsOf(raw);
-    return Effect.gen(function* () {
-      yield* writer.put(rows, id, { n });
-      const afterPut = yield* writer.get(rows, id);
-      yield* writer.del(rows, id);
-      const afterDel = yield* writer.get(rows, id);
-      yield* Ref.set(hooks.observed, [afterPut, afterDel]);
-    });
-  },
-});
+}) =>
+  ({
+    "test/set": (raw, writer) => {
+      const { id, n } = argsOf(raw);
+      return writer.put(rows, id, { n });
+    },
+    // Write, then park before returning: the window a pull or evaluate can hit.
+    "test/park": (raw, writer) => {
+      const { id, n } = argsOf(raw);
+      return writer
+        .put(rows, id, { n })
+        .pipe(
+          Effect.andThen(Deferred.succeed(hooks.written, undefined)),
+          Effect.andThen(Deferred.await(hooks.release))
+        );
+    },
+    // Write, park, then reject permanently.
+    "test/park-reject": (raw, writer) => {
+      const { id, n } = argsOf(raw);
+      return writer
+        .put(rows, id, { n })
+        .pipe(
+          Effect.andThen(Deferred.succeed(hooks.written, undefined)),
+          Effect.andThen(Deferred.await(hooks.release)),
+          Effect.andThen(Effect.fail(new MutationRejected({ reason: "parked and rejected" })))
+        );
+    },
+    // Write, then fail transiently.
+    "test/fail-after-write": (raw, writer) => {
+      const { id, n } = argsOf(raw);
+      return writer
+        .put(rows, id, { n })
+        .pipe(Effect.andThen(Effect.fail(new BackendError({ message: "transient after write" }))));
+    },
+    // Write, read it back, delete it, read again.
+    "test/read-back": (raw, writer) => {
+      const { id, n } = argsOf(raw);
+      return Effect.gen(function* () {
+        yield* writer.put(rows, id, { n });
+        const afterPut = yield* writer.get(rows, id);
+        yield* writer.del(rows, id);
+        const afterDel = yield* writer.get(rows, id);
+        yield* Ref.set(hooks.observed, [afterPut, afterDel]);
+      });
+    },
+  }) satisfies Record<string, MemoryBackend.BackendHandler>;
 
-const makeHooks = Effect.gen(function* () {
+const makeHooks = Effect.fn("makeHooks")(function* () {
   return {
     written: yield* Deferred.make<void>(),
     release: yield* Deferred.make<void>(),
@@ -114,7 +116,7 @@ const makeHooks = Effect.gen(function* () {
 describe("MemoryBackend atomicity", () => {
   it.effect("keeps a handler's writes and its bump invisible until the mutation commits", () =>
     Effect.gen(function* () {
-      const hooks = yield* makeHooks;
+      const hooks = yield* makeHooks();
       const backend = yield* MemoryBackend.make(handlersFor(hooks));
 
       const push = yield* Effect.forkChild(
@@ -140,7 +142,7 @@ describe("MemoryBackend atomicity", () => {
 
   it.effect("discards a rejected mutation's writes and bumps only after it parks", () =>
     Effect.gen(function* () {
-      const hooks = yield* makeHooks;
+      const hooks = yield* makeHooks();
       const backend = yield* MemoryBackend.make(handlersFor(hooks));
 
       const push = yield* Effect.forkChild(
@@ -163,7 +165,7 @@ describe("MemoryBackend atomicity", () => {
 
   it.effect("leaves a row unchanged and bumps nothing when a handler fails after a write", () =>
     Effect.gen(function* () {
-      const hooks = yield* makeHooks;
+      const hooks = yield* makeHooks();
       const backend = yield* MemoryBackend.make(handlersFor(hooks));
 
       yield* backend.applyMutations(context, [mutation(1, "test/set", { id: "a", n: 1 })]);
@@ -192,7 +194,7 @@ describe("MemoryBackend atomicity", () => {
 
   it.effect("lets a handler read back its own staged writes and deletes", () =>
     Effect.gen(function* () {
-      const hooks = yield* makeHooks;
+      const hooks = yield* makeHooks();
       const backend = yield* MemoryBackend.make(handlersFor(hooks));
 
       yield* backend.applyMutations(context, [mutation(1, "test/read-back", { id: "a", n: 7 })]);
@@ -216,7 +218,7 @@ interface Gate {
   readonly release: Deferred.Deferred<void>;
 }
 
-const makeGate = Effect.gen(function* () {
+const makeGate = Effect.fn("makeGate")(function* () {
   return {
     entered: yield* Deferred.make<void>(),
     release: yield* Deferred.make<void>(),
@@ -225,12 +227,12 @@ const makeGate = Effect.gen(function* () {
 
 const makeGates = Effect.all(
   {
-    a: makeGate,
-    b: makeGate,
-    first: makeGate,
-    stale: makeGate,
-    fresh: makeGate,
-    next: makeGate,
+    a: makeGate(),
+    b: makeGate(),
+    first: makeGate(),
+    stale: makeGate(),
+    fresh: makeGate(),
+    next: makeGate(),
   },
   { concurrency: 1 }
 );
@@ -241,25 +243,24 @@ const makeGates = Effect.all(
  * whatever committed while it was parked; a counter that moves twice means
  * the mutation applied twice.
  */
-const gatedHandlers = (
-  gates: Record<GateName, Gate>
-): Record<string, MemoryBackend.BackendHandler> => ({
-  "test/gated": (raw, writer) => {
-    const { id, n, gate } = raw as {
-      readonly id: string;
-      readonly n: number;
-      readonly gate: GateName;
-    };
-    const hook = gates[gate];
-    return Effect.gen(function* () {
-      yield* Deferred.succeed(hook.entered, undefined);
-      yield* Deferred.await(hook.release);
-      const current = (yield* writer.get(rows, "counter")) as { count: number } | undefined;
-      yield* writer.put(rows, "counter", { count: (current?.count ?? 0) + 1 });
-      yield* writer.put(rows, id, { n });
-    });
-  },
-});
+const gatedHandlers = (gates: Record<GateName, Gate>) =>
+  ({
+    "test/gated": (raw, writer) => {
+      const { id, n, gate } = raw as {
+        readonly id: string;
+        readonly n: number;
+        readonly gate: GateName;
+      };
+      const hook = gates[gate];
+      return Effect.gen(function* () {
+        yield* Deferred.succeed(hook.entered, undefined);
+        yield* Deferred.await(hook.release);
+        const current = (yield* writer.get(rows, "counter")) as { count: number } | undefined;
+        yield* writer.put(rows, "counter", { count: (current?.count ?? 0) + 1 });
+        yield* writer.put(rows, id, { n });
+      });
+    },
+  }) satisfies Record<string, MemoryBackend.BackendHandler>;
 
 const gatedMutation = (mutationId: number, gate: GateName, id: string, n: number): Mutation =>
   mutation(mutationId, "test/gated", { id, n, gate });
@@ -340,16 +341,15 @@ describe("MemoryBackend concurrent applyMutations", () => {
 });
 
 /** The gated handlers, plus a mutator that rejects at once and a plain set. */
-const outcomeHandlers = (
-  gates: Record<GateName, Gate>
-): Record<string, MemoryBackend.BackendHandler> => ({
-  ...gatedHandlers(gates),
-  "test/reject": () => Effect.fail(new MutationRejected({ reason: "forbidden" })),
-  "test/set": (raw, writer) => {
-    const { id, n } = argsOf(raw);
-    return writer.put(rows, id, { n });
-  },
-});
+const outcomeHandlers = (gates: Record<GateName, Gate>) =>
+  ({
+    ...gatedHandlers(gates),
+    "test/reject": () => Effect.fail(new MutationRejected({ reason: "forbidden" })),
+    "test/set": (raw, writer) => {
+      const { id, n } = argsOf(raw);
+      return writer.put(rows, id, { n });
+    },
+  }) satisfies Record<string, MemoryBackend.BackendHandler>;
 
 const rejectedMutation = (mutationId: number): Mutation => mutation(mutationId, "test/reject", {});
 
@@ -448,7 +448,7 @@ interface PushGate {
   readonly deliver: Deferred.Deferred<void>;
 }
 
-const pushGate = Effect.gen(function* () {
+const pushGate = Effect.fn("pushGate")(function* () {
   return {
     returned: yield* Deferred.make<void>(),
     deliver: yield* Deferred.make<void>(),
@@ -488,16 +488,17 @@ const raceMutators = Mutator.registry([
 const raceHandlers = (
   copies: Ref.Ref<number>,
   parked: { readonly entered: Deferred.Deferred<void>; readonly release: Deferred.Deferred<void> }
-): Record<string, MemoryBackend.BackendHandler> => ({
-  "todo/race": (args, writer) =>
-    Effect.gen(function* () {
-      const copy = yield* Ref.updateAndGet(copies, (n) => n + 1);
-      if (copy > 1) return yield* new MutationRejected({ reason: "forbidden" });
-      yield* Deferred.succeed(parked.entered, undefined);
-      yield* Deferred.await(parked.release);
-      return yield* writer.put("todos", (args as { readonly id: string }).id, args);
-    }),
-});
+) =>
+  ({
+    "todo/race": (args, writer) =>
+      Effect.gen(function* () {
+        const copy = yield* Ref.updateAndGet(copies, (n) => n + 1);
+        if (copy > 1) return yield* new MutationRejected({ reason: "forbidden" });
+        yield* Deferred.succeed(parked.entered, undefined);
+        yield* Deferred.await(parked.release);
+        return yield* writer.put("todos", (args as { readonly id: string }).id, args);
+      }),
+  }) satisfies Record<string, MemoryBackend.BackendHandler>;
 
 const serverFor = (backend: Backend) =>
   Effect.gen(function* () {
@@ -538,7 +539,7 @@ const openEngineEvents = (engine: ClientEngineModule.ClientEngine) =>
     const pull = yield* Stream.toPull(engine.engineEvents);
     const seen = yield* Ref.make<ReadonlyArray<ClientEngineModule.EngineEvent>>([]);
     const pullsSeen = Ref.get(seen).pipe(
-      Effect.map((events) => events.filter((event) => event._tag === "PullCompleted").length)
+      Effect.map((events) => events.filter((event) => P.isTagged(event, "PullCompleted")).length)
     );
     yield* Effect.forkScoped(
       Effect.forever(
@@ -586,7 +587,7 @@ const runRace = (order: "rejected-first" | "losing-first") =>
     const handler = yield* serverFor(backend);
     const store = yield* ClientStoreModule.makeMemory;
     const pushes = yield* Ref.make(0);
-    const gates = [yield* pushGate, yield* pushGate] as const;
+    const gates = [yield* pushGate(), yield* pushGate()] as const;
     const transport = yield* makeInMemory(handler, "group-a");
     const engine = yield* ClientEngineModule.make({
       clientId: "client-a",

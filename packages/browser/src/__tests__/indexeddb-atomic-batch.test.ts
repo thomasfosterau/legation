@@ -18,6 +18,10 @@ import { IDBKeyRange, indexedDB } from "fake-indexeddb";
 import * as IndexedDbClientStore from "../IndexedDbClientStore.js";
 import { defined } from "./defined.js";
 import { withLayer } from "./with-layer.js";
+import * as Schema from "effect/Schema";
+
+const JsonText = Schema.fromJsonString(Schema.Unknown);
+const decodeJson = Schema.decodeSync(JsonText);
 
 /**
  * Makes the Nth `put` of an armed batch throw, as a write that fails mid-transaction would. Every
@@ -195,7 +199,7 @@ describe("IndexedDbClientStore's atomic batch", () => {
             });
 
             // The rows, the id index and the cookie sit in the platform's own records, and no record was written.
-            expect(JSON.parse((yield* kv.get(rowKey("a"))) ?? "null")).toMatchObject({
+            expect(decodeJson((yield* kv.get(rowKey("a"))) ?? "null")).toMatchObject({
               value: { n: 1 },
             });
             expect(yield* kv.get("legation/rowIndex/counters")).toBe('["a","b"]');

@@ -2,6 +2,7 @@
  * CollectionLoader tests: mapping JSON:API resources/documents into
  * collection rows, and loading them over a mocked HttpClient.
  */
+import * as P from "effect/Predicate";
 import { assert, describe, expect, it, layer } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
@@ -11,6 +12,10 @@ import type * as HttpClientRequest from "effect/http/HttpClientRequest";
 import * as HttpClientResponse from "effect/http/HttpClientResponse";
 import { Filter } from "@thomasfosterau/effect-jsonapi";
 import * as CollectionLoader from "../CollectionLoader.js";
+import * as Schema from "effect/Schema";
+
+const JsonText = Schema.fromJsonString(Schema.Unknown);
+const encodeJson = Schema.encodeSync(JsonText);
 
 describe("resourceToRow", () => {
   it("maps attributes and relationship linkage", () => {
@@ -100,7 +105,7 @@ const respondWith = (status: number, body: unknown) =>
       Effect.succeed(
         HttpClientResponse.fromWeb(
           request,
-          new Response(body === undefined ? null : JSON.stringify(body), {
+          new Response(body === undefined ? null : encodeJson(body), {
             status,
             headers: { "Content-Type": "application/vnd.api+json" },
           })
@@ -149,7 +154,7 @@ describe("load / loadOne", () => {
       Effect.gen(function* () {
         const failure = yield* Effect.flip(CollectionLoader.load("todos"));
         expect(failure._tag).toBe("ApiError");
-        assert(failure._tag === "ApiError");
+        assert(P.isTagged(failure, "ApiError"));
         expect(failure.errors[0]?.title).toBe("Forbidden");
       })
     );

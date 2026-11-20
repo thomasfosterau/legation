@@ -72,12 +72,17 @@ describe("DurableFanoutBroker shard calls", () => {
   );
 });
 
+/** Topic to the rooms leasing it, as a shard's `publish` answers. */
+interface LeasedRooms {
+  readonly [topic: string]: ReadonlyArray<string>;
+}
+
 describe("DurableFanoutBroker publish", () => {
   it.effect(
     "pokes each leased room once, with every topic it matched, and drops a failed shard",
     () =>
       Effect.gen(function* () {
-        const leased: Record<string, ReadonlyArray<string>> = {
+        const leased: LeasedRooms = {
           products: ["room-a", "room-b"],
           "products/categoryId=c-1": ["room-a"],
         };

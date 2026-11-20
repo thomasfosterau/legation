@@ -43,6 +43,7 @@
  * superset list) is deliberately not built (ADR-0029 section 3).
  */
 
+import * as P from "effect/Predicate";
 import * as Defined from "./Defined.js";
 import * as Arr from "effect/Array";
 import * as Effect from "effect/Effect";
@@ -55,6 +56,7 @@ import type * as Node from "./Node.js";
 import * as Predicate from "./Predicate.js";
 import * as Query from "./Query.js";
 import * as Related from "./Related.js";
+import * as Json from "./internal/Json.js";
 import * as Subset from "./Subset.js";
 
 /**
@@ -103,7 +105,7 @@ export type Verdict =
 
 /** A literal's key: its type and its value, so `"1"` and `1` never collide. */
 const literalKey = (literal: Predicate.Literal): string =>
-  literal === null ? "null" : `${Predicate.typeName(literal)}:${JSON.stringify(literal)}`;
+  literal === null ? "null" : `${Predicate.typeName(literal)}:${Json.stringify(literal)}`;
 
 /** Deduplicate and sort keys (plain string order; only determinism matters). */
 const sortedUnique = (keys: ReadonlyArray<string>): ReadonlyArray<string> =>
@@ -141,15 +143,15 @@ const leafKey: (leaf: Leaf) => string = Match.type<Leaf>().pipe(
   Match.tag("True", () => "True"),
   Match.tag(
     "Compare",
-    (leaf) => `Compare(${leaf.op},${JSON.stringify(leaf.field)},${literalKey(leaf.value)})`
+    (leaf) => `Compare(${leaf.op},${Json.stringify(leaf.field)},${literalKey(leaf.value)})`
   ),
   Match.tag(
     "In",
     "NotIn",
     (leaf) =>
-      `${leaf._tag}(${JSON.stringify(leaf.field)},[${sortedUnique(leaf.values.map(literalKey)).join(",")}])`
+      `${leaf._tag}(${Json.stringify(leaf.field)},[${sortedUnique(leaf.values.map(literalKey)).join(",")}])`
   ),
-  Match.tag("IsNull", (leaf) => `IsNull(${JSON.stringify(leaf.field)},${leaf.negated === true})`),
+  Match.tag("IsNull", (leaf) => `IsNull(${Json.stringify(leaf.field)},${leaf.negated === true})`),
   Match.tag("InSet", (leaf) => `InSet(${literalKey(leaf.field)},${literalKey(leaf.set)})`),
   Match.exhaustive
 );
@@ -170,7 +172,7 @@ export const structuralKey: (predicate: Predicate.Predicate) => string =
     Match.tag(
       "Exists",
       (predicate) =>
-        `Exists(${JSON.stringify(predicate.collection)},${JSON.stringify(predicate.localField)},${JSON.stringify(predicate.foreignField)},${structuralKey(predicate.where)})`
+        `Exists(${Json.stringify(predicate.collection)},${Json.stringify(predicate.localField)},${Json.stringify(predicate.foreignField)},${structuralKey(predicate.where)})`
     ),
     Match.orElse((leaf) => leafKey(leaf))
   );
@@ -379,7 +381,7 @@ export const NOT_PULLED: Pulled = { windows: [] };
  * mirror decoded from a message matches the one a read builds locally.
  */
 export const windowKey = (window: Subset.Subset): string =>
-  JSON.stringify([
+  Json.stringify([
     window.collection,
     structuralKey(window.where),
     window.orderBy.map((term) => [term.field, term.direction]),
@@ -391,8 +393,8 @@ export const windowKey = (window: Subset.Subset): string =>
 const pinnedOf = (
   where: Predicate.Predicate
 ): { readonly field: string; readonly values: ReadonlyArray<string> } | undefined => {
-  if (where._tag === "In") return { field: where.field, values: where.values.map(literalKey) };
-  if (where._tag === "Compare" && where.op === "eq") {
+  if (P.isTagged(where, "In")) return { field: where.field, values: where.values.map(literalKey) };
+  if (P.isTagged(where, "Compare") && where.op === "eq") {
     return { field: where.field, values: [literalKey(where.value)] };
   }
   return undefined;

@@ -23,6 +23,7 @@ import * as Incremental from "../Incremental.js";
 import type { RowChange } from "../RowChange.js";
 import * as Subset from "../Subset.js";
 import { defined } from "./defined.js";
+import * as Json from "../internal/Json.js";
 
 type Row<A> = Incremental.Row<A>;
 
@@ -67,8 +68,8 @@ type Divergence = string | null;
 
 const divergence = (seed: number, step: number, actual: unknown, expected: unknown): string =>
   `seed ${seed} step ${step}: incremental diverged from recompute\n` +
-  `  incremental: ${JSON.stringify(actual)}\n` +
-  `  recompute:   ${JSON.stringify(expected)}`;
+  `  incremental: ${Json.show(actual)}\n` +
+  `  recompute:   ${Json.show(expected)}`;
 
 /** Mutate ground truth by a random put/del and return the resulting delta. */
 const stepGround = <A>(
@@ -96,7 +97,7 @@ const stepGround = <A>(
 
 // ─── Value generators / keys (module scope: shared, capture nothing) ─────────
 
-const doubleN = (v: { readonly n: number }): { readonly double: number } => ({
+const doubleN = (v: { readonly n: number }) => ({
   double: v.n * 2,
 });
 const teamKey = (v: { readonly team: string }): string => v.team;
@@ -393,7 +394,7 @@ const runDeltaFromChangesSession = (seed: number, steps: number): string | null 
       }
       const recoveredIds = recovered.added.map((r) => r.id).toSorted();
       const groundIds = [...ground.keys()].toSorted();
-      if (JSON.stringify(recoveredIds) !== JSON.stringify(groundIds)) {
+      if (Json.show(recoveredIds) !== Json.show(groundIds)) {
         return `seed ${seed} step ${step}: reset's added ids didn't match ground truth`;
       }
       if (known.size !== ground.size) {
@@ -404,8 +405,8 @@ const runDeltaFromChangesSession = (seed: number, steps: number): string | null 
     const delta = stepGround(rng, ground, ids, makeValue, 0.2);
     const batch = changeBatchOf(delta);
     const recovered = Incremental.deltaFromChanges(known, batch);
-    if (JSON.stringify(recovered) !== JSON.stringify(delta)) {
-      return `seed ${seed} step ${step}: recovered ${JSON.stringify(recovered)} !== expected ${JSON.stringify(delta)}`;
+    if (Json.show(recovered) !== Json.show(delta)) {
+      return `seed ${seed} step ${step}: recovered ${Json.show(recovered)} !== expected ${Json.show(delta)}`;
     }
   }
   return null;

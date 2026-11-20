@@ -36,6 +36,7 @@ import { describe, expect, layer } from "@effect/vitest";
 import { type Engine, makePostgres, makeSqlite, type Verdict } from "./differential/engines.js";
 import * as Env from "../env.js";
 import { TestFailure } from "../test-failure.js";
+import * as Json from "../../internal/Json.js";
 
 const seed = FilterCorpus.resolveSeed(Env.corpusSeed);
 
@@ -51,7 +52,7 @@ type Orderer = (orderBy: ReadonlyArray<Subset.OrderBy>, rows: Rows) => Effect.Ef
 type Judge = (predicate: Predicate.Predicate, rows: Rows) => Effect.Effect<Verdicts>;
 
 const idsOf = (rows: Rows): Ids => rows.map((row) => row.id);
-const sameIds = (left: Ids, right: Ids): boolean => JSON.stringify(left) === JSON.stringify(right);
+const sameIds = (left: Ids, right: Ids): boolean => Json.show(left) === Json.show(right);
 
 /** Render verdicts as `id=T` entries in id order, for comparison and reporting. */
 const renderVerdicts = (verdicts: Verdicts): Ids =>
@@ -305,8 +306,8 @@ const differentialLayer = Layer.effect(Differential)(
       booleanOrder: false,
     });
     const restrictedQ = prefixedCorpus("q", restricted);
-    const sqliteEngine = yield* makeSqlite;
-    const postgresEngine = yield* makePostgres;
+    const sqliteEngine = yield* makeSqlite();
+    const postgresEngine = yield* makePostgres();
     // Both SQL legs hold the union of every row set used below; ids are
     // disjoint across corpora and focused cases, so restriction is exact.
     const loaded = [...full.rows, ...restrictedQ.rows, ...focusedRows];
@@ -340,7 +341,7 @@ layer(differentialLayer, { timeout: "120 seconds" })(
       Effect.gen(function* () {
         const { full } = yield* Differential;
         yield* Console.info(
-          `differential corpus seed ${seed}; coverage ${JSON.stringify(full.coverage)}`
+          `differential corpus seed ${seed}; coverage ${Json.show(full.coverage)}`
         );
         // `true` is deliberately rare; everything else must recur.
         const thin = Object.entries(full.coverage).filter(

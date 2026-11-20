@@ -20,6 +20,7 @@ import * as Schema from "effect/Schema";
 import { KeyValueStore } from "effect/persistence";
 import type { RowId, RowVersion } from "./Collection.js";
 import { StoreError } from "./Errors.js";
+import * as Json from "./internal/Json.js";
 
 /** What one client group holds: collection → row id → row version. */
 export interface Cvr {
@@ -167,7 +168,7 @@ export const makeKeyValueStore = (
         ),
       set: (cookie, cvr) =>
         store
-          .set(cookie, JSON.stringify(toWire(cvr)))
+          .set(cookie, Json.stringify(toWire(cvr)))
           .pipe(Effect.mapError(storeError(`Failed to write CVR "${cookie}"`))),
       remove: (cookie) =>
         store.remove(cookie).pipe(Effect.mapError(storeError(`Failed to remove CVR "${cookie}"`))),

@@ -30,6 +30,10 @@ export type Aggregate =
   | { readonly _tag: "Count" }
   | { readonly _tag: "Sum" | "Min" | "Max" | "Avg"; readonly field: string };
 
+/** Narrows an aggregate to `Count`, the one variant without a field. */
+const isCount = (agg: Aggregate): agg is Extract<Aggregate, { readonly _tag: "Count" }> =>
+  P.isTagged(agg, "Count");
+
 const aggregateCodec = Schema.Union([
   Schema.Struct({ _tag: Schema.tag("Count") }),
   Schema.Struct({
@@ -95,7 +99,7 @@ export const compute = (
   agg: Aggregate,
   rows: ReadonlyArray<{ readonly value: unknown }>
 ): AggregateValue =>
-  agg._tag === "Count" ? rows.length : RowDispatch.foldNumeric(agg, numericValues(rows, agg.field));
+  isCount(agg) ? rows.length : RowDispatch.foldNumeric(agg, numericValues(rows, agg.field));
 
 /** A row's group key: `String(row.value[groupBy])` (so `undefined` → `"undefined"`). */
 const groupKey = (value: unknown, groupBy: string): string =>
@@ -124,7 +128,7 @@ export const computeGrouped = (
   agg: Aggregate,
   rows: ReadonlyArray<{ readonly value: unknown }>,
   groupBy: string
-): Record<string, AggregateValue> => {
+) => {
   const result: Record<string, AggregateValue> = {};
   for (const [key, bucket] of bucketByGroup(rows, groupBy)) result[key] = compute(agg, bucket);
   return result;
@@ -169,15 +173,14 @@ export const sameGroupedValue = (
 // aliasing concern.
 
 /** A non-`Count` aggregate's field, or `undefined` for `Count` (no field). */
-const fieldOf = (agg: Aggregate): string | undefined =>
-  agg._tag === "Count" ? undefined : agg.field;
+const fieldOf = (agg: Aggregate): string | undefined => (isCount(agg) ? undefined : agg.field);
 
 /** One aggregate's running fold, mutated in place by `addToBucket` / `removeFromBucket`. */
 type Bucket = RowDispatch.Bucket;
 
 /** Fold one row's value into `bucket` (an insertion, or an update's "add" half). */
 const addToBucket = (bucket: Bucket, value: unknown, field: string | undefined): void => {
-  if (bucket._tag === "Count") {
+  if (P.isTagged(bucket, "Count")) {
     bucket.count += 1;
     return;
   }
@@ -201,7 +204,7 @@ const removeFromBucket = (
   field: string | undefined,
   remainingValues: () => ReadonlyArray<number>
 ): void => {
-  if (bucket._tag === "Count") {
+  if (P.isTagged(bucket, "Count")) {
     bucket.count -= 1;
     return;
   }
@@ -381,7 +384,7 @@ export const applyGroupedDel = (state: GroupedState, agg: Aggregate, id: string)
 };
 
 /** The current value of an incrementally-maintained grouped aggregate. */
-export const groupedStateValue = (state: GroupedState): Record<string, AggregateValue> => {
+export const groupedStateValue = (state: GroupedState) => {
   const result: Record<string, AggregateValue> = {};
   for (const [key, group] of state.groups) result[key] = RowDispatch.bucketValue(group.bucket);
   return result;

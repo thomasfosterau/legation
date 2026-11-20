@@ -38,6 +38,9 @@ import * as SyncServer from "../SyncServer.js";
 import * as Telemetry from "../Telemetry.js";
 import { ClientTransport, makeInMemory } from "../Transport.js";
 import { defined } from "./defined.js";
+import * as Json from "../internal/Json.js";
+
+const decodeSnapshot = Schema.decodeSync(Hydration.SnapshotFromJson);
 
 interface Counter {
   readonly id: string;
@@ -64,9 +67,9 @@ const counterMutators = Mutator.registry([
   },
 ]);
 
-const backendHandlers: Record<string, MemoryBackend.BackendHandler> = {
+const backendHandlers = {
   "counter/inc": (args, writer) => incrementCounter(writer, (args as { readonly id: string }).id),
-};
+} satisfies Record<string, MemoryBackend.BackendHandler>;
 
 const authPolicy = Authorization.policy({ counters: Authorization.allowAll });
 const countersSubset = Subset.make({ collection: "counters" });
@@ -450,7 +453,7 @@ describe("ClientStore's unpulled tail", () => {
         const first = yield* ClientStoreModule.makeKeyValue();
         yield* first.appendMutation(mutation("c1", 1));
         // The body landed; the index write never did.
-        yield* kv.set("legation/unpulled/c1/1", JSON.stringify(mutation("c1", 1)));
+        yield* kv.set("legation/unpulled/c1/1", Json.stringify(mutation("c1", 1)));
 
         const second = yield* ClientStoreModule.makeKeyValue();
         expect(yield* second.unpulled).toEqual([]);
@@ -797,9 +800,9 @@ describe("the tail in an engine", () => {
           yield* engine.mutate("counter/inc", { id: "c" });
           yield* engine.push;
 
-          const wire = JSON.stringify(yield* Hydration.dehydrate(source));
+          const wire = Json.stringify(yield* Hydration.dehydrate(source));
           const target = yield* ClientStoreModule.makeMemory;
-          yield* Hydration.hydrate(target, JSON.parse(wire));
+          yield* Hydration.hydrate(target, decodeSnapshot(wire));
           expect(yield* tailOf(target)).toEqual(["client-a#1"]);
 
           const restarted = yield* makeCounterEngine(server, target);
@@ -813,7 +816,7 @@ describe("the tail in an engine", () => {
     scoped.effect("a snapshot without the tail field loads, with an empty tail", () =>
       Effect.gen(function* () {
         const store = yield* ClientStoreModule.makeMemory;
-        const legacy = JSON.parse(JSON.stringify({ rows: [], journal: [] }));
+        const legacy = decodeSnapshot(Json.stringify({ rows: [], journal: [] }));
         yield* Hydration.hydrate(store, legacy);
         expect(yield* store.unpulled).toEqual([]);
         const dehydrated = yield* Hydration.dehydrate(store);
@@ -981,7 +984,7 @@ describe("the tail's crash windows and interleavings", () => {
           expect(snapshot.unpulled).toHaveLength(1);
 
           const target = yield* ClientStoreModule.makeMemory;
-          yield* Hydration.hydrate(target, JSON.parse(JSON.stringify(snapshot)));
+          yield* Hydration.hydrate(target, decodeSnapshot(Json.stringify(snapshot)));
           expect(yield* target.pendingMutations).toEqual([]);
           expect(yield* tailOf(target)).toEqual(["client-a#1"]);
         })
@@ -1341,7 +1344,7 @@ describe("a release record's guarantees across both stores", () => {
             // A snapshot whose journal still holds the entry, as a dehydrate that races an acknowledgement gives.
             yield* Hydration.hydrate(
               store,
-              JSON.parse(JSON.stringify({ rows: [], journal: [mutation("c1", 1)] }))
+              decodeSnapshot(Json.stringify({ rows: [], journal: [mutation("c1", 1)] }))
             );
             expect(yield* store.pendingMutations).toEqual([]);
             yield* putCounter(store, "c", 2);
@@ -2139,21 +2142,21 @@ describeWrapped("a push that takes the tail to half the bound pulls ahead of it"
         yield* Ref.set(probe.failing, true);
 
         let total = 0;
-        const pushOne = Effect.gen(function* () {
+        const pushOne = Effect.fn("pushOne")(function* () {
           yield* engine.mutate("counter/inc", { id: "c" });
           yield* engine.push;
           total += 1;
         });
 
         // Crossing the threshold starts a pull, and it fails.
-        for (let i = 0; i < BURST_LIMIT / 2; i++) yield* pushOne;
+        for (let i = 0; i < BURST_LIMIT / 2; i++) yield* pushOne();
         expect(
           yield* settles(Ref.get(probe.failed).pipe(Effect.map((n) => n >= 1))),
           "the pull ahead to fail"
         ).toBe(true);
         // Pushes carry on while the pull is down: each is acknowledged and the journal drains.
         for (let i = 0; i < 8; i++) {
-          yield* pushOne;
+          yield* pushOne();
           expect(yield* store.pendingMutations).toEqual([]);
         }
 
@@ -2161,7 +2164,7 @@ describeWrapped("a push that takes the tail to half the bound pulls ahead of it"
         // tail; a push that lands while it is still ending starts none, so keep pushing until one does.
         yield* Ref.set(probe.failing, false);
         for (let i = 0; i < 16 && Arr.isReadonlyArrayNonEmpty(yield* store.unpulled); i++) {
-          yield* pushOne;
+          yield* pushOne();
           yield* Effect.yieldNow;
         }
         expect(
@@ -2263,7 +2266,7 @@ describe("dehydrate reads one state of the store", () => {
           const target = yield* ClientStoreModule.makeKeyValue().pipe(
             Effect.provideContext(targetKv)
           );
-          yield* Hydration.hydrate(target, JSON.parse(JSON.stringify(snapshot)));
+          yield* Hydration.hydrate(target, decodeSnapshot(Json.stringify(snapshot)));
           const viewer = yield* makeCounterEngine(server, target);
           yield* viewer.subscribe(countersSubset);
           expect(yield* counterValue(viewer)).toBe(1);
@@ -2309,7 +2312,7 @@ describe("dehydrate reads one state of the store", () => {
         const target = yield* ClientStoreModule.makeKeyValue().pipe(
           Effect.provideContext(targetKv)
         );
-        yield* Hydration.hydrate(target, JSON.parse(JSON.stringify(snapshot)));
+        yield* Hydration.hydrate(target, decodeSnapshot(Json.stringify(snapshot)));
         const viewer = yield* makeCounterEngine(server, target);
         yield* viewer.subscribe(countersSubset);
         expect(yield* counterValue(viewer)).toBe(1);
@@ -2346,7 +2349,7 @@ describeWrapped("a memory snapshot is one pull's state", (it) => {
       const rounds = 200;
       let torn = 0;
       const seen = new Set<number | undefined>();
-      const pulls = Effect.gen(function* () {
+      const pulls = Effect.fn("pulls")(function* () {
         for (let k = 1; k <= rounds; k++) {
           yield* defined(store.commitPull)({
             lastMutationIds: {},
@@ -2355,7 +2358,7 @@ describeWrapped("a memory snapshot is one pull's state", (it) => {
           });
         }
       });
-      const reads = Effect.gen(function* () {
+      const reads = Effect.fn("reads")(function* () {
         for (let i = 0; i < rounds * 2; i++) {
           const state = yield* defined(store.snapshot);
           const row = state.rows.find((entry) => entry.row.id === "a")?.row;
@@ -2364,8 +2367,8 @@ describeWrapped("a memory snapshot is one pull's state", (it) => {
           if (state.cookie !== (n === undefined ? undefined : `c${n}`)) torn++;
         }
       });
-      const pulling = yield* Effect.forkChild(pulls);
-      const reading = yield* Effect.forkChild(reads);
+      const pulling = yield* Effect.forkChild(pulls());
+      const reading = yield* Effect.forkChild(reads());
       yield* Fiber.join(pulling);
       yield* Fiber.join(reading);
       // The reads must interleave with the pulls, or the check above is vacuous.

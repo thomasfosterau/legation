@@ -60,7 +60,7 @@ const eventually = <A>(read: Effect.Effect<A>, until: (value: A) => boolean) =>
     return yield* Effect.die(new TestFailure({ message: "eventually: condition never held" }));
   });
 
-const makeEngine = Effect.gen(function* () {
+const makeEngine = Effect.fn("makeEngine")(function* () {
   const backend = yield* MemoryBackend.make(
     MemoryBackend.validatedHandlers([
       MemoryBackend.handler(todoSet, (args, writer) => writer.put("todos", args.id, args)),
@@ -91,7 +91,7 @@ const makeEngine = Effect.gen(function* () {
 describe("Mirror backpressure", () => {
   it.live("a stalled tab observer bounds its queue and refreshes to latest rows", () =>
     Effect.gen(function* () {
-      const engine = yield* makeEngine;
+      const engine = yield* makeEngine();
       const { host, mirror: mirrorChannel } = yield* MirrorChannel.makeLoopbackPair;
       yield* EngineHost.run({ channel: host, engine });
       // Small bound → a burst of mirror updates overruns it, forcing drops.

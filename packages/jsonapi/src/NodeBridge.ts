@@ -238,7 +238,7 @@ const fail = (resource: string, relationship: string, message: string): never =>
  * plus the option-declared extras. This is the map inverse discovery
  * scans, so declared and relationship-derived edges resolve identically.
  */
-const oneEdgesOf = (resource: Resource.Any, options: BridgeOptions): Record<string, Edge.One> => {
+const oneEdgesOf = (resource: Resource.Any, options: BridgeOptions) => {
   const related = R.filterMap(resource.relationships, (descriptor, name) =>
     descriptor.kind === "one" || descriptor.kind === "optional"
       ? Result.succeed(
@@ -334,7 +334,7 @@ const edgesOf = (
   resource: Resource.Any,
   options: BridgeOptions,
   oneEdgesOfTarget: (target: Resource.Any) => Record<string, Edge.One>
-): Record<string, Edge.Edge> => {
+) => {
   const collections = R.filterMap(resource.relationships, (descriptor, name) =>
     descriptor.kind === "many" || descriptor.kind === "paginated"
       ? Result.succeed(collectionEdge(resource, name, descriptor, options, oneEdgesOfTarget))
@@ -371,10 +371,7 @@ interface DeclaredField {
  * attribute it is stored in both filterable — is a definition-time defect:
  * neither declaration may silently win.
  */
-const declaredFilterable = (
-  resource: Resource.Any,
-  edges: Record<string, Edge.Edge>
-): Record<string, FilterPolicy.FilterableInput> => {
+const declaredFilterable = (resource: Resource.Any, edges: Record<string, Edge.Edge>) => {
   const declared: Record<string, FilterPolicy.FilterableInput> = {};
   const attributes = resource.fields.attributes.fields;
   const filterable: Readonly<Record<string, DeclaredField>> = Resource.filterable(resource);
@@ -424,6 +421,13 @@ const withKinds = (
     }
   );
 
+/** What a bridged node declares besides its attributes and edges. */
+interface NodeOptions {
+  readonly hintKeys?: ReadonlyArray<string>;
+  readonly filterable: Record<string, FilterPolicy.FilterableInput>;
+  readonly sortable: ReadonlyArray<string>;
+}
+
 /**
  * The per-node options: hint keys from the bridge options; the filterable
  * set and sortable fields from the resource's declaration, each option
@@ -433,11 +437,7 @@ const nodeOptionsOf = (
   resource: Resource.Any,
   edges: Record<string, Edge.Edge>,
   options: BridgeOptions
-): {
-  readonly hintKeys?: ReadonlyArray<string>;
-  readonly filterable: Record<string, FilterPolicy.FilterableInput>;
-  readonly sortable: ReadonlyArray<string>;
-} => ({
+): NodeOptions => ({
   ...Option.match(options.hintKeys, {
     onNone: () => ({}),
     onSome: (hintKeys) => ({ hintKeys }),

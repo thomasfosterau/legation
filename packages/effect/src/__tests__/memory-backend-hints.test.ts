@@ -24,7 +24,7 @@ const mutation = (mutationId: number, mutator: string, args: unknown): Mutation 
   createdAt: 0,
 });
 
-const handlers: Record<string, MemoryBackend.BackendHandler> = {
+const handlers = {
   "test/put": (raw, writer) => {
     const { id, n } = raw as { readonly id: string; readonly n: number };
     return writer.put(rows, id, { n });
@@ -33,7 +33,7 @@ const handlers: Record<string, MemoryBackend.BackendHandler> = {
     const { id } = raw as { readonly id: string };
     return writer.del(rows, id);
   },
-};
+} satisfies Record<string, MemoryBackend.BackendHandler>;
 
 describe("MemoryBackend change hints across mutations", () => {
   it.effect("a put then a later delete of the same row in one push carries no value", () =>

@@ -5,6 +5,7 @@
  * the hook per parent (scoping `where` to a parent id) pages each parent's
  * list independently.
  */
+import * as P from "effect/Predicate";
 import { afterEach, describe, expect, it } from "vite-plus/test";
 import { mount, unmount } from "svelte";
 import * as Effect from "effect/Effect";
@@ -48,7 +49,7 @@ describe("useConnection", () => {
       Effect.forkDetach(
         Stream.runForEach(engine.engineEvents, (event) =>
           Effect.sync(() => {
-            if (event._tag === "ViewRebuilt") rebuilds++;
+            if (P.isTagged(event, "ViewRebuilt")) rebuilds++;
           })
         )
       ).pipe(Effect.asVoid)
