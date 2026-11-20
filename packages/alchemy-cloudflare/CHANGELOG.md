@@ -1,5 +1,22 @@
 # @thomasfosterau/legation-alchemy-cloudflare
 
+## 0.4.0
+
+### Minor Changes
+
+- a2786dc: The `alchemy` and `@alchemy.run/cloudflare` peers move to exactly `2.0.0-beta.87` (were `2.0.0-beta.85`), and the `effect` peer to `^4.1.4` (was `^4.1.0`), because Alchemy 2.0.0-beta.87 peers `effect ^4.1.4`. Upgrade Alchemy and `effect` together with this release.
+
+### Patch Changes
+
+- a6cb2f0: Doc comments no longer cite issue numbers.
+- 64d8c43: `Room.make`'s `backend` doc comment says to bind a Hyperdrive configuration with query caching disabled: Hyperdrive caches reads outside a transaction without invalidating them on a write, and the pull's reads run outside one. Hyperdrive's transaction pooling keeps a push atomic.
+- 8d3d468: The docs no longer call a room hibernation-friendly. `FanoutBus`'s lease heartbeat keeps a timer pending, so a room Durable Object stays in memory, billed for its duration, until the platform evicts it; `Room.make`'s doc comments and the README now say so.
+- Updated dependencies [a6cb2f0]
+- Updated dependencies [7cd6f7f]
+- Updated dependencies [cfa9b14]
+- Updated dependencies [fc73997]
+  - @thomasfosterau/legation@0.6.1
+
 ## 0.3.1
 
 ### Patch Changes

@@ -1,5 +1,17 @@
 # @thomasfosterau/legation-jsonapi
 
+## 0.6.1
+
+### Patch Changes
+
+- a6cb2f0: Doc comments no longer cite issue numbers.
+- 7cd6f7f: Doc comments no longer cite tracker issues; each now says what it meant in its own words. No behaviour changes.
+- Updated dependencies [a6cb2f0]
+- Updated dependencies [7cd6f7f]
+- Updated dependencies [cfa9b14]
+- Updated dependencies [fc73997]
+  - @thomasfosterau/legation@0.6.1
+
 ## 0.6.0
 
 ### Minor Changes
