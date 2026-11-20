@@ -129,10 +129,7 @@ describe("per-parent windowed subsets", () => {
 
         yield* Effect.forEach(
           ["p-1", "p-2"],
-          (id) =>
-            Effect.gen(function* () {
-              yield* client.mutate("product/set", { id, name: id, featured: true });
-            }),
+          (id) => client.mutate("product/set", { id, name: id, featured: true }),
           { concurrency: 1, discard: true }
         );
         yield* Effect.forkScoped(

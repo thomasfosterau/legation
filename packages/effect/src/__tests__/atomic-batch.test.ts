@@ -165,10 +165,7 @@ const pullOnRecordPath = (store: ClientStore, release: PullRelease) =>
     if (release.cookie !== undefined) yield* store.setCookie(release.cookie);
     yield* Effect.forEach(
       Object.entries(release.lastMutationIds),
-      ([clientId, upTo]) =>
-        Effect.gen(function* () {
-          yield* store.acknowledge(clientId, upTo);
-        }),
+      ([clientId, upTo]) => store.acknowledge(clientId, upTo),
       { concurrency: 1, discard: true }
     );
     yield* store.releaseUnpulled(release.lastMutationIds);
@@ -184,10 +181,7 @@ const acknowledgeOnRecordPath = (
     yield* store.parkUnpulled(parked);
     yield* Effect.forEach(
       Object.entries(lastMutationIds),
-      ([clientId, upTo]) =>
-        Effect.gen(function* () {
-          yield* store.acknowledge(clientId, upTo);
-        }),
+      ([clientId, upTo]) => store.acknowledge(clientId, upTo),
       { concurrency: 1, discard: true }
     );
   });
@@ -265,14 +259,10 @@ describe("the atomic batch on the key-value store", () => {
 
       const history = [mutation("c", 1), mutation("c", 2), mutation("c", 3)];
       for (const store of [batchStore, recordStore]) {
-        yield* Effect.forEach(
-          history,
-          (m) =>
-            Effect.gen(function* () {
-              yield* store.appendMutation(m);
-            }),
-          { concurrency: 1, discard: true }
-        );
+        yield* Effect.forEach(history, (m) => store.appendMutation(m), {
+          concurrency: 1,
+          discard: true,
+        });
         yield* store.putRow("counters", { id: "a", version: 1, value: { id: "a", n: 0 } });
       }
 

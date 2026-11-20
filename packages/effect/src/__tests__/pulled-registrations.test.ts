@@ -240,14 +240,10 @@ const reconcile = (
 ) =>
   Effect.gen(function* () {
     const requested = yield* Coverage.requestedOf(nodes.collections, plan, engine.query);
-    yield* Effect.forEach(
-      requested.windows,
-      (window) =>
-        Effect.gen(function* () {
-          yield* marks.wrap(key).subscribe(window);
-        }),
-      { concurrency: 1, discard: true }
-    );
+    yield* Effect.forEach(requested.windows, (window) => marks.wrap(key).subscribe(window), {
+      concurrency: 1,
+      discard: true,
+    });
   });
 
 /** The coverage verdict of `requested` over the registration `key` held in `marks`. */

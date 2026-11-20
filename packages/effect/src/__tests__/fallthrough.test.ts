@@ -124,10 +124,7 @@ const seed = (handler: Transport.ServerHandler) =>
         ["r-2", "2026-02-01"],
         ["r-3", "2026-03-01"],
       ] as const,
-      ([id, at]) =>
-        Effect.gen(function* () {
-          yield* writer.mutate("review/set", { id, body: id, createdAt: at, productId: "p-1" });
-        }),
+      ([id, at]) => writer.mutate("review/set", { id, body: id, createdAt: at, productId: "p-1" }),
       { concurrency: 1, discard: true }
     );
     yield* engine.push.pipe(Effect.orDie);

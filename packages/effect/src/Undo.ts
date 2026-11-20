@@ -171,10 +171,7 @@ export const make = <E>(handle: MutateHandle<E>): Effect.Effect<UndoManager<E>> 
         const ordered = direction === "undo" ? Arr.reverse(step) : step;
         yield* Effect.forEach(
           ordered,
-          (entry) =>
-            Effect.gen(function* () {
-              yield* runIntent(direction === "undo" ? entry.undo : entry.execute);
-            }),
+          (entry) => runIntent(direction === "undo" ? entry.undo : entry.execute),
           { concurrency: 1, discard: true }
         );
       });
