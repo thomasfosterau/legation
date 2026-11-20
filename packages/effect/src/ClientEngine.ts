@@ -3289,12 +3289,12 @@ export const make = (
     // still handled inside `observeSubset`).
     const observeProjected = <B>(
       subset: Subset.Subset,
-      options?: ObserveOptions<LocalRow, B>
+      observeOptions?: ObserveOptions<LocalRow, B>
     ): Stream.Stream<B | ReadonlyArray<LocalRow>, StoreError | MutatorError> => {
       const base = observeSubset(subset);
-      if (options === undefined) return base;
-      const equals = options.equals ?? ((a: B, b: B) => a === b);
-      return base.pipe(Stream.map(options.select), Stream.changesWith(equals));
+      if (observeOptions === undefined) return base;
+      const equals = observeOptions.equals ?? ((a: B, b: B) => a === b);
+      return base.pipe(Stream.map(observeOptions.select), Stream.changesWith(equals));
     };
 
     const queryAggregate = (subset: Subset.Subset, agg: Aggregate.Aggregate) =>

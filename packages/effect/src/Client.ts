@@ -112,10 +112,10 @@ export type Registered = Register extends { readonly nodes: infer Graph extends 
 
 /** An included edge's resolved value: the target row or `null` for `one`, the target rows otherwise. */
 export type RelatedOf<Graph extends Node.NodeRegistry, E extends Edge.Edge> =
-  E extends Edge.One<infer Target>
-    ? Node.RowOf<Node.NodeOf<Graph, Target>> | null
-    : E extends Edge.Many<infer Target> | Edge.Paginated<infer Target>
-      ? ReadonlyArray<Node.RowOf<Node.NodeOf<Graph, Target>>>
+  E extends Edge.One<infer To>
+    ? Node.RowOf<Node.NodeOf<Graph, To>> | null
+    : E extends Edge.Many<infer To> | Edge.Paginated<infer To>
+      ? ReadonlyArray<Node.RowOf<Node.NodeOf<Graph, To>>>
       : never;
 
 /** The edges a read includes: the literal keys of its `include`. */
@@ -1022,13 +1022,13 @@ export const fromView = <Graph extends Node.NodeRegistry>(
         )
       )
     ),
-    coverageOf: (read, options) => {
+    coverageOf: (read, coverageOptions) => {
       const plan = Query.plan(nodes, read);
       return verdictOf(
         plan,
-        options?.snapshot === undefined
+        coverageOptions?.snapshot === undefined
           ? view.query
-          : Coverage.snapshotOf(options.snapshot, view.query)
+          : Coverage.snapshotOf(coverageOptions.snapshot, view.query)
       );
     },
     totalOf: (subset) => view.totalOf?.(subset) ?? Effect.undefined,

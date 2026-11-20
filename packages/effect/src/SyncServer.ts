@@ -521,11 +521,14 @@ export const makeWithIntrospectionWith = (
     // the SyncContext built here carries the group and the resolved identity only.
     const contextFor = (
       clientGroupId: string,
-      options?: HandleOptions
+      handleOptions?: HandleOptions
     ): Effect.Effect<SyncContext, AuthorizationError> =>
       resolveContext(identityOption, {
         clientGroupId,
-        credentials: Option.getOrElse(options?.credentials ?? Option.none(), () => noCredentials),
+        credentials: Option.getOrElse(
+          handleOptions?.credentials ?? Option.none(),
+          () => noCredentials
+        ),
       });
 
     const pokeHub = yield* PokeHub.make;
@@ -712,12 +715,12 @@ export const makeWithIntrospectionWith = (
 
     const handlePush = (
       request: PushRequest,
-      options?: HandleOptions
+      handleOptions?: HandleOptions
     ): Effect.Effect<PushResponse, TransportError | VersionNotSupportedError> =>
       checkVersion(request.schemaVersion).pipe(
         Effect.andThen(
           Effect.gen(function* () {
-            const context = yield* contextFor(request.clientGroupId, options);
+            const context = yield* contextFor(request.clientGroupId, handleOptions);
             const checked = yield* middleware.onPush(context, request);
             // The push's one acquisition, opened after the middleware so a
             // refused push opens none: `applyMutations` is one transaction, so its
@@ -921,12 +924,12 @@ export const makeWithIntrospectionWith = (
 
     const handlePull = (
       request: PullRequest,
-      options?: HandleOptions
+      handleOptions?: HandleOptions
     ): Effect.Effect<PullResponse, TransportError | VersionNotSupportedError> =>
       checkVersion(request.schemaVersion).pipe(
         Effect.andThen(
           Effect.gen(function* () {
-            const context = yield* contextFor(request.clientGroupId, options);
+            const context = yield* contextFor(request.clientGroupId, handleOptions);
             yield* checkClientSubsets(request.subscriptions);
             const checked = yield* middleware.onPull(context, request);
 
@@ -1013,12 +1016,12 @@ export const makeWithIntrospectionWith = (
     // (pull stays the correctness path).
     const handleRead = (
       request: ReadRequest,
-      options?: HandleOptions
+      handleOptions?: HandleOptions
     ): Effect.Effect<ReadResponse, TransportError | VersionNotSupportedError> =>
       checkVersion(request.schemaVersion).pipe(
         Effect.andThen(
           Effect.gen(function* () {
-            const context = yield* contextFor(request.clientGroupId, options);
+            const context = yield* contextFor(request.clientGroupId, handleOptions);
             const rows = yield* readSubsets(
               { backend: configured, authPolicy, middleware },
               context,

@@ -259,18 +259,18 @@ export const simulateOffline = (
   transport: ClientTransport
 ): Effect.Effect<SimulatedOffline, never, Scope.Scope> =>
   Effect.gen(function* () {
-    const offline = yield* SubscriptionRef.make(false);
+    const offlineRef = yield* SubscriptionRef.make(false);
 
-    const gate = failWhileOffline(SubscriptionRef.get(offline), "simulated offline");
+    const gate = failWhileOffline(SubscriptionRef.get(offlineRef), "simulated offlineRef");
 
-    const status = SubscriptionRef.get(offline).pipe(
+    const status = SubscriptionRef.get(offlineRef).pipe(
       Effect.flatMap((isOffline): Effect.Effect<ConnectionStatus> =>
         isOffline ? Effect.succeed("disconnected") : transport.status
       )
     );
 
     const statusChanges = Stream.zipLatestWith(
-      SubscriptionRef.changes(offline),
+      SubscriptionRef.changes(offlineRef),
       transport.statusChanges,
       (isOffline, real): ConnectionStatus => (isOffline ? "disconnected" : real)
     ).pipe(Stream.changesWith((a, b) => a === b));
@@ -289,8 +289,8 @@ export const simulateOffline = (
 
     return {
       transport: wrapped,
-      setOffline: (next) => SubscriptionRef.set(offline, next),
-      isOffline: SubscriptionRef.get(offline),
+      setOffline: (next) => SubscriptionRef.set(offlineRef, next),
+      isOffline: SubscriptionRef.get(offlineRef),
     };
   });
 

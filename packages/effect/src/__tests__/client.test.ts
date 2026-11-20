@@ -753,8 +753,8 @@ describe("Client.make defaults (zero wiring)", () => {
         // Live reads work too — entirely against the local replica.
         const latest = yield* Ref.make<ReadonlyArray<Client.ResolvedRow>>([]);
         yield* Effect.forkScoped(
-          Stream.runForEach(client.observe({ collection: "products" }), (rows) =>
-            Ref.set(latest, rows)
+          Stream.runForEach(client.observe({ collection: "products" }), (current) =>
+            Ref.set(latest, current)
           ).pipe(Effect.ignore)
         );
         yield* eventually(Ref.get(latest), (current) => current.length === 1);

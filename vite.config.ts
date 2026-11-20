@@ -183,6 +183,7 @@ export default defineConfig({
       "effecttsgo/effect-try-without-catch": "error",
       "effecttsgo/effect-succeed-with-undefined": "error",
       "unicorn/prefer-add-event-listener": "error",
+      "eslint/no-shadow": "error",
     },
     overrides: [
       // ---- Genuine can't-applies ------------------------------------------
