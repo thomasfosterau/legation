@@ -24,6 +24,7 @@ import * as PubSub from "effect/PubSub";
 import * as Schema from "effect/Schema";
 import * as Scope from "effect/Scope";
 import type { ChangeHint } from "./Backend.js";
+import * as Json from "./internal/Json.js";
 import * as Telemetry from "./Telemetry.js";
 
 /**
@@ -214,7 +215,7 @@ export const makeSerialized = (
     publish: (hints) =>
       Arr.isReadonlyArrayEmpty(hints)
         ? Effect.void
-        : broker.publish(JSON.stringify(hints)).pipe(
+        : broker.publish(Json.stringify(hints)).pipe(
             Effect.timeoutOrElse({
               duration: timeout,
               orElse: () =>

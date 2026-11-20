@@ -44,6 +44,9 @@ import * as ReplicaDocuments from "../ReplicaDocuments.js";
 import * as RestHandlers from "../RestHandlers.js";
 import { defined } from "./defined.js";
 
+const JsonText = Schema.fromJsonString(Schema.Unknown);
+const encodeJson = Schema.encodeSync(JsonText);
+
 // ─── The graph ───────────────────────────────────────────────────────────────
 
 const categories = Node.make("categories", { attributes: { name: Schema.String } });
@@ -283,7 +286,7 @@ const jsonApi = (url: string, init: RequestInit = {}): Request =>
     ...init,
   });
 
-const bytes = (document: unknown) => JSON.stringify(document);
+const bytes = (document: unknown) => encodeJson(document);
 
 const body = (response: Response) => awaitPromise(() => response.json() as Promise<unknown>);
 

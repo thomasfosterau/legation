@@ -28,6 +28,7 @@ import * as Subset from "../Subset.js";
 import * as SyncServer from "../SyncServer.js";
 import { ClientTransport, makeInMemory, type ServerHandler } from "../Transport.js";
 import { defined } from "./defined.js";
+import * as Json from "../internal/Json.js";
 
 const rowsOf = (...values: ReadonlyArray<unknown>) =>
   values.map((value, i) => ({ id: `${i}`, value }));
@@ -86,7 +87,7 @@ const roundTrip = (agg: Aggregate.Aggregate) =>
   Effect.gen(function* () {
     const encoded = yield* Schema.encodeEffect(Aggregate.AggregateSchema)(agg);
     const decoded = yield* Schema.decodeUnknownEffect(Aggregate.AggregateSchema)(
-      JSON.parse(JSON.stringify(encoded))
+      Json.parse(Json.stringify(encoded))
     );
     expect(decoded).toEqual(agg);
   });

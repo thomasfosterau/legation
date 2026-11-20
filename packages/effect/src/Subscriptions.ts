@@ -23,6 +23,7 @@ import * as Scope from "effect/Scope";
 import * as Semaphore from "effect/Semaphore";
 import type { ClientEngine, WindowObservation } from "./ClientEngine.js";
 import type { MutatorError, QueryError, StoreError } from "./Errors.js";
+import * as Json from "./internal/Json.js";
 import * as Subset from "./Subset.js";
 
 /** A held subscription. `release` is idempotent; the grace timer starts when
@@ -248,7 +249,8 @@ export const make = (
 
     const acquireQuery = (name: string, args: unknown) =>
       acquireKey(
-        `@query:${name}:${JSON.stringify(args)}`,
+        // Strict, as `JSON.stringify` threw: a lossy key would merge two queries.
+        `@query:${name}:${args === undefined ? "undefined" : Json.stringify(args)}`,
         engine.subscribeQuery(name, args),
         engine.unsubscribeQuery(name, args).pipe(Effect.orDie)
       );

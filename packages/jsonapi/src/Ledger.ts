@@ -69,6 +69,8 @@ const GroupLedger = Schema.Struct({
 
 const decodeGroup = Schema.decodeUnknownEffect(GroupLedger);
 
+const LedgerJson = Schema.fromJsonString(Schema.Unknown);
+
 /**
  * A ledger store over an Effect `KeyValueStore`: each client group's ledger is
  * one JSON value under `${prefix}${clientGroupId}`. Use a durable key/value
@@ -89,10 +91,10 @@ export const keyValue = (
         Effect.flatMap((raw) =>
           raw === undefined
             ? Effect.succeed(emptyGroup)
-            : Effect.try({
-                try: () => JSON.parse(raw) as unknown,
-                catch: (cause) => new BackendError({ message: "Ledger is not JSON", cause }),
-              }).pipe(
+            : Schema.decodeEffect(LedgerJson)(raw).pipe(
+                Effect.mapError(
+                  (cause) => new BackendError({ message: "Ledger is not JSON", cause })
+                ),
                 Effect.flatMap((value) =>
                   decodeGroup(value).pipe(
                     Effect.mapError(
@@ -105,7 +107,7 @@ export const keyValue = (
       ),
     write: (clientGroupId, ledger) =>
       store
-        .set(keyOf(clientGroupId), JSON.stringify(ledger))
+        .set(keyOf(clientGroupId), Schema.encodeSync(LedgerJson)(ledger))
         .pipe(
           Effect.mapError((cause) => new BackendError({ message: "Ledger write failed", cause }))
         ),

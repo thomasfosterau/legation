@@ -32,6 +32,7 @@ import { AtomicKeyValue, type KeyValueEntry, type KeyValueOp } from "./AtomicKey
 import type { RowId } from "./Collection.js";
 import { StoreError } from "./Errors.js";
 import * as Identity from "./Identity.js";
+import * as Json from "./internal/Json.js";
 import { Mutation, PatchOp } from "./Protocol.js";
 
 /** Narrows a patch op to `Clear`, the one variant that names no row. */
@@ -1416,7 +1417,7 @@ export const makeKeyValue = (
       );
     const writeJson = (key: string, value: unknown): Effect.Effect<void, StoreError> =>
       store
-        .set(key, JSON.stringify(value))
+        .set(key, Json.stringify(value))
         .pipe(Effect.mapError(storeError(`Failed to write "${key}"`)));
     const remove = (key: string): Effect.Effect<void, StoreError> =>
       store.remove(key).pipe(Effect.mapError(storeError(`Failed to remove "${key}"`)));
@@ -1990,7 +1991,7 @@ export const makeKeyValue = (
         read,
         /** A JSON value, as the record path's `writeJson` writes it. */
         putJson: (key: string, value: unknown) => {
-          staged.set(key, JSON.stringify(value));
+          staged.set(key, Json.stringify(value));
         },
         /** A value written verbatim, as the cookie is (`setCookie`). */
         putRaw: (key: string, raw: string) => {

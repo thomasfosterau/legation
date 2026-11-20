@@ -33,6 +33,9 @@ import * as ReplicaDocuments from "../ReplicaDocuments.js";
 import * as RestHandlers from "../RestHandlers.js";
 import { defined } from "./defined.js";
 
+const JsonText = Schema.fromJsonString(Schema.Unknown);
+const encodeJson = Schema.encodeSync(JsonText);
+
 // ─── The graph ───────────────────────────────────────────────────────────────
 
 const categories = Node.make("categories", { attributes: { name: Schema.String } });
@@ -160,7 +163,7 @@ const restGet = (rest: RestHandlers.RestHandlers, resource: Resource.Any, url: s
     request: HttpServerRequest.fromWeb(new Request(`http://shop.test${url}`)),
   });
 
-const bytes = (document: unknown) => JSON.stringify(document);
+const bytes = (document: unknown) => encodeJson(document);
 
 /**
  * A collection URL's total over this replica: its filter over every row

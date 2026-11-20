@@ -23,6 +23,7 @@ import * as Mutator from "../Mutator.js";
 import * as SyncServer from "../SyncServer.js";
 import { ClientTransport, makeInMemory } from "../Transport.js";
 import type { Mutation, PatchOp } from "../Protocol.js";
+import * as Json from "../internal/Json.js";
 
 const mutation = (mutationId: number, clientId = "c1"): Mutation => ({
   clientId,
@@ -104,22 +105,22 @@ describe("ClientStore per-row layout", () => {
       Effect.gen(function* () {
         const kv = yield* KeyValueStore.KeyValueStore;
         // Pre-populate the legacy whole-blob layout directly (no `__layout` key).
-        yield* kv.set("legation/collections", JSON.stringify(["todos", "notes"]));
+        yield* kv.set("legation/collections", Json.stringify(["todos", "notes"]));
         yield* kv.set(
           "legation/rows/todos",
-          JSON.stringify({ "1": { id: "1", version: 1, value: { title: "a" } } })
+          Json.stringify({ "1": { id: "1", version: 1, value: { title: "a" } } })
         );
         yield* kv.set(
           "legation/rows/notes",
-          JSON.stringify({ n1: { id: "n1", version: 2, value: { body: "x" } } })
+          Json.stringify({ n1: { id: "n1", version: 2, value: { body: "x" } } })
         );
         yield* kv.set(
           "legation/journal",
-          JSON.stringify([
+          Json.stringify([
             { clientId: "c1", mutationId: 1, mutator: "noop", args: { a: 1 }, createdAt: 0 },
           ])
         );
-        yield* kv.set("legation/counters", JSON.stringify({ c1: 1 }));
+        yield* kv.set("legation/counters", Json.stringify({ c1: 1 }));
         yield* kv.set("legation/cookie", "cookie-legacy");
 
         const store = yield* ClientStoreModule.makeKeyValue();

@@ -5,6 +5,7 @@ import * as Cvr from "../Cvr.js";
 import * as Predicate from "../Predicate.js";
 import * as Protocol from "../Protocol.js";
 import * as Subset from "../Subset.js";
+import * as Json from "../internal/Json.js";
 
 describe("Predicate", () => {
   const row = { id: "1", status: "open", priority: 3 };
@@ -43,7 +44,7 @@ describe("Predicate", () => {
       );
       const encoded = yield* Schema.encodeEffect(Predicate.PredicateSchema)(predicate);
       const decoded = yield* Schema.decodeUnknownEffect(Predicate.PredicateSchema)(
-        JSON.parse(JSON.stringify(encoded))
+        Json.parse(Json.stringify(encoded))
       );
       expect(decoded).toEqual(predicate);
     })
@@ -131,7 +132,7 @@ describe("Protocol schemas", () => {
         lastMutationIds: { "client-a": 4 },
       };
       const encoded = yield* Schema.encodeEffect(Protocol.PullResponse)(response);
-      const decoded = yield* Protocol.decodePullResponse(JSON.parse(JSON.stringify(encoded)));
+      const decoded = yield* Protocol.decodePullResponse(Json.parse(Json.stringify(encoded)));
       expect(decoded).toEqual(response);
     })
   );

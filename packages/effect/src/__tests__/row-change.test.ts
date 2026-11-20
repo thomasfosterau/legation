@@ -30,6 +30,7 @@ import * as Predicate from "../Predicate.js";
 import * as RowChange from "../RowChange.js";
 import * as Subset from "../Subset.js";
 import { defined } from "./defined.js";
+import * as Json from "../internal/Json.js";
 
 /** mulberry32: tiny deterministic PRNG so a failing seed is reproducible. */
 const mulberry32 = (seed: number) => {
@@ -223,12 +224,12 @@ const checkSession = (
 ): Mismatch | undefined => {
   const page = pageEntries(LiveView.result(state.view));
   const foldedEntries = sortedEntries(state.folded);
-  if (JSON.stringify(foldedEntries) !== JSON.stringify(page)) {
+  if (Json.show(foldedEntries) !== Json.show(page)) {
     return { label: `${label} (seed=${seed})`, folded: foldedEntries, page };
   }
   if (lateObserver === undefined) return undefined;
   const lateEntries = sortedEntries(lateObserver.folded);
-  if (JSON.stringify(lateEntries) === JSON.stringify(page)) return undefined;
+  if (Json.show(lateEntries) === Json.show(page)) return undefined;
   return {
     label: `${label} (seed=${seed}, late observer since step ${lateObserver.startedAtStep})`,
     folded: lateEntries,

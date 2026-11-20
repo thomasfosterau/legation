@@ -198,6 +198,8 @@ export interface JsonApiBackendConfig {
 /** A mutation as the sync server pushes it to a backend. */
 type PushedMutation = Protocol.Mutation;
 
+const encodeJson = Schema.encodeSync(Schema.fromJsonString(Schema.Unknown));
+
 const jsonApiHeaders = {
   "Content-Type": "application/vnd.api+json",
   Accept: "application/vnd.api+json",
@@ -1321,7 +1323,7 @@ export const make = (
           client.execute(
             HttpClientRequest.post(urlFor(config.baseUrl, path)).pipe(
               HttpClientRequest.bodyText(
-                JSON.stringify({ "atomic:operations": operations }),
+                encodeJson({ "atomic:operations": operations }),
                 Atomic.MEDIA_TYPE
               ),
               HttpClientRequest.setHeaders(atomicHeaders)

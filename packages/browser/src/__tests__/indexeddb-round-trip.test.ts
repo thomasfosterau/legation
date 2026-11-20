@@ -13,6 +13,10 @@ import { IDBKeyRange, indexedDB } from "fake-indexeddb";
 import * as IndexedDbClientStore from "../IndexedDbClientStore.js";
 import { keyValueLayer } from "../internal/IndexedDbKeyValue.js";
 import { withLayer } from "./with-layer.js";
+import * as Schema from "effect/Schema";
+
+const JsonText = Schema.fromJsonString(Schema.Unknown);
+const decodeJson = Schema.decodeSync(JsonText);
 
 const fakeIndexedDb = Layer.succeed(IndexedDb.IndexedDb)(
   IndexedDb.make({ indexedDB, IDBKeyRange })
@@ -95,7 +99,7 @@ describe("IndexedDbClientStore round trips with the platform store", () => {
 
       yield* Effect.gen(function* () {
         const kv = yield* KeyValueStore.KeyValueStore;
-        expect(JSON.parse((yield* kv.get("legation/row/counters/a")) ?? "null")).toEqual({
+        expect(decodeJson((yield* kv.get("legation/row/counters/a")) ?? "null")).toEqual({
           id: "a",
           version: 1,
           value: { id: "a", n: 5 },

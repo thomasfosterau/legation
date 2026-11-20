@@ -15,6 +15,7 @@ import * as Defined from "./Defined.js";
 import * as Schema from "effect/Schema";
 import type { AnyCollection, RowOf } from "./Collection.js";
 import * as Index from "./CollectionIndex.js";
+import * as Json from "./internal/Json.js";
 import * as Predicate from "./Predicate.js";
 
 /** Sort direction. */
@@ -74,7 +75,7 @@ export const make = (options: {
 });
 
 /** Stable identity for a subset (used as CVR / subscription map keys). */
-export const hash = (subset: Subset): string => JSON.stringify(subset);
+export const hash = (subset: Subset): string => Json.stringify(subset);
 
 // ─── Typed builder ─────────────────────────────────────────────────────────────
 //

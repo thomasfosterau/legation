@@ -20,6 +20,7 @@ import * as FilterCorpus from "../FilterCorpus.js";
 import * as Predicate from "../Predicate.js";
 import * as Subset from "../Subset.js";
 import { defined } from "./defined.js";
+import * as Json from "../internal/Json.js";
 
 // ─── Deterministic PRNG (mulberry32) ─────────────────────────────────────────
 
@@ -122,7 +123,7 @@ const randomPredicate = (rng: Rng): Predicate.Predicate => {
 const idsOf = (rows: ReadonlyArray<{ readonly id: string }>): ReadonlyArray<string> =>
   rows.map((r) => r.id).toSorted();
 const same = (left: ReadonlyArray<string>, right: ReadonlyArray<string>): boolean =>
-  JSON.stringify(left) === JSON.stringify(right);
+  Json.show(left) === Json.show(right);
 
 const TRIALS = 400;
 const ROWS_PER_TRIAL = 60;
@@ -210,9 +211,7 @@ describe("CollectionIndex evaluation ≡ full-scan Subset.apply (property)", () 
       const subset = Subset.make({ collection: "t", where });
       const expected = idsOf(Subset.apply(rows, subset));
       const actual = idsOf(Subset.applyIndexed(rowsById, subset, index));
-      return JSON.stringify(actual) === JSON.stringify(expected)
-        ? []
-        : [{ where, expected, actual }];
+      return Json.show(actual) === Json.show(expected) ? [] : [{ where, expected, actual }];
     });
     expect(mismatches).toEqual([]);
     // The ADR-0028 rule (b) answer, stated outright.

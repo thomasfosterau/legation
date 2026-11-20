@@ -22,6 +22,7 @@ import * as BusBrokers from "../BusBrokers.js";
 import * as InvalidationBus from "../InvalidationBus.js";
 import { defined } from "./defined.js";
 import { TestFailure } from "./test-failure.js";
+import * as Json from "../internal/Json.js";
 
 const hint: ChangeHint = { collection: "todos", ids: ["1"] };
 
@@ -63,8 +64,8 @@ describe("makeWebSocketBroker (Durable Object relay pattern)", () => {
       const subscription = yield* busB.subscribe;
 
       raw.send("not json at all");
-      raw.send(JSON.stringify({ not: "an array of hints" }));
-      raw.send(JSON.stringify([hint]));
+      raw.send(Json.stringify({ not: "an array of hints" }));
+      raw.send(Json.stringify([hint]));
       expect(yield* subscription.take).toEqual([hint]);
     }).pipe(Effect.scoped)
   );

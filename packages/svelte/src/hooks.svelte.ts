@@ -33,6 +33,7 @@ import * as ManagedRuntime from "effect/ManagedRuntime";
 import * as Option from "effect/Option";
 import * as P from "effect/Predicate";
 import * as R from "effect/Record";
+import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
 import { AsyncResult } from "effect/reactivity";
 import { Aggregate, Client, Query } from "@thomasfosterau/legation";
@@ -245,10 +246,12 @@ export interface ConnectionOptions<R extends Query.Read = Query.Read> extends Li
   readonly pageSize?: number;
 }
 
+const encodeJson = Schema.encodeSync(Schema.fromJsonString(Schema.Unknown));
+
 /** The base read minus its window — the hook owns `first`/`after`. */
 const connectionKey = (read: Query.Read): string => {
   const { first: _first, after: _after, ...base } = read;
-  return JSON.stringify(base);
+  return encodeJson(base);
 };
 
 /**

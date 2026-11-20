@@ -27,6 +27,7 @@ import * as Subset from "../Subset.js";
 import * as SyncServer from "../SyncServer.js";
 import * as Telemetry from "../Telemetry.js";
 import { ClientTransport, makeInMemory } from "../Transport.js";
+import * as Json from "../internal/Json.js";
 
 const todoSet = Mutator.make("todo/set", Schema.Struct({ id: Schema.String }));
 const allTodos = Subset.make({ collection: "todos" });
@@ -163,7 +164,7 @@ describe("ClientStore.pendingCount", () => {
       // A store written before the journal was split into per-entry bodies.
       yield* Effect.sync(() => {
         kv.data.delete("legation/journalIndex");
-        kv.data.set("legation/journal", JSON.stringify([entry(1), entry(2), entry(3)]));
+        kv.data.set("legation/journal", Json.stringify([entry(1), entry(2), entry(3)]));
       });
       expect(yield* store.pendingCount).toBe(3);
       expect((yield* store.pendingMutations).length).toBe(3);

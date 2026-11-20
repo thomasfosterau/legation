@@ -35,6 +35,7 @@ import * as Subset from "../Subset.js";
 import * as SyncServer from "../SyncServer.js";
 import { ClientTransport, makeInMemory, type ServerHandler } from "../Transport.js";
 import { defined } from "./defined.js";
+import * as Json from "../internal/Json.js";
 
 interface Todo {
   readonly id: string;
@@ -273,7 +274,7 @@ describe("ClientEngine.mutationStates", () => {
       const message = MirrorProtocol.mutationStatesUpdate(
         MutationState.droppedMany(states, [1], 0)
       );
-      const decoded = yield* MirrorProtocol.decodeHostMessage(JSON.parse(JSON.stringify(message)));
+      const decoded = yield* MirrorProtocol.decodeHostMessage(Json.parse(Json.stringify(message)));
       expect(decoded?._tag).toBe("MutationStatesUpdate");
     })
   );

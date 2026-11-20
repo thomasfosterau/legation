@@ -305,6 +305,8 @@ class RequestBodyUnreadable extends Schema.TaggedError<
   cause: Schema.optional(Schema.Defect()),
 }) {}
 
+const encodeBody = Schema.encodeSync(Schema.fromJsonString(Schema.Unknown));
+
 /** Every response the façade synthesises: JSON:API, never cached, marked as served locally. */
 const respondWith = (
   status: number,
@@ -312,7 +314,7 @@ const respondWith = (
   cookie: Option.Option<string>,
   headers: Readonly<Record<string, string>> = {}
 ): Response =>
-  new Response(JSON.stringify(body), {
+  new Response(encodeBody(body), {
     status,
     headers: {
       ...headers,

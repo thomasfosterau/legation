@@ -57,6 +57,9 @@ import { routeOf, routes } from "../RoomProtocol.js";
 import { routeSync } from "../Worker.js";
 import { defined } from "./defined.js";
 
+const JsonText = Schema.fromJsonString(Schema.Unknown);
+const encodeJson = Schema.encodeSync(JsonText);
+
 // ─── The app ─────────────────────────────────────────────────────────────────
 
 const Product = Node.make("products", { attributes: { name: Schema.String } });
@@ -105,7 +108,7 @@ const sessionOf = (cookie: string | undefined): string | undefined => {
 };
 
 const json = (body: unknown): Response =>
-  new Response(JSON.stringify(body), { headers: { "content-type": "application/json" } });
+  new Response(encodeJson(body), { headers: { "content-type": "application/json" } });
 
 interface Api {
   /** The bound Worker's fetch handler — what `env.API.fetch` reaches. */
@@ -115,7 +118,7 @@ interface Api {
 }
 
 const badRequest = (error: TransportError | VersionNotSupportedError) =>
-  Effect.succeed(new Response(JSON.stringify({ error: error.message }), { status: 400 }));
+  Effect.succeed(new Response(encodeJson({ error: error.message }), { status: 400 }));
 
 /**
  * The API Worker: one sync server per room (its own CVR store), all over one
@@ -309,7 +312,7 @@ describe("BindingTransport", () => {
   it.effect("maps an HTTP failure onto a TransportError carrying the server's reason", () =>
     Effect.gen(function* () {
       const binding = {
-        fetch: async () => new Response(JSON.stringify({ error: "nope" }), { status: 400 }),
+        fetch: async () => new Response(encodeJson({ error: "nope" }), { status: 400 }),
       };
       const transport = BindingTransport.make({ binding, request: inbound(SESSION) });
       const failure = yield* Effect.flip(

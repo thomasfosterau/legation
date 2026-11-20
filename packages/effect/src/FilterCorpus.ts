@@ -38,6 +38,7 @@ import * as Match from "effect/Match";
 import * as Option from "effect/Option";
 import * as Random from "effect/Random";
 import * as Predicate from "./Predicate.js";
+import * as Json from "./internal/Json.js";
 import type * as Subset from "./Subset.js";
 import * as Schema from "effect/Schema";
 
@@ -71,7 +72,7 @@ export const resolveSeed = (override: string | undefined): number => {
   const seed = Number(override);
   if (!Number.isInteger(seed)) {
     throw new InvalidCorpusInput({
-      message: `LEGATION_CORPUS_SEED must be an integer, got ${JSON.stringify(override)}`,
+      message: `LEGATION_CORPUS_SEED must be an integer, got ${Json.stringify(override)}`,
     });
   }
   return seed;
@@ -701,8 +702,12 @@ export interface Disagreement {
  * JSON prints it as `0`, and a minimal case built on `-0` would not
  * reproduce from its own report.
  */
-const print = (value: unknown): string =>
-  JSON.stringify(value, (_key, field: unknown) => (Object.is(field, -0) ? "-0" : field));
+const printOption = Schema.encodeOption(
+  Schema.fromJsonString(Schema.Unknown, {
+    replacer: (_key, field: unknown) => (Object.is(field, -0) ? "-0" : field),
+  })
+);
+const print = (value: unknown): string => Option.getOrElse(printOption(value), () => "undefined");
 
 /**
  * Render a disagreement: the seed, the (minimal) predicate or order terms,
@@ -723,7 +728,7 @@ export const formatDisagreement = (disagreement: Disagreement): string => {
     lines.push(`  ${row.id} ${print(row.value)}`);
   });
   Arr.forEach(Object.entries(disagreement.results), ([name, ids]) => {
-    lines.push(`${name}: ${JSON.stringify(ids)}`);
+    lines.push(`${name}: ${Json.stringify(ids)}`);
   });
   return lines.join("\n");
 };

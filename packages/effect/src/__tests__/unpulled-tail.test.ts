@@ -38,6 +38,9 @@ import * as SyncServer from "../SyncServer.js";
 import * as Telemetry from "../Telemetry.js";
 import { ClientTransport, makeInMemory } from "../Transport.js";
 import { defined } from "./defined.js";
+import * as Json from "../internal/Json.js";
+
+const decodeSnapshot = Schema.decodeSync(Hydration.SnapshotFromJson);
 
 interface Counter {
   readonly id: string;
@@ -450,7 +453,7 @@ describe("ClientStore's unpulled tail", () => {
         const first = yield* ClientStoreModule.makeKeyValue();
         yield* first.appendMutation(mutation("c1", 1));
         // The body landed; the index write never did.
-        yield* kv.set("legation/unpulled/c1/1", JSON.stringify(mutation("c1", 1)));
+        yield* kv.set("legation/unpulled/c1/1", Json.stringify(mutation("c1", 1)));
 
         const second = yield* ClientStoreModule.makeKeyValue();
         expect(yield* second.unpulled).toEqual([]);
@@ -797,9 +800,9 @@ describe("the tail in an engine", () => {
           yield* engine.mutate("counter/inc", { id: "c" });
           yield* engine.push;
 
-          const wire = JSON.stringify(yield* Hydration.dehydrate(source));
+          const wire = Json.stringify(yield* Hydration.dehydrate(source));
           const target = yield* ClientStoreModule.makeMemory;
-          yield* Hydration.hydrate(target, JSON.parse(wire));
+          yield* Hydration.hydrate(target, decodeSnapshot(wire));
           expect(yield* tailOf(target)).toEqual(["client-a#1"]);
 
           const restarted = yield* makeCounterEngine(server, target);
@@ -813,7 +816,7 @@ describe("the tail in an engine", () => {
     scoped.effect("a snapshot without the tail field loads, with an empty tail", () =>
       Effect.gen(function* () {
         const store = yield* ClientStoreModule.makeMemory;
-        const legacy = JSON.parse(JSON.stringify({ rows: [], journal: [] }));
+        const legacy = decodeSnapshot(Json.stringify({ rows: [], journal: [] }));
         yield* Hydration.hydrate(store, legacy);
         expect(yield* store.unpulled).toEqual([]);
         const dehydrated = yield* Hydration.dehydrate(store);
@@ -981,7 +984,7 @@ describe("the tail's crash windows and interleavings", () => {
           expect(snapshot.unpulled).toHaveLength(1);
 
           const target = yield* ClientStoreModule.makeMemory;
-          yield* Hydration.hydrate(target, JSON.parse(JSON.stringify(snapshot)));
+          yield* Hydration.hydrate(target, decodeSnapshot(Json.stringify(snapshot)));
           expect(yield* target.pendingMutations).toEqual([]);
           expect(yield* tailOf(target)).toEqual(["client-a#1"]);
         })
@@ -1341,7 +1344,7 @@ describe("a release record's guarantees across both stores", () => {
             // A snapshot whose journal still holds the entry, as a dehydrate that races an acknowledgement gives.
             yield* Hydration.hydrate(
               store,
-              JSON.parse(JSON.stringify({ rows: [], journal: [mutation("c1", 1)] }))
+              decodeSnapshot(Json.stringify({ rows: [], journal: [mutation("c1", 1)] }))
             );
             expect(yield* store.pendingMutations).toEqual([]);
             yield* putCounter(store, "c", 2);
@@ -2263,7 +2266,7 @@ describe("dehydrate reads one state of the store", () => {
           const target = yield* ClientStoreModule.makeKeyValue().pipe(
             Effect.provideContext(targetKv)
           );
-          yield* Hydration.hydrate(target, JSON.parse(JSON.stringify(snapshot)));
+          yield* Hydration.hydrate(target, decodeSnapshot(Json.stringify(snapshot)));
           const viewer = yield* makeCounterEngine(server, target);
           yield* viewer.subscribe(countersSubset);
           expect(yield* counterValue(viewer)).toBe(1);
@@ -2309,7 +2312,7 @@ describe("dehydrate reads one state of the store", () => {
         const target = yield* ClientStoreModule.makeKeyValue().pipe(
           Effect.provideContext(targetKv)
         );
-        yield* Hydration.hydrate(target, JSON.parse(JSON.stringify(snapshot)));
+        yield* Hydration.hydrate(target, decodeSnapshot(Json.stringify(snapshot)));
         const viewer = yield* makeCounterEngine(server, target);
         yield* viewer.subscribe(countersSubset);
         expect(yield* counterValue(viewer)).toBe(1);

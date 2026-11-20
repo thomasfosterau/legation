@@ -133,7 +133,7 @@ export default defineConfig({
       "effect/imperative-loops": "warn", // 366 sites
       "effect/yield-in-for-loop": "warn", // 535 sites
       "effect/avoid-direct-tag-checks": "warn", // 6 sites, the measured switches in internal/RowDispatch.ts
-      "effect/avoid-direct-json": "warn", // 161 sites
+      "effect/avoid-direct-json": "warn", // 4 sites: Hash.ts (measured hot), a JSON.parse bench, a Svelte panel
       "effect/prefer-effect-fn": "warn", // 7 sites, exported effect values (public API)
       "effect/no-known-value-widening": "warn", // 3 sites, exported return types (public API)
 

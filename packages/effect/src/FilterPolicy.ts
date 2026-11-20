@@ -27,6 +27,7 @@ import * as Option from "effect/Option";
 import * as P from "effect/Predicate";
 import * as SchemaAST from "effect/SchemaAST";
 import { AuthorizationError, FilterDeclarationError } from "./Errors.js";
+import * as Json from "./internal/Json.js";
 import type { Literal, Predicate } from "./Predicate.js";
 import type { OrderBy } from "./Subset.js";
 
@@ -350,7 +351,7 @@ const literalCheck = (
     ? undefined
     : deny(
         collection,
-        `literal ${JSON.stringify(value)} for field "${field}" ("${operator}") does not match its kind "${kind}"`
+        `literal ${Json.stringify(value)} for field "${field}" ("${operator}") does not match its kind "${kind}"`
       );
 };
 

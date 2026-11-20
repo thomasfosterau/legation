@@ -160,9 +160,12 @@ interface SqlUnit {
   readonly staleRejection: boolean;
 }
 
+/** The `rejections` column's JSON text. */
+const RejectionsJson = Schema.fromJsonString(Schema.Unknown);
+
 /** The `rejections` column's value: a JSON object of mutation id → reason, or `null` when none is remembered. */
 const encodeRejections = (rejections: ReadonlyMap<number, string>): string | null =>
-  rejections.size === 0 ? null : JSON.stringify(Object.fromEntries(rejections));
+  rejections.size === 0 ? null : Schema.encodeSync(RejectionsJson)(Object.fromEntries(rejections));
 
 /** Decode the `rejections` column (`null` and absent both mean none remembered). */
 const decodeRejections = (
@@ -170,21 +173,26 @@ const decodeRejections = (
   mutationsTable: string
 ): Effect.Effect<ReadonlyMap<number, string>, BackendError> => {
   if (text === null || text === undefined) return Effect.succeed(new Map());
-  return Effect.try({
-    try: () => {
-      if (!P.isString(text)) throw new TypeError("not text");
-      return new Map(
-        Object.entries(JSON.parse(text) as Record<string, string>).map(
-          ([id, reason]) => [Number(id), String(reason)] as const
-        )
-      );
-    },
-    catch: (cause) =>
-      new BackendError({
-        message: `The "rejections" column of the mutation ledger "${mutationsTable}" holds a value that is not a rejection memory`,
-        cause,
-      }),
-  });
+  const notRejections = (cause: unknown) =>
+    new BackendError({
+      message: `The "rejections" column of the mutation ledger "${mutationsTable}" holds a value that is not a rejection memory`,
+      cause,
+    });
+  if (!P.isString(text)) return Effect.fail(notRejections(new TypeError("not text")));
+  return Schema.decodeEffect(RejectionsJson)(text).pipe(
+    Effect.mapError(notRejections),
+    Effect.flatMap((parsed) =>
+      Effect.try({
+        try: () =>
+          new Map(
+            Object.entries(parsed as Record<string, string>).map(
+              ([id, reason]) => [Number(id), String(reason)] as const
+            )
+          ),
+        catch: notRejections,
+      })
+    )
+  );
 };
 
 /** A row as returned by the driver: a column → value record. */

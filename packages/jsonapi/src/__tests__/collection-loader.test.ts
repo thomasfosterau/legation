@@ -12,6 +12,10 @@ import type * as HttpClientRequest from "effect/http/HttpClientRequest";
 import * as HttpClientResponse from "effect/http/HttpClientResponse";
 import { Filter } from "@thomasfosterau/effect-jsonapi";
 import * as CollectionLoader from "../CollectionLoader.js";
+import * as Schema from "effect/Schema";
+
+const JsonText = Schema.fromJsonString(Schema.Unknown);
+const encodeJson = Schema.encodeSync(JsonText);
 
 describe("resourceToRow", () => {
   it("maps attributes and relationship linkage", () => {
@@ -101,7 +105,7 @@ const respondWith = (status: number, body: unknown) =>
       Effect.succeed(
         HttpClientResponse.fromWeb(
           request,
-          new Response(body === undefined ? null : JSON.stringify(body), {
+          new Response(body === undefined ? null : encodeJson(body), {
             status,
             headers: { "Content-Type": "application/vnd.api+json" },
           })

@@ -68,6 +68,7 @@ import * as SyncServer from "../SyncServer.js";
 import { ClientTransport, makeInMemory, type ServerHandler } from "../Transport.js";
 import { defined } from "./defined.js";
 import { TestFailure } from "./test-failure.js";
+import * as Json from "../internal/Json.js";
 
 interface Todo {
   readonly id: string;
@@ -455,7 +456,7 @@ describe("ClientEngine.observeChanges", () => {
           .pipe(Effect.map((rows) => rows.map((r) => r.id).toSorted()));
         yield* eventually(
           Effect.all([foldedIds, expectedIds], { concurrency: 1 }),
-          ([folded, expected]) => JSON.stringify(folded) === JSON.stringify(expected)
+          ([folded, expected]) => Json.show(folded) === Json.show(expected)
         );
 
         const seen = yield* Ref.get(batches);
@@ -644,7 +645,7 @@ describe("ClientEngine.observeChanges — randomized property through the real e
                   // eslint-disable-next-line no-loop-func -- captures `batches` fresh each poll, not stale
                   const seen = yield* eventually(Ref.get(batches), (candidate) => {
                     const folded = sortedIdValue(foldChangeBatches(candidate));
-                    return JSON.stringify(folded) === JSON.stringify(expected);
+                    return Json.show(folded) === Json.show(expected);
                   });
                   expect(sortedIdValue(foldChangeBatches(seen))).toEqual(expected);
                 }

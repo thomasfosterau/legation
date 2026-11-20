@@ -15,6 +15,7 @@ import { describe, expect, it } from "vite-plus/test";
 import * as LiveView from "../LiveView.js";
 import * as Subset from "../Subset.js";
 import { defined } from "./defined.js";
+import * as Json from "../internal/Json.js";
 
 const makePrng = (seed: number) => {
   let state = seed | 0 || 1;
@@ -106,9 +107,7 @@ describe("LiveView property: maintained order ≡ Subset.apply after every delta
         ({ view, reference } = step(view, reference, defined(deltas[i])));
         const maintained = LiveView.result(view).map((r) => r.id);
         const expected = Subset.apply([...reference.values()], subset).map((r) => r.id);
-        expect(maintained, `seed ${seed}, step ${i} (${JSON.stringify(deltas[i])})`).toEqual(
-          expected
-        );
+        expect(maintained, `seed ${seed}, step ${i} (${Json.show(deltas[i])})`).toEqual(expected);
       }
     });
   });

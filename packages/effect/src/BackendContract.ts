@@ -77,6 +77,7 @@ import * as Mutator from "./Mutator.js";
 import * as Predicate from "./Predicate.js";
 import type { Mutation } from "./Protocol.js";
 import * as Subset from "./Subset.js";
+import * as Json from "./internal/Json.js";
 import * as UnknownMutator from "./UnknownMutator.js";
 
 /** A backend broke one of the contract's guarantees. */
@@ -502,7 +503,7 @@ const rule2IdempotentSkip: Rule = ({
     yield* check(
       rule,
       (b?.value as { n?: number } | undefined)?.n === 2,
-      `Replaying mutation 2 must not re-execute its effects (row "b" became ${JSON.stringify(b?.value)})`
+      `Replaying mutation 2 must not re-execute its effects (row "b" became ${Json.show(b?.value)})`
     );
   });
 
@@ -590,11 +591,7 @@ const expectEvaluation = (
     const evaluated = (yield* expectOk(rule, backend.evaluate(context, subset))).map(
       (entry) => entry.id
     );
-    yield* check(
-      rule,
-      JSON.stringify(evaluated) === JSON.stringify(expected),
-      describe(expected, evaluated)
-    );
+    yield* check(rule, Json.show(evaluated) === Json.show(expected), describe(expected, evaluated));
     return expected;
   });
 
@@ -717,7 +714,7 @@ const rule6ReferenceSemantics: Rule = (h) =>
       reference,
       limited,
       (expected, evaluated) =>
-        `where+orderBy+limit: expected ${JSON.stringify(expected)}, got ${JSON.stringify(evaluated)}`
+        `where+orderBy+limit: expected ${Json.show(expected)}, got ${Json.show(evaluated)}`
     );
 
     const paged = Subset.make({
@@ -733,7 +730,7 @@ const rule6ReferenceSemantics: Rule = (h) =>
       reference,
       paged,
       (expected, evaluated) =>
-        `cursor page: expected ${JSON.stringify(expected)}, got ${JSON.stringify(evaluated)}`
+        `cursor page: expected ${Json.show(expected)}, got ${Json.show(evaluated)}`
     );
 
     yield* generatedCorpus(h, rule, reference, h.start + 4 + evalSeed.length);
@@ -747,7 +744,7 @@ const rule7OmitsMissingIds: Rule = ({ backend, context, rows, check, expectOk })
     yield* check(
       rule,
       fetched.length === 1 && fetched[0]?.id === "a",
-      `Expected exactly row "a", got ${JSON.stringify(fetched.map((row) => row.id))}`
+      `Expected exactly row "a", got ${Json.show(fetched.map((row) => row.id))}`
     );
   });
 
@@ -832,9 +829,8 @@ const rule10WriteThenFail: Rule = (h) =>
     const [after] = yield* expectOk(rule, backend.getRows(context, rows, ["a"]));
     yield* check(
       rule,
-      after?.version === before?.version &&
-        JSON.stringify(after?.value) === JSON.stringify(before?.value),
-      `A failed write must leave row "a" unchanged (was ${JSON.stringify(before?.value)} at version ${before?.version}, now ${JSON.stringify(after?.value)} at version ${after?.version})`
+      after?.version === before?.version && Json.show(after?.value) === Json.show(before?.value),
+      `A failed write must leave row "a" unchanged (was ${Json.show(before?.value)} at version ${before?.version}, now ${Json.show(after?.value)} at version ${after?.version})`
     );
 
     yield* Effect.exit(attempt("ghost"));
@@ -1033,7 +1029,7 @@ const rule12OwnWritesReachGetRows: Rule = (h) =>
     yield* check(
       rule,
       listed.includes(kept) && listed.includes(gone),
-      `The listing must return both seeded rows so the backend can cache them, got ${JSON.stringify(listed)}`
+      `The listing must return both seeded rows so the backend can cache them, got ${Json.show(listed)}`
     );
 
     yield* expectOk(
@@ -1044,7 +1040,7 @@ const rule12OwnWritesReachGetRows: Rule = (h) =>
     yield* check(
       rule,
       (updated?.value as { readonly n?: number } | undefined)?.n === 2,
-      `An update must show in getRows without a re-list: row "${kept}" reads ${JSON.stringify(updated?.value)}`
+      `An update must show in getRows without a re-list: row "${kept}" reads ${Json.show(updated?.value)}`
     );
 
     yield* expectOk(
@@ -1057,7 +1053,7 @@ const rule12OwnWritesReachGetRows: Rule = (h) =>
     yield* check(
       rule,
       Arr.isReadonlyArrayEmpty(removed),
-      `A delete must make getRows omit the row without a re-list: row "${gone}" still reads ${JSON.stringify(removed[0]?.value)}`
+      `A delete must make getRows omit the row without a re-list: row "${gone}" still reads ${Json.show(removed[0]?.value)}`
     );
   });
 
@@ -1094,7 +1090,7 @@ const rule13ListsRejections: Rule = (h) =>
           entry.mutationId === startId + 1 &&
           entry.reason === reported?.reason
       ),
-      `A permanent rejection must be listed by rejections with the reason applyMutations reported (${JSON.stringify(reported?.reason)}), got ${JSON.stringify(listed)}`
+      `A permanent rejection must be listed by rejections with the reason applyMutations reported (${Json.show(reported?.reason)}), got ${Json.show(listed)}`
     );
   });
 

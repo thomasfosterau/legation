@@ -35,6 +35,7 @@ import * as SyncServer from "../SyncServer.js";
 import { ClientTransport, makeInMemory, type ServerHandler } from "../Transport.js";
 import { defined } from "./defined.js";
 import { TestFailure } from "./test-failure.js";
+import * as Json from "../internal/Json.js";
 
 interface Issue {
   readonly id: string;
@@ -190,7 +191,7 @@ const waitForEmissions = <A>(
   seen: SubscriptionRef.SubscriptionRef<A>,
   until: (emissions: A) => boolean,
   failure: string,
-  show: (emissions: A) => string = (emissions) => JSON.stringify(emissions)
+  show: (emissions: A) => string = (emissions) => Json.show(emissions)
 ): Effect.Effect<A> =>
   SubscriptionRef.changes(seen).pipe(
     Stream.filter(until),
@@ -278,7 +279,7 @@ describe("Related.query / observe", () => {
             failure: string
           ) =>
             waitForEmissions(seen, until, failure, (emissions) =>
-              JSON.stringify(emissions.map(i1Bodies))
+              Json.stringify(emissions.map(i1Bodies))
             );
           yield* Effect.forkScoped(
             Stream.runForEach(
@@ -308,7 +309,7 @@ describe("Related.query / observe", () => {
           const emissions = yield* emitted(
             (acc) =>
               acc.length >= 2 &&
-              JSON.stringify(i1Bodies(defined(acc[acc.length - 1]))) === JSON.stringify(settled),
+              Json.show(i1Bodies(defined(acc[acc.length - 1]))) === Json.show(settled),
             "the join never re-emitted the pulled edit"
           );
           const firstI1 = defined(defined(emissions[0]).find((r) => r.id === "i1"));
@@ -614,7 +615,7 @@ const idsOf = (values: ReadonlyArray<unknown>) =>
  * as sets; `one` and the base row compare directly. */
 const relatedValuesEqual = (a: Related.RelatedValue, b: Related.RelatedValue): boolean => {
   if (Array.isArray(a) && Array.isArray(b)) {
-    return JSON.stringify(idsOf(a)) === JSON.stringify(idsOf(b));
+    return Json.show(idsOf(a)) === Json.show(idsOf(b));
   }
   return a === b;
 };
@@ -675,9 +676,9 @@ describe("Related delta-maintenance", () => {
       expect(
         sameJoinUnordered(lastResult, expected),
         `step ${step} (seed ${rngSeed}) diverged from from-scratch hydrate:\n` +
-          `op: ${JSON.stringify(op)}\n` +
-          `actual:   ${JSON.stringify(lastResult)}\n` +
-          `expected: ${JSON.stringify(expected)}`
+          `op: ${Json.show(op)}\n` +
+          `actual:   ${Json.show(lastResult)}\n` +
+          `expected: ${Json.show(expected)}`
       ).toBe(true);
     }
   });

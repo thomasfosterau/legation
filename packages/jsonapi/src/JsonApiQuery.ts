@@ -101,6 +101,12 @@ import type { JsonApiRequestOptions, SortTerm } from "./types.js";
 
 // ─── Filter AST ⇄ Predicate ──────────────────────────────────────────────────
 
+const JsonText = Schema.fromJsonString(Schema.Unknown);
+const encodeJson = Schema.encodeSync(JsonText);
+/** A value's JSON text for a message, `"undefined"` where JSON has none. */
+const showJson = (value: unknown): string =>
+  Option.getOrElse(Schema.encodeOption(JsonText)(value), () => "undefined");
+
 /**
  * A grammar literal as a `Predicate` literal: scalars as they are, a `Date`
  * as its instant text (the load-bearing encode of ADR-0028 rule e), or a
@@ -118,7 +124,7 @@ const literalOf = (field: string, value: unknown): Result.Result<Predicate.Liter
         ? Result.succeed(other.toISOString())
         : Result.fail(
             new QueryError({
-              message: `Filter literal ${JSON.stringify(other)} for field "${field}" is not a scalar`,
+              message: `Filter literal ${showJson(other)} for field "${field}" is not a scalar`,
               parameter: `filter[${field}]`,
             })
           )
@@ -975,7 +981,7 @@ const filterOf = (
     const back = fromFilterAst(ast);
     if (Result.isFailure(back)) throw back.failure;
     const next = foldConstants(back.success);
-    if (JSON.stringify(next) === JSON.stringify(predicate)) return Option.some(ast);
+    if (encodeJson(next) === encodeJson(predicate)) return Option.some(ast);
     return settle(next, pass + 1);
   };
   return settle(foldConstants(where), 0);

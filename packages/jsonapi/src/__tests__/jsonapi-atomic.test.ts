@@ -29,6 +29,10 @@ import * as JsonApiSync from "../JsonApiSync.js";
 import { defined } from "./defined.js";
 import { withLayer } from "./with-layer.js";
 
+const JsonText = Schema.fromJsonString(Schema.Unknown);
+const encodeJson = Schema.encodeSync(JsonText);
+const decodeJson = Schema.decodeSync(JsonText);
+
 // A conventional JSON:API surface for `todos`, plus an atomic operations
 // endpoint declared with a plain HttpApiEndpoint: what makes it atomic is its
 // `atomic:operations` payload, not its path or the library that built it.
@@ -61,12 +65,12 @@ interface Recorded {
 const atomicHeaders = { "Content-Type": Atomic.MEDIA_TYPE };
 const jsonHeaders = { "Content-Type": "application/vnd.api+json" };
 const respond = (status: number, document: unknown, headers = atomicHeaders) =>
-  new Response(JSON.stringify(document), { status, headers });
+  new Response(encodeJson(document), { status, headers });
 const empty = (status: number) => new Response(null, { status });
 const readBody = (request: { readonly body: unknown }): any => {
   const b = request.body as { _tag?: string; body?: Uint8Array };
   return b?._tag === "Uint8Array" && b.body
-    ? JSON.parse(new TextDecoder().decode(b.body))
+    ? decodeJson(new TextDecoder().decode(b.body))
     : undefined;
 };
 

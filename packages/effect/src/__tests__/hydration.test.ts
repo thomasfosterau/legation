@@ -26,6 +26,7 @@ import type { PatchOp, PullResponse } from "../Protocol.js";
 import * as Subset from "../Subset.js";
 import * as SyncServer from "../SyncServer.js";
 import { ClientTransport, makeInMemory, ServerHandler } from "../Transport.js";
+import * as Json from "../internal/Json.js";
 
 interface Todo {
   readonly id: string;
@@ -181,7 +182,7 @@ describe("Hydration.dehydrate/hydrate", () => {
       yield* engine.mutate("todo/set", { id: "2", title: "pending", done: false });
 
       const snapshot = yield* Hydration.dehydrate(store);
-      const parsed = JSON.parse(JSON.stringify(snapshot)) as Hydration.Snapshot;
+      const parsed = Json.parse(Json.stringify(snapshot)) as Hydration.Snapshot;
 
       const target = yield* ClientStoreModule.makeMemory;
       yield* Hydration.hydrate(target, parsed);

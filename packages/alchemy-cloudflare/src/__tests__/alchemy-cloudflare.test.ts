@@ -83,6 +83,10 @@ import {
 } from "./harness.js";
 import { TestFailure } from "./test-failure.js";
 
+const JsonText = Schema.fromJsonString(Schema.Unknown);
+const encodeJson = Schema.encodeSync(JsonText);
+const decodeJson = Schema.decodeSync(JsonText);
+
 /** Run an effect that needs the runtime context, as inside a Durable Object event. */
 const inRuntime = <A, E>(effect: Effect.Effect<A, E, RuntimeContext>) =>
   effect.pipe(Effect.provideService(RuntimeContext, runtimeContext));
@@ -456,7 +460,7 @@ const roomTransport = (send: (request: Request) => Effect.Effect<Response>) => {
     send(
       new Request(`https://room${route}`, {
         method: "POST",
-        body: JSON.stringify(body),
+        body: encodeJson(body),
         headers: { "content-type": "application/json" },
       })
     ).pipe(
@@ -642,7 +646,7 @@ describe("rooms + shards, end to end", () => {
           (poke) => poke.room === "room-a" && poke.topics.includes("reviews/productId=p-1")
         );
         expect(socketA.sent.length).toBeGreaterThan(0);
-        expect(JSON.parse(defined(socketA.sent[0]))).toEqual({ type: "poke" });
+        expect(decodeJson(defined(socketA.sent[0]))).toEqual({ type: "poke" });
         // …and (a client honouring the poke pulls) the window converges.
         yield* reader.pull.pipe(Effect.orDie);
         yield* Deferred.await(hasConverged);
@@ -999,7 +1003,7 @@ describe("Room HTTP routes", () => {
         send(
           new Request(`https://room${path}`, {
             method: "POST",
-            body: JSON.stringify({ not: "a request" }),
+            body: encodeJson({ not: "a request" }),
             headers: { "content-type": "application/json" },
           })
         );

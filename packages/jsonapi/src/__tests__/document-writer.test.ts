@@ -15,6 +15,9 @@ import * as DocumentWriter from "../DocumentWriter.js";
 import * as JsonApiQuery from "../JsonApiQuery.js";
 import { defined } from "./defined.js";
 
+const JsonText = Schema.fromJsonString(Schema.Unknown);
+const encodeJson = Schema.encodeSync(JsonText);
+
 // ─── A commerce-shaped graph ─────────────────────────────────────────────────
 
 const categories = Node.make("categories", { attributes: { name: Schema.String } });
@@ -424,8 +427,8 @@ describe("DocumentWriter.collection", () => {
       rows: [row(desk, { variants: [v1] })],
       fields: { products: ["priceCents", "name"] },
     };
-    expect(JSON.stringify(DocumentWriter.collection(input))).toBe(
-      JSON.stringify(DocumentWriter.collection({ ...input }))
+    expect(encodeJson(DocumentWriter.collection(input))).toBe(
+      encodeJson(DocumentWriter.collection({ ...input }))
     );
   });
 });

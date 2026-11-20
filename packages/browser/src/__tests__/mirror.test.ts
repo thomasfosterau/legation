@@ -48,6 +48,9 @@ import * as BroadcastMirrorChannel from "../BroadcastMirrorChannel.js";
 import { defined } from "./defined.js";
 import { TestFailure } from "./test-failure.js";
 
+const JsonText = Schema.fromJsonString(Schema.Unknown);
+const encodeJson = Schema.encodeSync(JsonText);
+
 const TodoArgs = Schema.Struct({
   id: Schema.String,
   title: Schema.String,
@@ -679,7 +682,7 @@ describe("EngineHost.Host.registrations", () => {
             (read) =>
               Effect.gen(function* () {
                 const verdict = yield* coverageOf(read);
-                expect(verdict._tag, JSON.stringify(read)).toBe("Covered");
+                expect(verdict._tag, encodeJson(read)).toBe("Covered");
                 // The host tells the mirror which registrations are pulled, so the Client agrees once it hears.
                 const local = yield* eventually(client.coverageOf(read), (current) =>
                   P.isTagged(current, "Covered")

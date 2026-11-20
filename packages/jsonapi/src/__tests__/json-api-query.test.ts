@@ -35,6 +35,9 @@ import * as JsonApiQuery from "../JsonApiQuery.js";
 import * as JsonApiSync from "../JsonApiSync.js";
 import { defined } from "./defined.js";
 
+const JsonText = Schema.fromJsonString(Schema.Unknown);
+const encodeJson = Schema.encodeSync(JsonText);
+
 // ─── A commerce-shaped node graph, plus the harness's corpus table ──────────
 
 const categories = Node.make("categories", {
@@ -428,7 +431,7 @@ const makeServer = (seed: ReadonlyArray<Stored>) => {
       });
       return HttpClientResponse.fromWeb(
         request,
-        new Response(JSON.stringify({ data: rows }), { status: 200, headers })
+        new Response(encodeJson({ data: rows }), { status: 200, headers })
       );
     })
   );

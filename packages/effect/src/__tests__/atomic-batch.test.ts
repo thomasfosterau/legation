@@ -31,6 +31,7 @@ import * as SyncServer from "../SyncServer.js";
 import { ClientTransport, makeInMemory } from "../Transport.js";
 import { defined } from "./defined.js";
 import { TestFailure } from "./test-failure.js";
+import * as Json from "../internal/Json.js";
 
 // ─── Harness ─────────────────────────────────────────────────────────────────
 
@@ -235,7 +236,7 @@ describe("the atomic batch on the key-value store", () => {
       expect(writes).toEqual(keys);
       // The cookie and the row values are what the pull carried, the last write of `a` winning.
       expect(data.get("legation/cookie")).toBe("cookie-1");
-      expect(JSON.parse(data.get(ROW_A) ?? "null")).toEqual({
+      expect(Json.parse(data.get(ROW_A) ?? "null")).toEqual({
         id: "a",
         version: 1,
         value: { id: "a", n: 3 },
@@ -403,7 +404,7 @@ describe("the atomic batch on the key-value store", () => {
         // A later row write finishes whatever is still outstanding.
         yield* store.putRow("counters", { id: "c", version: 1, value: { id: "c", n: 0 } });
 
-        expect(JSON.parse(data.get(ROW_A) ?? "null")).toMatchObject({ value: { n: 2 } });
+        expect(Json.parse(data.get(ROW_A) ?? "null")).toMatchObject({ value: { n: 2 } });
         expect(data.get("legation/cookie")).toBe("k2");
         expect(data.has(RECORD)).toBe(false);
       })
