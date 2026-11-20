@@ -377,7 +377,8 @@ const declaredFilterable = (
 ): Record<string, FilterPolicy.FilterableInput> => {
   const declared: Record<string, FilterPolicy.FilterableInput> = {};
   const attributes = resource.fields.attributes.fields;
-  const entries = Object.entries(Resource.filterable(resource)) as Array<[string, DeclaredField]>;
+  const filterable: Readonly<Record<string, DeclaredField>> = Resource.filterable(resource);
+  const entries = R.toEntries(filterable);
   entries.forEach(([key, entry]) => {
     const edge = edges[key];
     const viaRelationship = attributes[key] === undefined && edge?.kind === "one";

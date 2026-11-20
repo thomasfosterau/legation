@@ -470,6 +470,21 @@ describe("an id that has left the journal is never reissued", () => {
   });
 });
 
+const d = (clientId = "c") => ({ clientId, mutator: "noop", args: {}, createdAt: 0 });
+
+/** Fork both, then join: each runs as its own fiber so they interleave at yields. */
+const race = <A, B, E>(a: Effect.Effect<A, E>, b: Effect.Effect<B, E>) =>
+  Effect.gen(function* () {
+    const fa = yield* Effect.forkChild(a);
+    const fb = yield* Effect.forkChild(b);
+    yield* Fiber.join(fa);
+    yield* Fiber.join(fb);
+  });
+
+const key = (x: { clientId: string; mutationId: number }) => `${x.clientId}:${x.mutationId}`;
+
+const m = (mutationId: number, clientId = "c") => ({ ...d(clientId), mutationId });
+
 /**
  * Every memory-store operation that writes the journal, the quarantine or the
  * counters holds the same permit. `acknowledge` and
@@ -479,18 +494,7 @@ describe("an id that has left the journal is never reissued", () => {
  * every round on the unlocked code.
  */
 describeWrapped("memory store: journal writers exclude one another", (it) => {
-  const d = (clientId = "c") => ({ clientId, mutator: "noop", args: {}, createdAt: 0 });
-  const m = (mutationId: number, clientId = "c") => ({ ...d(clientId), mutationId });
   const rounds = 50;
-  /** Fork both, then join: each runs as its own fiber so they interleave at yields. */
-  const race = <A, B, E>(a: Effect.Effect<A, E>, b: Effect.Effect<B, E>) =>
-    Effect.gen(function* () {
-      const fa = yield* Effect.forkChild(a);
-      const fb = yield* Effect.forkChild(b);
-      yield* Fiber.join(fa);
-      yield* Fiber.join(fb);
-    });
-  const key = (x: { clientId: string; mutationId: number }) => `${x.clientId}:${x.mutationId}`;
 
   it.live("acknowledge never loses a concurrent releaseQuarantine", () =>
     Effect.gen(function* () {
@@ -498,12 +502,9 @@ describeWrapped("memory store: journal writers exclude one another", (it) => {
       for (let round = 0; round < rounds; round++) {
         const store = yield* ClientStoreModule.makeMemory;
         yield* store.appendMutation(m(1, "x"));
-        yield* store.quarantinePending("A" as Identity.Fingerprint);
+        yield* store.quarantinePending("A");
         yield* store.appendMutation(m(1));
-        yield* race(
-          store.acknowledge("c", 1),
-          store.releaseQuarantine("A" as Identity.Fingerprint)
-        );
+        yield* race(store.acknowledge("c", 1), store.releaseQuarantine("A"));
         if (!(yield* store.pendingMutations).map(key).includes("x:1")) lost++;
       }
       expect(lost).toBe(0);
@@ -530,13 +531,10 @@ describeWrapped("memory store: journal writers exclude one another", (it) => {
       for (let round = 0; round < rounds; round++) {
         const store = yield* ClientStoreModule.makeMemory;
         yield* store.appendMutation(m(1));
-        yield* race(
-          store.quarantinePending("A" as Identity.Fingerprint),
-          store.appendMutation(m(2))
-        );
+        yield* race(store.quarantinePending("A"), store.appendMutation(m(2)));
         // The new entry is either still pending or was quarantined with the
         // rest; it must exist in one of the two.
-        const held = (yield* store.quarantinedMutations("A" as Identity.Fingerprint)).map(key);
+        const held = (yield* store.quarantinedMutations("A")).map(key);
         const pending = (yield* store.pendingMutations).map(key);
         if (![...held, ...pending].includes("c:2")) lost++;
       }

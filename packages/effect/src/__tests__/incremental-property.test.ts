@@ -366,13 +366,14 @@ const changeBatchOf = <A>(delta: Incremental.Delta<A>): ReadonlyArray<RowChange<
   return changes;
 };
 
+const makeValue = (r: () => number) => ({ n: Math.floor(r() * 10) });
+
 /** `null` if every step of one seed matched, else a description of the first divergence. */
 const runDeltaFromChangesSession = (seed: number, steps: number): string | null => {
   const rng = mulberry32(seed);
   const ground = new Map<string, Row<{ readonly n: number }>>();
   const known = new Map<string, Row<{ readonly n: number }>>();
   const ids = ["a", "b", "c", "d", "e", "f"];
-  const makeValue = (r: () => number) => ({ n: Math.floor(r() * 10) });
   for (let step = 0; step < steps; step++) {
     // Occasionally exercise `reset` (a Rebuild/gap-collapse batch) instead of
     // a single-row delta.
@@ -425,7 +426,6 @@ describe("Incremental.deltaFromChanges — equivalent to diffing pages, not just
       const operator = Incremental.makeFilter(geFive);
       const result = new Map<string, Row<{ readonly n: number }>>();
       const ids = ["a", "b", "c", "d", "e", "f"];
-      const makeValue = (r: () => number) => ({ n: Math.floor(r() * 10) });
       for (let step = 0; step < 150; step++) {
         const delta = stepGround(rng, ground, ids, makeValue, 0.2);
         const batch = changeBatchOf(delta);

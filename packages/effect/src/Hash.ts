@@ -13,10 +13,9 @@ import * as P from "effect/Predicate";
 const canonical = (value: unknown): string => {
   if (!P.isObjectOrArray(value)) return JSON.stringify(value) ?? "null";
   if (Array.isArray(value)) return `[${value.map(canonical).join(",")}]`;
-  const record = value as Record<string, unknown>;
-  return `{${Object.keys(record)
+  return `{${Object.keys(value)
     .toSorted()
-    .map((key) => `${JSON.stringify(key)}:${canonical(record[key])}`)
+    .map((key) => `${JSON.stringify(key)}:${canonical(value[key])}`)
     .join(",")}}`;
 };
 

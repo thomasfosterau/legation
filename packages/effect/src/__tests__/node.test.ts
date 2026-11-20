@@ -31,7 +31,7 @@ const Category = Node.make("categories", {
 });
 
 const Product = Node.make("products", {
-  attributes: { name: Schema.String, priceCents: Schema.Number },
+  attributes: { name: Schema.String, priceCents: Schema.Finite },
   edges: {
     category: Edge.one("categories", { via: "categoryId" }),
     reviews: Edge.paginated("reviews", { inverse: "product", order: ["-createdAt"] }),

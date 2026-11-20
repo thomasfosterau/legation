@@ -255,9 +255,7 @@ const rootLimit = (read: Read): number | undefined =>
 const compileWhere = (where: Read["where"]): Predicate.Predicate => {
   if (where === undefined) return Predicate.always;
   if ("_tag" in where) return where as Predicate.Predicate;
-  const terms = Object.entries(where).map(([field, value]) =>
-    Predicate.eq(field, value as Predicate.Literal)
-  );
+  const terms = Object.entries(where).map(([field, value]) => Predicate.eq(field, value));
   const only = terms[0];
   return terms.length === 1 && only !== undefined ? only : Predicate.and(...terms);
 };
@@ -339,8 +337,8 @@ const edgeOrder =
   (a, b) => {
     // The first term whose fields differ decides; equal on every term is a tie.
     const decided = Arr.findFirst(edgePlan.order, (term) => {
-      const left = (a as Record<string, unknown>)[term.field] as string | number;
-      const right = (b as Record<string, unknown>)[term.field] as string | number;
+      const left = Predicate.fieldValue(a, term.field) as string | number;
+      const right = Predicate.fieldValue(b, term.field) as string | number;
       if (left === right) return Option.none();
       const ascending = left < right;
       return Option.some<-1 | 0 | 1>(

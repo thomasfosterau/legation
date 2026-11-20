@@ -28,7 +28,7 @@ const categories = Node.make("categories", {
 });
 const sellers = Node.make("sellers", { id: "handle", attributes: { handle: Schema.String } });
 const products = Node.make("products", {
-  attributes: { name: Schema.String, priceCents: Schema.Number },
+  attributes: { name: Schema.String, priceCents: Schema.Finite },
   edges: {
     category: Edge.one("categories", { via: "categoryId" }),
     seller: Edge.one("sellers", { via: "sellerHandle" }),
@@ -37,7 +37,7 @@ const products = Node.make("products", {
   sortable: ["name"],
 });
 const reviews = Node.make("reviews", {
-  attributes: { rating: Schema.Number },
+  attributes: { rating: Schema.Finite },
   edges: { product: Edge.one("products", { via: "productId" }) },
 });
 
@@ -93,6 +93,13 @@ declare const valueOf: <A>(effect: Effect.Effect<A, unknown>) => A;
 const compileOnly = (assertions: () => void): void => {
   expect(assertions).toBeTypeOf("function");
 };
+
+// Inside the helper, `R` is already checked, so the inner call is told it
+// rather than re-inferring (and re-checking) the intersection.
+const firstOf = <const R extends Query.Read>(read: R & Query.Validate<Graph, R>) =>
+  Effect.map(client.query<R>(read), (rows) => rows[0]);
+
+const either = (flag: boolean) => (flag ? allProducts : allSellers);
 
 describe("typed reads", () => {
   it("as const satisfies Query.Read keeps the literal collection, include keys and order", () => {
@@ -242,7 +249,7 @@ describe("typed reads", () => {
         sellers,
         reviews,
         Node.make("products", {
-          attributes: { title: Schema.String, priceCents: Schema.Number },
+          attributes: { title: Schema.String, priceCents: Schema.Finite },
           edges: {
             category: Edge.one("categories", { via: "categoryId" }),
             vendor: Edge.one("sellers", { via: "sellerHandle" }),
@@ -260,10 +267,6 @@ describe("typed reads", () => {
 
   it("a generic helper forwards a checked read with its type argument", () =>
     compileOnly(() => {
-      // Inside the helper, `R` is already checked, so the inner call is told it
-      // rather than re-inferring (and re-checking) the intersection.
-      const firstOf = <const R extends Query.Read>(read: R & Query.Validate<Graph, R>) =>
-        Effect.map(client.query<R>(read), (rows) => rows[0]);
       void Effect.map(firstOf(allProducts), (row) => {
         const seller: SellerRow | null | undefined = row?.related.seller;
         // @ts-expect-error the wrapper's rows carry only the included edges
@@ -292,7 +295,6 @@ describe("typed reads", () => {
       void client.query({ collection: "products", where: Predicate.eq(field, "Lamp") });
       void client.query({ collection: "products", where, order });
       // A read whose type is a union resolves to the union of its rows.
-      const either = (flag: boolean) => (flag ? allProducts : allSellers);
       const mixed = rowOf(client.query(either(true)));
       expectTypeOf(mixed.value).toEqualTypeOf<ProductRow | SellerRow>();
     }));

@@ -56,6 +56,7 @@ import {
   HintSource,
   Subset,
 } from "@thomasfosterau/legation/internal";
+import type { SqlBackend } from "@thomasfosterau/legation/sql";
 import * as D1Executor from "../D1Executor.js";
 import * as DurableFanoutBroker from "../DurableFanoutBroker.js";
 import * as DurableCvrStore from "../DurableCvrStore.js";
@@ -143,7 +144,7 @@ describe("FanoutShard", () => {
 });
 
 /** A raw D1 binding over canned rows, recording each statement it runs. */
-const makeRawD1 = (rows: ReadonlyArray<Record<string, unknown>>, fail = false) => {
+const makeRawD1 = (rows: ReadonlyArray<SqlBackend.SqlRow>, fail = false) => {
   const statements: Array<{ readonly sql: string; readonly params: ReadonlyArray<unknown> }> = [];
   const raw = fakeBinding<cf.D1Database>({
     prepare: (sql: string) => {
@@ -209,6 +210,11 @@ describe("D1Executor", () => {
   );
 });
 
+const roomIdOf = (request: HttpServerRequest.HttpServerRequest) =>
+  Effect.succeed(
+    Option.fromNullishOr(new URL(request.url, "https://app").searchParams.get("user"))
+  );
+
 describe("routeSync", () => {
   // The stub answers which room was addressed and the path it was given.
   const stubRooms = fakeBinding<Workers.DurableObject<Room.RoomObject>>({
@@ -217,10 +223,6 @@ describe("routeSync", () => {
         Effect.succeed(HttpServerResponse.jsonUnsafe({ room: name, path: request.url })),
     }),
   });
-  const roomIdOf = (request: HttpServerRequest.HttpServerRequest) =>
-    Effect.succeed(
-      Option.fromNullishOr(new URL(request.url, "https://app").searchParams.get("user"))
-    );
   const route = (path: string, basePath?: string) =>
     routeSync({ rooms: stubRooms, roomIdOf, basePath }).pipe(
       Effect.provideService(

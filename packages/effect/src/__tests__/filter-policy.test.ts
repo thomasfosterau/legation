@@ -34,7 +34,7 @@ const Product = Node.make("products", {
   attributes: {
     name: Schema.String,
     priceCents: Schema.Int,
-    rating: Schema.Number,
+    rating: Schema.Finite,
     archived: Schema.Boolean,
     status: Schema.Literals(["draft", "live"]),
     createdAt: Schema.String,
@@ -590,7 +590,7 @@ describe("FilterPolicy: on SyncServer", () => {
     Effect.scoped(
       Effect.gen(function* () {
         const { backend, evaluations } = yield* recordingBackend;
-        const topRated = Query.named("products/topRated", Schema.Struct({ min: Schema.Number }));
+        const topRated = Query.named("products/topRated", Schema.Struct({ min: Schema.Finite }));
         const server = yield* Server.make({
           backend,
           auth: {

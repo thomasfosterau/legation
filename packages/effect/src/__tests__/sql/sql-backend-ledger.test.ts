@@ -52,8 +52,8 @@ const DDL_WITHOUT_REJECTIONS: ReadonlyArray<string> = [
 ];
 
 /** Run `use` against a fresh in-memory SQLite database with the given schema (default: `DDL`). */
-const withDatabase = <A>(
-  use: (sql: SqlClient) => Effect.Effect<A, unknown>,
+const withDatabase = <A, E>(
+  use: (sql: SqlClient) => Effect.Effect<A, E>,
   schema: ReadonlyArray<string> = DDL
 ) =>
   Effect.scoped(

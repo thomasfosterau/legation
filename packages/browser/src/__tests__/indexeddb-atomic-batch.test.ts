@@ -45,7 +45,7 @@ const wrapStore = (store: IDBObjectStore): IDBObjectStore =>
           }
           const key = (value as { key?: unknown } | undefined)?.key;
           if (P.isString(key)) tally.putKeys.push(key);
-          return target.put(value as never);
+          return target.put(value);
         };
       }
       return passThrough(target, prop);

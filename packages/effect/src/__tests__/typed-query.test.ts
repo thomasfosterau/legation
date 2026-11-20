@@ -15,6 +15,7 @@ import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
 import * as Ref from "effect/Ref";
+import type * as Scope from "effect/Scope";
 import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
 import * as Authorization from "../Authorization.js";
@@ -30,7 +31,7 @@ import * as InvalidationBus from "../InvalidationBus.js";
 import * as MemoryBackend from "../MemoryBackend.js";
 import * as Mutator from "../Mutator.js";
 import * as Predicate from "../Predicate.js";
-import type { PullRequest, PullResponse, PushResponse } from "../Protocol.js";
+import type { PullRequest, PullResponse } from "../Protocol.js";
 import * as Query from "../Query.js";
 import * as Subset from "../Subset.js";
 import * as SyncRoom from "../SyncRoom.js";
@@ -60,7 +61,7 @@ const backendHandlers: Record<string, MemoryBackend.BackendHandler> = {
   "todo/set": (args, writer) => Effect.asVoid(writer.put("todos", (args as Todo).id, args)),
 };
 
-const makeServer: Effect.Effect<ServerHandler, never, any> = Effect.gen(function* () {
+const makeServer: Effect.Effect<ServerHandler, never, Scope.Scope> = Effect.gen(function* () {
   const backend = yield* MemoryBackend.make(backendHandlers);
   return yield* SyncServer.make.pipe(
     Effect.provideService(Backend, backend),
@@ -136,7 +137,7 @@ describe("canonical arg keys", () => {
 
   it.effect("reordered named-subscription args collapse to one subscription entry", () =>
     Effect.gen(function* () {
-      const QueryArgs = Schema.Struct({ isDone: Schema.Boolean, limit: Schema.Number });
+      const QueryArgs = Schema.Struct({ isDone: Schema.Boolean, limit: Schema.Finite });
       const byDone = Query.make("todos/byDone", QueryArgs);
       const queries = Query.registry([
         {
@@ -152,7 +153,7 @@ describe("canonical arg keys", () => {
 
       const pulls: Array<PullRequest> = [];
       const recordingTransport: ClientTransport = {
-        push: () => Effect.succeed({ lastMutationIds: {} } as PushResponse),
+        push: () => Effect.succeed({ lastMutationIds: {} }),
         pull: (request) =>
           Effect.sync(() => {
             pulls.push(request);

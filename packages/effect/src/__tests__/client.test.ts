@@ -280,6 +280,16 @@ const pulled = (engine: ClientEngine.ClientEngine) => engine.pull.pipe(Effect.or
 const rootHashes = (engine: ClientEngine.ClientEngine) =>
   Effect.map(engine.activeSubscriptions, (subsets) => subsets.map(Subset.hash));
 
+const perParent = (id: string) =>
+  Subset.hash(
+    Subset.make({
+      collection: "reviews",
+      where: Predicate.eq("productId", id),
+      orderBy: [{ field: "createdAt", direction: "desc" }],
+      limit: 2,
+    })
+  );
+
 describe("Client.query coverage (ADR-0029: conjunct subsumption with strict windows)", () => {
   it.effect("the shell's windowed subscription does not cover productPage({ categoryId })", () =>
     Effect.scoped(
@@ -381,15 +391,6 @@ describe("Client.query coverage (ADR-0029: conjunct subsumption with strict wind
         const root = Query.plan(nodes, pinned).root;
         // The root window AND one per-parent review window (ADR-0024) are
         // registered with the engine — the same registration `observe` runs.
-        const perParent = (id: string) =>
-          Subset.hash(
-            Subset.make({
-              collection: "reviews",
-              where: Predicate.eq("productId", id),
-              orderBy: [{ field: "createdAt", direction: "desc" }],
-              limit: 2,
-            })
-          );
         const registered = yield* eventually(rootHashes(engine), (hashes) => hashes.length === 3);
         expect(new Set(registered)).toEqual(
           new Set([Subset.hash(root), perParent("p-1"), perParent("p-2")])

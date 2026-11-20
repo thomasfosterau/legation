@@ -18,7 +18,6 @@ import * as ClientStoreModule from "../ClientStore.js";
 import { ClientStore } from "../ClientStore.js";
 import * as CollectionIndex from "../CollectionIndex.js";
 import { StoreError } from "../Errors.js";
-import type * as Identity from "../Identity.js";
 import * as Hydration from "../Hydration.js";
 import * as Mutator from "../Mutator.js";
 import * as Predicate from "../Predicate.js";
@@ -638,11 +637,11 @@ describe("ClientEngine + CollectionIndex", () => {
       const store = yield* ClientStoreModule.makeMemory;
       const engine = yield* priorityEngine(store);
       const where = Predicate.eq("priority", 3);
-      yield* engine.reset("sha256:alice" as Identity.Fingerprint);
+      yield* engine.reset("sha256:alice");
       yield* seedEngine(engine, [{ id: "i1", priority: 3, done: false }]);
       expect((yield* engine.query(Subset.make({ collection: "items", where }))).length).toBe(1);
 
-      yield* engine.reset("sha256:bob" as Identity.Fingerprint);
+      yield* engine.reset("sha256:bob");
       expect(yield* store.listRows("items")).toEqual([]);
       // Whatever index the next query consults must not name the dropped row.
       const consulted = vi.spyOn(CollectionIndex, "evaluate");
@@ -742,7 +741,7 @@ describe("ClientEngine + CollectionIndex", () => {
             if (stored.id === "i2" && (yield* Ref.get(armed))) {
               return yield* new StoreError({ message: "write refused" });
             }
-            yield* memory.putRow(collection, stored);
+            return yield* memory.putRow(collection, stored);
           }),
       });
       const engine = yield* priorityEngine(store);

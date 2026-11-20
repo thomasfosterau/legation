@@ -140,8 +140,41 @@ export interface SubscriptionsOptions {
 export const make = (
   engine: ClientEngine,
   options?: SubscriptionsOptions
-): Effect.Effect<Subscriptions, never, Scope.Scope> =>
-  Effect.gen(function* () {
+): Effect.Effect<Subscriptions, never, Scope.Scope> => {
+  // A window's own lifecycle, deliberately NOT routed through `acquireKey`'s
+  // hash-keyed `entries` map: `retarget` changes the subset's `limit`/
+  // `cursor` (and so its hash) over the observation's lifetime, which the
+  // refcounted map has no way to track (it would either leak the original
+  // entry or, worse, silently release a DIFFERENT acquirer's subscription
+  // that happens to now share the retargeted hash). `currentRef` tracks
+  // this window's own current subset so `release` unsubscribes the right
+  // one regardless of how many times it was retargeted.
+  const acquireWindow = (
+    subset: Subset.Subset
+  ): Effect.Effect<WindowHandle, StoreError | MutatorError, Scope.Scope> =>
+    Effect.gen(function* () {
+      yield* engine.subscribe(subset);
+      const currentRef = yield* Ref.make(subset);
+      const observation = yield* engine.observeWindow(subset);
+      const retarget: WindowHandle["retarget"] = (window) =>
+        observation.retarget(window).pipe(
+          Effect.andThen(
+            Ref.update(currentRef, (current): Subset.Subset => ({
+              ...current,
+              ...Defined.fields({ limit: window.limit, cursor: window.cursor }),
+            }))
+          )
+        );
+      let released = false;
+      const release = Effect.suspend(() => {
+        if (released) return Effect.void;
+        released = true;
+        return Ref.get(currentRef).pipe(Effect.flatMap((current) => engine.unsubscribe(current)));
+      });
+      return { rows: observation.rows, retarget, release };
+    });
+
+  return Effect.gen(function* () {
     const ttl = options?.ttl ?? Duration.minutes(5);
     const scope = yield* Effect.scope;
     const lock = yield* Semaphore.make(1);
@@ -220,39 +253,6 @@ export const make = (
         engine.unsubscribeQuery(name, args).pipe(Effect.orDie)
       );
 
-    // A window's own lifecycle, deliberately NOT routed through `acquireKey`'s
-    // hash-keyed `entries` map: `retarget` changes the subset's `limit`/
-    // `cursor` (and so its hash) over the observation's lifetime, which the
-    // refcounted map has no way to track (it would either leak the original
-    // entry or, worse, silently release a DIFFERENT acquirer's subscription
-    // that happens to now share the retargeted hash). `currentRef` tracks
-    // this window's own current subset so `release` unsubscribes the right
-    // one regardless of how many times it was retargeted.
-    const acquireWindow = (
-      subset: Subset.Subset
-    ): Effect.Effect<WindowHandle, StoreError | MutatorError, Scope.Scope> =>
-      Effect.gen(function* () {
-        yield* engine.subscribe(subset);
-        const currentRef = yield* Ref.make(subset);
-        const observation = yield* engine.observeWindow(subset);
-        const retarget: WindowHandle["retarget"] = (window) =>
-          observation.retarget(window).pipe(
-            Effect.andThen(
-              Ref.update(currentRef, (current): Subset.Subset => ({
-                ...current,
-                ...Defined.fields({ limit: window.limit, cursor: window.cursor }),
-              }))
-            )
-          );
-        let released = false;
-        const release = Effect.suspend(() => {
-          if (released) return Effect.void;
-          released = true;
-          return Ref.get(currentRef).pipe(Effect.flatMap((current) => engine.unsubscribe(current)));
-        });
-        return { rows: observation.rows, retarget, release };
-      });
-
     return {
       acquire,
       acquireWindow,
@@ -261,3 +261,4 @@ export const make = (
       preloadQuery: (name, args) => Effect.asVoid(acquireQuery(name, args)),
     };
   });
+};

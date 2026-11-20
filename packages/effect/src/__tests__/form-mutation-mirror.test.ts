@@ -39,7 +39,7 @@ const increment = Mutator.make("counter/inc", counterArgs);
 // The backend refuses it; the client's local handler still applies it.
 const refuse = Mutator.make("counter/refuse", counterArgs);
 
-const Counter = Schema.Struct({ id: Schema.String, n: Schema.Number });
+const Counter = Schema.Struct({ id: Schema.String, n: Schema.Finite });
 const asCounter = Schema.decodeUnknownOption(Counter);
 const incremented = (id: string, current: Option.Option<typeof Counter.Type>) => ({
   id,
@@ -50,7 +50,7 @@ const incremented = (id: string, current: Option.Option<typeof Counter.Type>) =>
 // encoded, not encode it a second time.
 const add = Mutator.make(
   "counter/add",
-  Schema.Struct({ id: Schema.String, by: Schema.NumberFromString })
+  Schema.Struct({ id: Schema.String, by: Schema.FiniteFromString })
 );
 // Known to one mirror's registry but not to the host's engine.
 const unknownToHost = Mutator.make("counter/unknown", counterArgs);
@@ -86,7 +86,7 @@ const widerMutators = Mutator.registry([
   },
 ]);
 
-const nodes = Node.registry([Node.make("counters", { attributes: { n: Schema.Number } })]);
+const nodes = Node.registry([Node.make("counters", { attributes: { n: Schema.Finite } })]);
 const countersSubset = Subset.make({ collection: "counters" });
 const form = { clientId: "form-1", mutationId: 1 } as const;
 

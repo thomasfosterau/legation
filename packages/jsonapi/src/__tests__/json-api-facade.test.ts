@@ -48,7 +48,7 @@ import { defined } from "./defined.js";
 
 const categories = Node.make("categories", { attributes: { name: Schema.String } });
 const products = Node.make("products", {
-  attributes: { name: Schema.String, priceCents: Schema.Number },
+  attributes: { name: Schema.String, priceCents: Schema.Finite },
   edges: {
     category: Edge.one("categories", { via: "categoryId" }),
     variants: Edge.many("variants", { inverse: "product" }),
@@ -64,7 +64,7 @@ const nodes = Node.registry([categories, products, variants]);
 
 interface SeedRow {
   readonly id: string;
-  readonly [field: string]: unknown;
+  readonly [field: string]: Schema.Json;
 }
 
 const seed: Readonly<Record<string, ReadonlyArray<SeedRow>>> = {

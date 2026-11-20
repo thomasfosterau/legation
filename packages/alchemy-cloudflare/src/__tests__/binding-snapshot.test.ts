@@ -113,6 +113,9 @@ interface Api {
   readonly rooms: ReadonlySet<string>;
 }
 
+const badRequest = (error: TransportError | VersionNotSupportedError) =>
+  Effect.succeed(new Response(JSON.stringify({ error: error.message }), { status: 400 }));
+
 /**
  * The API Worker: one sync server per room (its own CVR store), all over one
  * shared backend, behind the real `routeSync`. An unauthenticated caller falls
@@ -153,8 +156,6 @@ const makeApi: Effect.Effect<Api, never, Scope.Scope> = Effect.gen(function* () 
     const handler = await runtime.runPromise(handlerFor(room));
     const path = routeOf(new URL(request.url).pathname);
     const body: unknown = await request.json();
-    const badRequest = (error: TransportError | VersionNotSupportedError) =>
-      Effect.succeed(new Response(JSON.stringify({ error: error.message }), { status: 400 }));
     const answer = (effect: Effect.Effect<unknown, TransportError | VersionNotSupportedError>) =>
       runtime.runPromise(
         effect.pipe(

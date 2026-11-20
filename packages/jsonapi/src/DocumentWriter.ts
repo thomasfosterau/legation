@@ -61,7 +61,6 @@
 import { Defined } from "@thomasfosterau/legation/internal";
 import { Handlers } from "@thomasfosterau/effect-jsonapi";
 import * as Option from "effect/Option";
-import * as P from "effect/Predicate";
 import * as R from "effect/Record";
 import * as Result from "effect/Result";
 import { type Node, Predicate, type Query } from "@thomasfosterau/legation";
@@ -164,12 +163,8 @@ export interface Input {
 
 // ─── Row helpers (shared with the linkage derivation) ────────────────────────
 
-/** A row value as a record (a node row always is one). */
-const recordOf = (value: unknown): Readonly<Record<string, unknown>> =>
-  P.isObjectOrArray(value) ? (value as Record<string, unknown>) : {};
-
 /** The row id a row value carries (node rows carry `id` in the value). */
-export const idOf = (value: unknown): string => String(recordOf(value)["id"]);
+export const idOf = (value: unknown): string => String(Predicate.fieldValue(value, "id"));
 
 /** A resolved edge's value as its rows: a list as it is, a single row alone, `null` / `undefined` as none. */
 export const relatedValuesOf = (value: Related.RelatedValue): ReadonlyArray<unknown> =>
@@ -193,9 +188,9 @@ const envOf = (input: Input): Env => ({
 });
 
 /** The node's declared attributes off the row value, in declaration order; absent ones are left out. */
-const attributesOf = (node: Node.AnyNode, value: Readonly<Record<string, unknown>>) => {
+const attributesOf = (node: Node.AnyNode, value: unknown) => {
   return R.filterMap(node.attributes, (_, field) => {
-    const attribute = value[field];
+    const attribute = Predicate.fieldValue(value, field);
     return attribute === undefined ? Result.failVoid : Result.succeed(attribute);
   });
 };
@@ -237,7 +232,7 @@ const relationshipOf = (
   const edge = node.edges[name];
   if (edge === undefined) return Option.none();
   if (edge.kind === "one") {
-    const key = recordOf(row.value)[edge.via];
+    const key = Predicate.fieldValue(row.value, edge.via);
     return Option.some({
       data: key === undefined || key === null ? null : { type: edge.target, id: String(key) },
     });
@@ -266,7 +261,7 @@ const resourceOf = (env: Env, node: Node.AnyNode, row: Row): ResourceValue => {
   return {
     type: node.type,
     id: row.id,
-    attributes: attributesOf(node, recordOf(row.value)),
+    attributes: attributesOf(node, row.value),
     ...Defined.fields({
       relationships: R.isEmptyReadonlyRecord(relationships) ? undefined : relationships,
     }),

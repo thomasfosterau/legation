@@ -204,7 +204,7 @@ const bindAll = (
 };
 
 const descriptorsOf = (resource: Resource.Any): Readonly<Record<string, Relationship.Descriptor>> =>
-  resource.relationships as Readonly<Record<string, Relationship.Descriptor>>;
+  resource.relationships;
 
 /** The types a resource's document can carry: its own and its relationships' targets. */
 const carriedTypes = (resource: Resource.Any): ReadonlyArray<string> => [

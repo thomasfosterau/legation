@@ -552,6 +552,16 @@ const noUrlReads = (url: string): QueryError =>
     query: url,
   });
 
+const noBoundary = <A>(): Effect.Effect<A, StoreError> =>
+  Effect.fail(
+    new StoreError({
+      message:
+        "Client.reset: this Client is connected to an engine hosted elsewhere " +
+        "(Client.connect), which owns the durable replica. Reset the Client that " +
+        "owns the engine — in the service worker or other host — instead.",
+    })
+  );
+
 /**
  * Build a Client over any view. The window ledger lives here, so however
  * many observers a window has — and however the view refcounts — the
@@ -715,16 +725,6 @@ export const fromView = <Graph extends Node.NodeRegistry>(
       );
     })
   );
-
-  const noBoundary = <A>(): Effect.Effect<A, StoreError> =>
-    Effect.fail(
-      new StoreError({
-        message:
-          "Client.reset: this Client is connected to an engine hosted elsewhere " +
-          "(Client.connect), which owns the durable replica. Reset the Client that " +
-          "owns the engine — in the service worker or other host — instead.",
-      })
-    );
 
   const boundary = view.identityBoundary;
 
@@ -1004,9 +1004,9 @@ export const fromView = <Graph extends Node.NodeRegistry>(
     // which is this Client's own `nodes`: the trust the engine's typed reads
     // place in rows that passed the row schema on write (ADR-0014). The read
     // itself is checked against the same graph at the call (`Query.Validate`).
-    query: queryOnce as QueryOf<Graph>,
+    query: queryOnce,
     // SAFETY: as `query`: the same plan over the same graph, streamed.
-    observe: observe as ObserveOf<Graph>,
+    observe,
     answer: answerOnce,
     observeAnswers,
     subscribe: (input) =>

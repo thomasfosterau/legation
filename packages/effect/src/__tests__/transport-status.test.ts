@@ -327,11 +327,11 @@ const awaitSeen = (
 ) =>
   Effect.gen(function* () {
     for (let turn = 0; turn < maxTurns; turn++) {
-      if ((yield* Ref.get(seen)).length >= count) return;
+      if ((yield* Ref.get(seen)).length >= count) return undefined;
       yield* Effect.yieldNow;
     }
     const all = yield* Ref.get(seen);
-    if (all.length >= count) return;
+    if (all.length >= count) return undefined;
     return yield* Effect.die(
       new TestFailure({
         message: `awaitSeen: ${count} statuses never arrived in ${maxTurns} turns; saw ${all.join()}`,

@@ -251,7 +251,7 @@ export const fromLayer = (
 
   return {
     runtime,
-    liveQuery: liveQuery as EngineAtoms["liveQuery"],
+    liveQuery,
     namedQuery,
     aggregate,
     aggregateGrouped,

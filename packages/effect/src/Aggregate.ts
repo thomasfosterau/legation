@@ -30,14 +30,16 @@ export type Aggregate =
   | { readonly _tag: "Count" }
   | { readonly _tag: "Sum" | "Min" | "Max" | "Avg"; readonly field: string };
 
-/** Wire codec for {@link Aggregate} — a union of tagged structs (mirrors `PredicateSchema`). */
-export const AggregateSchema: Schema.Codec<Aggregate> = Schema.Union([
+const aggregateCodec = Schema.Union([
   Schema.Struct({ _tag: Schema.tag("Count") }),
   Schema.Struct({
     _tag: Schema.Literals(["Sum", "Min", "Max", "Avg"]),
     field: Schema.String,
   }),
-]) as Schema.Codec<Aggregate>;
+]);
+
+/** Wire codec for {@link Aggregate} — a union of tagged structs (mirrors `PredicateSchema`). */
+export const AggregateSchema: Schema.Codec<Aggregate> = aggregateCodec;
 
 // ─── Constructors ────────────────────────────────────────────────────────────
 

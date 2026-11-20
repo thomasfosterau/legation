@@ -81,7 +81,7 @@ const declared = (resource: Resource.Any, name: string): string =>
 const descriptorsOf = (
   resource: Resource.Any
 ): ReadonlyArray<readonly [string, Relationship.Descriptor]> =>
-  Object.entries(resource.relationships) as ReadonlyArray<[string, Relationship.Descriptor]>;
+  Object.entries(resource.relationships);
 
 /** One declared relationship checked against the node's edge of that name: same name, same arity, same target. */
 const checkDeclaration = (
@@ -273,7 +273,7 @@ const assignLinkage = (
     query.parents.forEach((parent) => bucket(query.type, parent, query.edge));
     fetched.forEach((row) => {
       if (row.collection !== query.collection) return;
-      const parent = String((row.value as Record<string, unknown>)[query.field]);
+      const parent = String(Predicate.fieldValue(row.value, query.field));
       if (query.parents.has(parent)) bucket(query.type, parent, query.edge).push(row.value);
     });
   });

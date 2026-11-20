@@ -29,16 +29,12 @@ export const make = (
         }),
       subscribe: Effect.gen(function* () {
         const queue = yield* Queue.unbounded<unknown>();
+        const listener = (event: MessageEvent) => {
+          Queue.offerUnsafe(queue, event.data);
+        };
         yield* Effect.acquireRelease(
-          Effect.sync(() => {
-            const listener = (event: MessageEvent) => {
-              Queue.offerUnsafe(queue, event.data);
-            };
-            channel.addEventListener("message", listener as EventListener);
-            return listener;
-          }),
-          (listener) =>
-            Effect.sync(() => channel.removeEventListener("message", listener as EventListener))
+          Effect.sync(() => channel.addEventListener("message", listener as EventListener)),
+          () => Effect.sync(() => channel.removeEventListener("message", listener as EventListener))
         );
         return { take: Queue.take(queue).pipe(Effect.orDie) };
       }),

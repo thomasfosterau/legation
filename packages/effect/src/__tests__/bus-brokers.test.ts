@@ -93,6 +93,11 @@ describe("makeWebSocketBroker (Durable Object relay pattern)", () => {
 // Entry IDs are `<seq>-0`, so the sequence number orders them.
 const seqOf = (id: string) => Number(id.split("-")[0]);
 
+// `Redis.make` requires pub/sub too; the Streams broker only ever sends
+// commands, so a subscribe here is a test bug, not a code path.
+const subscribe = () =>
+  Effect.die(new TestFailure({ message: "the Streams broker never subscribes" }));
+
 const makeFakeRedis = Effect.gen(function* () {
   const entries = yield* Ref.make<Array<{ readonly id: string; readonly payload: string }>>([]);
   const signal = yield* PubSub.unbounded<void>();
@@ -203,11 +208,6 @@ const makeFakeRedis = Effect.gen(function* () {
   // Makes every XREAD hang (until `setXreadHung(false)`), as if a connection
   // accepted the read and never replied. Other commands still answer.
   const setXreadHung = (value: boolean) => Effect.sync(() => void (xreadHung = value));
-
-  // `Redis.make` requires pub/sub too; the Streams broker only ever sends
-  // commands, so a subscribe here is a test bug, not a code path.
-  const subscribe = () =>
-    Effect.die(new TestFailure({ message: "the Streams broker never subscribes" }));
 
   // Nor does it reserve a dedicated connection (`connect`, Effect 4.1).
   const connect = Effect.die(
@@ -678,7 +678,7 @@ describe("makeRedisBroker (Redis Streams)", () => {
   it.effect("a hung XADD is dropped at its timeout, so the publish returns", () =>
     Effect.gen(function* () {
       const redis = yield* Redis.make({
-        send: (() => Effect.never) as Redis.Redis["Service"]["send"],
+        send: () => Effect.never,
         subscribe: () =>
           Effect.die(new TestFailure({ message: "the Streams broker never subscribes" })),
         connect: Effect.die(

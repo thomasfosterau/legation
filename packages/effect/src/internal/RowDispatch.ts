@@ -10,6 +10,7 @@
  */
 
 import * as Arr from "effect/Array";
+import { absurd } from "effect/Function";
 import type { Aggregate, AggregateValue } from "../Aggregate.js";
 import type { Delta, Row } from "../Incremental.js";
 import type { Comparison } from "../Predicate.js";
@@ -55,6 +56,7 @@ export const foldNumeric = (
         ? undefined
         : values.reduce((a, b) => (a > b ? a : b));
   }
+  return absurd(agg._tag);
 };
 
 /**
@@ -74,6 +76,7 @@ export const emptyBucket = (agg: Aggregate): Bucket => {
     case "Max":
       return { _tag: "MinMax", pick: (a, b) => (a > b ? a : b), current: undefined };
   }
+  return absurd(agg);
 };
 
 /** A bucket's current value. Runs per emission, once per group of a grouped aggregate. */
@@ -88,6 +91,7 @@ export const bucketValue = (bucket: Bucket): AggregateValue => {
     case "MinMax":
       return bucket.current;
   }
+  return absurd(bucket);
 };
 
 /** Fold a row's numeric field value `n` into `bucket`: per row, on every insert and update. */
@@ -187,4 +191,5 @@ export const holds = (op: Comparison, ordered: number): boolean => {
     case "lte":
       return ordered <= 0;
   }
+  return absurd(op);
 };

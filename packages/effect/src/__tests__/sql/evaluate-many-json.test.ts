@@ -15,6 +15,7 @@ import { Mutator } from "@thomasfosterau/legation";
 import { Subset } from "@thomasfosterau/legation/internal";
 import * as Sql from "../../sql/Sql.js";
 import * as SqlBackend from "../../sql/SqlBackend.js";
+import { defined } from "../defined.js";
 
 const context = { clientGroupId: "g" };
 
@@ -79,8 +80,7 @@ describe("SqlBackend.evaluateMany on a Json dialect", () => {
           [],
           statements
         );
-        const evaluateMany = backend.evaluateMany;
-        if (evaluateMany === undefined) return expect.unreachable("evaluateMany is defined");
+        const evaluateMany = defined(backend.evaluateMany);
         expect(yield* evaluateMany(context, pull)).toEqual([
           [
             { id: "a", version: 1 },
@@ -102,8 +102,7 @@ describe("SqlBackend.evaluateMany on a Json dialect", () => {
           [{ id: "a", version: 1, amount: "0.1000000000000000000001" }],
           statements
         );
-        const evaluateMany = backend.evaluateMany;
-        if (evaluateMany === undefined) return expect.unreachable("evaluateMany is defined");
+        const evaluateMany = defined(backend.evaluateMany);
         const single = yield* backend.evaluate(
           context,
           pull[0] ?? Subset.make({ collection: "items" })
@@ -138,8 +137,7 @@ describe("SqlBackend.evaluateMany on a Json dialect", () => {
           ],
           statements
         );
-        const evaluateMany = backend.evaluateMany;
-        if (evaluateMany === undefined) return expect.unreachable("evaluateMany is defined");
+        const evaluateMany = defined(backend.evaluateMany);
         expect(yield* evaluateMany(context, pull)).toEqual([
           [
             { id: "a", version: "9007199254740993" },
@@ -162,8 +160,7 @@ describe("SqlBackend.evaluateMany names every inexact column", () => {
           [{ id: "a", version: "9007199254740993", 'net"amount': "0.1000000000000000000001" }],
           statements
         );
-        const evaluateMany = backend.evaluateMany;
-        if (evaluateMany === undefined) return expect.unreachable("evaluateMany is defined");
+        const evaluateMany = defined(backend.evaluateMany);
         expect(yield* evaluateMany(context, pull)).toEqual([
           [{ id: "a", version: "9007199254740993" }],
         ]);

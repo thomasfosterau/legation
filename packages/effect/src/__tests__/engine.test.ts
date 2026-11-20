@@ -19,7 +19,6 @@ import * as ClientStoreModule from "../ClientStore.js";
 import { ClientStore } from "../ClientStore.js";
 import * as Cvr from "../Cvr.js";
 import { MutationRejected } from "../Errors.js";
-import * as Identity from "../Identity.js";
 import * as InvalidationBus from "../InvalidationBus.js";
 import * as MemoryBackend from "../MemoryBackend.js";
 import * as Mutator from "../Mutator.js";
@@ -401,7 +400,7 @@ describe("a push acknowledgement keeps the overlay until a pull reports it", () 
       yield* engine.push;
       expect(yield* engine.query(allTodos)).toHaveLength(1);
 
-      yield* engine.reset("sha256:another-subject" as Identity.Fingerprint);
+      yield* engine.reset("sha256:another-subject");
       expect(yield* engine.query(allTodos)).toEqual([]);
     })
   );

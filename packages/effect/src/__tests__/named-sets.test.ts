@@ -229,7 +229,9 @@ describe("session-resolved read scopes", () => {
       // session's set stale and pokes it; the session pulls until the poke has
       // been handled (the hint is delivered asynchronously).
       yield* write(put("follows", { id: "f1", follower: "alice", followee: "bob" }));
-      const pullUntilChanged = (attempt: number): Effect.Effect<PullResponse, unknown> =>
+      const pullUntilChanged = (
+        attempt: number
+      ): Effect.Effect<PullResponse, Effect.Error<ReturnType<typeof pull>>> =>
         pull("group-alice", first.cookie).pipe(
           Effect.filterOrElse(
             (response) => Arr.isReadonlyArrayNonEmpty(response.patch) || attempt >= 100,

@@ -60,8 +60,8 @@ const EVAL_COLLECTION = `${COLLECTION}_eval`;
 // absent values under ADR-0028, so both are nullable and optional), plus the
 // two server rules below.
 const attributes = {
-  n: Schema.optionalKey(Schema.Number),
-  rank: Schema.optionalKey(Schema.NullOr(Schema.Number)),
+  n: Schema.optionalKey(Schema.Finite),
+  rank: Schema.optionalKey(Schema.NullOr(Schema.Finite)),
   tag: Schema.optionalKey(Schema.NullOr(Schema.String)),
   /** A row the server refuses to store: a permanent rejection (422). */
   poison: Schema.optionalKey(Schema.Boolean),
@@ -127,7 +127,7 @@ const ClientIdRequest = Schema.Struct({
 
 /** One operation, as the default request document would decode it, without the add's client id. */
 const decodeOperation = (raw: unknown): Effect.Effect<BatchOperation> => {
-  const operation = raw as { readonly op?: unknown; readonly data?: Record<string, unknown> };
+  const operation = raw as { readonly op?: unknown; readonly data?: Record<string, Schema.Json> };
   const { id: _clientId, ...data } = operation.data ?? {};
   const withoutId = operation.op === "add" ? { ...operation, data } : operation;
   return Schema.decodeUnknownEffect(Atomic.Operations([Row, EvalRow]))(withoutId).pipe(
@@ -153,7 +153,7 @@ const api = HttpApi.make("contract")
 interface Stored {
   readonly type: string;
   readonly id: string;
-  readonly attributes: Record<string, unknown>;
+  readonly attributes: Attributes;
 }
 type Store = Map<string, Map<string, Stored>>;
 
@@ -168,12 +168,12 @@ const tableOf = (store: Store, type: string): Map<string, Stored> => {
 const contractResource = (row: Stored): typeof Row.Type => ({
   type: COLLECTION,
   id: Row.Id.make(row.id),
-  attributes: row.attributes as Attributes,
+  attributes: row.attributes,
 });
 const evalResource = (row: Stored): typeof EvalRow.Type => ({
   type: EVAL_COLLECTION,
   id: EvalRow.Id.make(row.id),
-  attributes: row.attributes as Attributes,
+  attributes: row.attributes,
 });
 const resourceOf = (row: Stored): AnyResource =>
   row.type === COLLECTION ? contractResource(row) : evalResource(row);
@@ -259,7 +259,7 @@ const applyAdd = (
   const row: Stored = {
     type: operation.data.type,
     id,
-    attributes: operation.data.attributes as Record<string, unknown>,
+    attributes: Defined.fields(operation.data.attributes),
   };
   if (row.attributes.poison === true)
     return Effect.fail(rejection(index, "poison rows are refused"));
@@ -297,12 +297,15 @@ const applyUpdate = (
   }
   const { increment, ...merge } = operation.data.attributes ?? {};
   if (increment === undefined) {
-    const row: Stored = { ...current, attributes: { ...current.attributes, ...merge } };
+    const row: Stored = {
+      ...current,
+      attributes: { ...current.attributes, ...Defined.fields(merge) },
+    };
     tableOf(staged, row.type).set(id, row);
     return Effect.succeed({ data: resourceOf(row) });
   }
   return Effect.gen(function* () {
-    const read = Number(current.attributes.n ?? 0);
+    const read = current.attributes.n ?? 0;
     yield* BackendContract.park(increment);
     const row: Stored = { ...current, attributes: { ...current.attributes, n: read + 1 } };
     tableOf(staged, row.type).set(id, row);
@@ -393,7 +396,7 @@ const makeInProcessClient = (store: Store, probe: ServerProbe = noProbe) =>
       ),
       Layer.provide(middleware),
       Layer.provide(HttpServer.layerServices)
-    ) as Layer.Layer<never, never, HttpRouter.HttpRouter>;
+    );
     const { handler } = yield* Effect.acquireRelease(
       Effect.sync(() => HttpRouter.toWebHandler(app, { disableLogger: true })),
       ({ dispose }) => awaitPromise(dispose).pipe(Effect.orDie)
@@ -438,7 +441,7 @@ const writes = new Map<string, (args: unknown) => JsonApiBackend.Write>([
         operation: "create",
         type: a.collection,
         id: a.id,
-        attributes: a.value as Record<string, unknown>,
+        attributes: a.value as Record<string, Schema.Json>,
       };
     },
   ],

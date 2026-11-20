@@ -282,7 +282,7 @@ describe("loadSnapshot + clientRuntime", () => {
 
 // ─── Form-action Mutations ──────────────────────────────────
 
-const Tally = Schema.Struct({ id: Schema.String, n: Schema.Number });
+const Tally = Schema.Struct({ id: Schema.String, n: Schema.Finite });
 const asTally = Schema.decodeUnknownOption(Tally);
 const tallyArgs = Schema.Struct({ id: Schema.String });
 // A non-idempotent tally: a double application shows as `n: 2`.
@@ -305,7 +305,7 @@ const tallyMutations = Mutation.registry([
     local: (args, writer) => writer.put("tallies", args.id, nextTally(args.id, Option.none())),
   },
 ]);
-const tallyNodes = Node.registry([Node.make("tallies", { attributes: { n: Schema.Number } })]);
+const tallyNodes = Node.registry([Node.make("tallies", { attributes: { n: Schema.Finite } })]);
 const allTallies: Query.Read = { collection: "tallies" };
 
 const makeTallyServer = Effect.fn("makeTallyServer")(function* () {
@@ -338,7 +338,9 @@ const postedForm = (form: { clientId: string; mutationId: number }, id: string) 
 };
 
 // The form layer's decode of the posted fields into the Mutation's args.
-const tallyArgsOf = (data: FormData) => ({ id: String(data.get("id")) });
+const tallyArgsOf = (data: FormData) => ({
+  id: Schema.decodeUnknownSync(Schema.String)(data.get("id")),
+});
 
 describe("form-action Mutations", () => {
   it.effect("the no-JS path: a rendered form resubmitted is applied once", () =>
@@ -456,7 +458,7 @@ describe("form-action Mutations", () => {
         // Shown from the tail, then from the confirmed rows: applied once.
         expect(yield* query).toEqual([{ id: "t2", n: 1 }]);
 
-        yield* awaitPromise(() => runtime.dispose());
+        return yield* awaitPromise(() => runtime.dispose());
       })
     )
   );
@@ -502,7 +504,7 @@ describe("form-action Mutations", () => {
           "tally is locked",
         ]);
         expect(yield* query).toEqual([]);
-        yield* awaitPromise(() => runtime.dispose());
+        return yield* awaitPromise(() => runtime.dispose());
       })
     )
   );

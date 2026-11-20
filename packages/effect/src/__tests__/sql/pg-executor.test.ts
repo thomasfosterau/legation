@@ -23,6 +23,7 @@ import { Subset } from "@thomasfosterau/legation/internal";
 import * as PgExecutor from "../../sql/PgExecutor.js";
 import * as Sql from "../../sql/Sql.js";
 import * as SqlBackend from "../../sql/SqlBackend.js";
+import { defined } from "../defined.js";
 import * as Env from "../env.js";
 
 const databaseUrl = Env.databaseUrl;
@@ -94,12 +95,9 @@ const backendOver = (executor: SqlBackend.SqlExecutor) =>
   });
 
 /** Run `use` over a counted `PgExecutor` against a freshly reset schema. */
-const withCounted = <A>(
+const withCounted = <A, E>(
   url: string,
-  use: (
-    backend: ReturnType<typeof backendOver>,
-    counts: Ref.Ref<Counts>
-  ) => Effect.Effect<A, unknown>
+  use: (backend: ReturnType<typeof backendOver>, counts: Ref.Ref<Counts>) => Effect.Effect<A, E>
 ) =>
   Effect.scoped(
     Effect.gen(function* () {
@@ -228,8 +226,7 @@ describePostgres("PgExecutor round trips", () => {
   it.live("evaluateMany gives evaluate's entries for bigint columns beyond 2^53", () =>
     withCounted(databaseUrl ?? "", (backend) =>
       Effect.gen(function* () {
-        const evaluateMany = backend.evaluateMany;
-        if (evaluateMany === undefined) return expect.unreachable("evaluateMany is defined");
+        const evaluateMany = defined(backend.evaluateMany);
         const subsets = [
           Subset.make({ collection: "big" }),
           Subset.make({ collection: "big", orderBy: [{ field: "rank", direction: "desc" }] }),

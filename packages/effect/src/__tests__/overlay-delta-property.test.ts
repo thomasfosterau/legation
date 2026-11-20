@@ -156,10 +156,7 @@ const randomStep = (rng: () => number, ids: ReadonlyArray<string>): Step => {
   return { kind: "pull" };
 };
 
-const runStep = (
-  engine: ClientEngineModule.ClientEngine,
-  step: Step
-): Effect.Effect<void, unknown> =>
+const runStep = (engine: ClientEngineModule.ClientEngine, step: Step) =>
   Match.value(step).pipe(
     Match.discriminator("kind")("put", (put) =>
       engine.mutate("todo/put", { id: put.id, value: put.value })
@@ -179,10 +176,7 @@ const runStep = (
 // surface and the mutator registry's local handlers — deliberately not calling
 // into `ClientEngine`'s private `computeOverlay`, so it is a genuine oracle for
 // what the engine's delta-maintained cache should equal.
-const referenceOverlay = (
-  store: ClientStore,
-  tail: ReadonlyArray<Mutation>
-): Effect.Effect<Map<string, unknown>, unknown> =>
+const referenceOverlay = (store: ClientStore, tail: ReadonlyArray<Mutation>) =>
   Effect.gen(function* () {
     const rows = new Map<string, unknown>();
     Arr.forEach(yield* store.listRows("todos"), (row) => {
@@ -228,7 +222,7 @@ const runTracked = (
   store: ClientStore,
   tail: Ref.Ref<ReadonlyArray<Mutation>>,
   step: Step
-): Effect.Effect<void, unknown> =>
+) =>
   Effect.gen(function* () {
     const before = yield* store.pendingMutations;
     yield* runStep(engine, step);

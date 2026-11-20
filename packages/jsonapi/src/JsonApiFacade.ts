@@ -566,6 +566,17 @@ const queryFailure = (error: QueryError, cookie: Option.Option<string>): Outcome
 
 // ─── The handler ─────────────────────────────────────────────────────────────
 
+/** The replica with the request's root window answered from `rows`: the rows coverage judged, not a second read. */
+const pinned = (
+  reader: ClientView.Reader,
+  root: Subset.Subset,
+  rows: ReadonlyArray<ClientEngine.LocalRow>
+): ClientView.Reader => ({
+  query: (subset) =>
+    Subset.hash(subset) === Subset.hash(root) ? Effect.succeed(rows) : reader.query(subset),
+  observe: reader.observe,
+});
+
 /**
  * Build the façade over an api and a replica. Route reflection and the
  * writer's declaration checks run here, so a declaration the graph cannot
@@ -673,17 +684,6 @@ export const fetchHandler = <Id extends string, Groups extends HttpApiGroup.Cons
             Effect.map((rows) => Option.some(rows.length)),
             Effect.orElseSucceed(() => Option.none<number>())
           );
-
-  /** The replica with the request's root window answered from `rows`: the rows coverage judged, not a second read. */
-  const pinned = (
-    reader: ClientView.Reader,
-    root: Subset.Subset,
-    rows: ReadonlyArray<ClientEngine.LocalRow>
-  ): ClientView.Reader => ({
-    query: (subset) =>
-      Subset.hash(subset) === Subset.hash(root) ? Effect.succeed(rows) : reader.query(subset),
-    observe: reader.observe,
-  });
 
   /** A rejection as an outcome, with the cookie read for the response it may carry. */
   const rejected = (error: QueryError): Effect.Effect<never, Outcome> =>

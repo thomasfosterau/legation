@@ -43,7 +43,7 @@ const api = HttpApi.make("app").add(
 interface StoredResource {
   readonly type: string;
   readonly id: string;
-  readonly attributes: Record<string, unknown>;
+  readonly attributes: Record<string, Schema.Json>;
 }
 
 const headers = { "Content-Type": "application/vnd.api+json" };

@@ -36,7 +36,7 @@ import { defined } from "./defined.js";
 
 const categories = Node.make("categories", { attributes: { name: Schema.String } });
 const products = Node.make("products", {
-  attributes: { name: Schema.String, priceCents: Schema.Number },
+  attributes: { name: Schema.String, priceCents: Schema.Finite },
   edges: {
     category: Edge.one("categories", { via: "categoryId" }),
     variants: Edge.many("variants", { inverse: "product" }),
@@ -53,7 +53,7 @@ const variants = Node.make("variants", {
   },
 });
 const offers = Node.make("offers", {
-  attributes: { priceCents: Schema.Number },
+  attributes: { priceCents: Schema.Finite },
   edges: { variant: Edge.one("variants", { via: "variantId" }) },
 });
 const reviews = Node.make("reviews", {
@@ -67,7 +67,7 @@ const nodes = Node.registry([categories, products, variants, offers, reviews]);
 /** A seed row: its id and whatever fields its node declares. */
 interface SeedRow {
   readonly id: string;
-  readonly [field: string]: unknown;
+  readonly [field: string]: Schema.Json;
 }
 
 const seed: Readonly<Record<string, ReadonlyArray<SeedRow>>> = {
@@ -173,14 +173,14 @@ const localTotal = (url: string) =>
 // ─── Declarations: the app's resources, beside the node graph's synthesis ────
 
 const Category = Resource.make("categories", { attributes: { name: Schema.String } });
-const Offer = Resource.make("offers", { attributes: { priceCents: Schema.Number } });
+const Offer = Resource.make("offers", { attributes: { priceCents: Schema.Finite } });
 const Variant = Resource.make("variants", {
   attributes: { sku: Schema.String },
   relationships: { offers: Relationship.many(() => Offer) },
 });
 /** Declares `variants` (linkage resolved) and not `reviews` (links only). */
 const Product = Resource.make("products", {
-  attributes: { name: Schema.String, priceCents: Schema.Number },
+  attributes: { name: Schema.String, priceCents: Schema.Finite },
   relationships: {
     category: Relationship.one(() => Category),
     variants: Relationship.many(() => Variant),
@@ -392,7 +392,7 @@ describe("ReplicaDocuments over the replica", () => {
       expect(error._tag).toBe("Fail");
       assert(error._tag === "Fail");
       expect(error.error).toBeInstanceOf(QueryError);
-      expect((error.error as QueryError).parameter).toBe("filter[name]");
+      expect(error.error.parameter).toBe("filter[name]");
     })
   );
 

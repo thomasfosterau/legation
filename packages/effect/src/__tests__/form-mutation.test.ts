@@ -28,7 +28,7 @@ const increment = Mutator.make("counter/inc", counterArgs);
 // The backend refuses it; the client's local handler still applies it.
 const refuse = Mutator.make("counter/refuse", counterArgs);
 
-const Counter = Schema.Struct({ id: Schema.String, n: Schema.Number });
+const Counter = Schema.Struct({ id: Schema.String, n: Schema.Finite });
 const asCounter = Schema.decodeUnknownOption(Counter);
 // The counter after one more increment, from the row a writer read.
 const incremented = (id: string, current: Option.Option<typeof Counter.Type>) => ({

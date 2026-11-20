@@ -75,6 +75,13 @@ interface Counters {
   readonly pull: Ref.Ref<number>;
 }
 
+// Count only network legs the engine actually makes (push short-circuits an
+// empty journal before reaching the transport), and count each one once it
+// has completed, so a count the tests wait on means the leg's effects
+// (a drained journal, rows in the store) are already visible.
+const count = (counter: Ref.Ref<number> | undefined) =>
+  counter ? Ref.update(counter, (n) => n + 1) : Effect.void;
+
 const makeClient = (
   handler: ServerHandler,
   name: string,
@@ -84,12 +91,6 @@ const makeClient = (
   Effect.gen(function* () {
     const store = yield* ClientStoreModule.makeMemory;
     const base = yield* makeInMemory(handler, `group-${name}`);
-    // Count only network legs the engine actually makes (push short-circuits an
-    // empty journal before reaching the transport), and count each one once it
-    // has completed, so a count the tests wait on means the leg's effects
-    // (a drained journal, rows in the store) are already visible.
-    const count = (counter: Ref.Ref<number> | undefined) =>
-      counter ? Ref.update(counter, (n) => n + 1) : Effect.void;
     const transport: ClientTransport = {
       push: (request) => base.push(request).pipe(Effect.tap(() => count(opts?.counters?.push))),
       pull: (request) => base.pull(request).pipe(Effect.tap(() => count(opts?.counters?.pull))),
@@ -123,10 +124,10 @@ const advanceUntil = <E>(
 ) =>
   Effect.gen(function* () {
     for (let attempt = 0; attempt < maxSteps; attempt++) {
-      if (yield* condition) return;
+      if (yield* condition) return undefined;
       yield* TestClock.adjust(step);
     }
-    if (yield* condition) return;
+    if (yield* condition) return undefined;
     return yield* Effect.die(
       new TestFailure({ message: `advanceUntil: condition never held in ${maxSteps} steps` })
     );
@@ -143,7 +144,7 @@ const settle = <E>(condition: Effect.Effect<boolean, E>, maxSteps = 200) =>
   advanceUntil(condition, Duration.millis(0), maxSteps);
 
 const atLeast = (counter: Ref.Ref<number>, n: number) =>
-  Effect.map(Ref.get(counter), (count) => count >= n);
+  Effect.map(Ref.get(counter), (current) => current >= n);
 
 describe("sync-loop scheduling", () => {
   it.effect("auto-pushes a mutation with no app-level push call", () =>

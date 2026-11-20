@@ -77,9 +77,7 @@ const currentRole = (role: Stream.Stream<Role>) =>
 const makeServer = Effect.gen(function* () {
   const backend = yield* MemoryBackend.make(
     MemoryBackend.validatedHandlers([
-      MemoryBackend.handler(todoSet, (args, writer) =>
-        writer.put("todos", (args as Todo).id, args)
-      ),
+      MemoryBackend.handler(todoSet, (args, writer) => writer.put("todos", args.id, args)),
     ])
   );
   return yield* SyncServer.make.pipe(
@@ -126,7 +124,7 @@ const makeFakeLockManager = (): LockManager => {
           return;
         }
         held.add(name);
-        Promise.resolve(callback({ mode: options.mode ?? "exclusive", name } as Lock)).then(
+        Promise.resolve(callback({ mode: options.mode ?? "exclusive", name })).then(
           (value) => {
             held.delete(name);
             settled = true;
@@ -136,7 +134,7 @@ const makeFakeLockManager = (): LockManager => {
           (error: unknown) => {
             held.delete(name);
             settled = true;
-            reject(error as Error);
+            reject(error);
             advance(name);
           }
         );
@@ -156,7 +154,7 @@ const makeFakeLockManager = (): LockManager => {
     });
   }) as LockManager["request"];
 
-  return { request, query: () => Promise.resolve({ held: [], pending: [] }) } as LockManager;
+  return { request, query: () => Promise.resolve({ held: [], pending: [] }) };
 };
 
 const dependenciesOf = (

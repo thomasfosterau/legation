@@ -279,7 +279,7 @@ const respondToFailures = <A, E>(
       return Effect.succeed(errorResponse(ApiError.Forbidden.status, forbiddenDocument(error)));
     }
     if (error instanceof BackendError) return Effect.die(error);
-    return Effect.fail(error as E);
+    return Effect.fail(error);
   });
 
 // ─── The handlers ────────────────────────────────────────────────────────────
@@ -393,7 +393,7 @@ export const make = (options: Options): RestHandlers => {
           return DocumentWriter.collection({
             ...input(read, resolved, fields),
             meta: { total },
-          }) as CollectionDocumentOf<R>;
+          });
         })
       );
   };

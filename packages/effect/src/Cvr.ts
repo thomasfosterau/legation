@@ -134,6 +134,8 @@ export interface KeyValueCvrOptions {
   readonly prefix?: string;
 }
 
+const storeError = (message: string) => (cause: unknown) => new StoreError({ message, cause });
+
 /**
  * A CVR store over `effect/persistence` KeyValueStore (ADR-0009):
  * back it with a *shared* KVS — Redis, SQL, a Durable Object's storage — and
@@ -150,7 +152,6 @@ export const makeKeyValueStore = (
       yield* KeyValueStore.KeyValueStore,
       options?.prefix ?? "legation/cvr/"
     );
-    const storeError = (message: string) => (cause: unknown) => new StoreError({ message, cause });
     return CvrStore.of({
       get: (cookie) =>
         store.get(cookie).pipe(

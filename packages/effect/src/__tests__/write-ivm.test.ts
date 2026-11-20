@@ -170,13 +170,15 @@ describe("write-path selective re-evaluation", () => {
   );
 });
 
+const row = (id: string, rank: number): LiveView.Row => ({ id, value: { rank } });
+
+const ids = (rows: ReadonlyArray<LiveView.Row>) => rows.map((r) => r.id);
+
 describe("LiveView id index", () => {
   const ranked = Subset.make({
     collection: "items",
     orderBy: [{ field: "rank", direction: "asc" }],
   });
-  const row = (id: string, rank: number): LiveView.Row => ({ id, value: { rank } });
-  const ids = (rows: ReadonlyArray<LiveView.Row>) => rows.map((r) => r.id);
 
   it("locates and repositions rows via the id index (distinct sort keys)", () => {
     let view = LiveView.make(ranked, [row("a", 1), row("b", 2), row("c", 3)]);

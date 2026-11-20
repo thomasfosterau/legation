@@ -24,6 +24,7 @@ import {
   Subset,
   SyncServer,
   Mirror,
+  Related,
 } from "@thomasfosterau/legation/internal";
 import { describe, expect, it } from "@effect/vitest";
 import * as Arr from "effect/Array";
@@ -197,7 +198,7 @@ describe("EngineHost ↔ Mirror extensions", () => {
             authorId: "u1",
           });
 
-          const latest = yield* Ref.make<ReadonlyArray<{ related: Record<string, unknown> }>>([]);
+          const latest = yield* Ref.make<ReadonlyArray<Related.RelatedRow>>([]);
           const stream = yield* mirror.related(collections, "todos", allTodos, ["author"]);
           yield* Effect.forkScoped(
             Stream.runForEach(stream, (rows) => Ref.set(latest, rows)).pipe(Effect.ignore)
@@ -349,7 +350,7 @@ describe("ServiceWorkerHost", () => {
           yield* mirror.mutate("todo/set", { id: "1", title: "sw", done: false, authorId: "u1" });
 
           // Registry pass-through: related resolves through the SW host.
-          const latest = yield* Ref.make<ReadonlyArray<{ related: Record<string, unknown> }>>([]);
+          const latest = yield* Ref.make<ReadonlyArray<Related.RelatedRow>>([]);
           const stream = yield* mirror.related(collections, "todos", allTodos, ["author"]);
           yield* Effect.forkScoped(
             Stream.runForEach(stream, (rows) => Ref.set(latest, rows)).pipe(Effect.ignore)

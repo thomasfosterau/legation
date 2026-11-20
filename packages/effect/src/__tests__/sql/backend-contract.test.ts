@@ -47,10 +47,11 @@ import * as SqlBackend from "../../sql/SqlBackend.js";
 import * as Env from "../env.js";
 import { TestFailure } from "../test-failure.js";
 
+const asBackendError = (message: string) => (cause: unknown) =>
+  new BackendError({ message, cause });
+
 /** `SqlExecutor` over the Effect SQL sqlite client (fragments → unsafe statements). */
 const makeExecutor = (sql: SqlClient): SqlBackend.SqlExecutor => {
-  const asBackendError = (message: string) => (cause: unknown) =>
-    new BackendError({ message, cause });
   return {
     query: (fragment) =>
       sql
@@ -626,7 +627,7 @@ const pgHandlers: Record<string, SqlBackend.SqlHandler> = {
 };
 
 /** Runs `use` on a pooled PostgreSQL client against a freshly created contract schema. */
-const withPgContract = <A>(url: string, use: (sql: SqlClient) => Effect.Effect<A, unknown>) =>
+const withPgContract = <A, E>(url: string, use: (sql: SqlClient) => Effect.Effect<A, E>) =>
   Effect.scoped(
     Effect.gen(function* () {
       // Two concurrent transactions (the parked call and its peer) plus a spare.
@@ -704,11 +705,8 @@ const awaitPeerOn =
   (sql: SqlClient, onLockWait: Effect.Effect<void> = Effect.void): BackendContract.PeerSettle =>
   (peerSettled) =>
     Effect.gen(function* () {
-      if (yield* peerSettled) return;
-      if (yield* peerBlockedOnLock(sql)) {
-        yield* onLockWait;
-        return;
-      }
+      if (yield* peerSettled) return undefined;
+      if (yield* peerBlockedOnLock(sql)) return yield* onLockWait;
       return yield* Effect.fail("pending" as const);
     }).pipe(
       Effect.retry({

@@ -776,7 +776,7 @@ describe("the tail in an engine", () => {
         yield* engine.push;
         expect(yield* tailOf(store)).toHaveLength(1);
 
-        yield* engine.reset("sha256:another-subject" as Identity.Fingerprint);
+        yield* engine.reset("sha256:another-subject");
         expect(yield* store.unpulled).toEqual([]);
         const restarted = yield* makeCounterEngine(server, store);
         yield* restarted.subscribe(countersSubset);
@@ -957,7 +957,7 @@ describe("the tail's crash windows and interleavings", () => {
           const engine = yield* makeCounterEngine(server, source);
           yield* engine.subscribe(countersSubset);
           yield* engine.mutate("counter/inc", { id: "c" });
-          const entry = (yield* source.pendingMutations)[0] as Mutation;
+          const entry = (yield* source.pendingMutations)[0];
 
           // The acknowledgement lands between dehydrate's journal read and its tail read.
           const acked = yield* Ref.make(false);
@@ -1807,9 +1807,7 @@ describe("the engine's release failure paths", () => {
         yield* engine.subscribe(countersSubset);
 
         yield* Ref.set(holdNext, true);
-        const resetting = yield* Effect.forkChild(
-          engine.reset("sha256:alice" as Identity.Fingerprint)
-        );
+        const resetting = yield* Effect.forkChild(engine.reset("sha256:alice"));
         yield* Deferred.await(reached);
 
         // A read started while the reset clears the rows must wait, and then see them cleared.
@@ -2035,6 +2033,9 @@ const observed = <A, E, R>(
   );
 };
 
+const pullFibres = (spans: ReadonlyArray<string>) =>
+  spans.filter((name) => name === Telemetry.span.clientPull).length;
+
 // Pull ahead of the bound. With no pokes and no `pullInterval` nothing pulls on its own, so a
 // run of pushes used to reach the bound and overflow, reverting the view. A push that takes the tail
 // to half the bound now starts one pull in the background, which the push does not wait for.
@@ -2043,8 +2044,6 @@ describeWrapped("a push that takes the tail to half the bound pulls ahead of it"
   const pullAheadAt = Math.ceil(SMALL_LIMIT / 2);
   // A bound large enough that a burst stays under it while one pull is held.
   const BURST_LIMIT = 64;
-  const pullFibres = (spans: ReadonlyArray<string>) =>
-    spans.filter((name) => name === Telemetry.span.clientPull).length;
 
   it.effect(
     "with pokes off and no pullInterval, a run of pushes past the bound never takes the tail past it",
@@ -2178,30 +2177,52 @@ describeWrapped("a push that takes the tail to half the bound pulls ahead of it"
   );
 });
 
-describe("dehydrate reads one state of the store", () => {
-  // A KeyValueStore whose first read of `parkKey` after `armed` is set signals `reached` and waits on
-  // `release`. Parking on the cookie leaves the snapshot's row reads behind and its journal and tail
-  // reads ahead of whatever the test lands. Parking on the unpulled index leaves the journal read behind
-  // and the tail read ahead, so an acknowledgement that lands there is seen by the tail alone.
-  const parkedAt = (
-    base: KeyValueStore.KeyValueStore,
-    parkKey: string,
-    armed: Ref.Ref<boolean>,
-    reached: Deferred.Deferred<void>,
-    release: Deferred.Deferred<void>
-  ) =>
-    KeyValueStore.KeyValueStore.of({
-      ...base,
-      get: (key) =>
-        Effect.gen(function* () {
-          if (key === parkKey && (yield* Ref.getAndSet(armed, false))) {
-            yield* Deferred.succeed(reached, undefined);
-            yield* Deferred.await(release);
-          }
-          return yield* base.get(key);
-        }),
-    });
+// A KeyValueStore whose first read of `parkKey` after `armed` is set signals `reached` and waits on
+// `release`. Parking on the cookie leaves the snapshot's row reads behind and its journal and tail
+// reads ahead of whatever the test lands. Parking on the unpulled index leaves the journal read behind
+// and the tail read ahead, so an acknowledgement that lands there is seen by the tail alone.
+const parkedAt = (
+  base: KeyValueStore.KeyValueStore,
+  parkKey: string,
+  armed: Ref.Ref<boolean>,
+  reached: Deferred.Deferred<void>,
+  release: Deferred.Deferred<void>
+) =>
+  KeyValueStore.KeyValueStore.of({
+    ...base,
+    get: (key) =>
+      Effect.gen(function* () {
+        if (key === parkKey && (yield* Ref.getAndSet(armed, false))) {
+          yield* Deferred.succeed(reached, undefined);
+          yield* Deferred.await(release);
+        }
+        return yield* base.get(key);
+      }),
+  });
 
+// Every part of the snapshot is the member's read, in a state with rows, a cookie, a tail and a journal.
+const expectSnapshotIsTheMembers = (store: ClientStore) =>
+  Effect.gen(function* () {
+    const server = yield* serverOver(yield* MemoryBackend.make(backendHandlers));
+    const engine = yield* makeCounterEngine(server, store);
+    yield* engine.subscribe(countersSubset);
+    yield* engine.mutate("counter/inc", { id: "c" });
+    yield* engine.push;
+    yield* engine.pull;
+    yield* engine.mutate("counter/inc", { id: "c" });
+    yield* engine.push;
+    yield* engine.mutate("counter/inc", { id: "c" });
+
+    const state = yield* defined(store.snapshot);
+    expect(state.rows.map((entry) => entry.row)).toEqual(yield* store.listRows("counters"));
+    expect(state.cookie).toBe(yield* store.getCookie);
+    expect(state.journal).toEqual(yield* store.pendingMutations);
+    expect(state.unpulled).toEqual(yield* store.unpulled);
+    expect(state.unpulled).toHaveLength(1);
+    expect(state.journal).toHaveLength(1);
+  });
+
+describe("dehydrate reads one state of the store", () => {
   layer(KeyValueStore.layerMemory)((scoped) => {
     scoped.effect(
       "a pull that lands between the snapshot's reads is seen whole or not at all",
@@ -2295,28 +2316,6 @@ describe("dehydrate reads one state of the store", () => {
       })
     );
   });
-
-  // Every part of the snapshot is the member's read, in a state with rows, a cookie, a tail and a journal.
-  const expectSnapshotIsTheMembers = (store: ClientStore) =>
-    Effect.gen(function* () {
-      const server = yield* serverOver(yield* MemoryBackend.make(backendHandlers));
-      const engine = yield* makeCounterEngine(server, store);
-      yield* engine.subscribe(countersSubset);
-      yield* engine.mutate("counter/inc", { id: "c" });
-      yield* engine.push;
-      yield* engine.pull;
-      yield* engine.mutate("counter/inc", { id: "c" });
-      yield* engine.push;
-      yield* engine.mutate("counter/inc", { id: "c" });
-
-      const state = yield* defined(store.snapshot);
-      expect(state.rows.map((entry) => entry.row)).toEqual(yield* store.listRows("counters"));
-      expect(state.cookie).toBe(yield* store.getCookie);
-      expect(state.journal).toEqual(yield* store.pendingMutations);
-      expect(state.unpulled).toEqual(yield* store.unpulled);
-      expect(state.unpulled).toHaveLength(1);
-      expect(state.journal).toHaveLength(1);
-    });
 
   layer(KeyValueStore.layerMemory)((scoped) => {
     scoped.effect("the memory store's snapshot is the state its members read", () =>

@@ -36,7 +36,7 @@ const clientId = "visibility-client";
 /** A pushed mutation that parks after its write (the handler below). */
 const park = Mutator.make(
   "visibility/park",
-  Schema.Struct({ id: Schema.String, n: Schema.Number })
+  Schema.Struct({ id: Schema.String, n: Schema.Finite })
 );
 
 const DDL: ReadonlyArray<string> = [

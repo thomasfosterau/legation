@@ -230,10 +230,10 @@ describe("offset pagination: covered by the ordinary limit-prefix rule", () => {
   });
 });
 
-describe("rule 3: canonical conjuncts", () => {
-  const keys = (predicate: Predicate.Predicate) =>
-    Coverage.canonicalConjuncts(predicate).map((conjunct) => conjunct.key);
+const keys = (predicate: Predicate.Predicate) =>
+  Coverage.canonicalConjuncts(predicate).map((conjunct) => conjunct.key);
 
+describe("rule 3: canonical conjuncts", () => {
   it("an absent where, True and an empty And canonicalise to the empty set", () => {
     expect(keys(Predicate.always)).toEqual([]);
     expect(keys(Predicate.and())).toEqual([]);

@@ -46,7 +46,7 @@ export interface RelatedRow {
 export type Lookup = (collection: string, id: string) => Option.Option<JsonApiRow>;
 
 const refOf = (value: JsonApiRow, name: string): RelationshipRef =>
-  (value.relationships?.[name] ?? null) as RelationshipRef;
+  value.relationships?.[name] ?? null;
 
 const isLink = (value: unknown): value is { readonly type: string; readonly id: string } =>
   P.isObjectOrArray(value) && "type" in value && "id" in value;

@@ -181,7 +181,7 @@ interface Active {
    * The broadcast loop: each run observes the engine afresh, so its first
    * emission is the replica as it stands when the run starts.
    */
-  readonly loop: Effect.Effect<void, unknown>;
+  readonly loop: Effect.Effect<void>;
   /** The fiber running {@link loop} now; replaced when the loop is restarted. */
   readonly fiber: Ref.Ref<Fiber.Fiber<void>>;
   /** Engine-side release beyond interrupting the fiber (e.g. unsubscribe). */
@@ -309,10 +309,7 @@ export const run = (options: EngineHostOptions): Effect.Effect<Host, never, Scop
       Effect.gen(function* () {
         yield* Fiber.interrupt(yield* Ref.get(entry.fiber));
         yield* entry.hydrate;
-        yield* Ref.set(
-          entry.fiber,
-          yield* entry.loop.pipe(Effect.ignore, Effect.forkIn(hostScope))
-        );
+        yield* Ref.set(entry.fiber, yield* entry.loop.pipe(Effect.forkIn(hostScope)));
       });
 
     // Tell the mirrors which registrations are pulled, rows first.
@@ -404,20 +401,20 @@ export const run = (options: EngineHostOptions): Effect.Effect<Host, never, Scop
      * succeeded — the engine holds the windows — and its URL identity while
      * some mirror holds the key by URL.
      */
-    const acquire = (
+    const acquire = <E, LE>(
       mirrorId: string,
       key: string,
       start: Effect.Effect<
         {
-          readonly loop: Effect.Effect<void, unknown>;
+          readonly loop: Effect.Effect<void, LE>;
           readonly teardown: Effect.Effect<void>;
           readonly hydrate: Effect.Effect<void>;
         },
-        unknown,
+        E,
         Scope.Scope
       >,
       registered?: Registered
-    ): Effect.Effect<void, unknown, Scope.Scope> =>
+    ): Effect.Effect<void, E, Scope.Scope> =>
       Effect.gen(function* () {
         const byUrl = registered?.url !== undefined;
         const existing = (yield* Ref.get(active)).get(key);
@@ -438,13 +435,13 @@ export const run = (options: EngineHostOptions): Effect.Effect<Host, never, Scop
         // A failed start (an unknown named query, an undeclared edge) registers
         // nothing and records nothing; the message loop swallows the error and
         // the mirror simply never hydrates.
-        const { loop, teardown, hydrate } = yield* start;
+        const started = yield* start;
+        const loop = Effect.ignore(started.loop);
+        const { teardown, hydrate } = started;
         yield* Semaphore.withPermit(
           registryLock,
           Effect.gen(function* () {
-            const fiber = yield* Ref.make(
-              yield* Effect.forkIn(loop.pipe(Effect.ignore), hostScope)
-            );
+            const fiber = yield* Ref.make(yield* Effect.forkIn(loop, hostScope));
             yield* Ref.update(active, (map) =>
               new Map(map).set(key, {
                 mirrors: new Set([mirrorId]),
@@ -458,7 +455,7 @@ export const run = (options: EngineHostOptions): Effect.Effect<Host, never, Scop
             );
           })
         );
-        yield* announce;
+        return yield* announce;
       });
 
     /** Drop one mirror from one registration; tear it down if it was the last. */

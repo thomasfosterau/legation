@@ -21,4 +21,4 @@ import * as P from "effect/Predicate";
  * Rows are not typed engine-wide. `Predicate.fieldValue` re-exports it.
  */
 export const fieldValue = (row: unknown, field: string): unknown =>
-  P.isObjectOrArray(row) ? (row as Record<string, unknown>)[field] : undefined;
+  P.isObjectOrArray(row) && P.hasProperty(row, field) ? row[field] : undefined;

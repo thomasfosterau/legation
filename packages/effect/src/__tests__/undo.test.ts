@@ -105,6 +105,11 @@ const nodes = Node.registry([
   Node.make("todos", { attributes: { title: Schema.String, done: Schema.Boolean } }),
 ]);
 
+const create = (id: string): Undo.UndoEntry => ({
+  execute: { mutator: "todo/set", args: { id, title: id, done: false } },
+  undo: { mutator: "todo/remove", args: { id } },
+});
+
 describe("Undo", () => {
   it.effect("basic undo/redo tracks stacks and a new run clears redo", () =>
     Effect.gen(function* () {
@@ -246,11 +251,6 @@ describe("Undo", () => {
       const transport = yield* makeInMemory(handler, "group-grp");
       const { engine, manager } = yield* makeManaged(transport, "grp");
       yield* engine.subscribe(allTodos);
-
-      const create = (id: string): Undo.UndoEntry => ({
-        execute: { mutator: "todo/set", args: { id, title: id, done: false } },
-        undo: { mutator: "todo/remove", args: { id } },
-      });
 
       yield* manager.group(
         Effect.all([manager.run(create("a")), manager.run(create("b")), manager.run(create("c"))], {

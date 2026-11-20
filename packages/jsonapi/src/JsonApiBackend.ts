@@ -358,13 +358,32 @@ const recordApplied = (
   );
 };
 
+/** A write's `attributes` member, as sent. */
+type WriteAttributes = NonNullable<Write["attributes"]>;
+
+/** A write's `relationships` member, as sent. */
+type WriteRelationships = NonNullable<Write["relationships"]>;
+
+/** A resource object as a write sends it: `{ type, id, attributes, relationships? }`. */
+interface WriteData {
+  readonly type: string;
+  readonly id: string;
+  readonly attributes: WriteAttributes;
+  readonly relationships?: WriteRelationships;
+}
+
+/** An atomic operation object: an `add` / `update` with its resource, or a `remove` by ref. */
+type AtomicOperation =
+  | { readonly op: "add" | "update"; readonly data: WriteData }
+  | { readonly op: "remove"; readonly ref: { readonly type: string; readonly id: string } };
+
 /** Build a JSON:API write body (`{ data: { type, id, attributes, ... } }`). */
 const writeBody = (
   type: string,
   id: string,
-  attributes: Record<string, unknown>,
-  relationships?: Record<string, unknown>
-): { readonly data: Record<string, unknown> } => ({
+  attributes: WriteAttributes,
+  relationships?: WriteRelationships
+): { readonly data: WriteData } => ({
   data: {
     type,
     id,
@@ -421,8 +440,8 @@ const writeOf = (operation: OperationInfo, args: unknown): Effect.Effect<Write, 
     Match.when("create", () => {
       const a = args as {
         id: string;
-        attributes: Record<string, unknown>;
-        relationships?: Record<string, unknown>;
+        attributes: WriteAttributes;
+        relationships?: WriteRelationships;
       };
       return Effect.succeed({
         operation: "create",
@@ -433,7 +452,7 @@ const writeOf = (operation: OperationInfo, args: unknown): Effect.Effect<Write, 
       });
     }),
     Match.when("update", () => {
-      const a = args as { id: string; attributes: Record<string, unknown> };
+      const a = args as { id: string; attributes: WriteAttributes };
       return Effect.succeed({
         operation: "update",
         type: operation.type,
@@ -451,9 +470,9 @@ const writeOf = (operation: OperationInfo, args: unknown): Effect.Effect<Write, 
   );
 
 /** One write as an atomic operation object (`add` / `update` / `remove`). */
-const operationOf = (write: Write): Record<string, unknown> =>
+const operationOf = (write: Write): AtomicOperation =>
   Match.value(write.operation).pipe(
-    Match.withReturnType<Record<string, unknown>>(),
+    Match.withReturnType<AtomicOperation>(),
     Match.when("create", () => ({
       op: "add",
       data: {
@@ -584,6 +603,25 @@ const reportedTotal = (document: JsonApiDocument): Option.Option<number> => {
   return P.isNumber(total) && Number.isInteger(total) && total >= 0
     ? Option.some(total)
     : Option.none();
+};
+
+// A subset's entries and total from the rows a listing (or the
+// include cache) holds: the window is cut here, so the total is the
+// matching rows before the cut, unless the listing reported its own
+// `meta.total` (an upstream that pages its listings knows better).
+const countedFrom = (
+  values: ReadonlyArray<JsonApiRow>,
+  subset: Subset.Subset,
+  reported: Option.Option<number>
+): Backend.CountedEntries => {
+  const { rows, total } = Subset.applyCounted(
+    values.map((value) => ({ id: value.id, value })),
+    subset
+  );
+  return {
+    entries: rows.map((row) => ({ id: row.id, version: versionOf(row.value) })),
+    total: Option.getOrElse(reported, () => total),
+  };
 };
 
 /** Build the JsonApiBackend from its config; requires an `HttpClient`. */
@@ -822,25 +860,6 @@ export const make = (
           { concurrency: 1, discard: true }
         );
       });
-
-    // A subset's entries and total from the rows a listing (or the
-    // include cache) holds: the window is cut here, so the total is the
-    // matching rows before the cut, unless the listing reported its own
-    // `meta.total` (an upstream that pages its listings knows better).
-    const countedFrom = (
-      values: ReadonlyArray<JsonApiRow>,
-      subset: Subset.Subset,
-      reported: Option.Option<number>
-    ): Backend.CountedEntries => {
-      const { rows, total } = Subset.applyCounted(
-        values.map((value) => ({ id: value.id, value })),
-        subset
-      );
-      return {
-        entries: rows.map((row) => ({ id: row.id, version: versionOf(row.value) })),
-        total: Option.getOrElse(reported, () => total),
-      };
-    };
 
     const NO_ROWS: Backend.CountedEntries = { entries: [], total: 0 };
 
@@ -1290,7 +1309,7 @@ export const make = (
     /** Send one `atomic:operations` request and classify the server's answer. */
     const sendAtomic = (
       path: string,
-      operations: ReadonlyArray<Record<string, unknown>>
+      operations: ReadonlyArray<AtomicOperation>
     ): Effect.Effect<AtomicOutcome, BackendError> =>
       Effect.gen(function* () {
         const response = yield* Effect.scoped(

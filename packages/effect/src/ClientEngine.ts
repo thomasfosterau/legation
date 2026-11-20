@@ -1050,6 +1050,124 @@ export interface ClientEngine {
  */
 export const ClientEngine = Context.Service<ClientEngine>("@thomasfosterau/legation/ClientEngine");
 
+// Time an effect and record its wall-clock duration (ms) as the rebase
+// histogram — wraps the actual overlay replay (cache misses only).
+const timedRebase = <A, E>(effect: Effect.Effect<A, E>): Effect.Effect<A, E> =>
+  Effect.gen(function* () {
+    const start = yield* Clock.currentTimeMillis;
+    const result = yield* effect;
+    const elapsed = (yield* Clock.currentTimeMillis) - start;
+    yield* Metric.update(Telemetry.rebaseDurationMs, elapsed);
+    return result;
+  });
+
+// The fields a subset's `where` could narrow via an index: the top-level
+// (or top-level-`And`) `Compare`/`In` conjuncts' fields. Used only to
+// decide what `autoIndex` should index — never changes evaluation.
+const indexableFieldsOf = (where: PredicateModule.Predicate): ReadonlyArray<string> => {
+  const conjuncts = where._tag === "And" ? where.predicates : [where];
+  const fields: Array<string> = [];
+  for (const conjunct of conjuncts) {
+    // Mirrors `CollectionIndex.conjunctIds`: `IS NOT NULL` never narrows.
+    if (
+      conjunct._tag === "Compare" ||
+      conjunct._tag === "In" ||
+      (conjunct._tag === "IsNull" && conjunct.negated !== true)
+    ) {
+      fields.push(conjunct.field);
+    }
+  }
+  return fields;
+};
+
+const infoOf = (error: VersionNotSupportedError) => ({
+  ...Defined.fields({ schemaVersion: error.schemaVersion }),
+  message: error.message,
+});
+
+// Retry only transient (transport) failures; store/mutator errors are not
+// transient and go straight to the failure surface.
+const isTransient = (error: { readonly _tag: string }): boolean => error._tag === "TransportError";
+
+const namedKey = (name: string, argsEncoded: unknown) =>
+  `${name}:${Hash.canonicalJson(argsEncoded)}`;
+
+// Apply a Patch's deltas for one collection to a LiveView — confirmed-row
+// ops from a pull, or optimistic `OverlayOp`s from a mutate; both
+// shapes carry the `_tag`/`collection`/`id`/`value` this only reads.
+const applyOps = (
+  view: LiveView.LiveView,
+  collection: string,
+  ops: ReadonlyArray<PatchOp | OverlayOp>
+): LiveView.LiveView => {
+  let next = view;
+  for (const op of ops) {
+    if (op._tag === "Clear" || op.collection !== collection) continue;
+    next =
+      op._tag === "Put"
+        ? LiveView.put(next, { id: op.id, value: op.value })
+        : LiveView.del(next, op.id);
+  }
+  return next;
+};
+
+// A scoped rebuild that doesn't name the observed collection cannot have
+// moved it, so the observer keeps its page (and `changesWith` dedups the
+// re-emit). An unscoped rebuild (collections undefined) always recomputes.
+const rebuildSkips = (change: ViewChange, collection: string): boolean =>
+  change._tag === "Rebuild" &&
+  change.collections !== undefined &&
+  !change.collections.has(collection);
+
+// Route a Patch's ops (this subset's collection only) through an
+// incremental aggregate state. A Patch's ops are confirmed-row deltas
+// from a pull, or optimistic `OverlayOp`s a mutate's local handler just
+// performed — both shapes carry the `_tag`/`collection`/`id`/`value`
+// this reads. `Put` carries the raw new value — `Aggregate.applyPut`
+// re-tests `subset.where` itself to decide insert/update/remove, exactly
+// as `applyOps` does for `LiveView` above.
+const applyAggregatePatch = (
+  state: Aggregate.State,
+  agg: Aggregate.Aggregate,
+  subset: Subset.Subset,
+  ops: ReadonlyArray<PatchOp | OverlayOp>
+): Aggregate.State => {
+  let next = state;
+  for (const op of ops) {
+    if (op._tag === "Clear" || op.collection !== subset.collection) continue;
+    next =
+      op._tag === "Put"
+        ? Aggregate.applyPut(next, agg, subset.where, op.id, op.value)
+        : Aggregate.applyDel(next, agg, op.id);
+  }
+  return next;
+};
+
+const applyAggregateGroupedPatch = (
+  state: Aggregate.GroupedState,
+  agg: Aggregate.Aggregate,
+  subset: Subset.Subset,
+  groupBy: string,
+  ops: ReadonlyArray<PatchOp | OverlayOp>
+): Aggregate.GroupedState => {
+  let next = state;
+  for (const op of ops) {
+    if (op._tag === "Clear" || op.collection !== subset.collection) continue;
+    next =
+      op._tag === "Put"
+        ? Aggregate.applyGroupedPut(next, agg, subset.where, groupBy, op.id, op.value)
+        : Aggregate.applyGroupedDel(next, agg, op.id);
+  }
+  return next;
+};
+
+const invalidArgs = (mutator: string) => (cause: unknown) =>
+  new MutatorError({ message: `Invalid args for mutator "${mutator}"`, mutator, cause });
+
+const isVersionNotSupported = (error: {
+  readonly _tag: string;
+}): error is VersionNotSupportedError => error._tag === "VersionNotSupportedError";
+
 /**
  * Build a {@link ClientEngine} over the `ClientStore` and `ClientTransport` in context; the engine
  * lives as long as the scope.
@@ -1307,16 +1425,6 @@ export const make = (
       Effect.flatMap((count) => Metric.update(Telemetry.journalDepth, count)),
       Effect.ignore
     );
-    // Time an effect and record its wall-clock duration (ms) as the rebase
-    // histogram — wraps the actual overlay replay (cache misses only).
-    const timedRebase = <A, E>(effect: Effect.Effect<A, E>): Effect.Effect<A, E> =>
-      Effect.gen(function* () {
-        const start = yield* Clock.currentTimeMillis;
-        const result = yield* effect;
-        const elapsed = (yield* Clock.currentTimeMillis) - start;
-        yield* Metric.update(Telemetry.rebaseDurationMs, elapsed);
-        return result;
-      });
     const forgetAck = (id: number): Effect.Effect<void> =>
       Ref.update(acks, (map) => {
         const next = new Map(map);
@@ -1494,6 +1602,7 @@ export const make = (
           );
           yield* handler(args, writer);
         }
+        return undefined;
       });
 
     // Secondary field-value indexes over confirmed rows.
@@ -1516,25 +1625,6 @@ export const make = (
       generations: new Map(),
       clears: 0,
     });
-
-    // The fields a subset's `where` could narrow via an index: the top-level
-    // (or top-level-`And`) `Compare`/`In` conjuncts' fields. Used only to
-    // decide what `autoIndex` should index — never changes evaluation.
-    const indexableFieldsOf = (where: PredicateModule.Predicate): ReadonlyArray<string> => {
-      const conjuncts = where._tag === "And" ? where.predicates : [where];
-      const fields: Array<string> = [];
-      for (const conjunct of conjuncts) {
-        // Mirrors `CollectionIndex.conjunctIds`: `IS NOT NULL` never narrows.
-        if (
-          conjunct._tag === "Compare" ||
-          conjunct._tag === "In" ||
-          (conjunct._tag === "IsNull" && conjunct.negated !== true)
-        ) {
-          fields.push(conjunct.field);
-        }
-      }
-      return fields;
-    };
 
     // Record a subset's indexable fields when `autoIndex` is on, widening
     // that collection's declared field set and invalidating its built index
@@ -2270,10 +2360,6 @@ export const make = (
     // notifies again. A version rejection never trims the journal: pending
     // intents are retained across it, ready to push once the build is updated.
     const updateNeededLatch = yield* Ref.make(false);
-    const infoOf = (error: VersionNotSupportedError) => ({
-      ...Defined.fields({ schemaVersion: error.schemaVersion }),
-      message: error.message,
-    });
     const onVersionError = (error: VersionNotSupportedError): Effect.Effect<void> =>
       Ref.getAndSet(updateNeededLatch, true).pipe(
         Effect.flatMap((already) =>
@@ -2287,9 +2373,6 @@ export const make = (
     const resetUpdateLatch = Ref.set(updateNeededLatch, false);
     // Fire `onVersionError` on a version rejection, reset the latch on success;
     // shared by push and pull so both dedupe against one latch.
-    const isVersionNotSupported = (error: {
-      readonly _tag: string;
-    }): error is VersionNotSupportedError => error._tag === "VersionNotSupportedError";
     const withVersionLatch = <A, E extends { readonly _tag: string }, R>(
       effect: Effect.Effect<A, E, R>
     ): Effect.Effect<A, E, R> =>
@@ -2417,7 +2500,7 @@ export const make = (
         yield* Metric.update(Telemetry.mutationsPushedTotal, sent);
         yield* Metric.update(Telemetry.pushesTotal, 1);
         yield* Metric.update(Telemetry.pushMutations, sent);
-        yield* emitEngineEvent({ _tag: "PushCompleted", mutations: sent });
+        return yield* emitEngineEvent({ _tag: "PushCompleted", mutations: sent });
       });
 
     // The claim is held for the whole round trip (through the ack sweep) and
@@ -2841,11 +2924,6 @@ export const make = (
         yield* dedupedPull(subset);
       });
 
-    // Retry only transient (transport) failures; store/mutator errors are not
-    // transient and go straight to the failure surface.
-    const isTransient = (error: { readonly _tag: string }): boolean =>
-      error._tag === "TransportError";
-
     const pushPolicy = options.retry?.push ?? defaultRetryPolicy;
     const pullPolicy = options.retry?.pull ?? defaultRetryPolicy;
     const pokePolicy = options.retry?.pokes ?? defaultRetryPolicy;
@@ -3009,8 +3087,6 @@ export const make = (
           )
         )
       );
-    const namedKey = (name: string, argsEncoded: unknown) =>
-      `${name}:${Hash.canonicalJson(argsEncoded)}`;
     // Encode + key a named subscription, then update the registry with both.
     const updateNamedSubs = (
       name: string,
@@ -3027,36 +3103,10 @@ export const make = (
           )
         )
       );
-    // Apply a Patch's deltas for one collection to a LiveView — confirmed-row
-    // ops from a pull, or optimistic `OverlayOp`s from a mutate; both
-    // shapes carry the `_tag`/`collection`/`id`/`value` this only reads.
-    const applyOps = (
-      view: LiveView.LiveView,
-      collection: string,
-      ops: ReadonlyArray<PatchOp | OverlayOp>
-    ): LiveView.LiveView => {
-      let next = view;
-      for (const op of ops) {
-        if (op._tag === "Clear" || op.collection !== collection) continue;
-        next =
-          op._tag === "Put"
-            ? LiveView.put(next, { id: op.id, value: op.value })
-            : LiveView.del(next, op.id);
-      }
-      return next;
-    };
 
     const sameResult = (a: ReadonlyArray<LocalRow>, b: ReadonlyArray<LocalRow>): boolean =>
       a.length === b.length &&
       a.every((row, i) => row.id === b[i]?.id && row.value === b[i]?.value);
-
-    // A scoped rebuild that doesn't name the observed collection cannot have
-    // moved it, so the observer keeps its page (and `changesWith` dedups the
-    // re-emit). An unscoped rebuild (collections undefined) always recomputes.
-    const rebuildSkips = (change: ViewChange, collection: string): boolean =>
-      change._tag === "Rebuild" &&
-      change.collections !== undefined &&
-      !change.collections.has(collection);
 
     // One sequenced step's page transition for a query's LiveView: `before`/
     // `after` are the window slices pre/post this step, `reset` marks a
@@ -3305,47 +3355,6 @@ export const make = (
       groupBy: string
     ) => query(subset).pipe(Effect.map((rows) => Aggregate.computeGrouped(agg, rows, groupBy)));
 
-    // Route a Patch's ops (this subset's collection only) through an
-    // incremental aggregate state. A Patch's ops are confirmed-row deltas
-    // from a pull, or optimistic `OverlayOp`s a mutate's local handler just
-    // performed — both shapes carry the `_tag`/`collection`/`id`/`value`
-    // this reads. `Put` carries the raw new value — `Aggregate.applyPut`
-    // re-tests `subset.where` itself to decide insert/update/remove, exactly
-    // as `applyOps` does for `LiveView` above.
-    const applyAggregatePatch = (
-      state: Aggregate.State,
-      agg: Aggregate.Aggregate,
-      subset: Subset.Subset,
-      ops: ReadonlyArray<PatchOp | OverlayOp>
-    ): Aggregate.State => {
-      let next = state;
-      for (const op of ops) {
-        if (op._tag === "Clear" || op.collection !== subset.collection) continue;
-        next =
-          op._tag === "Put"
-            ? Aggregate.applyPut(next, agg, subset.where, op.id, op.value)
-            : Aggregate.applyDel(next, agg, op.id);
-      }
-      return next;
-    };
-    const applyAggregateGroupedPatch = (
-      state: Aggregate.GroupedState,
-      agg: Aggregate.Aggregate,
-      subset: Subset.Subset,
-      groupBy: string,
-      ops: ReadonlyArray<PatchOp | OverlayOp>
-    ): Aggregate.GroupedState => {
-      let next = state;
-      for (const op of ops) {
-        if (op._tag === "Clear" || op.collection !== subset.collection) continue;
-        next =
-          op._tag === "Put"
-            ? Aggregate.applyGroupedPut(next, agg, subset.where, groupBy, op.id, op.value)
-            : Aggregate.applyGroupedDel(next, agg, op.id);
-      }
-      return next;
-    };
-
     /**
      * A push-based reducer over a subset's raw row ops, feeding
      * {@link observeAggregateSubset}: `init` builds state from a full
@@ -3446,8 +3455,6 @@ export const make = (
             sameValue: Aggregate.sameGroupedValue,
           });
 
-    const invalidArgs = (mutator: string) => (cause: unknown) =>
-      new MutatorError({ message: `Invalid args for mutator "${mutator}"`, mutator, cause });
     // Journal a mutation and reveal its local effects. The whole body runs
     // under `overlayLock`: appending to the store then tracking the
     // handler's effects directly onto the cached overlay must be atomic with
@@ -3673,11 +3680,11 @@ export const make = (
         ).pipe(Effect.andThen(publishChange(REBUILD))),
       unsubscribeQuery: (name, args) =>
         updateNamedSubs(name, args, (current, entry) => current.filter((e) => e.key !== entry.key)),
-      query: query as ClientEngine["query"],
+      query,
       queryNamed: (name, args) => localSubsetOf(name, args).pipe(Effect.flatMap(query)),
-      observe: observeProjected as ClientEngine["observe"],
+      observe: observeProjected,
       observeWindow,
-      observeChanges: observeSubsetChanges as ClientEngine["observeChanges"],
+      observeChanges: observeSubsetChanges,
       queryAggregate,
       queryAggregateGrouped,
       observeAggregate,

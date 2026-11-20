@@ -11,6 +11,7 @@
 
 import type * as cf from "@cloudflare/workers-types";
 import * as Workers from "@alchemy.run/cloudflare/Workers";
+import type { HttpEffect } from "alchemy/Http";
 import { RuntimeContext } from "alchemy/RuntimeContext";
 import * as Arr from "effect/Array";
 import * as Effect from "effect/Effect";
@@ -144,8 +145,11 @@ export const construct = <Surface>(
     return { object, sockets: raw.sockets, run };
   });
 
-/** A Durable Object's surface, read as its members by name. */
-type Members = Readonly<Record<string | symbol, unknown>>;
+/** An RPC method of a Durable Object's surface, as the bridge calls it. */
+type RpcMethod = (...args: ReadonlyArray<unknown>) => Effect.Effect<unknown, never, RuntimeContext>;
+
+/** A Durable Object's surface, read as its members by name: its `fetch` handler and its RPC methods. */
+type Members = Readonly<Record<string | symbol, Handler | RpcMethod>>;
 
 /**
  * An in-memory namespace over `instances`. `getByName` returns a stub whose
@@ -178,11 +182,7 @@ export const makeNamespace = <Surface extends object>(
                   Effect.flatMap(lookup(name), (instance) =>
                     instance.run<unknown, never>(
                       // SAFETY: every other member of a Durable Object's surface is an RPC method.
-                      (
-                        membersOf(instance)[method] as (
-                          ...args: ReadonlyArray<unknown>
-                        ) => Effect.Effect<unknown, never, RuntimeContext>
-                      )(...args)
+                      (membersOf(instance)[method] as RpcMethod)(...args)
                     )
                   ),
         }
@@ -191,11 +191,7 @@ export const makeNamespace = <Surface extends object>(
 };
 
 /** A Durable Object's HTTP handler, as the bridge runs it. */
-type Handler = Effect.Effect<
-  HttpServerResponse.HttpServerResponse,
-  unknown,
-  HttpServerRequest.HttpServerRequest | Scope.Scope | Workers.DurableObjectState | RuntimeContext
->;
+type Handler = HttpEffect<Workers.DurableObjectState | RuntimeContext>;
 
 /** Run a Durable Object `fetch` handler on a web request and answer a web response. */
 export const fetchOf =

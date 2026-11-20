@@ -169,7 +169,7 @@ export const forCollection = <C extends AnyCollection>(
   collection: C
 ): TypedSubsetBuilder<RowOf<C>> => ({
   make: (options) => {
-    const where = options?.where?.(typedPredicate as TypedPredicate<RowOf<C>>);
+    const where = options?.where?.(typedPredicate);
     return make({
       collection: collection.name,
       ...Defined.fields({
@@ -178,7 +178,7 @@ export const forCollection = <C extends AnyCollection>(
         limit: options?.limit,
         cursor: options?.cursor,
       }),
-    }) as TypedSubset<RowOf<C>>;
+    });
   },
 });
 

@@ -412,7 +412,7 @@ describe("the atomic batch on the key-value store", () => {
   // fail, so the batch must fail with nothing written: a finish that cannot read the record is not
   // skipped. Each member writes something here, so a member that skipped the finish would show it.
   const batchMemberCalls: ReadonlyArray<
-    readonly [string, (store: ClientStore) => Effect.Effect<void, unknown>]
+    readonly [string, (store: ClientStore) => Effect.Effect<void, StoreError>]
   > = [
     [
       "commitPull",

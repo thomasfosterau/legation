@@ -464,21 +464,21 @@ describe("ClientEngine.observeChanges", () => {
   );
 });
 
-describe("Mirror.observeChanges", () => {
-  const makeEngine = (handler: ServerHandler) =>
-    Effect.gen(function* () {
-      const store = yield* ClientStoreModule.makeMemory;
-      const transport = yield* makeInMemory(handler, "group-host");
-      return yield* ClientEngineModule.make({
-        clientId: "host",
-        clientGroupId: "group-host",
-        mutators,
-      }).pipe(
-        Effect.provideService(ClientStore, store),
-        Effect.provideService(ClientTransport, transport)
-      );
-    });
+const makeEngine = (handler: ServerHandler) =>
+  Effect.gen(function* () {
+    const store = yield* ClientStoreModule.makeMemory;
+    const transport = yield* makeInMemory(handler, "group-host");
+    return yield* ClientEngineModule.make({
+      clientId: "host",
+      clientGroupId: "group-host",
+      mutators,
+    }).pipe(
+      Effect.provideService(ClientStore, store),
+      Effect.provideService(ClientTransport, transport)
+    );
+  });
 
+describe("Mirror.observeChanges", () => {
   it.effect(
     "diffs consecutive whole-page mirror updates into enter/update/exit",
     () =>

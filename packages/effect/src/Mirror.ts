@@ -284,6 +284,26 @@ export interface Mirror {
   readonly pinEdges: ClientView.ClientView["pinEdges"];
 }
 
+// Take a request's deferred out of its map and complete it. A no-op when the
+// requestId is not in this map (so both maps can be swept on `MutateError`).
+const resolveIn = <A>(
+  ref: Ref.Ref<Map<number, Deferred.Deferred<A, MutatorError | TransportError>>>,
+  requestId: number,
+  complete: (
+    deferred: Deferred.Deferred<A, MutatorError | TransportError>
+  ) => Effect.Effect<boolean>
+) =>
+  Effect.gen(function* () {
+    const deferred = (yield* Ref.get(ref)).get(requestId);
+    if (deferred === undefined) return;
+    yield* Ref.update(ref, (map) => {
+      const next = new Map(map);
+      next.delete(requestId);
+      return next;
+    });
+    yield* complete(deferred);
+  });
+
 /**
  * Connect a {@link Mirror} to the host on `options.channel`; its subscriptions are released when
  * the scope closes.
@@ -499,26 +519,6 @@ export const make = (options: MirrorOptions): Effect.Effect<Mirror, never, Scope
         )
       )
     );
-
-    // Take a request's deferred out of its map and complete it. A no-op when the
-    // requestId is not in this map (so both maps can be swept on `MutateError`).
-    const resolveIn = <A>(
-      ref: Ref.Ref<Map<number, Deferred.Deferred<A, MutatorError | TransportError>>>,
-      requestId: number,
-      complete: (
-        deferred: Deferred.Deferred<A, MutatorError | TransportError>
-      ) => Effect.Effect<boolean>
-    ) =>
-      Effect.gen(function* () {
-        const deferred = (yield* Ref.get(ref)).get(requestId);
-        if (deferred === undefined) return;
-        yield* Ref.update(ref, (map) => {
-          const next = new Map(map);
-          next.delete(requestId);
-          return next;
-        });
-        yield* complete(deferred);
-      });
 
     // Complete this mirror's waiting form request from the host's reply;
     // a reply addressed to another mirror is not ours, whatever its requestId.

@@ -192,7 +192,7 @@ const literalList = (
   const [head, ...tail] = values;
   return head === undefined || head === null || tail.includes(null)
     ? Option.none()
-    : Option.some([head, ...(tail as Array<Predicate.Literal>)]);
+    : Option.some([head, ...tail]);
 };
 
 /**
@@ -479,15 +479,13 @@ const codecOf = (nodes: Node.NodeRegistry, node: Node.AnyNode): QueryCodec =>
     const schema = UrlQuery.schema(resource, {
       include: includeOption(node),
       fields: true,
-      sort: node.sortable as ReadonlyArray<Resource.AttributeKeys<Resource.Any>>,
+      sort: node.sortable,
       page: PageWindow,
       filter: true,
     }) as QueryCodec["schema"];
     return {
       schema,
-      canonical: UrlQuery.canonical(schema as UrlQuery.FlatQuerySchema) as (
-        decoded: DecodedQuery
-      ) => string,
+      canonical: UrlQuery.canonical(schema),
     };
   });
 
@@ -707,7 +705,7 @@ const projectionError = (node: Node.AnyNode, type: string): Option.Option<QueryE
 /** Check every `fields[…]` key before decoding (see {@link projectionError}). */
 const checkFields = (
   node: Node.AnyNode,
-  record: Readonly<Record<string, unknown>>
+  record: Readonly<Record<string, string | ReadonlyArray<string>>>
 ): Effect.Effect<void, QueryError> =>
   failFirst(Object.keys(record), (key) => {
     const match = /^fields\[(.*)\]$/.exec(key);
@@ -722,7 +720,7 @@ const checkFields = (
  */
 const checkPage = (
   node: Node.AnyNode,
-  record: Readonly<Record<string, unknown>>
+  record: Readonly<Record<string, string | ReadonlyArray<string>>>
 ): Effect.Effect<void, QueryError> =>
   record["page[after]"] !== undefined && record["page[offset]"] !== undefined
     ? Effect.fail(

@@ -19,6 +19,7 @@ import * as HttpApiEndpoint from "effect/http-api/HttpApiEndpoint";
 import * as HttpApiGroup from "effect/http-api/HttpApiGroup";
 import * as HttpClient from "effect/http/HttpClient";
 import * as HttpClientResponse from "effect/http/HttpClientResponse";
+import type { Predicate } from "@thomasfosterau/legation";
 import { ClientEngine, Subset, Defined } from "@thomasfosterau/legation/internal";
 import type { JsonApiRow } from "../Derive.js";
 import * as Relationships from "../Relationships.js";
@@ -41,9 +42,24 @@ const api = HttpApi.make("app").add(crud("issues")).add(crud("comments")).add(cr
 interface Stored {
   readonly type: string;
   readonly id: string;
-  readonly attributes: Record<string, unknown>;
-  readonly relationships?: Record<string, unknown>;
+  readonly attributes: Record<string, Predicate.Literal>;
+  readonly relationships?: Record<string, Schema.Json>;
 }
+
+const readBody = (request: { readonly body: unknown }): any => {
+  const b = request.body as { _tag?: string; body?: Uint8Array };
+  return b?._tag === "Uint8Array" && b.body
+    ? JSON.parse(new TextDecoder().decode(b.body))
+    : undefined;
+};
+
+const links = (rel: unknown): ReadonlyArray<{ type: string; id: string }> => {
+  const data = P.isObject(rel) ? (rel as { data?: unknown }).data : undefined;
+  return (data == null ? [] : Array.isArray(data) ? data : [data]) as ReadonlyArray<{
+    type: string;
+    id: string;
+  }>;
+};
 
 const makeServer = (seed: ReadonlyArray<Stored>) => {
   const store = new Map(seed.map((r) => [`${r.type}:${r.id}`, r]));
@@ -51,20 +67,6 @@ const makeServer = (seed: ReadonlyArray<Stored>) => {
   const headers = { "Content-Type": "application/vnd.api+json" };
   const doc = (data: unknown) => new Response(JSON.stringify({ data }), { status: 200, headers });
   const empty = (status: number) => new Response(null, { status, headers });
-  const readBody = (request: { readonly body: unknown }): any => {
-    const b = request.body as { _tag?: string; body?: Uint8Array };
-    return b?._tag === "Uint8Array" && b.body
-      ? JSON.parse(new TextDecoder().decode(b.body))
-      : undefined;
-  };
-
-  const links = (rel: unknown): ReadonlyArray<{ type: string; id: string }> => {
-    const data = P.isObject(rel) ? (rel as { data?: unknown }).data : undefined;
-    return (data == null ? [] : Array.isArray(data) ? data : [data]) as ReadonlyArray<{
-      type: string;
-      id: string;
-    }>;
-  };
 
   // The grammar's shorthand: `filter[f]=v` (eq), `filter[f]=a,b` (in), or
   // `filter[f][eq|in]=…` — enough for the id windows the engine pushes.
@@ -161,6 +163,9 @@ const provide = <E>(
 /** A row's string attribute; `None` when the attribute is absent or not a string. */
 const attr = (value: JsonApiRow, key: string): Option.Option<string> =>
   Option.liftPredicate(value[key], P.isString);
+
+const bodiesOf = (rows: ReadonlyArray<Relationships.RelatedRow>) =>
+  (defined(rows[0]).related.comments as ReadonlyArray<JsonApiRow>).map((c) => attr(c, "body"));
 
 describe("Relationships", () => {
   const issues = Subset.make({ collection: "issues" });
@@ -260,10 +265,6 @@ describe("Relationships", () => {
           const engine = yield* ClientEngine.ClientEngine;
           yield* syncAll(engine);
 
-          const bodiesOf = (rows: ReadonlyArray<Relationships.RelatedRow>) =>
-            (defined(rows[0]).related.comments as ReadonlyArray<JsonApiRow>).map((c) =>
-              attr(c, "body")
-            );
           const seen = yield* SubscriptionRef.make<ReadonlyArray<ReadonlyArray<unknown>>>([]);
           // Wait on the observer's emissions, not on wall-clock time.
           const emitted = (until: (emissions: ReadonlyArray<ReadonlyArray<unknown>>) => boolean) =>

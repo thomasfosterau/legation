@@ -69,9 +69,9 @@ const DDL_WITHOUT_REJECTIONS: ReadonlyArray<string> = [
 ];
 
 /** Run `use` on a pooled client against a freshly reset schema (default: `DDL`). */
-const withDatabase = <A>(
+const withDatabase = <A, E>(
   url: string,
-  use: (sql: SqlClient) => Effect.Effect<A, unknown>,
+  use: (sql: SqlClient) => Effect.Effect<A, E>,
   schema: ReadonlyArray<string> = DDL
 ): Effect.Effect<A> =>
   Effect.scoped(
@@ -201,12 +201,12 @@ const lockWaitOf = (sql: SqlClient) =>
  */
 const awaitCopySettled = (sql: SqlClient, copy: Fiber.Fiber<unknown, unknown>) =>
   Effect.gen(function* () {
-    if (copy.pollUnsafe() !== undefined) return { _tag: "Finished" } as CopySettled;
+    if (copy.pollUnsafe() !== undefined) return { _tag: "Finished" } satisfies CopySettled;
     if ((yield* lockWaitOf(sql)) === undefined) return yield* Effect.fail("pending" as const);
     // Read again: this read's snapshot is taken after the first saw the wait
     // begin, so it shows the statement that is waiting (see lockWaitOf).
     const wait = yield* lockWaitOf(sql);
-    if (wait !== undefined) return { _tag: "Blocked", ...wait } as CopySettled;
+    if (wait !== undefined) return { _tag: "Blocked", ...wait } satisfies CopySettled;
     return yield* Effect.fail("pending" as const);
   }).pipe(
     Effect.retry({
