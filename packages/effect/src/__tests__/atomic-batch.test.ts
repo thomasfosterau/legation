@@ -51,7 +51,7 @@ const recordingKeyValue = () => {
         }
         return Effect.sync(() => data.get(key));
       }),
-    getUint8Array: () => Effect.succeed(undefined),
+    getUint8Array: () => Effect.undefined,
     set: (key: string, value: string | Uint8Array) =>
       Effect.sync(() => {
         writes.push(key);

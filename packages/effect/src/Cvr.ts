@@ -157,7 +157,7 @@ export const makeKeyValueStore = (
           Effect.mapError(storeError(`Failed to read CVR "${cookie}"`)),
           Effect.flatMap((raw) =>
             raw === undefined
-              ? Effect.succeed(undefined)
+              ? Effect.undefined
               : decodeCvr(raw).pipe(
                   Effect.map(fromWire),
                   Effect.mapError(storeError(`Corrupt CVR at "${cookie}"`))

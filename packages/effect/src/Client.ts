@@ -1031,7 +1031,7 @@ export const fromView = <Graph extends Node.NodeRegistry>(
           : Coverage.snapshotOf(options.snapshot, view.query)
       );
     },
-    totalOf: (subset) => view.totalOf?.(subset) ?? Effect.succeed(undefined),
+    totalOf: (subset) => view.totalOf?.(subset) ?? Effect.undefined,
     reset,
     identity: boundary === undefined ? noBoundary() : boundary.current,
     quarantines: boundary === undefined ? noBoundary() : boundary.quarantines,

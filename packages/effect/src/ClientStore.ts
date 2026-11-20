@@ -1263,7 +1263,7 @@ const readerOver =
   <A>(key: string, codec: Schema.Codec<A, string>) => {
     const raw = entries.get(key);
     return raw === undefined
-      ? Effect.succeed(undefined)
+      ? Effect.undefined
       : Schema.decodeUnknownEffect(codec)(raw).pipe(
           Effect.mapError(
             (cause) => new StoreError({ message: `Corrupt persisted state at "${key}"`, cause })
@@ -1404,7 +1404,7 @@ export const makeKeyValue = (
         Effect.mapError(storeError(`Failed to read "${key}"`)),
         Effect.flatMap((raw) =>
           raw === undefined
-            ? Effect.succeed(undefined)
+            ? Effect.undefined
             : Schema.decodeUnknownEffect(codec)(raw).pipe(
                 Effect.mapError(storeError(`Corrupt persisted state at "${key}"`))
               )
@@ -1977,7 +1977,7 @@ export const makeKeyValue = (
           if (!staged.has(key)) return readDecoded(key, codec);
           const raw = staged.get(key);
           return raw === undefined
-            ? Effect.succeed(undefined)
+            ? Effect.undefined
             : Schema.decodeUnknownEffect(codec)(raw).pipe(
                 Effect.mapError(storeError(`Corrupt persisted state at "${key}"`))
               );
@@ -2341,7 +2341,7 @@ export const makeKeyValue = (
               yield* writeJson(COMPACTION_KEY, intent).pipe(
                 Effect.catch((error) =>
                   readDecoded(COMPACTION_KEY, CompactionIntentFromJson).pipe(
-                    Effect.catchTag("StoreError", () => Effect.succeed(undefined)),
+                    Effect.catchTag("StoreError", () => Effect.undefined),
                     Effect.flatMap((found) =>
                       found === undefined ? Effect.fail(error) : Effect.void
                     )
