@@ -240,7 +240,7 @@ export interface ElectedBootOptions {
 }
 
 /**
- * Dev-mode toggle (#133 item 6, `?host=main` in `+layout.svelte`): the same
+ * Dev-mode toggle (`?host=main` in `+layout.svelte`): the same
  * domain (nodes/mutators) and transport `runHost` gives the service worker,
  * hosted via `ElectedHost.run`'s `navigator.locks` leader election instead —
  * the shipped no-service-worker fallback (ADR-0010) — so it actually

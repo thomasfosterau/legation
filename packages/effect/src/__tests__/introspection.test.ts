@@ -129,8 +129,7 @@ describe("EngineIntrospection", () => {
       expect(events.map((event: EngineEvent) => event._tag)).toEqual([
         "MutationJournaled",
         "PushStarted",
-        // #116: every journaled mutation now settles (not just `mutateWithAck`
-        // ones), so a plain `mutate` also reports `MutationAcknowledged`.
+        // Every journaled mutation settles (not just `mutateWithAck` ones), so a plain `mutate` also reports `MutationAcknowledged`.
         "MutationAcknowledged",
         "PushCompleted",
         "PullStarted",

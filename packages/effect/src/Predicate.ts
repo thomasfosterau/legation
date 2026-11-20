@@ -64,8 +64,8 @@ export type LiteralKind = "text" | "integer" | "double" | "boolean" | "instant";
  *   this row's `localField`. It is a relational node — a single-row evaluator
  *   can't decide it; a backend resolves it to an `In` over `localField` against
  *   the matching `foreignField` set (`resolveExists`).
- * - `InSet` tests field membership in a **named set** (ADR-0015 amendment,
- *   #205): the node carries the set's name, never its members, so an auth
+ * - `InSet` tests field membership in a **named set** (ADR-0015 amendment):
+ *   the node carries the set's name, never its members, so an auth
  *   filter's authored form is stable while the set moves. It is server-authored
  *   only — the wire codec has no case for it — and the sync server binds it to
  *   the resolved values (`bindSets`) before a subset reaches a backend. An

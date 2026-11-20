@@ -1,8 +1,8 @@
 /**
  * CollectionIndex
  *
- * Secondary field-value indexes over a collection's confirmed rows (issue
- * #113): a hash index answers `eq`/`In`/`IsNull` and an ordered index answers
+ * Secondary field-value indexes over a collection's confirmed rows: a hash
+ * index answers `eq`/`In`/`IsNull` and an ordered index answers
  * range `Compare`s, so a subset's `where` resolves against `O(hits)`
  * candidates instead of a full collection scan. Purely in-memory
  * acceleration — never the source of truth (the confirmed rows in

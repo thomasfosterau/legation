@@ -12,11 +12,11 @@
  * disagreement is shrunk to the minimal predicate/row pair and reported with
  * the seed.
  *
- * Every leg is green since #155 made the JS evaluator three-valued, absent ≡
+ * Every leg is green: the JS evaluator is three-valued, absent ≡
  * NULL, text order code point, and booleans ordered `false < true`. The
  * restricted corpus (no NULL/absent, no astral text, no ordered booleans)
- * stays as the regression floor that was green before #155. Since #156 the
- * SQL legs compile with the corpus columns' declared kinds, so every text
+ * stays as the regression floor that was green before the evaluator was
+ * three-valued. The SQL legs compile with the corpus columns' declared kinds, so every text
  * comparison carries the explicit collation clause (`COLLATE "C"` /
  * `COLLATE BINARY`), instants carry none (the oracle's instant column is a
  * real `timestamptz`, which would reject one), and booleans reach SQLite as
@@ -283,7 +283,7 @@ interface Differential {
   /** The full corpus: NULL, absent, astral text, ordered booleans — everything ADR-0028 covers. */
   readonly full: FilterCorpus.Corpus;
   /**
-   * The corpus every evaluator agreed on before #155: no NULL/absent, no astral text, no ordered
+   * The corpus every evaluator agreed on before three-valued evaluation: no NULL/absent, no astral text, no ordered
    * comparison on booleans, re-id'd so it can share the SQL tables with `full`. Same seed as `full`
    * so the seed a disagreement reports reproduces it; the options alone make it distinct.
    */
@@ -590,7 +590,7 @@ const focusedWhere: ReadonlyArray<{
     predicate: Predicate.gt("b", false),
     ids: ["f-true", "f-false", "f-absent"],
   },
-  // #156: the collation clause and typed binds, node by node.
+  // The collation clause and typed binds, node by node.
   {
     // `"s" COLLATE "C" < $1` against an astral literal: U+FFFF sorts below
     // U+1F600 by code point (both SQL legs) but above it by UTF-16 code unit.

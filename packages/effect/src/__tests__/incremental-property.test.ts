@@ -336,7 +336,7 @@ describe("Incremental.join — arbitrary key equality", () => {
 
 // ─── Ordered window ──────────────────────────────────────────────────────────
 
-// ─── deltaFromChanges (#133 item 1: observeChanges as combinator input) ─────
+// ─── deltaFromChanges (observeChanges as combinator input) ──────────────────
 //
 // `stepGround` above already synthesizes exactly the delta a real `LiveView`
 // put/del would produce (at most one row touched per step); converting it to

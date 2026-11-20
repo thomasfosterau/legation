@@ -80,8 +80,8 @@ interface CompactionPlan<T extends Numbered> {
 /**
  * Plan a compaction over the whole `journal` for `clientId`. Pure and generic
  * over the entry shape, so the memory store plans over full mutations while
- * the durable store plans over its compact index (ids only, #249 review S3:
- * a paced flush must not read every body in the journal). Shared so both
+ * the durable store plans over its compact index (ids only: a paced flush
+ * must not read every body in the journal). Shared so both
  * agree on the rule.
  *
  * Eligible ids: pending, `clientId`'s own, above `sentUpTo`. Survivors above
@@ -2299,7 +2299,7 @@ export const makeKeyValue = (
       // forward before the next journal operation, and the caller must learn
       // the renumbering now (returning the error instead would leave the
       // engine, Paced trackers and ack handles on ids the store has already
-      // left behind: the newest paced write would be dropped, #249 review B1).
+      // left behind, and the newest paced write would be dropped).
       compactPending: (clientId, mutationIds) =>
         locked(
           Effect.uninterruptible(

@@ -384,7 +384,7 @@ const nextLink = (input: Input, page: ReadonlyArray<Related.RelatedRow>): Option
  * `links.prev` for an offset page past the first: the same query at
  * `max(0, offset - first)`. Cursor pagination has no `prev` — a forward
  * cursor names no way back, and ADR-0029's model is unbounded-forward only
- * (#209 adds `prev` for the offset idiom alone).
+ * (`prev` is for the offset idiom alone).
  */
 const prevLink = (input: Input): Option.Option<string> => {
   const { first, offset } = input.read;

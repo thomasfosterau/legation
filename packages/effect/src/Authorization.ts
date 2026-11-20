@@ -183,7 +183,7 @@ export const filter = (
 
 /**
  * Produce a collection's read scope, per request. A bare `Predicate` is a
- * `Filter` without named sets (the pre-#205 form, still accepted).
+ * `Filter` without named sets (still accepted).
  */
 export type AuthFilter = (
   context: SyncContext
@@ -229,8 +229,8 @@ export interface AuthPolicy {
    * is checked against its collection's declaration — a collection the
    * registry does not know gets {@link FilterPolicy.bare} (`id` by `eq` /
    * `in`, sortable by `id`). Absent (a policy built without `collections`),
-   * the filter surface is not enforced: the pre-#154 open behaviour, kept
-   * for policies that never see a Node graph.
+   * the filter surface is not enforced, for policies that never see a Node
+   * graph.
    */
   readonly declarations?: ReadonlyMap<string, FilterPolicy.FilterDeclaration>;
 }

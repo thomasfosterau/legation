@@ -327,7 +327,7 @@ const COOKIE_EPOCH_PATTERN = /~e([0-9a-f]+)$/;
 
 /**
  * The scope epoch a cookie was minted under (`""` when the pull bound no
- * named set, the cookie format before #205).
+ * named set, and in cookies minted before named sets).
  */
 const cookieEpochOf = (cookie: string): string =>
   // Read only a trailing `~e<hex>`: a separator inside the fleet namespace must
@@ -877,7 +877,7 @@ export const makeWithIntrospectionWith = (
     // the rows, and no push is in the rows without being covered. That is the
     // invariant the client's overlay relies on to release an acknowledged
     // mutation without a revert or a double application. A backend that exposes
-    // effects before the bump (MemoryBackend today, #341; SqlBackend on D1)
+    // effects before the bump (MemoryBackend today; SqlBackend on D1)
     // can still hand a pull an effect its watermark does not cover; this check
     // cannot see that window.
     //

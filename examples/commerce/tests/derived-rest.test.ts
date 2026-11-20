@@ -161,7 +161,7 @@ describe("src/lib/resources.ts agrees with src/lib/domain.ts", () => {
     }
   });
 
-  it("declares the usage table of #148: eq/in on the key fields, eq on userId, sortable name and createdAt", () => {
+  it("declares the filterable usage: eq/in on the key fields, eq on userId, sortable name and createdAt", () => {
     const products = nodes.nodes.get("products")!;
     expect(products.filterable).toEqual({
       id: { kind: "text", operators: ["eq", "in"] },

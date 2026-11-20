@@ -1,5 +1,5 @@
 /**
- * Test 3 of #221 — same URL, same answer (ADR-0029 §6): for one signed-in
+ * Same URL, same answer (ADR-0029 §6): for one signed-in
  * viewer, a JSON:API `GET` answered by the façade from the viewer's replica
  * and the same `GET` answered by the server's derived REST handler, under
  * the viewer's session cookie, are the same document, byte for byte. Both

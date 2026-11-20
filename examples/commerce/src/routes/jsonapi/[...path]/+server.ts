@@ -8,7 +8,7 @@
  * (`server/client.ts`): the Kit process resolves the Better Auth session
  * (`hooks.server.ts`) and vouches for it in the header, and whatever the
  * client sent under that name is dropped. Reads only — the writes stay
- * form actions through the typed client (the façade's writes are #169).
+ * form actions through the typed client (the façade does not take writes yet).
  *
  * The URL is forwarded as received — the raw path and query, never the
  * decoded route param, so a percent-encoded `#`, `?` or `/` in an id

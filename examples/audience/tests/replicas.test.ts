@@ -1,5 +1,5 @@
 /**
- * Test 1 of #221 — one corpus, four viewers (and nobody): the owner, a
+ * One corpus, four viewers (and nobody): the owner, a
  * follower, a stranger and a moderator each subscribe to the same
  * collection on their own device, and each replica holds exactly the rows
  * the viewer's effect-auth policy admits. Asserted on what the durable

@@ -40,7 +40,7 @@ describe("useConnection", () => {
     expect(text()).toContain("row:todo-2");
     expect(text()).not.toContain("row:todo-3");
 
-    // #133: count `ViewRebuilt` engine events from here on — a widen that
+    // Count `ViewRebuilt` engine events from here on — a widen that
     // reuses the maintained order (`retarget`) fires none; only a genuine
     // Rebuild (a pull racing a pending mutation, a Clear) would.
     let rebuilds = 0;

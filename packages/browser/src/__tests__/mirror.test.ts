@@ -949,9 +949,9 @@ describe("pulled marks follow their rows over a mirror", () => {
   it.live("a mirror holds a key unpulled until that key's rows have reached it", () =>
     Effect.scoped(
       Effect.gen(function* () {
-        // A stand-in host that sends the mark first, as a host that predates
-        // #672 could, or one whose mark reached this tab before it took an
-        // interest in the key.
+        // A stand-in host that sends the mark first, as an older host could,
+        // or one whose mark reached this tab before it took an interest in
+        // the key.
         const { host: hostChannel, mirror: channel } = yield* MirrorChannel.makeLoopbackPair;
         const mirror = yield* Mirror.make({ channel, mutators });
         yield* mirror.subscribe(allTodos);

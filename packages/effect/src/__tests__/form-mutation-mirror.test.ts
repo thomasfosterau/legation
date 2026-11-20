@@ -269,7 +269,7 @@ describe("enhanced form submit over a connected host", () => {
     Effect.scoped(
       Effect.gen(function* () {
         const pair = yield* MirrorChannel.makeLoopbackPair;
-        // A host from before #536: it decodes the begin as an ordinary `Mutate`
+        // An older host: it decodes the begin as an ordinary `Mutate`
         // and its engine has no such mutator, so it answers `MutateError`.
         const inbox = yield* pair.host.subscribe;
         yield* Effect.forkScoped(

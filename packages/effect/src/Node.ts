@@ -7,7 +7,7 @@
  * attributes + the foreign-key fields its `one` edges declare), the
  * {@link Collection} the engine materializes, the joins and sync windows its
  * edges imply, and the fan-out **derivable set** (ADR-0023: `one`-edge keys
- * + declared `hintKeys`), and the **filterable set** (ADR-0028, #154: the
+ * + declared `hintKeys`), and the **filterable set** (ADR-0028: the
  * fields a client may filter or sort by, with their operators and kinds).
  *
  * Ids are branded per node type, so a `products` id cannot be passed where

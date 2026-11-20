@@ -772,7 +772,7 @@ const makeParkable = (mock: Mock) =>
     return { backend, ran, written, release };
   });
 
-describe("SqlBackend overlapping calls (READ COMMITTED model, issue #352)", () => {
+describe("SqlBackend overlapping calls (READ COMMITTED model)", () => {
   // The mock's transaction does not serialise, so two calls interleave the way
   // PostgreSQL READ COMMITTED lets them: a handler parked after its writes does
   // not hold a second call back. A parked call's claim is already in the
@@ -885,7 +885,7 @@ describe("SqlBackend ledger order follows the executor's transactions", () => {
 describe("SqlBackend watermark without transactions", () => {
   it.effect("a parked call that finishes after a later bump never moves the watermark back", () => {
     // D1's order: nothing is claimed, so a copy of mutation 2 runs while the
-    // first call is parked (the double-apply #342 describes). The watermark is
+    // first call is parked (a double apply). The watermark is
     // still what the bump makes of it: the parked call's bump of 2 must not
     // undo the bump of 3.
     const mock = makeMock({ transactional: false });

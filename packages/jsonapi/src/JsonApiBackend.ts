@@ -40,7 +40,7 @@
  * `oldValues`, as MemoryBackend's do, so topic-derived fan-out (ADR-0023) pokes
  * the windows a row moved away from. A REST API keeps no change token, and
  * nothing here says whether a cached row is still current (a write made
- * elsewhere goes unseen, #447; this backend's own writes do keep its cache
+ * elsewhere goes unseen; this backend's own writes do keep its cache
  * current), so the old value is always read: each update or delete does one
  * `GET /{type}/{id}` before its write, once per row per push. A row the push
  * creates was absent before the push, so it is not read (`enterBatchCreate`),

@@ -1,5 +1,5 @@
 /**
- * Test 5 of #221 — offline is still bounded. The follower syncs, then the
+ * Offline is still bounded. The follower syncs, then the
  * network goes down. Offline, the replica answers what it answered online
  * and nothing more: no read the pin covers widens past the policy, a read
  * the replica does not cover is the façade's `503` (never a partial

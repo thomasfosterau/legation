@@ -1,6 +1,6 @@
 /**
- * A registration is pulled only once a pull that started after it has applied (ADR-0029 section 3,
- * #426). A registration made while a pull is in flight is not marked by that pull, because the
+ * A registration is pulled only once a pull that started after it has applied (ADR-0029 section 3).
+ * A registration made while a pull is in flight is not marked by that pull, because the
  * pull may have read the subscriptions before it was made; the next pull marks it. The view
  * (`ClientView.pulled`) and the Client's coverage answer alike: a covered read is served locally
  * only when the windows its rows link to are pulled.

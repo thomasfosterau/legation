@@ -19,7 +19,7 @@
   //
   // `?host=main` skips the service worker entirely and runs
   // `ElectedHost.run` on this tab instead (the shipped no-service-worker
-  // fallback, ADR-0010/#119) — useful for exercising that topology locally.
+  // fallback, ADR-0010) — useful for exercising that topology locally.
   // It is gated on `import.meta.env.DEV` so a production build cannot be
   // switched onto the fallback topology by a query string. `role` below is
   // purely a debug badge; no application logic branches on it, and neither

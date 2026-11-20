@@ -1,5 +1,5 @@
 /**
- * Test 2 of #221 — the filter is the policy. A property test over generated
+ * The filter is the policy. A property test over generated
  * corpora: for every viewer, the rows a subscription to `posts` yields —
  * across the boundary, through the real sync server (identity resolved from
  * the session cookie, the scope compiled and translated, the auth filter

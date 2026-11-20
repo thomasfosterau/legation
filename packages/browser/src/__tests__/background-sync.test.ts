@@ -474,9 +474,9 @@ describeWrapped("BackgroundSync", (it) => {
       "online writes coalesce into one debounced push; an immediately-firing SyncManager is never asked",
       () =>
         Effect.gen(function* () {
-          // Chromium online: a registered tag's `sync` fires at once. Before
-          // #246 every journaled mutation registered, so each of these five
-          // writes got its own push.
+          // Chromium online: a registered tag's `sync` fires at once, so if
+          // every journaled mutation registered, each of these five writes
+          // would get its own push.
           const self = fakeScope({ firesOnRegister: true });
           const listener = listenOn(self, { offline: Effect.succeed(false) });
           const { engine, store, pushes } = yield* makeEngine(yield* ClientStore.makeMemory, {

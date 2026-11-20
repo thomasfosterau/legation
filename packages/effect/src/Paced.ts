@@ -20,8 +20,8 @@
  * key via {@link ClientEngine.dropIfPending}, so a burst collapses to the
  * newest entry rather than piling one row per call into the journal.
  *
- * This was chosen over the alternative sketched in #117 (journal once,
- * replace an unpushed entry's args in place) because it needs no new
+ * This was chosen over journaling once and replacing an unpushed entry's args
+ * in place because it needs no new
  * "mutate this pushed-adjacent entry in place" primitive — `dropIfPending`
  * is a narrow, easily-audited addition (drop specific still-pending ids, never
  * touching anything a push may have claimed) that composes with the journal
@@ -169,8 +169,8 @@ const flush = (
 ): Effect.Effect<void, MutatorError | StoreError> =>
   Effect.gen(function* () {
     track(engine, lastIdByKey);
-    // Journaling and remembering the id are one uninterruptible step (#249
-    // review N1): an interrupt between them would leave an entry no tracker
+    // Journaling and remembering the id are one uninterruptible step: an
+    // interrupt between them would leave an entry no tracker
     // knows, which a later compaction could renumber without anyone noticing.
     const previous = yield* Effect.uninterruptible(
       Effect.gen(function* () {

@@ -233,8 +233,8 @@ export interface MutationEvent {
  * A unified sync-lifecycle event on {@link ClientEngine.engineEvents}:
  * the single source of truth from which {@link ClientEngine.mutationEvents}
  * is derived. Every variant is emitted from one internal hub, kept
- * unbounded for the same reason #44 keeps `mutationEventsHub` unbounded:
- * lifecycle events are low-volume, consumer-driven, and must be lossless —
+ * unbounded because lifecycle events are low-volume, consumer-driven, and
+ * must be lossless —
  * they are observability, not reconstructable via pull.
  *
  * - `MutationJournaled` — a mutation was journaled locally (from `mutate`,
@@ -382,7 +382,7 @@ const isCoveredBy = (
 // without also tracking window-boundary shifts (a delta outside the window
 // can still evict/admit a row at its edge, which a row-level delta alone
 // doesn't reveal) — `observeAggregate`/`observeAggregateGrouped` refold the
-// page each emission for these, same as before #110. An unwindowed subset
+// page each emission for these. An unwindowed subset
 // (the common case: aggregate over everything synced) folds `Patch` ops in
 // place instead.
 const isWindowed = (subset: Subset.Subset): boolean =>
@@ -819,11 +819,11 @@ export interface ClientEngine {
   /**
    * Row-level deltas of a subset's live window: `enter`/`exit` mark
    * predicate/limit-boundary crossings, `update` a same-membership value
-   * change, `move` a same-membership/same-value position change (#112's
-   * stable position keys) — batched per view-step (one array per
+   * change, `move` a same-membership/same-value position change (by stable
+   * position keys) — batched per view-step (one array per
    * {@link ViewChange} application, mirroring `observe`'s one-page-per-step).
-   * A confirmed-row pull `Patch` and a plain local mutation (#109 tracks a
-   * mutator's local handler directly onto the cached overlay and publishes
+   * A confirmed-row pull `Patch` and a plain local mutation (the engine tracks
+   * a mutator's local handler directly onto the cached overlay and publishes
    * exactly what it did) both diff precisely; `Rebuild`/seq-gap collapse — a
    * pull racing a still-pending mutation, an unknown mutator, a `Clear` —
    * emit a `reset` marker + fresh `enter`s instead of a diff, since the
@@ -995,8 +995,8 @@ export interface ClientEngine {
    * Run `body` with pulls held: under the pull lock, so no pull is in
    * flight while it runs and none starts until it ends, given the pull
    * counters as they stand. It is how a direct store write that must not race
-   * a pull is serialised against the engine's pulls (`Hydration.hydrateUnpulled`,
-   * #146): `counts.started` is `0` exactly when no pull has begun since the
+   * a pull is serialised against the engine's pulls (`Hydration.hydrateUnpulled`):
+   * `counts.started` is `0` exactly when no pull has begun since the
    * engine was built.
    *
    * `body` must not await {@link pull}, or anything that waits on one: the lock
@@ -1111,7 +1111,7 @@ export const make = (
         );
         for (const mutation of adopted) yield* emitEvent(mutation.mutationId, "journaled");
       });
-    // #212: with the identity boundary on, the sync-protocol client identity
+    // With the identity boundary on, the sync-protocol client identity
     // is scoped to the principal. It has to be: mutation ids are a per-client
     // sequence the backend requires to be contiguous (ADR-0008's exactly-once
     // ledger), so a second principal continuing the first's numbering pushes a
@@ -1177,8 +1177,7 @@ export const make = (
     const changeSeq = yield* Ref.make(0);
     // The single unified event hub: every sync-lifecycle event flows
     // through here, and `mutationEvents` is a filtered projection of it.
-    // Unbounded for the same reason #44 kept `mutationEventsHub` unbounded —
-    // lifecycle events are low-volume, consumer-driven, and lossless (they are
+    // Unbounded: lifecycle events are low-volume, consumer-driven, and lossless (they are
     // observability, not reconstructable via pull).
     const engineEventsHub = yield* Effect.acquireRelease(PubSub.unbounded<EngineEvent>(), (hub) =>
       PubSub.shutdown(hub)
@@ -1273,7 +1272,7 @@ export const make = (
           )
         )
       );
-    // Project the four mutation variants back to the #36 `MutationEvent` shape.
+    // Project the four mutation variants back to the `MutationEvent` shape.
     const toMutationEvent: (event: EngineEvent) => MutationEvent | undefined =
       Match.type<EngineEvent>().pipe(
         Match.withReturnType<MutationEvent | undefined>(),
@@ -1647,8 +1646,8 @@ export const make = (
 
     // Forget every built index, and bump every collection's generation, so the next
     // access rebuilds from the store and an in-flight build discards its result. For a
-    // confirmed-row write that does not name its rows (a cleared or rewritten store,
-    // #350): unlike a `Clear` patch op, it does not assume the store is now empty.
+    // confirmed-row write that does not name its rows (a cleared or rewritten
+    // store): unlike a `Clear` patch op, it does not assume the store is now empty.
     const invalidateAllIndexes: Effect.Effect<void> = Ref.update(indexState, (state) => ({
       built: new Map(),
       generations: state.generations,
@@ -2096,7 +2095,7 @@ export const make = (
         })
       );
 
-    // #117 / #249: compact superseded, still-pending journal entries for
+    // Compact superseded, still-pending journal entries for
     // pacing strategies, then renumber the survivors so the ids the backend
     // sees stay contiguous (it rejects a gap, ADR-0008).
     //
@@ -2121,8 +2120,7 @@ export const make = (
       Effect.gen(function* () {
         if (Arr.isReadonlyArrayEmpty(mutationIds)) return NO_COMPACTION;
         const clientId = yield* currentClientId;
-        // Uninterruptible from the store's commit to the last re-key (#249
-        // review B1): the store has renumbered the journal by the time
+        // Uninterruptible from the store's commit to the last re-key: the store has renumbered the journal by the time
         // `compactPending` returns, so an interrupt before the acks, states and
         // events catch up would leave this engine, Paced and every handle on
         // ids that no longer exist. Events and the cache invalidation run

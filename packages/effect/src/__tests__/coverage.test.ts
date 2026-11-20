@@ -178,7 +178,7 @@ describe("rule 2: the window", () => {
 });
 
 describe("offset pagination: covered by the ordinary limit-prefix rule", () => {
-  // Option A of #209: an offset read compiles (`Query.plan`'s `rootLimit`)
+  // An offset read compiles (`Query.plan`'s `rootLimit`)
   // to a plain limit-only window — `limit = offset + first`, no `cursor` —
   // so it is judged by exactly `coversWindow`/rule 2 above; no parallel
   // "offset coverage" path exists. Option B (offset windows as a

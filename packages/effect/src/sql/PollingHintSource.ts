@@ -12,7 +12,7 @@
  * (ADR-0006) — so any backend that can already run the `SqlBackend` can also run
  * this.
  *
- * The published hint is value-less (`ids: []`), so the #42 fan-out matcher falls
+ * The published hint is value-less (`ids: []`), so the fan-out matcher falls
  * back to a collection-level match: every group subscribed to the collection is
  * poked and the next pull reconciles. That is sound — over-matching a poke costs
  * an empty pull; poke is never a correctness dependency (ADR-0009).

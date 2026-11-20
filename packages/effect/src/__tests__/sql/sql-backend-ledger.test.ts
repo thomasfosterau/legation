@@ -7,8 +7,8 @@
  *
  * SQLite serialises every transaction on its one connection (the client holds
  * a semaphore and takes the write lock with `BEGIN IMMEDIATE`), so overlapping
- * calls cannot interleave here. The READ COMMITTED interleaving that #352 is
- * about is modelled in `sql-backend.test.ts`, where the executor's transaction
+ * calls cannot interleave here. The READ COMMITTED interleaving of overlapping
+ * calls is modelled in `sql-backend.test.ts`, where the executor's transaction
  * does not serialise.
  */
 import { describe, expect, it } from "@effect/vitest";
@@ -41,8 +41,8 @@ const DDL: ReadonlyArray<string> = [
   )`,
 ];
 
-/** The schema before #366: the ledger has no `rejections` column. */
-const DDL_BEFORE_366: ReadonlyArray<string> = [
+/** The older schema: the ledger has no `rejections` column. */
+const DDL_WITHOUT_REJECTIONS: ReadonlyArray<string> = [
   `CREATE TABLE todos (id TEXT PRIMARY KEY, title TEXT)`,
   `CREATE TABLE effects (seq INTEGER PRIMARY KEY AUTOINCREMENT, id TEXT NOT NULL)`,
   `CREATE TABLE sync_mutations (
@@ -550,7 +550,7 @@ describe("SqlBackend rejection memory on SQLite", () => {
             expect(yield* countOf(sql, "effects")).toBe(0);
             expect(yield* ledgerOf(sql)).toBe(0);
           }),
-        DDL_BEFORE_366
+        DDL_WITHOUT_REJECTIONS
       )
   );
 
@@ -565,7 +565,7 @@ describe("SqlBackend rejection memory on SQLite", () => {
           const replay = yield* backend.applyMutations(context, [mutation(1, "todo/reject")]);
           expect(replay.rejected).toEqual([rejected(1)]);
         }),
-      DDL_BEFORE_366
+      DDL_WITHOUT_REJECTIONS
     )
   );
 });
