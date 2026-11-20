@@ -41,10 +41,14 @@
     },
     "./package.json": "./package.json"
   },
+  "scripts": {
+    "docgen": "docgen"
+  },
   "dependencies": {
     "@thomasfosterau/legation": "workspace:^"
   },
   "devDependencies": {
+    "@effect/docgen": "catalog:",
     "@effect/vitest": "catalog:",
     "@thomasfosterau/effect-auth": "catalog:",
     "effect": "catalog:",

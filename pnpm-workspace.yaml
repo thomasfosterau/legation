@@ -7,6 +7,7 @@ packages:
 catalogMode: strict
 
 catalog:
+  "@effect/docgen": ^4.1.4
   # One release train at exact versions. 2.0.0-beta.87 is the release the apps
   # pin; it requires `effect ^4.1.4` (see `catalogs.alchemy-peers`).
   alchemy: 2.0.0-beta.87

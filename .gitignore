@@ -153,3 +153,12 @@ fallow.sarif
 .claude/scheduled_tasks.lock
 .vitest/
 .alchemy
+
+# docgen output (`vp run docgen`), published by the Pages workflow.
+packages/effect/docs/api/
+packages/browser/docs/api/
+packages/jsonapi/docs/api/
+packages/alchemy-cloudflare/docs/api/
+packages/auth/docs/api/
+packages/svelte/docs/api/
+packages/devtools/docs/api/

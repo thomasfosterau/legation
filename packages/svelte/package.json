@@ -47,11 +47,15 @@
   "publishConfig": {
     "access": "public"
   },
+  "scripts": {
+    "docgen": "docgen"
+  },
   "dependencies": {
     "@thomasfosterau/effect-svelte": "catalog:",
     "@thomasfosterau/legation": "workspace:^"
   },
   "devDependencies": {
+    "@effect/docgen": "catalog:",
     "@effect/vitest": "catalog:",
     "@sveltejs/kit": "catalog:",
     "effect": "catalog:",

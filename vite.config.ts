@@ -387,6 +387,21 @@ export default defineConfig({
   },
   run: {
     tasks: {
+      // The API reference the Pages workflow publishes. Examples are
+      // rendered but not compiled (`tscExecutable: "true"` in docgen.json).
+      docgen: {
+        command: "echo 'docgen: every package documented'",
+        dependsOn: [
+          "@thomasfosterau/legation#docgen",
+          "@thomasfosterau/legation-browser#docgen",
+          "@thomasfosterau/legation-jsonapi#docgen",
+          "@thomasfosterau/legation-alchemy-cloudflare#docgen",
+          "@thomasfosterau/legation-auth#docgen",
+          "@thomasfosterau/legation-svelte#docgen",
+          "@thomasfosterau/legation-devtools#docgen",
+        ],
+        cache: false,
+      },
       // Every package's `dist/` (`vp pack`), in dependency order.
       build: {
         command: "echo 'build: every package packed'",
