@@ -197,7 +197,7 @@ export const forward = (target: InvalidationTarget): InvalidationSink.Invalidati
 export const receive =
   (sink: InvalidationSink.InvalidationSink) =>
   (payload: string): Effect.Effect<void> =>
-    Option.match(Schema.decodeUnknownOption(TouchedJson)(payload), {
+    Option.match(Schema.decodeOption(TouchedJson)(payload), {
       onNone: () => Effect.logWarning("EdgeInvalidation: dropped a payload that does not decode"),
       onSome: (touched) => sink.invalidate(touched),
     });

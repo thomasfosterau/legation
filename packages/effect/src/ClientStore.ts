@@ -1264,7 +1264,7 @@ const readerOver =
     const raw = entries.get(key);
     return raw === undefined
       ? Effect.undefined
-      : Schema.decodeUnknownEffect(codec)(raw).pipe(
+      : Schema.decodeEffect(codec)(raw).pipe(
           Effect.mapError(
             (cause) => new StoreError({ message: `Corrupt persisted state at "${key}"`, cause })
           )
@@ -1405,7 +1405,7 @@ export const makeKeyValue = (
         Effect.flatMap((raw) =>
           raw === undefined
             ? Effect.undefined
-            : Schema.decodeUnknownEffect(codec)(raw).pipe(
+            : Schema.decodeEffect(codec)(raw).pipe(
                 Effect.mapError(storeError(`Corrupt persisted state at "${key}"`))
               )
         )
@@ -1978,7 +1978,7 @@ export const makeKeyValue = (
           const raw = staged.get(key);
           return raw === undefined
             ? Effect.undefined
-            : Schema.decodeUnknownEffect(codec)(raw).pipe(
+            : Schema.decodeEffect(codec)(raw).pipe(
                 Effect.mapError(storeError(`Corrupt persisted state at "${key}"`))
               );
         });

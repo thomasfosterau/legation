@@ -184,6 +184,7 @@ export default defineConfig({
       "effecttsgo/effect-succeed-with-undefined": "error",
       "unicorn/prefer-add-event-listener": "error",
       "eslint/no-shadow": "error",
+      "effecttsgo/prefer-typed-schema-decoder": "error",
     },
     overrides: [
       // ---- Genuine can't-applies ------------------------------------------

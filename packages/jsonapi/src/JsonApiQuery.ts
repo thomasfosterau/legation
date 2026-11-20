@@ -814,7 +814,7 @@ export const parseParams = (
     yield* checkInclude(node, Option.fromUndefinedOr(record["include"]));
     yield* checkFields(node, record);
     yield* checkPage(node, record);
-    const decoded = yield* Schema.decodeUnknownEffect(codecOf(nodes, node).schema)(record).pipe(
+    const decoded = yield* Schema.decodeEffect(codecOf(nodes, node).schema)(record).pipe(
       Effect.mapError(decodeError(collection))
     );
     const read = yield* Effect.fromResult(readOf(collection, decoded));
