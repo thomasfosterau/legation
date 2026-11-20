@@ -31,44 +31,44 @@ const decodeJson = Schema.decodeSync(JsonText);
 const failure = { armed: false, puts: 0, failAt: 2 };
 
 /** What the proxied factory saw: each readwrite and readonly transaction opened, and each key a put wrote. */
-const tally = { readwrite: 0, readonly: 0, putKeys: [] as Array<string> };
+const tally = { readwrite: 0, readonly: 0, putKeys: Arr.empty<string>() };
 
 /** A property read a trap does not intercept: the target's own, with methods bound to it. */
-const passThrough = <T extends object>(target: T, prop: string | symbol): T[keyof T] => {
-  const value = target[prop as keyof T];
+const passThrough: NonNullable<ProxyHandler<object>["get"]> = (target, prop) => {
+  const value = P.hasProperty(target, prop) ? target[prop] : undefined;
   return P.isFunction(value) ? value.bind(target) : value;
 };
 
 const wrapStore = (store: IDBObjectStore): IDBObjectStore =>
   new Proxy(store, {
-    get(target, prop) {
+    get(target, prop, receiver) {
       if (prop === "put") {
         return (value: unknown) => {
           if (failure.armed && ++failure.puts === failure.failAt) {
             throw new DOMException("simulated write failure", "DataError");
           }
-          const key = (value as { key?: unknown } | undefined)?.key;
+          const key = P.hasProperty(value, "key") ? value.key : undefined;
           if (P.isString(key)) tally.putKeys.push(key);
           return target.put(value);
         };
       }
-      return passThrough(target, prop);
+      return passThrough(target, prop, receiver);
     },
   });
 
 const wrapTransaction = (tx: IDBTransaction): IDBTransaction =>
   new Proxy(tx, {
-    get(target, prop) {
+    get(target, prop, receiver) {
       if (prop === "objectStore") {
         return (name: string) => wrapStore(target.objectStore(name));
       }
-      return passThrough(target, prop);
+      return passThrough(target, prop, receiver);
     },
   });
 
 const wrapDatabase = (db: IDBDatabase): IDBDatabase =>
   new Proxy(db, {
-    get(target, prop) {
+    get(target, prop, receiver) {
       if (prop === "transaction") {
         return (names: string | string[], mode?: IDBTransactionMode) => {
           const tx = target.transaction(names, mode);
@@ -78,24 +78,24 @@ const wrapDatabase = (db: IDBDatabase): IDBDatabase =>
           return wrapTransaction(tx);
         };
       }
-      return passThrough(target, prop);
+      return passThrough(target, prop, receiver);
     },
   });
 
 const wrapRequest = (request: IDBOpenDBRequest): IDBOpenDBRequest =>
   new Proxy(request, {
-    get(target, prop) {
+    get(target, prop, receiver) {
       if (prop === "result") return wrapDatabase(target.result);
-      return passThrough(target, prop);
+      return passThrough(target, prop, receiver);
     },
   });
 
 const failingIndexedDb: IDBFactory = new Proxy(indexedDB, {
-  get(target, prop) {
+  get(target, prop, receiver) {
     if (prop === "open") {
       return (name: string, version?: number) => wrapRequest(target.open(name, version));
     }
-    return passThrough(target, prop);
+    return passThrough(target, prop, receiver);
   },
 });
 

@@ -14,6 +14,7 @@ import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
 import * as Match from "effect/Match";
 import * as P from "effect/Predicate";
+import * as R from "effect/Record";
 import * as FilterCorpus from "../FilterCorpus.js";
 import * as Predicate from "../Predicate.js";
 import { defined } from "./defined.js";
@@ -107,9 +108,7 @@ layer(DefaultCorpus.layer)("FilterCorpus", (it) => {
   it.effect("covers every operator at the default seed", () =>
     Effect.gen(function* () {
       const corpus = yield* DefaultCorpus;
-      const names = Object.keys(
-        FilterCorpus.emptyCoverage()
-      ) as ReadonlyArray<FilterCorpus.OperatorName>;
+      const names = R.keys(FilterCorpus.emptyCoverage());
       // `true` is deliberately rare; everything else must recur.
       const thin = names.filter((name) => corpus.coverage[name] < (name === "true" ? 1 : 10));
       expect(thin).toEqual([]);

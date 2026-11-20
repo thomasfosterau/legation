@@ -28,28 +28,28 @@ import type { PullResponse, PushRequest } from "../Protocol.js";
 import * as Subset from "../Subset.js";
 import * as SyncServer from "../SyncServer.js";
 import { ClientTransport, makeInMemory, type ServerHandler } from "../Transport.js";
+import { idOf } from "./shapes.js";
 
 const groupId = "group-a";
 const clientId = "client-a";
 const allTodos = Subset.make({ collection: "todos" });
 
 const handlers = {
-  "todo/set": (args, writer) =>
-    Effect.asVoid(writer.put("todos", (args as { readonly id: string }).id, args)),
+  "todo/set": (args, writer) => Effect.asVoid(writer.put("todos", idOf(args), args)),
   "todo/forbidden": (args, writer) =>
     writer
-      .put("todos", (args as { readonly id: string }).id, args)
+      .put("todos", idOf(args), args)
       .pipe(Effect.andThen(Effect.fail(new MutationRejected({ reason: "permission revoked" })))),
 } satisfies Record<string, MemoryBackend.BackendHandler>;
 
 const mutators = Mutator.registry([
   {
     mutator: Mutator.make("todo/set", Schema.Unknown),
-    local: (args, writer) => writer.put("todos", (args as { readonly id: string }).id, args),
+    local: (args: { readonly id: string }, writer) => writer.put("todos", args.id, args),
   },
   {
     mutator: Mutator.make("todo/forbidden", Schema.Unknown),
-    local: (args, writer) => writer.put("todos", (args as { readonly id: string }).id, args),
+    local: (args: { readonly id: string }, writer) => writer.put("todos", args.id, args),
   },
 ]);
 
@@ -159,9 +159,7 @@ describe("ClientEngine settles a pull-carried rejection", () => {
       expect(yield* handle.acknowledged).toEqual({ _tag: "applied" });
       expect(yield* stateOf(engine, 1)).toMatchObject({ phase: "acknowledged" });
       expect(yield* store.pendingMutations).toEqual([]);
-      expect((yield* engine.query(allTodos)).map((row) => (row as { id: string }).id)).toEqual([
-        "y",
-      ]);
+      expect((yield* engine.query(allTodos)).map((row) => idOf(row))).toEqual(["y"]);
     })
   );
 });

@@ -21,6 +21,7 @@ import * as Subset from "../Subset.js";
 import * as SyncRoom from "../SyncRoom.js";
 import { layerInMemory } from "../Transport.js";
 import { TestFailure } from "./test-failure.js";
+import { idOf } from "./shapes.js";
 
 interface Todo {
   readonly id: string;
@@ -30,16 +31,16 @@ interface Todo {
 const mutators = Mutator.registry([
   {
     mutator: Mutator.make("todo/set", Schema.Unknown),
-    local: (args, writer) => writer.put("todos", (args as Todo).id, args),
+    local: (args: Todo, writer) => writer.put("todos", args.id, args),
   },
   {
     mutator: Mutator.make("todo/reject", Schema.Unknown),
-    local: (args, writer) => writer.put("todos", (args as Todo).id, args),
+    local: (args: Todo, writer) => writer.put("todos", args.id, args),
   },
 ]);
 
 const handlers = {
-  "todo/set": (args, writer) => Effect.asVoid(writer.put("todos", (args as Todo).id, args)),
+  "todo/set": (args, writer) => Effect.asVoid(writer.put("todos", idOf(args), args)),
   "todo/reject": () => Effect.fail(new MutationRejected({ reason: "not allowed" })),
 } satisfies Record<string, MemoryBackend.BackendHandler>;
 
@@ -111,15 +112,17 @@ describe("ClientView.fromEngine / layer, live", () => {
   });
 });
 
-const eventually = <A, E>(read: Effect.Effect<A, E>, until: (value: A) => boolean) =>
-  Effect.gen(function* () {
-    for (let attempt = 0; attempt < 200; attempt++) {
+const eventually = <A, E>(read: Effect.Effect<A, E>, until: (value: A) => boolean) => {
+  const poll = (remaining: number): Effect.Effect<A, E> =>
+    Effect.gen(function* () {
       const value = yield* read;
       if (until(value)) return value;
       yield* Effect.callback<void>((resume) => {
         const timer = setTimeout(() => resume(Effect.void), 5);
         return Effect.sync(() => clearTimeout(timer));
       });
-    }
-    return yield* Effect.die(new TestFailure({ message: "eventually: condition never held" }));
-  });
+      if (remaining > 1) return yield* poll(remaining - 1);
+      return yield* Effect.die(new TestFailure({ message: "eventually: condition never held" }));
+    });
+  return poll(200);
+};

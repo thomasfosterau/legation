@@ -26,6 +26,13 @@ import {
 } from "../index.js";
 import { ClientEngine, Cvr, InvalidationBus, Related, Subset, SyncServer } from "../internal.js";
 import { defined } from "./defined.js";
+import { idOf, stringField } from "./shapes.js";
+
+const bioOf = stringField("bio");
+const decodeSlugs = Schema.decodeUnknownSync(Schema.Array(Schema.Struct({ slug: Schema.String })));
+const nameOf = stringField("name");
+const slugOf = stringField("slug");
+const usernameOf = stringField("username");
 
 const Category = Node.make("categories", {
   attributes: { name: Schema.String },
@@ -262,23 +269,19 @@ const reviewSet = Mutator.make("review/set", Schema.Unknown);
 const mutators = Mutator.registry([
   {
     mutator: productSet,
-    local: (args, writer) => writer.put("products", (args as { id: string }).id, args),
+    local: (args: { id: string }, writer) => writer.put("products", args.id, args),
   },
   {
     mutator: reviewSet,
-    local: (args, writer) => writer.put("reviews", (args as { id: string }).id, args),
+    local: (args: { id: string }, writer) => writer.put("reviews", args.id, args),
   },
 ]);
 
 const makeEngine = Effect.fn("makeEngine")(function* () {
   const backend = yield* MemoryBackend.make(
     MemoryBackend.validatedHandlers([
-      MemoryBackend.handler(productSet, (args, writer) =>
-        writer.put("products", (args as { id: string }).id, args)
-      ),
-      MemoryBackend.handler(reviewSet, (args, writer) =>
-        writer.put("reviews", (args as { id: string }).id, args)
-      ),
+      MemoryBackend.handler(productSet, (args, writer) => writer.put("products", idOf(args), args)),
+      MemoryBackend.handler(reviewSet, (args, writer) => writer.put("reviews", idOf(args), args)),
     ])
   );
   const handler = yield* SyncServer.make.pipe(
@@ -316,11 +319,11 @@ const postSet = Mutator.make("post/set", Schema.Unknown);
 const naturalKeyMutators = Mutator.registry([
   {
     mutator: authorSet,
-    local: (args, writer) => writer.put("authors", (args as { username: string }).username, args),
+    local: (args: { username: string }, writer) => writer.put("authors", args.username, args),
   },
   {
     mutator: postSet,
-    local: (args, writer) => writer.put("posts", (args as { slug: string }).slug, args),
+    local: (args: { slug: string }, writer) => writer.put("posts", args.slug, args),
   },
 ]);
 
@@ -328,11 +331,9 @@ const makeNaturalKeyEngine = Effect.fn("makeNaturalKeyEngine")(function* () {
   const backend = yield* MemoryBackend.make(
     MemoryBackend.validatedHandlers([
       MemoryBackend.handler(authorSet, (args, writer) =>
-        writer.put("authors", (args as { username: string }).username, args)
+        writer.put("authors", usernameOf(args), args)
       ),
-      MemoryBackend.handler(postSet, (args, writer) =>
-        writer.put("posts", (args as { slug: string }).slug, args)
-      ),
+      MemoryBackend.handler(postSet, (args, writer) => writer.put("posts", slugOf(args), args)),
     ])
   );
   const handler = yield* SyncServer.make.pipe(
@@ -398,7 +399,7 @@ describe("Node registry over the existing engine", () => {
         const first = yield* Stream.runHead(Stream.take(stream, 1));
         const rows = Option.isSome(first) ? first.value : [];
         expect(rows).toHaveLength(1);
-        expect((defined(rows[0]).related["product"] as { name: string }).name).toBe("Desk");
+        expect(nameOf(defined(rows[0]).related["product"])).toBe("Desk");
       })
     )
   );
@@ -426,7 +427,7 @@ describe("Node registry over the existing engine", () => {
         );
         const posts = yield* firstRows(authorOf);
         expect(posts).toHaveLength(1);
-        expect((defined(posts[0]).related["author"] as { bio: string }).bio).toBe("engine");
+        expect(bioOf(defined(posts[0]).related["author"])).toBe("engine");
 
         // The inverse: authors.username → posts.authorName.
         const postsOf = yield* Related.related(
@@ -438,11 +439,9 @@ describe("Node registry over the existing engine", () => {
         );
         const authors = yield* firstRows(postsOf);
         expect(authors).toHaveLength(1);
-        expect(
-          (defined(authors[0]).related["posts"] as ReadonlyArray<{ slug: string }>).map(
-            (row) => row.slug
-          )
-        ).toEqual(["hello-world"]);
+        expect(decodeSlugs(defined(authors[0]).related["posts"]).map((row) => row.slug)).toEqual([
+          "hello-world",
+        ]);
       })
     )
   );

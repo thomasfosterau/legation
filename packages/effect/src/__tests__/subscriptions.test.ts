@@ -22,6 +22,7 @@ import * as Subscriptions from "../Subscriptions.js";
 import * as Subset from "../Subset.js";
 import * as SyncServer from "../SyncServer.js";
 import { ClientTransport, makeInMemory, type ServerHandler } from "../Transport.js";
+import { idOf } from "./shapes.js";
 
 interface Todo {
   readonly id: string;
@@ -30,10 +31,10 @@ interface Todo {
 
 const setTodo = Mutator.make("todo/set", Schema.Unknown);
 const mutators = Mutator.registry([
-  { mutator: setTodo, local: (args, writer) => writer.put("todos", (args as Todo).id, args) },
+  { mutator: setTodo, local: (args: Todo, writer) => writer.put("todos", args.id, args) },
 ]);
 const handlers = {
-  "todo/set": (args, writer) => Effect.asVoid(writer.put("todos", (args as Todo).id, args)),
+  "todo/set": (args, writer) => Effect.asVoid(writer.put("todos", idOf(args), args)),
 } satisfies Record<string, MemoryBackend.BackendHandler>;
 
 const makeServer = Effect.fn("makeServer")(function* (): Effect.fn.Return<

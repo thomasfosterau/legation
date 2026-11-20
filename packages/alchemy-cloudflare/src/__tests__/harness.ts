@@ -19,6 +19,7 @@ import * as P from "effect/Predicate";
 import * as HttpServerRequest from "effect/http/HttpServerRequest";
 import * as HttpServerResponse from "effect/http/HttpServerResponse";
 import * as Scope from "effect/Scope";
+import { TestFailure } from "./test-failure.js";
 
 /**
  * A partial fake of `T`: any subset of `T`'s members, each method with a
@@ -169,22 +170,26 @@ export const makeNamespace = <Surface extends object>(
           get: (_, method) =>
             method === "fetch"
               ? (request: HttpServerRequest.HttpServerRequest) =>
-                  Effect.flatMap(lookup(name), (instance) =>
-                    instance.run(
-                      // SAFETY: a Durable Object's `fetch` member is its HTTP handler.
-                      (membersOf(instance)["fetch"] as Handler).pipe(
-                        Effect.provideService(HttpServerRequest.HttpServerRequest, request),
-                        Effect.orDie
-                      )
-                    )
-                  )
+                  Effect.flatMap(lookup(name), (instance) => {
+                    const handler = membersOf(instance)["fetch"];
+                    return Effect.isEffect(handler)
+                      ? instance.run(
+                          handler.pipe(
+                            Effect.provideService(HttpServerRequest.HttpServerRequest, request),
+                            Effect.orDie
+                          )
+                        )
+                      : Effect.die(new TestFailure({ message: "`fetch` is not an HTTP handler" }));
+                  })
               : (...args: ReadonlyArray<unknown>) =>
-                  Effect.flatMap(lookup(name), (instance) =>
-                    instance.run<unknown, never>(
-                      // SAFETY: every other member of a Durable Object's surface is an RPC method.
-                      (membersOf(instance)[method] as RpcMethod)(...args)
-                    )
-                  ),
+                  Effect.flatMap(lookup(name), (instance) => {
+                    const rpc = membersOf(instance)[method];
+                    return P.isFunction(rpc)
+                      ? instance.run<unknown, never>(rpc(...args))
+                      : Effect.die(
+                          new TestFailure({ message: `${String(method)} is not an RPC method` })
+                        );
+                  }),
         }
       ),
   });

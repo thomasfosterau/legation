@@ -34,11 +34,11 @@ interface Window {
   readonly subset: Subset.Subset;
   readonly holds: number;
   /**
-   * The engine's `started` count when the window was first held; absent until then.
+   * The engine's `started` count when the window was first held.
    * A window held by several registrations keeps the mark of its first hold: it is
    * one engine window, so one pull marks it for all of them (N1).
    */
-  readonly since: number | undefined;
+  readonly since: number;
 }
 
 /** One registration: its root window, its holds, and how many holds it has on each window. */
@@ -79,8 +79,7 @@ export interface PullMarks {
 const summarize = (state: State, key: string, applied: number): Coverage.Pulled => {
   const owner = state.owners.get(key);
   if (owner === undefined) return Coverage.NOT_PULLED;
-  const ownPulled = (window: Window): boolean =>
-    window.since !== undefined && applied > window.since;
+  const ownPulled = (window: Window): boolean => applied > window.since;
   const pulledSubsets = [...state.windows.values()]
     .filter(ownPulled)
     .map((window) => window.subset);

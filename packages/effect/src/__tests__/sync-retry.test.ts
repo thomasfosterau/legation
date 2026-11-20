@@ -33,6 +33,7 @@ import * as SyncServer from "../SyncServer.js";
 import * as Telemetry from "../Telemetry.js";
 import { ClientTransport, makeInMemory, type ClientTransport as CT } from "../Transport.js";
 import type { ServerHandler } from "../Transport.js";
+import { idOf, titleOf } from "./shapes.js";
 
 interface Todo {
   readonly id: string;
@@ -43,18 +44,12 @@ interface Todo {
 const setTodo = Mutator.registry([
   {
     mutator: Mutator.make("todo/set", Schema.Unknown),
-    local: (args, writer) => {
-      const todo = args as Todo;
-      return writer.put("todos", todo.id, todo);
-    },
+    local: (todo: Todo, writer) => writer.put("todos", todo.id, todo),
   },
 ]);
 
 const backendHandlers = {
-  "todo/set": (args, writer) => {
-    const todo = args as Todo;
-    return Effect.asVoid(writer.put("todos", todo.id, todo));
-  },
+  "todo/set": (args, writer) => Effect.asVoid(writer.put("todos", idOf(args), args)),
 } satisfies Record<string, MemoryBackend.BackendHandler>;
 
 const authPolicy = Authorization.policy({ todos: Authorization.allowAll });
@@ -181,7 +176,7 @@ describe("retry integration", () => {
       // The first interval pull fails twice, retries, then converges.
       yield* Effect.sleep(Duration.millis(200));
       const seen = yield* reader.query(allTodos);
-      expect(seen.map((row) => (row.value as Todo).title)).toEqual(["remote"]);
+      expect(seen.map((row) => titleOf(row.value))).toEqual(["remote"]);
       expect(yield* Ref.get(failuresLeft)).toBe(0);
     })
   );
@@ -285,7 +280,7 @@ describe("retry integration", () => {
       yield* Effect.sleep(Duration.millis(200));
       expect(yield* Ref.get(subs)).toBeGreaterThan(1); // re-established
       const seen = yield* reader.query(allTodos);
-      expect(seen.map((row) => (row.value as Todo).title)).toEqual(["poked"]);
+      expect(seen.map((row) => titleOf(row.value))).toEqual(["poked"]);
     })
   );
 });

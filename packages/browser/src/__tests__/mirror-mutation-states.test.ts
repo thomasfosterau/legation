@@ -31,16 +31,19 @@ import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
 import { TestFailure } from "./test-failure.js";
 
+const decodeIdentified = Schema.decodeUnknownSync(Schema.Struct({ id: Schema.String }));
+
 const TodoArgs = Schema.Struct({
   id: Schema.String,
   title: Schema.String,
   isDone: Schema.Boolean,
 });
-type Todo = typeof TodoArgs.Type;
-
 const todoSet = Mutator.make("todo/set", TodoArgs);
 const mutators = Mutator.registry([
-  { mutator: todoSet, local: (args, writer) => writer.put("todos", (args as Todo).id, args) },
+  {
+    mutator: todoSet,
+    local: (args, writer) => writer.put("todos", decodeIdentified(args).id, args),
+  },
 ]);
 
 /** Real timers, independent of the test clock. */
@@ -51,15 +54,13 @@ const sleepReal = (millis: number) =>
   });
 
 /** Poll until `read` passes `until`, with a bounded number of attempts. */
-const eventually = <A>(read: Effect.Effect<A>, until: (value: A) => boolean) =>
-  Effect.gen(function* () {
-    for (let attempt = 0; attempt < 200; attempt++) {
-      const value = yield* read;
-      if (until(value)) return value;
-      yield* sleepReal(5);
-    }
-    return yield* Effect.die(new TestFailure({ message: "eventually: condition never held" }));
-  });
+const eventually = <A>(read: Effect.Effect<A>, until: (value: A) => boolean) => {
+  const attempt = (n: number): Effect.Effect<A> =>
+    n === 200
+      ? Effect.die(new TestFailure({ message: "eventually: condition never held" }))
+      : Effect.filterOrElse(read, until, () => Effect.andThen(sleepReal(5), attempt(n + 1)));
+  return attempt(0);
+};
 
 const makeEngine = Effect.fn("makeEngine")(function* () {
   const backend = yield* MemoryBackend.make(

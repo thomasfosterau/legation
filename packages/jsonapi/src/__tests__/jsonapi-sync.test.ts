@@ -18,6 +18,7 @@ import * as HttpApi from "effect/http-api/HttpApi";
 import * as HttpApiEndpoint from "effect/http-api/HttpApiEndpoint";
 import * as HttpApiGroup from "effect/http-api/HttpApiGroup";
 import * as HttpClient from "effect/http/HttpClient";
+import type * as HttpClientRequest from "effect/http/HttpClientRequest";
 import * as HttpClientResponse from "effect/http/HttpClientResponse";
 import * as Str from "effect/String";
 import { ClientStore } from "@thomasfosterau/legation";
@@ -28,9 +29,10 @@ import * as Ledger from "../Ledger.js";
 import { defined } from "./defined.js";
 import { withLayer } from "./with-layer.js";
 
+const decodeTitled = Schema.decodeUnknownSync(Schema.Struct({ title: Schema.String }));
+
 const JsonText = Schema.fromJsonString(Schema.Unknown);
 const encodeJson = Schema.encodeSync(JsonText);
-const decodeJson = Schema.decodeSync(JsonText);
 
 // A conventional JSON:API surface for one resource type, `todos`.
 const idParam = { params: Schema.Struct({ id: Schema.String }) };
@@ -53,12 +55,22 @@ interface StoredResource {
 const headers = { "Content-Type": "application/vnd.api+json" };
 const doc = (data: unknown) => new Response(encodeJson({ data }), { status: 200, headers });
 const empty = (status: number) => new Response(null, { status, headers });
-const readBody = (request: { readonly body: unknown }): any => {
-  const b = request.body as { _tag?: string; body?: Uint8Array };
-  return b?._tag === "Uint8Array" && b.body
-    ? decodeJson(new TextDecoder().decode(b.body))
-    : undefined;
-};
+const decodeResourceDocument = Schema.decodeUnknownSync(
+  Schema.fromJsonString(
+    Schema.Struct({
+      data: Schema.Struct({
+        type: Schema.String,
+        id: Schema.String,
+        attributes: Schema.optionalKey(Schema.Record(Schema.String, Schema.Json)),
+      }),
+    })
+  )
+);
+/** The primary resource of a request's JSON:API document. */
+const readResource = (request: HttpClientRequest.HttpClientRequest) =>
+  decodeResourceDocument(
+    request.body._tag === "Uint8Array" ? new TextDecoder().decode(request.body.body) : undefined
+  ).data;
 
 /** An in-memory JSON:API server exposed as an HttpClient. */
 const makeServer = (forbidCreate?: (id: string) => boolean) => {
@@ -78,7 +90,7 @@ const makeServer = (forbidCreate?: (id: string) => boolean) => {
               : empty(404)
         ),
         Match.when("POST", () => {
-          const resource = readBody(request).data as StoredResource;
+          const resource = readResource(request);
           if (forbidCreate?.(resource.id)) {
             return empty(403); // permanent rejection
           }
@@ -90,7 +102,7 @@ const makeServer = (forbidCreate?: (id: string) => boolean) => {
           return doc(store.get(resource.id));
         }),
         Match.when("PATCH", () => {
-          const patch = readBody(request).data as StoredResource;
+          const patch = readResource(request);
           const existing = store.get(defined(id)) ?? {
             type: "todos",
             id: defined(id),
@@ -117,7 +129,7 @@ const makeServer = (forbidCreate?: (id: string) => boolean) => {
 };
 
 const titles = (rows: ReadonlyArray<{ readonly value: unknown }>): ReadonlyArray<string> =>
-  rows.map((row) => (row.value as { title: string }).title);
+  rows.map((row) => decodeTitled(row.value).title);
 
 describeWrapped("Convention.classify", (it) => {
   it("classifies conventional JSON:API routes", () => {

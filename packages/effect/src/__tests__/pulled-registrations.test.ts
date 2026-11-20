@@ -175,7 +175,8 @@ describe("pulled registrations", () => {
         const { engine } = yield* makeEngine();
         const refusing: typeof engine = {
           ...engine,
-          // A ClientEngine is typed infallible, but a transport-backed one can refuse at run time.
+          // SAFETY: deliberately ill-typed: a ClientEngine is typed infallible, but a
+          // transport-backed one can refuse at run time, the case under test.
           subscribe: () => Effect.fail(new StoreError({ message: "refused" })) as never,
         };
         const view = ClientView.fromEngine(refusing);

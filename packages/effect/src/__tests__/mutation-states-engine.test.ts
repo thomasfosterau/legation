@@ -7,6 +7,7 @@
  */
 import * as P from "effect/Predicate";
 import { describe, expect, it } from "@effect/vitest";
+import * as Arr from "effect/Array";
 import * as Deferred from "effect/Deferred";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
@@ -36,6 +37,7 @@ import * as SyncServer from "../SyncServer.js";
 import { ClientTransport, makeInMemory, type ServerHandler } from "../Transport.js";
 import { defined } from "./defined.js";
 import * as Json from "../internal/Json.js";
+import { idOf } from "./shapes.js";
 
 interface Todo {
   readonly id: string;
@@ -46,19 +48,19 @@ interface Todo {
 const mutators = Mutator.registry([
   {
     mutator: Mutator.make("todo/set", Schema.Unknown),
-    local: (args, writer) => writer.put("todos", (args as Todo).id, args),
+    local: (args: Todo, writer) => writer.put("todos", args.id, args),
   },
   {
     mutator: Mutator.make("todo/forbidden", Schema.Unknown),
-    local: (args, writer) => writer.put("todos", (args as Todo).id, args),
+    local: (args: Todo, writer) => writer.put("todos", args.id, args),
   },
 ]);
 
 const backendHandlers = {
-  "todo/set": (args, writer) => Effect.asVoid(writer.put("todos", (args as Todo).id, args)),
+  "todo/set": (args, writer) => Effect.asVoid(writer.put("todos", idOf(args), args)),
   "todo/forbidden": (args, writer) =>
     writer
-      .put("todos", (args as Todo).id, args)
+      .put("todos", idOf(args), args)
       .pipe(Effect.andThen(Effect.fail(new MutationRejected({ reason: "permission revoked" })))),
 } satisfies Record<string, MemoryBackend.BackendHandler>;
 
@@ -214,10 +216,15 @@ describe("ClientEngine.mutationStates", () => {
 
       // 50 mutations, each journaled and immediately pushed+acknowledged: a
       // storm of terminal settlements.
-      for (let i = 1; i <= 50; i++) {
-        yield* engine.mutate("todo/set", { id: `t${i}`, title: `t${i}`, done: false });
-        yield* engine.push;
-      }
+      yield* Effect.forEach(
+        Arr.range(1, 50),
+        (i) =>
+          Effect.andThen(
+            engine.mutate("todo/set", { id: `t${i}`, title: `t${i}`, done: false }),
+            engine.push
+          ),
+        { concurrency: 1, discard: true }
+      );
       // One more left pending (never pushed) — must survive the bound.
       yield* engine.mutate("todo/set", { id: "last", title: "still pending", done: false });
 
@@ -306,6 +313,17 @@ describe("ClientEngine.mutationStates", () => {
   );
 });
 
+/** Runs `step` until `done` holds, checking before each step. */
+const runUntil = <E, R>(
+  done: Effect.Effect<boolean, E, R>,
+  step: Effect.Effect<unknown, E, R>
+): Effect.Effect<void, E, R> =>
+  Effect.gen(function* () {
+    if (yield* done) return;
+    yield* step;
+    yield* runUntil(done, step);
+  });
+
 /**
  * Subscribes to the engine's lifecycle events now and returns `read`: every event emitted before
  * its call, once it has returned. `Stream.toPull` subscribes on its first pull, so the reader pulls
@@ -324,15 +342,18 @@ const openEvents = (engine: ClientEngineModule.ClientEngine) =>
         pull.pipe(Effect.flatMap((chunk) => Ref.update(seen, (prior) => [...prior, ...chunk])))
       )
     );
-    while ((yield* pullsSeen) === 0) {
-      yield* engine.pull;
-      yield* Effect.yieldNow;
-    }
+    yield* runUntil(
+      Effect.map(pullsSeen, (count) => count !== 0),
+      Effect.andThen(engine.pull, Effect.yieldNow)
+    );
     return {
       read: Effect.gen(function* () {
         const before = yield* pullsSeen;
         yield* engine.pull;
-        while ((yield* pullsSeen) === before) yield* Effect.yieldNow;
+        yield* runUntil(
+          Effect.map(pullsSeen, (count) => count !== before),
+          Effect.yieldNow
+        );
         return yield* Ref.get(seen);
       }),
     };
@@ -539,9 +560,11 @@ describe("hydrated journal entries in a running engine", () => {
         // A peer under the same client id applies mutations 1..5, so the server reports
         // lastMutationIds["client-a"] = 5 and a pull of `engine` trims every journal entry up to 5.
         const peer = yield* makeEngine(handler, yield* ClientStoreModule.makeMemory);
-        for (let id = 1; id <= 5; id++) {
-          yield* peer.mutate("todo/set", { id: String(id), title: "peer", done: false });
-        }
+        yield* Effect.forEach(
+          Arr.range(1, 5),
+          (id) => peer.mutate("todo/set", { id: String(id), title: "peer", done: false }),
+          { concurrency: 1, discard: true }
+        );
         yield* peer.push;
 
         const engine = yield* makeEngine(handler, gated);
@@ -559,9 +582,19 @@ describe("hydrated journal entries in a running engine", () => {
         // Without the lock the pull trims id 5 now, while the read still holds its snapshot; with
         // it, the pull waits behind the read. Either way it gets a bounded number of scheduler
         // turns (no timers), then the read is released.
-        for (let turn = 0; turn < 10_000 && !(yield* Ref.get(trimmed)); turn++) {
-          yield* Effect.yieldNow;
-        }
+        let turn = 0;
+        let trimmedSeen = false;
+        yield* Effect.whileLoop({
+          while: () => turn < 10_000 && !trimmedSeen,
+          body: () =>
+            Effect.gen(function* () {
+              trimmedSeen = yield* Ref.get(trimmed);
+              if (!trimmedSeen) yield* Effect.yieldNow;
+            }),
+          step: () => {
+            turn += 1;
+          },
+        });
         yield* Deferred.succeed(releaseRead, undefined);
         yield* Fiber.join(resync);
         yield* Fiber.join(pull);

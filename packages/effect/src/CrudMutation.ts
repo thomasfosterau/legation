@@ -40,6 +40,7 @@
  */
 
 import * as Effect from "effect/Effect";
+import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 import * as Mutator from "./Mutator.js";
 import type * as Node from "./Node.js";
@@ -86,11 +87,14 @@ export interface Options {
   readonly writes?: Writes | undefined;
 }
 
-const derivesFor = (writes: Writes | undefined, type: string, operation: Operation): boolean =>
-  writes === undefined || (writes[type] ?? []).includes(operation);
+const derivesFor = (writes: Option.Option<Writes>, type: string, operation: Operation): boolean =>
+  Option.match(writes, {
+    onNone: () => true,
+    onSome: (chosen) => (chosen[type] ?? []).includes(operation),
+  });
 
 /** The derived mutations of one node, filtered by `writes`. */
-const nodeEntries = (node: Node.AnyNode, writes: Writes | undefined): ReadonlyArray<Entry> => {
+const nodeEntries = (node: Node.AnyNode, writes: Option.Option<Writes>): ReadonlyArray<Entry> => {
   const { type } = node;
   const identity = node.id;
   const entries: Array<Entry> = [];
@@ -156,7 +160,9 @@ const nodeEntries = (node: Node.AnyNode, writes: Writes | undefined): ReadonlyAr
  * ```
  */
 export const entries = (nodes: Node.NodeRegistry, options?: Options): ReadonlyArray<Entry> =>
-  [...nodes.nodes.values()].flatMap((node) => nodeEntries(node, options?.writes));
+  [...nodes.nodes.values()].flatMap((node) =>
+    nodeEntries(node, Option.fromUndefinedOr(options?.writes))
+  );
 
 /** The graph-derived CRUD mutations as a registry of their own. Duplicate names cannot occur. */
 export const registry = (nodes: Node.NodeRegistry, options?: Options): Mutator.MutatorRegistry =>

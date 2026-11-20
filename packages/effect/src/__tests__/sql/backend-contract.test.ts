@@ -45,6 +45,7 @@ import * as PgExecutor from "../../sql/PgExecutor.js";
 import * as Sql from "../../sql/Sql.js";
 import * as SqlBackend from "../../sql/SqlBackend.js";
 import * as Env from "../env.js";
+import { booleanField } from "../shapes.js";
 import { TestFailure } from "../test-failure.js";
 
 const asBackendError = (message: string) => (cause: unknown) =>
@@ -71,6 +72,25 @@ const makeExecutor = (sql: SqlClient): SqlBackend.SqlExecutor => {
         ),
   };
 };
+
+// The contract mutators' own args schemas: a handler decodes its args as the
+// memory backend's validated handlers do.
+const decodePutRow = Schema.decodeUnknownSync(BackendContract.putRow.args);
+const decodeDelRow = Schema.decodeUnknownSync(BackendContract.delRow.args);
+const decodeRejectAlways = Schema.decodeUnknownSync(BackendContract.rejectAlways.args);
+const decodeWriteThenFail = Schema.decodeUnknownSync(BackendContract.writeThenFail.args);
+const decodeCountUp = Schema.decodeUnknownSync(BackendContract.countUp.args);
+
+/** A `putRow` value: the columns the contract tables hold, each bound as given. */
+const decodeContractValue = Schema.decodeUnknownSync(
+  Schema.NullishOr(
+    Schema.Struct({
+      n: Schema.optional(Schema.Unknown),
+      rank: Schema.optional(Schema.Unknown),
+      tag: Schema.optional(Schema.Unknown),
+    })
+  )
+);
 
 /** Contract collections live in their own two-column tables (id + n). */
 const CONTRACT_DDL: ReadonlyArray<string> = [
@@ -118,21 +138,18 @@ const contractMutators = new Map<string, Mutator.AnyMutator>([
 const handlers = {
   [BackendContract.putRow.name]: (raw, tx) =>
     Effect.gen(function* () {
-      const args = raw as {
-        collection: string;
-        id: string;
-        value: { n?: number; rank?: number; tag?: string };
-      };
+      const args = decodePutRow(raw);
+      const value = decodeContractValue(args.value);
       const table = yield* tableFor(args.collection);
       yield* tx.run({
         text: `INSERT OR REPLACE INTO ${table} (id, n, rank, tag) VALUES (?, ?, ?, ?)`,
-        params: [args.id, args.value?.n ?? null, args.value?.rank ?? null, args.value?.tag ?? null],
+        params: [args.id, value?.n ?? null, value?.rank ?? null, value?.tag ?? null],
       });
       return [{ collection: args.collection, ids: [args.id] }];
     }),
   [BackendContract.delRow.name]: (raw, tx) =>
     Effect.gen(function* () {
-      const args = raw as { collection: string; id: string };
+      const args = decodeDelRow(raw);
       const table = yield* tableFor(args.collection);
       yield* tx.run({ text: `DELETE FROM ${table} WHERE id = ?`, params: [args.id] });
       return [{ collection: args.collection, ids: [args.id] }];
@@ -141,7 +158,7 @@ const handlers = {
     Effect.fail(new BackendError({ message: "contract/fail always fails" })),
   [BackendContract.writeThenFail.name]: (raw, tx) =>
     Effect.gen(function* () {
-      const args = raw as { collection: string; id: string };
+      const args = decodeWriteThenFail(raw);
       const table = yield* tableFor(args.collection);
       // Overwrite a live row, then fail transiently. The transaction rolls the
       // write back, so the suite sees the row unchanged (rule 10).
@@ -153,7 +170,7 @@ const handlers = {
     }),
   [BackendContract.countUp.name]: (raw, tx) =>
     Effect.gen(function* () {
-      const args = raw as { collection: string; id: string; gate: string };
+      const args = decodeCountUp(raw);
       const table = yield* tableFor(args.collection);
       // Read the counter, park between the read and the write (rule 11), then
       // write the increment. The write is a plain UPDATE: the isolation under
@@ -171,7 +188,7 @@ const handlers = {
     }),
   [BackendContract.rejectAlways.name]: (raw, tx) =>
     Effect.gen(function* () {
-      const args = raw as { collection: string; id: string };
+      const args = decodeRejectAlways(raw);
       const table = yield* tableFor(args.collection);
       // Stage a write, then reject — the suite asserts it rolled back (rule 9),
       // which only means something because `tx` is a real SAVEPOINT-backed
@@ -442,21 +459,26 @@ interface Todo {
   readonly done: boolean;
 }
 
+const decodeTitled = Schema.decodeUnknownSync(
+  Schema.Struct({ id: Schema.String, title: Schema.String })
+);
+const doneOf = booleanField("done");
+
 const todoSet = Mutator.make("todo/set", Schema.Unknown);
 const todoMutators = Mutator.registry([
   {
     mutator: todoSet,
-    local: (args, writer) => writer.put("todos", (args as Todo).id, args),
+    local: (args: Todo, writer) => writer.put("todos", args.id, args),
   },
 ]);
 
 const todoHandlers = {
   "todo/set": (raw, tx) =>
     Effect.gen(function* () {
-      const args = raw as Todo;
+      const args = decodeTitled(raw);
       yield* tx.run({
         text: `INSERT OR REPLACE INTO todos (id, title, done) VALUES (?, ?, ?)`,
-        params: [args.id, args.title, args.done ? 1 : 0],
+        params: [args.id, args.title, doneOf(raw) ? 1 : 0],
       });
       return [{ collection: "todos", ids: [args.id] }];
     }),
@@ -511,11 +533,10 @@ describe("paced compaction against SqlBackend", () => {
         yield* engine.subscribe(allTodos);
 
         const paced = yield* Paced.coalesce(engine, "todo/set");
-        for (let n = 1; n <= 3; n++)
-          yield* paced.call("1", { id: "1", title: `e${n}`, done: false });
+        const edit = (n: number) => paced.call("1", { id: "1", title: `e${n}`, done: false });
+        yield* Effect.forEach(Arr.range(1, 3), edit, { concurrency: 1, discard: true });
         yield* paced.call("2", { id: "2", title: "other", done: true });
-        for (let n = 4; n <= 5; n++)
-          yield* paced.call("1", { id: "1", title: `e${n}`, done: false });
+        yield* Effect.forEach(Arr.range(4, 5), edit, { concurrency: 1, discard: true });
 
         // Two survivors, contiguous from 1, in journal order (todo 2, then todo 1).
         const pending = yield* store.pendingMutations;
@@ -572,21 +593,18 @@ const pgExecutor = PgExecutor.make;
 const pgHandlers = {
   [BackendContract.putRow.name]: (raw, tx) =>
     Effect.gen(function* () {
-      const args = raw as {
-        collection: string;
-        id: string;
-        value: { n?: number; rank?: number; tag?: string };
-      };
+      const args = decodePutRow(raw);
+      const value = decodeContractValue(args.value);
       const table = yield* tableFor(args.collection);
       yield* tx.run({
         text: `INSERT INTO ${table} (id, n, rank, tag) VALUES ($1, $2, $3, $4) ON CONFLICT (id) DO UPDATE SET n = EXCLUDED.n, rank = EXCLUDED.rank, tag = EXCLUDED.tag`,
-        params: [args.id, args.value?.n ?? null, args.value?.rank ?? null, args.value?.tag ?? null],
+        params: [args.id, value?.n ?? null, value?.rank ?? null, value?.tag ?? null],
       });
       return [{ collection: args.collection, ids: [args.id] }];
     }),
   [BackendContract.delRow.name]: (raw, tx) =>
     Effect.gen(function* () {
-      const args = raw as { collection: string; id: string };
+      const args = decodeDelRow(raw);
       const table = yield* tableFor(args.collection);
       yield* tx.run({ text: `DELETE FROM ${table} WHERE id = $1`, params: [args.id] });
       return [{ collection: args.collection, ids: [args.id] }];
@@ -595,7 +613,7 @@ const pgHandlers = {
     Effect.fail(new BackendError({ message: "contract/fail always fails" })),
   [BackendContract.countUp.name]: (raw, tx) =>
     Effect.gen(function* () {
-      const args = raw as { collection: string; id: string; gate: string };
+      const args = decodeCountUp(raw);
       const table = yield* tableFor(args.collection);
       const rows = yield* tx.query({
         text: `SELECT n FROM ${table} WHERE id = $1`,
@@ -610,7 +628,7 @@ const pgHandlers = {
     }),
   [BackendContract.rejectAlways.name]: (raw, tx) =>
     Effect.gen(function* () {
-      const args = raw as { collection: string; id: string };
+      const args = decodeRejectAlways(raw);
       const table = yield* tableFor(args.collection);
       yield* tx.run({
         text: `INSERT INTO ${table} (id, n) VALUES ($1, -1) ON CONFLICT (id) DO UPDATE SET n = EXCLUDED.n`,
@@ -620,7 +638,7 @@ const pgHandlers = {
     }),
   [BackendContract.writeThenFail.name]: (raw, tx) =>
     Effect.gen(function* () {
-      const args = raw as { collection: string; id: string };
+      const args = decodeWriteThenFail(raw);
       const table = yield* tableFor(args.collection);
       yield* tx.run({
         text: `INSERT INTO ${table} (id, n) VALUES ($1, 99) ON CONFLICT (id) DO UPDATE SET n = EXCLUDED.n`,
@@ -729,7 +747,7 @@ const awaitPeerOn =
  */
 const lockingCountUp: SqlBackend.SqlHandler = (raw, tx) =>
   Effect.gen(function* () {
-    const args = raw as { collection: string; id: string; gate: string };
+    const args = decodeCountUp(raw);
     const table = yield* tableFor(args.collection);
     yield* tx.run({ text: `UPDATE ${table} SET n = n WHERE id = $1`, params: [args.id] });
     const rows = yield* tx.query({

@@ -19,6 +19,7 @@ import * as HttpApi from "effect/http-api/HttpApi";
 import * as HttpApiEndpoint from "effect/http-api/HttpApiEndpoint";
 import * as HttpApiGroup from "effect/http-api/HttpApiGroup";
 import * as HttpClient from "effect/http/HttpClient";
+import type * as HttpClientRequest from "effect/http/HttpClientRequest";
 import * as HttpClientResponse from "effect/http/HttpClientResponse";
 import { Atomic } from "@thomasfosterau/effect-jsonapi";
 import type { Backend } from "@thomasfosterau/legation";
@@ -28,6 +29,11 @@ import * as JsonApiBackend from "../JsonApiBackend.js";
 import * as JsonApiSync from "../JsonApiSync.js";
 import { defined } from "./defined.js";
 import { withLayer } from "./with-layer.js";
+
+const decodeTitled = Schema.decodeUnknownSync(Schema.Struct({ title: Schema.String }));
+const decodeMaybeTitled = Schema.decodeUnknownSync(
+  Schema.Struct({ title: Schema.optional(Schema.String) })
+);
 
 const JsonText = Schema.fromJsonString(Schema.Unknown);
 const encodeJson = Schema.encodeSync(JsonText);
@@ -67,12 +73,10 @@ const jsonHeaders = { "Content-Type": "application/vnd.api+json" };
 const respond = (status: number, document: unknown, headers = atomicHeaders) =>
   new Response(encodeJson(document), { status, headers });
 const empty = (status: number) => new Response(null, { status });
-const readBody = (request: { readonly body: unknown }): any => {
-  const b = request.body as { _tag?: string; body?: Uint8Array };
-  return b?._tag === "Uint8Array" && b.body
-    ? decodeJson(new TextDecoder().decode(b.body))
+const readBody = (request: HttpClientRequest.HttpClientRequest): any =>
+  request.body._tag === "Uint8Array"
+    ? decodeJson(new TextDecoder().decode(request.body.body))
     : undefined;
-};
 
 /** A row a server holds: its attributes and, optionally, its relationships as a document has them. */
 interface StoredRow {
@@ -180,10 +184,11 @@ const storeRow = (rows: Record<string, StoredRow>, data: any, merge: boolean): v
 
 /** Apply the operations of one accepted atomic request to `rows`. */
 const storeAtomic = (rows: Record<string, StoredRow>, request: Recorded): void => {
-  for (const operation of request.body["atomic:operations"]) {
+  const operations: ReadonlyArray<any> = request.body["atomic:operations"];
+  Arr.forEach(operations, (operation) => {
     if (operation.op === "remove") delete rows[operation.ref.id];
     else storeRow(rows, operation.data, operation.op === "update");
-  }
+  });
 };
 
 /** Apply one accepted per-resource write (`POST`, `PATCH` or `DELETE /todos/:id`) to `rows`. */
@@ -567,7 +572,7 @@ const makeModeBackend = (mode: HintMode, server: ReturnType<typeof makeServer>) 
     ...Defined.fields({ atomic: mode === "atomic" ? { path: "/operations" } : undefined }),
   }).pipe(withLayer(server.layer));
 
-for (const mode of ["atomic", "per-resource"] as const) {
+Arr.forEach(["atomic", "per-resource"] as const, (mode) => {
   describe(`JsonApiBackend change hints across mutations, ${mode} path`, () => {
     it.effect("a create then a later delete of the same row in one push carries no value", () =>
       Effect.gen(function* () {
@@ -729,7 +734,7 @@ for (const mode of ["atomic", "per-resource"] as const) {
       })
     );
   });
-}
+});
 
 /**
  * Change hints carry each row's pre-push value as `oldValues` (as
@@ -745,7 +750,7 @@ const bareWrites = (mode: HintMode) => (request: Recorded) =>
     ? respond(200, Atomic.results(request.body["atomic:operations"].map(() => Atomic.emptyResult)))
     : empty(204);
 
-for (const mode of ["atomic", "per-resource"] as const) {
+Arr.forEach(["atomic", "per-resource"] as const, (mode) => {
   describe(`JsonApiBackend change hints carry the pre-push row, ${mode} path`, () => {
     it.effect("an update of an existing row emits its pre-push value as oldValues", () =>
       Effect.gen(function* () {
@@ -1007,7 +1012,7 @@ for (const mode of ["atomic", "per-resource"] as const) {
       })
     );
 
-    for (const status of [403, 404]) {
+    Arr.forEach([403, 404], (status) => {
       it.effect(`a read refused with HTTP ${status} fails the push and writes nothing`, () =>
         Effect.gen(function* () {
           const server = makeServer(bareWrites(mode), {
@@ -1060,9 +1065,9 @@ for (const mode of ["atomic", "per-resource"] as const) {
             );
           })
       );
-    }
+    });
   });
-}
+});
 
 /** The first request is refused on its create; the resend and later requests apply. */
 const refusedCreate = (request: Recorded, index: number) =>
@@ -1133,7 +1138,7 @@ describe("JsonApiBackend atomic batch after a refused create", () => {
     })
   );
 
-  for (const status of [503, 404]) {
+  Arr.forEach([503, 404], (status) => {
     it.effect(
       `a read of the refused create's row failing with HTTP ${status} fails the push, sends no resend, and a retry applies it`,
       () =>
@@ -1170,7 +1175,7 @@ describe("JsonApiBackend atomic batch after a refused create", () => {
           expect(result.hints[0]?.oldValues).toEqual([{ id: "1", value: beforeRow }]);
         })
     );
-  }
+  });
 
   it.effect("a refused create with no later write of its row is not read", () =>
     Effect.gen(function* () {
@@ -1208,7 +1213,7 @@ describe("JsonApiBackend checks getOne for the whole push before its first write
       )
     );
 
-  for (const mode of ["atomic", "per-resource"] as const) {
+  Arr.forEach(["atomic", "per-resource"] as const, (mode) => {
     it.effect(
       `a write no getOne route can read sends nothing, even after an earlier write, ${mode} path`,
       () =>
@@ -1239,7 +1244,7 @@ describe("JsonApiBackend checks getOne for the whole push before its first write
           expect(yield* backend.lastMutationIds(context)).toEqual({});
         })
     );
-  }
+  });
 });
 
 /** A resource that receives updates or deletes but has no `getOne` route cannot be read before a write. */
@@ -1250,7 +1255,7 @@ describe("JsonApiBackend without a getOne route for updated or deleted resources
       .add(HttpApiEndpoint.make("DELETE")("remove", "/todos/:id", idParam))
   );
 
-  for (const mode of ["atomic", "per-resource"] as const) {
+  Arr.forEach(["atomic", "per-resource"] as const, (mode) => {
     it.effect(`an update or delete fails its push before any write, ${mode} path`, () =>
       Effect.gen(function* () {
         const inspected = JsonApiSync.inspect(writeOnly);
@@ -1274,7 +1279,7 @@ describe("JsonApiBackend without a getOne route for updated or deleted resources
         expect(yield* backend.lastMutationIds(context)).toEqual({});
       })
     );
-  }
+  });
 
   it.effect("a resource that only receives creates needs no getOne route", () =>
     Effect.gen(function* () {
@@ -1345,7 +1350,7 @@ describe("JsonApiBackend and a mutation whose args do not decode", () => {
  * mutation while the skipped one was never applied.
  */
 describe("JsonApiBackend refuses a mutation-id gap before any write", () => {
-  for (const mode of ["atomic", "per-resource"] as const) {
+  Arr.forEach(["atomic", "per-resource"] as const, (mode) => {
     it.effect(`a push that skips an id is refused and sends nothing, ${mode} path`, () =>
       Effect.gen(function* () {
         const server = modeServer(mode);
@@ -1367,7 +1372,7 @@ describe("JsonApiBackend refuses a mutation-id gap before any write", () => {
         expect(yield* backend.lastMutationIds(context)).toEqual({ "client-1": 1 });
       })
     );
-  }
+  });
 });
 
 /** A stateful server answering both the per-resource and the atomic routes. */
@@ -1385,15 +1390,15 @@ const makeStatefulServer = () => {
       return respond(201, { data }, jsonHeaders);
     }
     if (request.method === "POST" && request.path === "/operations") {
-      const ops = request.body["atomic:operations"];
-      for (const op of ops) {
+      const ops: ReadonlyArray<any> = request.body["atomic:operations"];
+      Arr.forEach(ops, (op) => {
         if (op.op === "add")
           store.set(op.data.id, {
             type: "todos",
             id: op.data.id,
             attributes: op.data.attributes,
           });
-      }
+      });
       return respond(200, resultsFor(ops));
     }
     return empty(405);
@@ -1413,7 +1418,7 @@ describe("JsonApiSync.layer atomic detection", () => {
     });
     yield* engine.push;
     yield* engine.pull;
-    return (yield* engine.query(all)).map((row) => (row.value as { title: string }).title);
+    return (yield* engine.query(all)).map((row) => decodeTitled(row.value).title);
   });
 
   it.effect("pushes through the reflected operations endpoint", () =>
@@ -1506,7 +1511,7 @@ const createFour = mutation(4, "todos/create", {
   attributes: { title: "fourth" },
 });
 
-for (const mode of ["atomic", "per-resource"] as const) {
+Arr.forEach(["atomic", "per-resource"] as const, (mode) => {
   describe(`JsonApiBackend rejection memory, ${mode} path`, () => {
     it.effect(
       "a replayed push reports the committed rejections and their reasons, sending nothing",
@@ -1558,7 +1563,7 @@ for (const mode of ["atomic", "per-resource"] as const) {
         })
     );
   });
-}
+});
 
 /** A server whose listing answers one row, `1`, and which takes the push's writes. */
 const listingServer = (mode: HintMode) =>
@@ -1583,7 +1588,7 @@ const listingServer = (mode: HintMode) =>
  * updates or deletes is not served at its pre-push value afterwards.
  */
 describe("JsonApiBackend getRows after its own writes", () => {
-  for (const mode of ["atomic", "per-resource"] as const) {
+  Arr.forEach(["atomic", "per-resource"] as const, (mode) => {
     it.effect(`getRows returns a row's post-update value without a re-list, ${mode} path`, () =>
       Effect.gen(function* () {
         const server = listingServer(mode);
@@ -1595,7 +1600,7 @@ describe("JsonApiBackend getRows after its own writes", () => {
         ]);
 
         const [row] = yield* backend.getRows(context, "todos", ["1"]);
-        expect((defined(row).value as { title?: string }).title).toBe("second");
+        expect(defined(row).value).toHaveProperty("title", "second");
         // Only the listing and the read before the write reached the server.
         expect(readsOf(server, "/todos")).toHaveLength(1);
         expect(readsOf(server, "/todos/1")).toHaveLength(1);
@@ -1616,7 +1621,7 @@ describe("JsonApiBackend getRows after its own writes", () => {
         expect(yield* backend.getRows(context, "todos", ["1"])).toEqual([]);
       })
     );
-  }
+  });
 });
 
 /** A listing answers rows 1 and 2, both `before`; `write` answers the push's writes, by arrival index. */
@@ -1650,7 +1655,7 @@ const twoUpdates = [updateRowOne, updateRowTwo];
 
 /** The title `getRows` serves for each row, by id. */
 const titlesOf = (rows: ReadonlyArray<{ readonly id: string; readonly value: unknown }>) =>
-  Object.fromEntries(rows.map((row) => [row.id, (row.value as { title?: string }).title]));
+  Object.fromEntries(rows.map((row) => [row.id, decodeMaybeTitled(row.value).title]));
 
 /**
  * The cache is updated only by writes the server applied: a rejected or

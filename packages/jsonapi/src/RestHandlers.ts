@@ -413,6 +413,8 @@ export const make = (options: Options): RestHandlers => {
           const { read, fields } = yield* JsonApiQuery.parseParams(nodes, node.type, single);
           const resolved = yield* run(context, node, plan, read);
           if (Arr.isReadonlyArrayEmpty(resolved.rows)) return yield* Effect.fail(notFound());
+          // SAFETY: as for `list`: the endpoint's success encoder checks the
+          // document against the resource at runtime; `R` only types it.
           return DocumentWriter.data(input(read, resolved, fields)) as DataDocumentOf<R>;
         })
       );

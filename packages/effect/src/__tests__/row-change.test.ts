@@ -24,6 +24,7 @@
 import * as P from "effect/Predicate";
 import * as Arr from "effect/Array";
 import * as Match from "effect/Match";
+import * as Option from "effect/Option";
 import { describe, expect, it } from "vite-plus/test";
 import * as LiveView from "../LiveView.js";
 import * as Predicate from "../Predicate.js";
@@ -141,7 +142,7 @@ const applyToLateObserver = (
   observer: LateObserver,
   batch: ReadonlyArray<RowChange.RowChange<LiveView.Row>>
 ): void => {
-  for (const change of batch) {
+  Arr.forEach(batch, (change) => {
     Match.value(change).pipe(
       Match.withReturnType<void>(),
       Match.tag("reset", () => {
@@ -156,7 +157,7 @@ const applyToLateObserver = (
       Match.tag("move", () => {}),
       Match.exhaustive
     );
-  }
+  });
 };
 
 /**
@@ -259,26 +260,26 @@ const runSession = (subset: Subset.Subset, seed: number, steps: number): Mismatc
   const initial = checkSession(seed, "initial", state, lateObserver);
   if (initial !== undefined) return initial;
 
-  for (let step = 0; step < steps; step++) {
-    if (step === lateSpawnStep) lateObserver = seedLateObserver(state.view, step);
+  return Option.getOrUndefined(
+    Arr.findFirst(Arr.range(0, steps - 1), (step) => {
+      if (step === lateSpawnStep) lateObserver = seedLateObserver(state.view, step);
 
-    const batch = stepSession(subset, state, rand, pick);
-    if (lateObserver !== undefined) applyToLateObserver(lateObserver, batch);
+      const batch = stepSession(subset, state, rand, pick);
+      if (lateObserver !== undefined) applyToLateObserver(lateObserver, batch);
 
-    const mismatch = checkSession(seed, `step ${step}`, state, lateObserver);
-    if (mismatch !== undefined) return mismatch;
-  }
-  return undefined;
+      return Option.fromUndefinedOr(checkSession(seed, `step ${step}`, state, lateObserver));
+    })
+  );
 };
 
 describe("RowChange — folding the feed reproduces LiveView.result", () => {
-  for (const [name, subset] of Object.entries(subsets)) {
+  Arr.forEach(Object.entries(subsets), ([name, subset]) => {
     it(`matches LiveView.result at every step (${name})`, () => {
-      for (let seed = 1; seed <= 25; seed++) {
+      Arr.forEach(Arr.range(1, 25), (seed) => {
         expect(runSession(subset, seed, 80)).toBeUndefined();
-      }
+      });
     });
-  }
+  });
 
   it("diff is empty for identical references (fast path)", () => {
     const rows: ReadonlyArray<LiveView.Row> = [{ id: "a", value: { rank: 1 } }];

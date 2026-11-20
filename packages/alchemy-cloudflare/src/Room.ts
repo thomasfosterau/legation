@@ -188,10 +188,13 @@ export interface RoomConfig<R = never> {
 
 /** Run an effect on the room's clock: the configured one, or the real clock when none is set. */
 const onRoomClock = <A, E, R>(
-  clock: Clock.Clock | undefined,
+  clock: Option.Option<Clock.Clock>,
   effect: Effect.Effect<A, E, R>
 ): Effect.Effect<A, E, R> =>
-  clock === undefined ? effect : effect.pipe(Effect.provideService(Clock.Clock, clock));
+  Option.match(clock, {
+    onNone: () => effect,
+    onSome: (configured) => effect.pipe(Effect.provideService(Clock.Clock, configured)),
+  });
 
 /** What a protocol request can fail with: an undecodable body, or the handler's own errors. */
 type AnswerError = ProtocolError | TransportError | VersionNotSupportedError;
@@ -244,7 +247,7 @@ export const make = <R>(
       // namespace's objects are rooms with this `RoomObject`.
       const rooms = scope as Workers.DurableObject<RoomObject>;
       return onRoomClock(
-        config.clock,
+        Option.fromUndefinedOr(config.clock),
         Effect.gen(function* () {
           // The scope lives as long as this in-memory instance; eviction tears
           // the whole isolate down, so no explicit close is needed.
@@ -317,7 +320,7 @@ export const make = <R>(
             );
 
             const fetch: RoomObject["fetch"] = onRoomClock(
-              config.clock,
+              Option.fromUndefinedOr(config.clock),
               Effect.gen(function* () {
                 const request = yield* HttpServerRequest.HttpServerRequest;
                 const route = routeOf(new URL(request.url, "https://room").pathname);
@@ -365,7 +368,7 @@ export const make = <R>(
               fetch,
               poke: (topics) =>
                 onRoomClock(
-                  config.clock,
+                  Option.fromUndefinedOr(config.clock),
                   deliver(topics).pipe(Effect.provideService(RuntimeContext, runtime))
                 ),
               webSocketMessage: () => Effect.void,

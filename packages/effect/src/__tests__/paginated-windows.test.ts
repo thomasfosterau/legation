@@ -26,6 +26,7 @@ import {
 } from "../index.js";
 import { ClientEngine, ClientView, EngineHost, MirrorChannel, Subset } from "../internal.js";
 import { TestFailure } from "./test-failure.js";
+import { idOf } from "./shapes.js";
 
 const Product = Node.make("products", {
   attributes: { name: Schema.String, featured: Schema.Boolean },
@@ -42,11 +43,11 @@ const reviewSet = Mutator.make("review/set", Schema.Unknown);
 const mutations = Mutator.registry([
   {
     mutator: productSet,
-    local: (args, writer) => writer.put("products", (args as { id: string }).id, args),
+    local: (args: { id: string }, writer) => writer.put("products", args.id, args),
   },
   {
     mutator: reviewSet,
-    local: (args, writer) => writer.put("reviews", (args as { id: string }).id, args),
+    local: (args: { id: string }, writer) => writer.put("reviews", args.id, args),
   },
 ]);
 
@@ -56,25 +57,26 @@ const sleepReal = (millis: number) =>
     return Effect.sync(() => clearTimeout(timer));
   });
 
-const eventually = <A>(read: Effect.Effect<A>, until: (value: A) => boolean) =>
+const eventually = <A>(
+  read: Effect.Effect<A>,
+  until: (value: A) => boolean,
+  attemptsLeft = 500
+): Effect.Effect<A> =>
   Effect.gen(function* () {
-    for (let attempt = 0; attempt < 500; attempt++) {
-      const value = yield* read;
-      if (until(value)) return value;
-      yield* sleepReal(10);
+    if (attemptsLeft === 0) {
+      return yield* Effect.die(new TestFailure({ message: "eventually: condition never held" }));
     }
-    return yield* Effect.die(new TestFailure({ message: "eventually: condition never held" }));
+    const value = yield* read;
+    if (until(value)) return value;
+    yield* sleepReal(10);
+    return yield* eventually(read, until, attemptsLeft - 1);
   });
 
 const makeServer = Effect.fn("makeServer")(function* () {
   const backend = yield* MemoryBackend.make(
     MemoryBackend.validatedHandlers([
-      MemoryBackend.handler(productSet, (args, writer) =>
-        writer.put("products", (args as { id: string }).id, args)
-      ),
-      MemoryBackend.handler(reviewSet, (args, writer) =>
-        writer.put("reviews", (args as { id: string }).id, args)
-      ),
+      MemoryBackend.handler(productSet, (args, writer) => writer.put("products", idOf(args), args)),
+      MemoryBackend.handler(reviewSet, (args, writer) => writer.put("reviews", idOf(args), args)),
     ])
   );
   const server = yield* Server.make({
@@ -178,8 +180,7 @@ describe("per-parent windowed subsets", () => {
         yield* Effect.forkScoped(
           Stream.runForEach(
             reader.observe({ collection: "products", include: { reviews: { first: 2 } } }),
-            (rows) =>
-              Ref.set(latest, (rows[0]?.related.reviews ?? []) as ReadonlyArray<{ id: string }>)
+            (rows) => Ref.set(latest, rows[0]?.related.reviews ?? [])
           ).pipe(Effect.ignore)
         );
         const reviews = yield* eventually(Ref.get(latest), (rows) => rows.length === 2);
@@ -218,8 +219,7 @@ describe("per-parent windowed subsets", () => {
         yield* Effect.forkScoped(
           Stream.runForEach(
             reader.observe({ collection: "products", include: { reviews: { first: 2 } } }),
-            (rows) =>
-              Ref.set(latest, (rows[0]?.related.reviews ?? []) as ReadonlyArray<{ id: string }>)
+            (rows) => Ref.set(latest, rows[0]?.related.reviews ?? [])
           ).pipe(Effect.ignore)
         );
         yield* eventually(
@@ -329,8 +329,7 @@ describe("over a hosted engine", () => {
         yield* Effect.forkScoped(
           Stream.runForEach(
             client.observe({ collection: "products", include: { reviews: { first: 2 } } }),
-            (rows) =>
-              Ref.set(latest, (rows[0]?.related.reviews ?? []) as ReadonlyArray<{ id: string }>)
+            (rows) => Ref.set(latest, rows[0]?.related.reviews ?? [])
           ).pipe(Effect.ignore)
         );
         const reviews = yield* eventually(Ref.get(latest), (rows) => rows.length === 2);

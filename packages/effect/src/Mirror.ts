@@ -661,7 +661,7 @@ export const make = (options: MirrorOptions): Effect.Effect<Mirror, never, Scope
             message.rows.map((row) => ({
               id: row.id,
               value: row.value,
-              related: row.related as Record<string, Related.RelatedValue>,
+              related: row.related,
             }))
           )
         ).pipe(Effect.andThen(noteReceived(message.key)), Effect.andThen(publishKey(message.key)))

@@ -158,9 +158,9 @@ const isSyncManager = (sync: unknown): sync is SyncManager =>
   P.isObjectOrArray(sync) && "register" in sync && P.isFunction(sync.register);
 
 /** The registration's `SyncManager`, if the browser gives it one. */
-const syncManagerOf = (registration: ProbedRegistration | undefined): SyncManager | undefined => {
+const syncManagerOf = (registration?: ProbedRegistration): Option.Option<SyncManager> => {
   const sync = registration?.sync;
-  return isSyncManager(sync) ? sync : undefined;
+  return isSyncManager(sync) ? Option.some(sync) : Option.none();
 };
 
 /** The slice of the worker's `SyncEvent` the listener reads. */
@@ -240,15 +240,15 @@ export const register = (options: RegisterOptions = {}): Effect.Effect<RegisterO
   Effect.gen(function* () {
     const tag = options.tag ?? defaultTag;
     const registration = yield* options.registration ?? pageRegistration;
-    const sync = syncManagerOf(registration);
-    if (sync === undefined) {
+    const manager = syncManagerOf(registration);
+    if (Option.isNone(manager)) {
       yield* Effect.logDebug(
         "Background Sync unavailable; the journal flushes on the next connectivity signal"
       );
       return "Unsupported" as const;
     }
     return yield* Effect.tryPromise({
-      try: () => sync.register(tag),
+      try: () => manager.value.register(tag),
       catch: (cause) => new SyncRegistrationFailed({ cause }),
     }).pipe(
       Effect.as("Registered" as const),

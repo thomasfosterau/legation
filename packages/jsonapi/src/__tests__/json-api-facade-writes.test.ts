@@ -42,6 +42,10 @@ import { ClientEngine, ClientView } from "@thomasfosterau/legation/internal";
 import * as JsonApiFacade from "../JsonApiFacade.js";
 import * as JsonApiQuery from "../JsonApiQuery.js";
 
+const decodeCollection = Schema.decodeUnknownSync(
+  Schema.Struct({ data: Schema.Array(Schema.Struct({ id: Schema.String })) })
+);
+
 // ─── The graph and its api ───────────────────────────────────────────────────
 
 const categories = Node.make("categories", { attributes: { name: Schema.String } });
@@ -263,8 +267,7 @@ const listed = (handler: JsonApiFacade.FetchHandler) =>
     const response = yield* answer(handler, read("/jsonapi/notes"));
     expect(response.status).toBe(200);
     const document = yield* body(response);
-    // SAFETY: a collection document's `data` is an array of resource objects.
-    const resources = document.data as ReadonlyArray<{ id: string }>;
+    const resources = decodeCollection(document).data;
     return Arr.sort(
       Arr.map(resources, (resource) => resource.id),
       Order.String

@@ -3,6 +3,7 @@
  * in-memory stores (no HTTP tier), plus a memory `ApiKeyStore` (effect-auth's
  * testing entry ships none) and stores that fail or die on demand.
  */
+import * as Arr from "effect/Array";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as MutableHashMap from "effect/MutableHashMap";
@@ -44,7 +45,10 @@ export const memoryApiKeyStore = (): typeof ApiKeyStore.Service => {
     listByUserId: (userId) => Effect.sync(() => all().filter((key) => key.userId === userId)),
     deleteByUserId: (userId) =>
       Effect.sync(() => {
-        for (const key of all()) if (key.userId === userId) MutableHashMap.remove(keys, key.id);
+        Arr.forEach(
+          Arr.filter(all(), (key) => key.userId === userId),
+          (key) => MutableHashMap.remove(keys, key.id)
+        );
       }),
   };
 };

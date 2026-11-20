@@ -211,22 +211,18 @@ const shrinkOrderRows = (
   disagrees: OrderDisagrees,
   terms: ReadonlyArray<Subset.OrderBy>,
   rows: Rows
-) =>
-  Effect.gen(function* () {
-    let current = rows;
-    let shrunk = true;
-    while (shrunk) {
-      shrunk = false;
-      for (let i = 0; i < current.length && !shrunk; i++) {
-        const fewer = current.filter((_, j) => j !== i);
-        if (yield* disagrees(terms, fewer)) {
-          current = fewer;
-          shrunk = true;
-        }
-      }
-    }
-    return current;
-  });
+): Effect.Effect<Rows> =>
+  Effect.findFirst(
+    Arr.map(rows, (_, i) => Arr.remove(rows, i)),
+    (fewer) => disagrees(terms, fewer)
+  ).pipe(
+    Effect.flatMap(
+      Option.match({
+        onNone: () => Effect.succeed(rows),
+        onSome: (fewer) => shrinkOrderRows(disagrees, terms, fewer),
+      })
+    )
+  );
 
 /** Shrink a disagreeing order case: fewer terms first, then fewer rows. */
 const shrinkOrder = (

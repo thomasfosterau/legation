@@ -138,6 +138,15 @@ export const failAlways = Mutator.make("contract/fail", Schema.Struct({}));
 /** The reason `rejectAlways` gives for its permanent rejection. */
 const rejectReason = "contract/reject always rejects";
 
+/** The counter field the contract's counting mutators write, read off a stored row value. */
+const decodeCounter = Schema.decodeUnknownOption(
+  Schema.Struct({ n: Schema.optional(Schema.Finite) })
+);
+
+/** The `n` a stored row value carries, when it is a counter row. */
+const counterOf = (value: Option.Option<{ readonly n?: number | undefined }>) =>
+  Option.getOrUndefined(value)?.n;
+
 /**
  * Writes a row and then rejects permanently — probes that a `MutationRejected`
  * bumps the id *without* leaving effects (the staged write must roll back).
@@ -205,11 +214,9 @@ export const memoryHandlers: Record<string, MemoryBackend.BackendHandler> =
     ),
     MemoryBackend.handler(countUp, (args, writer) =>
       Effect.gen(function* () {
-        const current = (yield* writer.get(args.collection, args.id)) as
-          | { readonly n?: number }
-          | undefined;
+        const current = counterOf(decodeCounter(yield* writer.get(args.collection, args.id)));
         yield* park(args.gate);
-        yield* writer.put(args.collection, args.id, { n: (current?.n ?? 0) + 1 });
+        yield* writer.put(args.collection, args.id, { n: (current ?? 0) + 1 });
       })
     ),
   ]);
@@ -315,7 +322,7 @@ interface Harness {
   readonly put: (mutationId: number, collection: string, id: string, value: unknown) => Mutation;
   readonly reject: (mutationId: number, collection: string, id: string) => Mutation;
   /** The backend's own peer wait for rule 11, when it supplies one. */
-  readonly awaitPeer: PeerSettle | undefined;
+  readonly awaitPeer: Option.Option<PeerSettle>;
 }
 
 /**
@@ -393,12 +400,12 @@ const harnessExpectRegisteredFailure: Harness["expectRegisteredFailure"] = (
 
 const makeHarness = (
   backend: Backend,
-  options: VerifyOptions | undefined,
+  options: VerifyOptions,
   start: number,
   peerStart: number
 ): Harness => {
-  const rows = options?.collection ?? "__contract";
-  const context: SyncContext = { clientGroupId: options?.clientGroupId ?? "__contract-group" };
+  const rows = options.collection ?? "__contract";
+  const context: SyncContext = { clientGroupId: options.clientGroupId ?? "__contract-group" };
   const clientId = CONTRACT_CLIENT;
 
   const mutation: Harness["mutation"] = (mutationId, mutator, args) => ({
@@ -430,7 +437,7 @@ const makeHarness = (
       mutation(mutationId, putRow.name, { collection, id, value }),
     reject: (mutationId, collection, id) =>
       mutation(mutationId, rejectAlways.name, { collection, id }),
-    awaitPeer: options?.awaitPeer,
+    awaitPeer: Option.fromUndefinedOr(options.awaitPeer),
   };
 };
 
@@ -502,7 +509,7 @@ const rule2IdempotentSkip: Rule = ({
     // did not re-execute.
     yield* check(
       rule,
-      (b?.value as { n?: number } | undefined)?.n === 2,
+      counterOf(decodeCounter(b?.value)) === 2,
       `Replaying mutation 2 must not re-execute its effects (row "b" became ${Json.show(b?.value)})`
     );
   });
@@ -963,7 +970,7 @@ const rule11CrossGroupLostUpdate: Rule = (h) =>
         )
       );
       const peerSettled = Deferred.isDone(peerDone);
-      yield* (h.awaitPeer ?? settleByTurns)(peerSettled);
+      yield* Option.getOrElse(h.awaitPeer, () => settleByTurns)(peerSettled);
       yield* Deferred.succeed(parked.release, undefined);
       const firstExit = yield* Effect.exit(Fiber.join(first));
       const peerExit = yield* Effect.exit(Fiber.join(second));
@@ -983,7 +990,7 @@ const rule11CrossGroupLostUpdate: Rule = (h) =>
       }
 
       const [stored] = yield* h.expectOk(rule, h.backend.getRows(h.context, h.rows, [row]));
-      const count = (stored?.value as { readonly n?: number } | undefined)?.n;
+      const count = counterOf(decodeCounter(stored?.value));
       return yield* h.check(
         rule,
         count === 2,
@@ -1039,7 +1046,7 @@ const rule12OwnWritesReachGetRows: Rule = (h) =>
     const [updated] = yield* expectOk(rule, backend.getRows(context, collection, [kept]));
     yield* check(
       rule,
-      (updated?.value as { readonly n?: number } | undefined)?.n === 2,
+      counterOf(decodeCounter(updated?.value)) === 2,
       `An update must show in getRows without a re-list: row "${kept}" reads ${Json.show(updated?.value)}`
     );
 
@@ -1285,7 +1292,12 @@ export const verifyBackendContract = (
           })
         );
       }
-      const harness = makeHarness(backend, options, expected, options?.restoredPeerLedger ?? 0);
+      const harness = makeHarness(
+        backend,
+        options ?? {},
+        expected,
+        options?.restoredPeerLedger ?? 0
+      );
       return Effect.forEach(rules, (rule) => rule(harness), { concurrency: 1, discard: true });
     })
   );

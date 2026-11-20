@@ -18,18 +18,21 @@ import * as HttpApi from "effect/http-api/HttpApi";
 import * as HttpApiEndpoint from "effect/http-api/HttpApiEndpoint";
 import * as HttpApiGroup from "effect/http-api/HttpApiGroup";
 import * as HttpClient from "effect/http/HttpClient";
+import type * as HttpClientRequest from "effect/http/HttpClientRequest";
 import * as HttpClientResponse from "effect/http/HttpClientResponse";
 import type { Predicate } from "@thomasfosterau/legation";
 import { ClientEngine, Subset, Defined } from "@thomasfosterau/legation/internal";
-import type { JsonApiRow } from "../Derive.js";
+import { RowSchema, type JsonApiRow } from "../Derive.js";
 import * as Relationships from "../Relationships.js";
 import * as JsonApiSync from "../JsonApiSync.js";
 import { defined } from "./defined.js";
 import { withLayer } from "./with-layer.js";
 
+const decodeRow = Schema.decodeUnknownSync(RowSchema);
+const decodeRows = Schema.decodeUnknownSync(Schema.Array(RowSchema));
+
 const JsonText = Schema.fromJsonString(Schema.Unknown);
 const encodeJson = Schema.encodeSync(JsonText);
-const decodeJson = Schema.decodeSync(JsonText);
 
 const idParam = { params: Schema.Struct({ id: Schema.String }) };
 const body = { payload: Schema.Unknown, success: Schema.Unknown };
@@ -50,19 +53,35 @@ interface Stored {
   readonly relationships?: Record<string, Schema.Json>;
 }
 
-const readBody = (request: { readonly body: unknown }): any => {
-  const b = request.body as { _tag?: string; body?: Uint8Array };
-  return b?._tag === "Uint8Array" && b.body
-    ? decodeJson(new TextDecoder().decode(b.body))
-    : undefined;
-};
+const decodeResourceDocument = Schema.decodeUnknownSync(
+  Schema.fromJsonString(
+    Schema.Struct({
+      data: Schema.Struct({
+        type: Schema.String,
+        id: Schema.String,
+        attributes: Schema.optionalKey(
+          Schema.Record(
+            Schema.String,
+            Schema.Union([Schema.String, Schema.Finite, Schema.Boolean, Schema.Null])
+          )
+        ),
+        relationships: Schema.optionalKey(Schema.Record(Schema.String, Schema.Json)),
+      }),
+    })
+  )
+);
+/** The primary resource of a request's JSON:API document. */
+const readResource = (request: HttpClientRequest.HttpClientRequest) =>
+  decodeResourceDocument(
+    request.body._tag === "Uint8Array" ? new TextDecoder().decode(request.body.body) : undefined
+  ).data;
 
-const links = (rel: unknown): ReadonlyArray<{ type: string; id: string }> => {
-  const data = P.isObject(rel) ? (rel as { data?: unknown }).data : undefined;
-  return (data == null ? [] : Array.isArray(data) ? data : [data]) as ReadonlyArray<{
-    type: string;
-    id: string;
-  }>;
+const decodeLinkage = Schema.decodeUnknownSync(
+  Schema.Array(Schema.Struct({ type: Schema.String, id: Schema.String }))
+);
+const links = (rel: unknown) => {
+  const data = P.hasProperty(rel, "data") ? rel.data : undefined;
+  return decodeLinkage(data == null ? [] : Array.isArray(data) ? data : [data]);
 };
 
 const makeServer = (seed: ReadonlyArray<Stored>) => {
@@ -118,7 +137,7 @@ const makeServer = (seed: ReadonlyArray<Stored>) => {
               : empty(404)
         ),
         Match.when("POST", () => {
-          const resource = readBody(request).data as Stored;
+          const resource = readResource(request);
           store.set(`${type}:${resource.id}`, {
             ...resource,
             attributes: resource.attributes ?? {},
@@ -126,7 +145,7 @@ const makeServer = (seed: ReadonlyArray<Stored>) => {
           return doc(store.get(`${type}:${resource.id}`));
         }),
         Match.when("PATCH", () => {
-          const patch = readBody(request).data as Stored;
+          const patch = readResource(request);
           const existing = store.get(`${type}:${id}`) ?? { type, id: defined(id), attributes: {} };
           const merged = {
             ...existing,
@@ -169,7 +188,7 @@ const attr = (value: JsonApiRow, key: string): Option.Option<string> =>
   Option.liftPredicate(value[key], P.isString);
 
 const bodiesOf = (rows: ReadonlyArray<Relationships.RelatedRow>) =>
-  (defined(rows[0]).related.comments as ReadonlyArray<JsonApiRow>).map((c) => attr(c, "body"));
+  decodeRows(defined(rows[0]).related.comments).map((c) => attr(c, "body"));
 
 describe("Relationships", () => {
   const issues = Subset.make({ collection: "issues" });
@@ -212,8 +231,8 @@ describe("Relationships", () => {
         const rows = yield* Relationships.query(engine, issues, ["author", "comments"]);
         expect(rows).toHaveLength(1);
         const issue = defined(rows[0]);
-        expect(attr(issue.related.author as JsonApiRow, "name")).toEqual(Option.some("Ada"));
-        const comments = issue.related.comments as ReadonlyArray<JsonApiRow>;
+        expect(attr(decodeRow(issue.related.author), "name")).toEqual(Option.some("Ada"));
+        const comments = decodeRows(issue.related.comments);
         expect(comments.map((c) => attr(c, "body"))).toEqual([
           Option.some("first"),
           Option.some("second"),
@@ -233,9 +252,10 @@ describe("Relationships", () => {
         // observe's first emission matches a one-shot query.
         const first = yield* Stream.runHead(Relationships.observe(engine, issues, ["comments"]));
         const initial = defined((Option.isSome(first) ? first.value : [])[0]);
-        expect(
-          (initial.related.comments as ReadonlyArray<JsonApiRow>).map((c) => attr(c, "body"))
-        ).toEqual([Option.some("first"), Option.some("second")]);
+        expect(decodeRows(initial.related.comments).map((c) => attr(c, "body"))).toEqual([
+          Option.some("first"),
+          Option.some("second"),
+        ]);
 
         // Editing a referenced comment is reflected in the resolved join.
         yield* engine.mutate("comments/update", {
@@ -247,11 +267,10 @@ describe("Relationships", () => {
         yield* engine.pull;
 
         const rows = yield* Relationships.query(engine, issues, ["comments"]);
-        expect(
-          (defined(rows[0]).related.comments as ReadonlyArray<JsonApiRow>).map((c) =>
-            attr(c, "body")
-          )
-        ).toEqual([Option.some("edited"), Option.some("second")]);
+        expect(decodeRows(defined(rows[0]).related.comments).map((c) => attr(c, "body"))).toEqual([
+          Option.some("edited"),
+          Option.some("second"),
+        ]);
       }),
       server
     );
@@ -322,10 +341,11 @@ describe("Relationships", () => {
         const head = yield* Stream.runHead(stream);
         const issue = defined((Option.isSome(head) ? head.value : [])[0]);
 
-        expect(attr(issue.related.author as JsonApiRow, "name")).toEqual(Option.some("Ada"));
-        expect(
-          (issue.related.comments as ReadonlyArray<JsonApiRow>).map((c) => attr(c, "body"))
-        ).toEqual([Option.some("first"), Option.some("second")]);
+        expect(attr(decodeRow(issue.related.author), "name")).toEqual(Option.some("Ada"));
+        expect(decodeRows(issue.related.comments).map((c) => attr(c, "body"))).toEqual([
+          Option.some("first"),
+          Option.some("second"),
+        ]);
         // The referenced collections were fetched narrowed to the linked ids,
         // in the grammar's canonical form (`in` over a list; a one-id list
         // takes the operator form so it decodes back as `in`, not `eq`).
@@ -345,10 +365,11 @@ describe("Relationships", () => {
         const head = yield* Stream.runHead(stream);
         const issue = defined((Option.isSome(head) ? head.value : [])[0]);
 
-        expect(
-          (issue.related.comments as ReadonlyArray<JsonApiRow>).map((c) => attr(c, "body"))
-        ).toEqual([Option.some("first"), Option.some("second")]);
-        expect(attr(issue.related.author as JsonApiRow, "name")).toEqual(Option.some("Ada"));
+        expect(decodeRows(issue.related.comments).map((c) => attr(c, "body"))).toEqual([
+          Option.some("first"),
+          Option.some("second"),
+        ]);
+        expect(attr(decodeRow(issue.related.author), "name")).toEqual(Option.some("Ada"));
 
         // Parent listing carried `include`; the related collections were served
         // from the harvested compound document, never fetched on their own.

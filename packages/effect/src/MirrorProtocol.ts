@@ -242,6 +242,9 @@ export type MirrorMessage =
   | { readonly _tag: "HostRequestCancel"; readonly mirrorId: string; readonly requestId: number };
 
 /** Wire codec for {@link MirrorMessage}. */
+// SAFETY: the members are `MirrorMessage`'s; they differ only in that
+// `Schema.optional` types an optional key as `?: T | undefined`, where the
+// interface, under `exactOptionalPropertyTypes`, says `?: T`.
 export const MirrorMessageSchema: Schema.Codec<MirrorMessage> = Schema.Union([
   Schema.Struct({
     _tag: Schema.tag("Mutate"),
@@ -522,6 +525,8 @@ export interface PulledRegistration {
 }
 
 /** Wire codec for {@link HostMessage}. */
+// SAFETY: as for `MirrorMessageSchema`: the members are `HostMessage`'s, typed
+// `?: T | undefined` where the interface says `?: T`.
 export const HostMessageSchema: Schema.Codec<HostMessage> = Schema.Union([
   Schema.Struct({ _tag: Schema.tag("HostReady") }),
   Schema.Struct({

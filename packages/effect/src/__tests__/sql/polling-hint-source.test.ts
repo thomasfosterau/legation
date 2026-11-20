@@ -37,7 +37,7 @@ interface Detector {
  * produces. The polling source issues only detector queries.
  */
 const makeExecutor = (read: () => Detector): SqlBackend.SqlExecutor => ({
-  query: () => Effect.sync(() => [{ ...read() }] as ReadonlyArray<SqlBackend.SqlRow>),
+  query: () => Effect.sync((): ReadonlyArray<SqlBackend.SqlRow> => [{ ...read() }]),
   run: () => Effect.void,
   transaction: (effect) => effect,
 });

@@ -8,10 +8,12 @@
  * push through `MemoryBackend`, which enforces that rule.
  */
 import { describeWrapped, expect, layer, describe } from "@effect/vitest";
+import * as Arr from "effect/Array";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
 import * as Fiber from "effect/Fiber";
+import * as Option from "effect/Option";
 import * as References from "effect/References";
 import * as Schema from "effect/Schema";
 import { KeyValueStore } from "effect/persistence";
@@ -59,7 +61,7 @@ const harness = (store: ClientStore) =>
       mutators: Mutator.registry([
         {
           mutator: todoSet,
-          local: (args, writer) => writer.put("todos", (args as { id: string }).id, args),
+          local: (args: { id: string }, writer) => writer.put("todos", args.id, args),
         },
       ]),
     }).pipe(
@@ -168,29 +170,32 @@ describe("a refused or failed journal append burns no mutation id", () => {
     );
   });
 
-  for (const [name, makeStore] of [
-    ["memory", ClientStoreModule.makeMemory],
-    ["key-value", ClientStoreModule.makeKeyValue()],
-  ] as const) {
-    layer(KeyValueStore.layerMemory)((scoped) => {
-      scoped.effect(`concurrent journaling neither duplicates nor skips ids (${name})`, () =>
-        Effect.gen(function* () {
-          const store = yield* makeStore;
-          const { engine, applied } = yield* harness(store);
-          const N = 25;
-          yield* Effect.forEach(
-            Array.from({ length: N }, (_, i) => i),
-            (i) => engine.mutate("todo/set", { id: `t${i}` }),
-            { concurrency: "unbounded" }
-          );
-          expect(yield* ids(store)).toEqual(Array.from({ length: N }, (_, i) => i + 1));
-          const pushed = yield* Effect.exit(engine.push);
-          expect(Exit.isSuccess(pushed)).toBe(true);
-          expect(applied).toHaveLength(N);
-        })
-      );
-    });
-  }
+  Arr.forEach(
+    [
+      ["memory", ClientStoreModule.makeMemory],
+      ["key-value", ClientStoreModule.makeKeyValue()],
+    ] as const,
+    ([name, makeStore]) => {
+      layer(KeyValueStore.layerMemory)((scoped) => {
+        scoped.effect(`concurrent journaling neither duplicates nor skips ids (${name})`, () =>
+          Effect.gen(function* () {
+            const store = yield* makeStore;
+            const { engine, applied } = yield* harness(store);
+            const N = 25;
+            yield* Effect.forEach(
+              Array.from({ length: N }, (_, i) => i),
+              (i) => engine.mutate("todo/set", { id: `t${i}` }),
+              { concurrency: "unbounded" }
+            );
+            expect(yield* ids(store)).toEqual(Array.from({ length: N }, (_, i) => i + 1));
+            const pushed = yield* Effect.exit(engine.push);
+            expect(Exit.isSuccess(pushed)).toBe(true);
+            expect(applied).toHaveLength(N);
+          })
+        );
+      });
+    }
+  );
 
   layer(KeyValueStore.layerMemory)((scoped) => {
     scoped.effect("concurrent journaling with refusals leaves the accepted ids consecutive", () =>
@@ -275,7 +280,7 @@ describe("ClientStore.appendNext", () => {
 
 interface CountersState {
   failCounters: boolean;
-  park: { reached: Deferred.Deferred<void>; gate: Deferred.Deferred<void> } | undefined;
+  park: Option.Option<{ reached: Deferred.Deferred<void>; gate: Deferred.Deferred<void> }>;
 }
 
 /**
@@ -285,7 +290,7 @@ interface CountersState {
  */
 const controlledCounters = () => {
   const data = new Map<string, string>();
-  const state: CountersState = { failCounters: false, park: undefined };
+  const state: CountersState = { failCounters: false, park: Option.none() };
   const kvs = KeyValueStore.makeStringOnly({
     get: (key) => Effect.sync(() => data.get(key)),
     set: (key, value) => {
@@ -296,13 +301,14 @@ const controlledCounters = () => {
           new KeyValueStore.KeyValueStoreError({ message: "injected", method: "set", key })
         );
       }
-      const park = state.park;
-      return park === undefined
-        ? write
-        : Deferred.succeed(park.reached, undefined).pipe(
+      return Option.match(state.park, {
+        onNone: () => write,
+        onSome: (park) =>
+          Deferred.succeed(park.reached, undefined).pipe(
             Effect.andThen(Deferred.await(park.gate)),
             Effect.andThen(write)
-          );
+          ),
+      });
     },
     remove: (key) => Effect.sync(() => void data.delete(key)),
     clear: Effect.sync(() => data.clear()),
@@ -347,17 +353,17 @@ describe("an id that has left the journal is never reissued", () => {
         const { engine, applied } = yield* harness(store);
         const reached = yield* Deferred.make<void>();
         const gate = yield* Deferred.make<void>();
-        state.park = { reached, gate };
+        state.park = Option.some({ reached, gate });
         const fiber = yield* Effect.forkChild(engine.mutate("todo/set", { id: "a" }));
         yield* Deferred.await(reached);
         // The append is uninterruptible: the interrupt is only delivered once
         // the counter write has landed, so the journal and counter agree.
         const interrupting = yield* Effect.forkChild(Fiber.interrupt(fiber));
         // Let the interrupt be requested while the counter write is still parked.
-        for (let i = 0; i < 10; i++) yield* Effect.yieldNow;
+        yield* Effect.replicateEffect(Effect.yieldNow, 10, { discard: true });
         yield* Deferred.succeed(gate, undefined);
         yield* Fiber.join(interrupting);
-        state.park = undefined;
+        state.park = Option.none();
         yield* engine.push;
         yield* engine.mutate("todo/set", { id: "b" });
         expect(yield* ids(store)).toEqual([2]);
@@ -418,56 +424,65 @@ describe("an id that has left the journal is never reissued", () => {
     );
   });
 
-  for (const [name, makeStore] of [
-    ["memory", ClientStoreModule.makeMemory],
-    ["key-value", ClientStoreModule.makeKeyValue()],
-  ] as const) {
-    layer(KeyValueStore.layerMemory)((scoped) => {
-      scoped.effect(`heals the counter from journal entries it did not allocate (${name})`, () =>
-        Effect.gen(function* () {
-          const store = yield* makeStore;
-          yield* store.appendMutation({ ...draft, mutationId: 5 });
-          expect((yield* store.appendNext(draft)).mutationId).toBe(6);
-          yield* store.acknowledge("c1", 6);
-          expect((yield* store.appendNext(draft)).mutationId).toBe(7);
-        })
-      );
-    });
-
-    layer(KeyValueStore.layerMemory)((scoped) => {
-      scoped.effect(
-        `acknowledge and quarantine leave the next id above everything removed (${name})`,
-        () =>
+  Arr.forEach(
+    [
+      ["memory", ClientStoreModule.makeMemory],
+      ["key-value", ClientStoreModule.makeKeyValue()],
+    ] as const,
+    ([name, makeStore]) => {
+      layer(KeyValueStore.layerMemory)((scoped) => {
+        scoped.effect(`heals the counter from journal entries it did not allocate (${name})`, () =>
           Effect.gen(function* () {
             const store = yield* makeStore;
-            yield* store.appendMutation({ ...draft, mutationId: 3 });
-            yield* store.acknowledge("c1", 3);
-            expect((yield* store.appendNext(draft)).mutationId).toBe(4);
-            const fingerprint: Identity.Fingerprint = "sha256:bob";
-            yield* store.quarantinePending(fingerprint);
-            expect((yield* store.appendNext(draft)).mutationId).toBe(5);
+            yield* store.appendMutation({ ...draft, mutationId: 5 });
+            expect((yield* store.appendNext(draft)).mutationId).toBe(6);
+            yield* store.acknowledge("c1", 6);
+            expect((yield* store.appendNext(draft)).mutationId).toBe(7);
           })
-      );
-    });
-  }
+        );
+      });
+
+      layer(KeyValueStore.layerMemory)((scoped) => {
+        scoped.effect(
+          `acknowledge and quarantine leave the next id above everything removed (${name})`,
+          () =>
+            Effect.gen(function* () {
+              const store = yield* makeStore;
+              yield* store.appendMutation({ ...draft, mutationId: 3 });
+              yield* store.acknowledge("c1", 3);
+              expect((yield* store.appendNext(draft)).mutationId).toBe(4);
+              const fingerprint: Identity.Fingerprint = "sha256:bob";
+              yield* store.quarantinePending(fingerprint);
+              expect((yield* store.appendNext(draft)).mutationId).toBe(5);
+            })
+        );
+      });
+    }
+  );
 
   layer(KeyValueStore.layerMemory)((scoped) => {
     scoped.effect("memory store: appendNext is atomic with respect to compactPending", () =>
-      Effect.gen(function* () {
-        for (let round = 0; round < 20; round++) {
-          const store = yield* ClientStoreModule.makeMemory;
-          for (let i = 0; i < 3; i++) yield* store.appendNext(draft);
-          yield* Effect.all(
-            [store.compactPending("c1", [2]), store.appendNext(draft), store.appendNext(draft)],
-            { concurrency: "unbounded" }
-          );
-          const after = yield* ids(store);
-          // Consecutive from 1, whichever order the operations were served in,
-          // and the counter agrees with the journal.
-          expect(after).toEqual(after.map((_, i) => i + 1));
-          expect((yield* store.appendNext(draft)).mutationId).toBe(after.length + 1);
-        }
-      })
+      Effect.forEach(
+        Arr.range(1, 20),
+        () =>
+          Effect.gen(function* () {
+            const store = yield* ClientStoreModule.makeMemory;
+            yield* Effect.forEach(Arr.range(1, 3), () => store.appendNext(draft), {
+              concurrency: 1,
+              discard: true,
+            });
+            yield* Effect.all(
+              [store.compactPending("c1", [2]), store.appendNext(draft), store.appendNext(draft)],
+              { concurrency: "unbounded" }
+            );
+            const after = yield* ids(store);
+            // Consecutive from 1, whichever order the operations were served in,
+            // and the counter agrees with the journal.
+            expect(after).toEqual(after.map((_, i) => i + 1));
+            expect((yield* store.appendNext(draft)).mutationId).toBe(after.length + 1);
+          }),
+        { concurrency: 1, discard: true }
+      )
     );
   });
 });

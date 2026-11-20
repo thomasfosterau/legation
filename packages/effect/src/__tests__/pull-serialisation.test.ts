@@ -10,6 +10,7 @@
  * long it runs, and on trunk a second pull reaches it within a few yields.
  */
 import { describe, expect, it } from "@effect/vitest";
+import * as Arr from "effect/Array";
 import * as Clock from "effect/Clock";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
@@ -29,6 +30,7 @@ import * as Subset from "../Subset.js";
 import { ClientTransport } from "../Transport.js";
 import { defined } from "./defined.js";
 import { TestFailure } from "./test-failure.js";
+import { titleOf } from "./shapes.js";
 
 /** Pulls the fake transport will serve; a test that issues more than this fails loudly. */
 const PULLS = 3;
@@ -166,7 +168,7 @@ const snapshot = (client: Client) =>
   Effect.gen(function* () {
     const cookie = yield* client.store.getCookie;
     const rows = yield* client.engine.query(allTodos);
-    return { cookie, titles: rows.map((row) => (row.value as { readonly title: string }).title) };
+    return { cookie, titles: rows.map((row) => titleOf(row.value)) };
   });
 
 describe("pull serialisation", () => {
@@ -327,9 +329,11 @@ describe("pull serialisation", () => {
 
       // The burst arrives while the pull hangs. The poke stream buffers it in one slot, so the
       // burst adds no pull and no fibre per poke; the offers all complete regardless.
-      for (let index = 0; index < BURST; index++) {
-        yield* Queue.offer(pokes, { reason: `burst-${index}` });
-      }
+      yield* Effect.forEach(
+        Arr.range(0, BURST - 1),
+        (index) => Queue.offer(pokes, { reason: `burst-${index}` }),
+        { concurrency: 1, discard: true }
+      );
       yield* settle;
       expect(yield* count).toBe(1);
 

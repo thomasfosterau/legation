@@ -195,9 +195,9 @@ interface StagedEntry {
 
 /**
  * The committed rows a handler read: for each row, the version it had at the
- * first read (`undefined` when the row was absent). The commit re-checks them.
+ * first read (`None` when the row was absent). The commit re-checks them.
  */
-type ReadSet = Map<string, Map<string, number | undefined>>;
+type ReadSet = Map<string, Map<string, Option.Option<number>>>;
 
 /**
  * A mutation's writes, not yet committed. `log` keeps them in handler order so
@@ -226,9 +226,9 @@ const recordRead = (
   stage: Stage,
   collection: string,
   id: string,
-  version: number | undefined
+  version: Option.Option<number>
 ): void => {
-  const rows = stage.reads.get(collection) ?? new Map<string, number | undefined>();
+  const rows = stage.reads.get(collection) ?? new Map<string, Option.Option<number>>();
   if (!rows.has(id)) rows.set(id, version);
   stage.reads.set(collection, rows);
 };
@@ -241,7 +241,7 @@ const recordRead = (
 const readsStale = (s: MemoryState, reads: ReadSet): boolean => {
   return [...reads].some(([collection, ids]) => {
     const rows = s.rows.get(collection);
-    return [...ids].some(([id, seen]) => rows?.get(id)?.version !== seen);
+    return [...ids].some(([id, seen]) => rows?.get(id)?.version !== Option.getOrUndefined(seen));
   });
 };
 
@@ -294,7 +294,8 @@ const rejectionOf = (
   clientGroupId: string,
   clientId: string,
   mutationId: number
-): string | undefined => s.rejections.get(clientGroupId)?.get(clientId)?.get(mutationId);
+): Option.Option<string> =>
+  Option.fromUndefinedOr(s.rejections.get(clientGroupId)?.get(clientId)?.get(mutationId));
 
 /** The state with a permanent rejection of one mutation remembered. */
 const withRejection = (
@@ -421,7 +422,7 @@ export const make = (handlers: Readonly<Record<string, BackendHandler>>): Effect
         return Ref.get(state).pipe(
           Effect.map((s) => {
             const row = s.rows.get(collection)?.get(id);
-            recordRead(stage, collection, id, row?.version);
+            recordRead(stage, collection, id, Option.fromUndefinedOr(row?.version));
             return row?.value;
           })
         );
@@ -453,7 +454,7 @@ export const make = (handlers: Readonly<Record<string, BackendHandler>>): Effect
             mutation.clientId,
             mutation.mutationId
           );
-          return [{ _tag: "Replayed", rejection: Option.fromUndefinedOr(rejection) }, s];
+          return [{ _tag: "Replayed", rejection }, s];
         }
         if (readsStale(s, unit.reads)) return [{ _tag: "Conflicted" }, s];
         const log = P.isTagged(outcome, "Applied") ? outcome.staged.log : [];
@@ -495,8 +496,11 @@ export const make = (handlers: Readonly<Record<string, BackendHandler>>): Effect
               : {
                   _tag: "Watermark",
                   lastMutationId: last,
-                  rejection: Option.fromUndefinedOr(
-                    rejectionOf(s, context.clientGroupId, mutation.clientId, mutation.mutationId)
+                  rejection: rejectionOf(
+                    s,
+                    context.clientGroupId,
+                    mutation.clientId,
+                    mutation.mutationId
                   ),
                 };
           })

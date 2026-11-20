@@ -290,7 +290,7 @@ describe("ClientStore per-row layout", () => {
           mutators: Mutator.registry([
             {
               mutator: Mutator.make("todo/set", Schema.Struct({ id: Schema.String })),
-              local: (args, writer) => writer.put("todos", (args as { id: string }).id, args),
+              local: (args: { id: string }, writer) => writer.put("todos", args.id, args),
             },
           ]),
         }).pipe(

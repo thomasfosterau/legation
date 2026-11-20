@@ -110,44 +110,52 @@ export const bare: FilterDeclaration = bareFor("id");
 const INT_CHECK_ID = "effect/schema/isInt";
 
 /** Whether any check on the node (recursing into groups) is `Schema.isInt`. */
-const hasIntCheck = (checks: SchemaAST.Checks | undefined): boolean =>
-  checks !== undefined &&
-  checks.some((check) =>
-    P.isTagged(check, "FilterGroup")
-      ? hasIntCheck(check.checks)
-      : check.annotations?.representation?.id === INT_CHECK_ID
+const hasIntCheck = (checks: Option.Option<SchemaAST.Checks>): boolean =>
+  Option.exists(checks, (present) =>
+    present.some((check) =>
+      P.isTagged(check, "FilterGroup")
+        ? hasIntCheck(Option.some(check.checks))
+        : check.annotations?.representation?.id === INT_CHECK_ID
+    )
   );
 
 /** The kind of a literal schema, by the JS type of its literal. */
-const kindOfLiteral: (literal: SchemaAST.LiteralValue) => LiteralKind | undefined =
+const kindOfLiteral: (literal: SchemaAST.LiteralValue) => Option.Option<LiteralKind> =
   Match.type<SchemaAST.LiteralValue>().pipe(
-    Match.withReturnType<LiteralKind | undefined>(),
-    Match.when(Match.string, () => "text"),
-    Match.when(Match.number, () => "double"),
-    Match.when(Match.boolean, () => "boolean"),
-    Match.orElse(() => undefined)
+    Match.withReturnType<Option.Option<LiteralKind>>(),
+    Match.when(Match.string, () => Option.some("text")),
+    Match.when(Match.number, () => Option.some("double")),
+    Match.when(Match.boolean, () => Option.some("boolean")),
+    Match.orElse(() => Option.none())
   );
 
 /** The one kind shared by a union's non-null members (`NullOr`, `optional`, `Literals`). */
-const kindOfUnion = (members: ReadonlyArray<SchemaAST.AST>): LiteralKind | undefined => {
-  const kinds = members
-    .filter((member) => !P.isTagged(member, "Null") && !P.isTagged(member, "Undefined"))
-    .map(kindOfAst);
-  if (kinds.includes(undefined)) return undefined;
-  const distinct = new Set(kinds);
-  return distinct.size === 1 ? [...distinct][0] : undefined;
-};
+const kindOfUnion = (members: ReadonlyArray<SchemaAST.AST>): Option.Option<LiteralKind> =>
+  Option.flatMap(
+    Option.all(
+      members
+        .filter((member) => !P.isTagged(member, "Null") && !P.isTagged(member, "Undefined"))
+        .map(kindOfAst)
+    ),
+    (kinds) => {
+      const distinct = new Set(kinds);
+      return distinct.size === 1 ? Arr.head([...distinct]) : Option.none();
+    }
+  );
 
-const kindOfAst: (ast: SchemaAST.AST) => LiteralKind | undefined = Match.type<SchemaAST.AST>().pipe(
-  Match.withReturnType<LiteralKind | undefined>(),
-  Match.tag("String", () => "text"),
-  Match.tag("Number", (ast) => (hasIntCheck(ast.checks) ? "integer" : "double")),
-  Match.tag("Boolean", () => "boolean"),
-  Match.tag("Literal", (ast) => kindOfLiteral(ast.literal)),
-  // `kindOfUnion` reads `kindOfAst` only when called.
-  Match.tag("Union", (ast) => kindOfUnion(ast.types)),
-  Match.orElse(() => undefined)
-);
+const kindOfAst: (ast: SchemaAST.AST) => Option.Option<LiteralKind> =
+  Match.type<SchemaAST.AST>().pipe(
+    Match.withReturnType<Option.Option<LiteralKind>>(),
+    Match.tag("String", () => Option.some("text")),
+    Match.tag("Number", (ast) =>
+      Option.some(hasIntCheck(Option.fromUndefinedOr(ast.checks)) ? "integer" : "double")
+    ),
+    Match.tag("Boolean", () => Option.some("boolean")),
+    Match.tag("Literal", (ast) => kindOfLiteral(ast.literal)),
+    // `kindOfUnion` reads `kindOfAst` only when called.
+    Match.tag("Union", (ast) => kindOfUnion(ast.types)),
+    Match.orElse(() => Option.none())
+  );
 
 /**
  * The default literal kind of an attribute, read off its schema's **encoded**
@@ -160,7 +168,7 @@ const kindOfAst: (ast: SchemaAST.AST) => LiteralKind | undefined = Match.type<Sc
  * `Schema.Date`, an object, an array).
  */
 export const kindOf = (schema: { readonly ast: SchemaAST.AST }): LiteralKind | undefined =>
-  kindOfAst(SchemaAST.toEncoded(schema.ast));
+  Option.getOrUndefined(kindOfAst(SchemaAST.toEncoded(schema.ast)));
 
 // ─── Resolution (definition time) ────────────────────────────────────────────
 
@@ -209,6 +217,10 @@ export const resolve = (options: ResolveOptions): FilterDeclaration => {
   );
 };
 
+/** The operators-only shorthand (`Array.isArray` does not narrow a `ReadonlyArray`). */
+const isOperatorList = (input: FilterableInput): input is ReadonlyArray<FilterOperator> =>
+  Array.isArray(input);
+
 /** One field's declaration with the operators-only shorthand expanded. */
 type DeclaredField = {
   readonly operators: ReadonlyArray<FilterOperator>;
@@ -217,9 +229,7 @@ type DeclaredField = {
 
 /** The declared form of one field, with the operators-only shorthand expanded. */
 const normaliseInput = (input: FilterableInput): DeclaredField =>
-  Array.isArray(input)
-    ? { operators: input as ReadonlyArray<FilterOperator> }
-    : (input as DeclaredField);
+  isOperatorList(input) ? { operators: input } : input;
 
 /** A declared field must be a field of the row. */
 const assertRowField = (
@@ -322,21 +332,25 @@ const fieldCheck = (
   declaration: FilterDeclaration,
   field: string,
   operator: FilterOperator
-): AuthorizationError | undefined => {
+): Option.Option<AuthorizationError> => {
   const declared = declaration.filterable[field];
   if (declared === undefined) {
-    return deny(
-      collection,
-      `field "${field}" is not filterable (filterable: ${Object.keys(declaration.filterable).join(", ")})`
+    return Option.some(
+      deny(
+        collection,
+        `field "${field}" is not filterable (filterable: ${Object.keys(declaration.filterable).join(", ")})`
+      )
     );
   }
   if (!declared.operators.includes(operator)) {
-    return deny(
-      collection,
-      `field "${field}" is not filterable with "${operator}" (declared: ${declared.operators.join(", ")})`
+    return Option.some(
+      deny(
+        collection,
+        `field "${field}" is not filterable with "${operator}" (declared: ${declared.operators.join(", ")})`
+      )
     );
   }
-  return undefined;
+  return Option.none();
 };
 
 const literalCheck = (
@@ -345,13 +359,15 @@ const literalCheck = (
   field: string,
   operator: FilterOperator,
   value: Literal
-): AuthorizationError | undefined => {
+): Option.Option<AuthorizationError> => {
   const kind = declaration.filterable[field]?.kind;
   return value !== null && kind !== undefined && matchesKind(kind, value)
-    ? undefined
-    : deny(
-        collection,
-        `literal ${Json.stringify(value)} for field "${field}" ("${operator}") does not match its kind "${kind}"`
+    ? Option.none()
+    : Option.some(
+        deny(
+          collection,
+          `literal ${Json.stringify(value)} for field "${field}" ("${operator}") does not match its kind "${kind}"`
+        )
       );
 };
 
@@ -361,13 +377,11 @@ const inCheck = (
   declaration: FilterDeclaration,
   node: { readonly field: string; readonly values: ReadonlyArray<Literal> },
   operator: "in" | "nin"
-): AuthorizationError | undefined => {
+): Option.Option<AuthorizationError> => {
   const failed = fieldCheck(collection, declaration, node.field, operator);
-  if (failed !== undefined) return failed;
-  return Option.getOrUndefined(
-    Arr.findFirst(node.values, (value) =>
-      Option.fromUndefinedOr(literalCheck(collection, declaration, node.field, operator, value))
-    )
+  if (Option.isSome(failed)) return failed;
+  return Arr.findFirst(node.values, (value) =>
+    literalCheck(collection, declaration, node.field, operator, value)
   );
 };
 
@@ -392,15 +406,16 @@ export const checkWhere = (
   collection: string,
   declaration: FilterDeclaration,
   where: Predicate
-): AuthorizationError | undefined => checkNode(where, collection, declaration);
+): AuthorizationError | undefined =>
+  Option.getOrUndefined(checkNode(where, collection, declaration));
 
-// The connective cases reach `checkWhere` (through `connectiveCheck` /
+// The connective cases reach `checkNode` (through `connectiveCheck` /
 // `notCheck`) only when called.
 const checkNode = Match.fn(
   (where: Predicate, _collection: string, _declaration: FilterDeclaration) => where
 ).pipe(
-  Match.withReturnType<AuthorizationError | undefined>(),
-  Match.tag("True", () => undefined),
+  Match.withReturnType<Option.Option<AuthorizationError>>(),
+  Match.tag("True", () => Option.none()),
   Match.tag("Compare", (where, _, collection, declaration) =>
     compareCheck(collection, declaration, where)
   ),
@@ -420,12 +435,11 @@ const checkNode = Match.fn(
     notCheck(collection, declaration, where.predicate)
   ),
   Match.tag("Exists", (_where, _, collection) =>
-    deny(collection, `"Exists" is not allowed in a client predicate`)
+    Option.some(deny(collection, `"Exists" is not allowed in a client predicate`))
   ),
   Match.orElse((where, _, collection) =>
-    deny(
-      collection,
-      `predicate node "${(where as { readonly _tag: string })._tag}" is not allowed in a client predicate`
+    Option.some(
+      deny(collection, `predicate node "${where._tag}" is not allowed in a client predicate`)
     )
   )
 );
@@ -437,18 +451,20 @@ const compareCheck = (
   collection: string,
   declaration: FilterDeclaration,
   node: CompareNode
-): AuthorizationError | undefined => {
-  if (node.value === null) {
+): Option.Option<AuthorizationError> => {
+  const value = node.value;
+  if (value === null) {
     return isNullTest(node)
       ? fieldCheck(collection, declaration, node.field, "isnull")
-      : deny(
-          collection,
-          `literal null for field "${node.field}" ("${node.op}") is not a comparable value`
+      : Option.some(
+          deny(
+            collection,
+            `literal null for field "${node.field}" ("${node.op}") is not a comparable value`
+          )
         );
   }
-  return (
-    fieldCheck(collection, declaration, node.field, node.op) ??
-    literalCheck(collection, declaration, node.field, node.op, node.value)
+  return Option.orElse(fieldCheck(collection, declaration, node.field, node.op), () =>
+    literalCheck(collection, declaration, node.field, node.op, value)
   );
 };
 
@@ -457,25 +473,20 @@ const connectiveCheck = (
   collection: string,
   declaration: FilterDeclaration,
   predicates: ReadonlyArray<Predicate>
-): AuthorizationError | undefined => {
-  return Option.getOrUndefined(
-    Arr.findFirst(predicates, (predicate) =>
-      Option.fromUndefinedOr(checkWhere(collection, declaration, predicate))
-    )
-  );
-};
+): Option.Option<AuthorizationError> =>
+  Arr.findFirst(predicates, (predicate) => checkNode(predicate, collection, declaration));
 
 /** `Not`: `Not(In)` is `nin`, a negated null test is `isnull`, anything else recurses. */
 const notCheck = (
   collection: string,
   declaration: FilterDeclaration,
   inner: Predicate
-): AuthorizationError | undefined => {
+): Option.Option<AuthorizationError> => {
   if (P.isTagged(inner, "In")) return inCheck(collection, declaration, inner, "nin");
   if (P.isTagged(inner, "Compare") && isNullTest(inner)) {
     return fieldCheck(collection, declaration, inner.field, "isnull");
   }
-  return checkWhere(collection, declaration, inner);
+  return checkNode(inner, collection, declaration);
 };
 
 /** Check a client-authored `orderBy`: every field must be sortable. */

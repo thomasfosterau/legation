@@ -157,6 +157,8 @@ const runRequest = <A>(
       return undefined;
     }
     const transaction = began.success;
+    // SAFETY: a transaction completes only after its one request succeeded, and
+    // that request's `success` listener (added below) has already set `result`.
     transaction.addEventListener("complete", () => finish(Effect.succeed(result as A)));
     transaction.addEventListener("error", () => fail(transaction.error));
     transaction.addEventListener("abort", () => fail(transaction.error));
@@ -335,7 +337,7 @@ const commitOps = (
  * the module note above). Keys are the full keys the store holds.
  */
 export const keyValueLayer = (
-  database: string | undefined
+  database?: string
 ): Layer.Layer<KeyValueStore.KeyValueStore, never, IndexedDb.IndexedDb> =>
   Layer.effect(KeyValueStore.KeyValueStore)(
     Effect.gen(function* () {
@@ -377,7 +379,7 @@ const readEntries = (
  * no knowledge of the prefix.
  */
 export const atomicKeyValueLayer = (
-  database: string | undefined
+  database?: string
 ): Layer.Layer<AtomicKeyValue.AtomicKeyValue, never, IndexedDb.IndexedDb> =>
   Layer.effect(AtomicKeyValue.AtomicKeyValue)(
     Effect.gen(function* () {

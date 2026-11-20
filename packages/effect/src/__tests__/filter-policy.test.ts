@@ -8,6 +8,7 @@
 import * as P from "effect/Predicate";
 import { describe, expect, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
+import { flow } from "effect/Function";
 import * as Ref from "effect/Ref";
 import * as Schema from "effect/Schema";
 import {
@@ -23,11 +24,10 @@ import {
   Predicate,
   Query,
   Server,
-  type AuthorizationError,
-  type TransportError,
 } from "../index.js";
 import { Subset } from "../internal.js";
 import { defined } from "./defined.js";
+import { idOf } from "./shapes.js";
 
 const Category = Node.make("categories", { attributes: { name: Schema.String } });
 
@@ -117,11 +117,16 @@ describe("FilterPolicy: declaration", () => {
     expect(() =>
       Node.make("bad", {
         attributes: { name: Schema.String },
+        // SAFETY: deliberately ill-typed: `nope` is no field of the node, the input under test.
         filterable: { nope: ["eq"] } as never,
       })
     ).toThrow(FilterDeclarationError);
     expect(() =>
-      Node.make("bad", { attributes: { name: Schema.String }, sortable: ["nope"] as never })
+      Node.make("bad", {
+        attributes: { name: Schema.String },
+        // SAFETY: deliberately ill-typed: `nope` is no field of the node, the input under test.
+        sortable: ["nope"] as never,
+      })
     ).toThrow(FilterDeclarationError);
     expect(() =>
       Node.make("bad", { attributes: { at: Schema.Date }, filterable: { at: ["eq"] } })
@@ -148,7 +153,7 @@ describe("FilterPolicy: declaration", () => {
     const comments = Collection.make({
       name: "comments",
       schema: Schema.Unknown,
-      id: (value) => (value as { id: string }).id,
+      id: (value) => idOf(value),
       relationships: [
         {
           name: "issue",
@@ -178,7 +183,7 @@ describe("FilterPolicy: declaration", () => {
     const comments = Collection.make({
       name: "comments",
       schema: Schema.Unknown,
-      id: (value) => (value as { id: string }).id,
+      id: (value) => idOf(value),
       relationships: [
         {
           name: "issue",
@@ -499,14 +504,13 @@ const recordingBackend = Effect.fn("recordingBackend")(function* () {
   return { backend, evaluations };
 });
 
+/** A handler failure: a `TransportError` carrying an `AuthorizationError` as its cause. */
+const AuthorizationFailure = Schema.TaggedStruct("TransportError", {
+  cause: Schema.TaggedStruct("AuthorizationError", { message: Schema.String }),
+});
+
 /** The `AuthorizationError` a handler failure carries (as the TransportError's cause). */
-const causeOf = (error: unknown): AuthorizationError => {
-  const transport = error as TransportError;
-  expect(transport._tag).toBe("TransportError");
-  const cause = transport.cause as AuthorizationError;
-  expect(cause._tag).toBe("AuthorizationError");
-  return cause;
-};
+const causeOf = flow(Schema.decodeUnknownSync(AuthorizationFailure), (error) => error.cause);
 
 describe("FilterPolicy: on SyncServer", () => {
   it.effect("an inadmissible subscription fails the pull before Backend.evaluate", () =>
@@ -689,7 +693,7 @@ describe("FilterPolicy: on SyncServer", () => {
         const backend = yield* MemoryBackend.make(
           MemoryBackend.validatedHandlers([
             MemoryBackend.handler(productSet, (args, writer) =>
-              writer.put("products", (args as { id: string }).id, args)
+              writer.put("products", idOf(args), args)
             ),
           ])
         );

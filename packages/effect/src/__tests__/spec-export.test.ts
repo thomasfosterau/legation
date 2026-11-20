@@ -32,6 +32,32 @@ const api: SpecExport.SyncApi = {
   path: "/sync",
 };
 
+// The parts of the emitted documents these tests read.
+const decodePutComponent = Schema.decodeUnknownSync(
+  Schema.Struct({ properties: Schema.Struct({ value: Schema.Unknown }) })
+);
+const decodeOpenApi = Schema.decodeUnknownSync(
+  Schema.Struct({
+    openapi: Schema.String,
+    paths: Schema.Record(
+      Schema.String,
+      Schema.Struct({ post: Schema.Struct({ operationId: Schema.String }) })
+    ),
+    components: Schema.Struct({ schemas: Schema.Record(Schema.String, Schema.Unknown) }),
+  })
+);
+const decodePaths = Schema.decodeUnknownSync(
+  Schema.Struct({ paths: Schema.Record(Schema.String, Schema.Unknown) })
+);
+const decodeAsyncApi = Schema.decodeUnknownSync(
+  Schema.Struct({
+    asyncapi: Schema.String,
+    channels: Schema.Record(Schema.String, Schema.Unknown),
+    operations: Schema.Record(Schema.String, Schema.Struct({ action: Schema.String })),
+    components: Schema.Struct({ messages: Schema.Record(Schema.String, Schema.Unknown) }),
+  })
+);
+
 describe("SpecExport.build", () => {
   it("specializes the protocol with per-name component schemas", () => {
     const spec = SpecExport.build(api);
@@ -61,7 +87,7 @@ describe("SpecExport.build", () => {
 
   it("describes the row value on a patch Put with the collection's schema", () => {
     const spec = SpecExport.build(api);
-    const put = spec.components["Put_todos"] as { properties: { value: { $ref: string } } };
+    const put = decodePutComponent(spec.components["Put_todos"]);
     expect(put.properties.value).toEqual({ $ref: "#/components/schemas/Row_todos" });
   });
 
@@ -75,11 +101,7 @@ describe("SpecExport.build", () => {
 
 describe("SpecExport.toOpenApi", () => {
   it("emits push/pull operations at the configured path", () => {
-    const doc = SpecExport.openApi(api) as {
-      openapi: string;
-      paths: Record<string, { post: { operationId: string; requestBody: unknown } }>;
-      components: { schemas: Record<string, Schema.Json> };
-    };
+    const doc = decodeOpenApi(SpecExport.openApi(api));
     expect(doc.openapi).toBe("3.1.0");
     expect(doc.paths["/sync/push"].post.operationId).toBe("push");
     expect(doc.paths["/sync/pull"].post.operationId).toBe("pull");
@@ -87,21 +109,14 @@ describe("SpecExport.toOpenApi", () => {
   });
 
   it("honours a custom path", () => {
-    const doc = SpecExport.openApi({ ...api, path: "/api/v2/sync" }) as {
-      paths: Record<string, Schema.Json>;
-    };
+    const doc = decodePaths(SpecExport.openApi({ ...api, path: "/api/v2/sync" }));
     expect(Object.keys(doc.paths)).toEqual(["/api/v2/sync/push", "/api/v2/sync/pull"]);
   });
 });
 
 describe("SpecExport.toAsyncApi", () => {
   it("emits push/pull/poke channels and operations", () => {
-    const doc = SpecExport.asyncApi(api) as {
-      asyncapi: string;
-      channels: Record<string, Schema.Json>;
-      operations: Record<string, { action: string }>;
-      components: { messages: Record<string, Schema.Json> };
-    };
+    const doc = decodeAsyncApi(SpecExport.asyncApi(api));
     expect(doc.asyncapi).toBe("3.0.0");
     expect(Arr.sort(Object.keys(doc.channels), Order.String)).toEqual(["pokes", "pull", "push"]);
     expect(doc.operations.receivePokes.action).toBe("receive");

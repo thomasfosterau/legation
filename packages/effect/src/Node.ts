@@ -200,6 +200,8 @@ export const make = <
     readonly sortable?: ReadonlyArray<FieldName<Fields, Edges, IdField>>;
   }
 ): Node<Type, Fields, Edges, IdField> => {
+  // SAFETY: `Edges` is inferred from `options.edges`; omitted, it is its
+  // default `NoEdges`, which the empty record is.
   const edges = options.edges ?? ({} as Edges);
   const id = Id(type);
   const identity = options.id ?? "id";
@@ -208,6 +210,8 @@ export const make = <
   Arr.forEach(Object.values(edges), (edge) => {
     if (edge.kind === "one") viaFields[edge.via] = Id(edge.target);
   });
+  // SAFETY: `filterable` maps field names (strings) to `FilterableInput`s, and
+  // `exactOptionalPropertyTypes` rules out an explicit `undefined` value.
   const declaration = FilterPolicy.resolve({
     collection: type,
     attributes: options.attributes,
@@ -216,6 +220,9 @@ export const make = <
     filterable: options.filterable as Readonly<Record<string, FilterPolicy.FilterableInput>>,
     sortable: options.sortable,
   });
+  // SAFETY: the struct holds the synthetic `id` exactly when no identity is
+  // declared, then the attributes and each `one` edge's via field, which is the
+  // row type `Node` names; TypeScript cannot spread generic field records.
   const row = Schema.Struct({
     // A declared identity is already one of the attributes; only a node
     // without one gets the synthetic branded `id`.
@@ -223,6 +230,8 @@ export const make = <
     ...options.attributes,
     ...viaFields,
   }) as Node<Type, Fields, Edges, IdField>["row"];
+  // SAFETY: `identity` is `options.id` when `IdField` is a string, and `"id"`
+  // when it is `undefined`, which is what `Node["id"]` names.
   return {
     type,
     id: identity as Node<Type, Fields, Edges, IdField>["id"],
@@ -391,6 +400,8 @@ const toCollection = (
   return Collection.make({
     name: node.type,
     schema: NodeRowCodec.rowCodec(node),
+    // SAFETY: `value` is a decoded row of this node, whose identity field is a
+    // string id.
     id: (value) => (value as Record<string, string>)[node.id] ?? "",
     identity: node.id,
     relationships,

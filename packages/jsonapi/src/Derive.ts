@@ -173,6 +173,8 @@ export const derive = (resources: ResourceMap): Derived => {
     if (Option.isSome(resource.update)) {
       add(type, "update", UpdateArgs, (args, writer) =>
         Effect.gen(function* () {
+          // SAFETY: a row of `type`'s collection is a `JsonApiRow`: its schema
+          // is `collectionFor`'s, and this module's handlers write only those.
           const current = Option.map(
             Option.fromUndefinedOr(yield* writer.get(type, args.id)),
             (row) => row as JsonApiRow

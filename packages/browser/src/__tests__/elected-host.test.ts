@@ -32,7 +32,11 @@ import * as Scope from "effect/Scope";
 import * as Stream from "effect/Stream";
 import * as ElectedHost from "../ElectedHost.js";
 import type { Role } from "../ElectedHost.js";
+import { defined } from "./defined.js";
 import { TestFailure } from "./test-failure.js";
+
+const decodeIdentified = Schema.decodeUnknownSync(Schema.Struct({ id: Schema.String }));
+const decodeTitled = Schema.decodeUnknownSync(Schema.Struct({ title: Schema.String }));
 
 interface Todo {
   readonly id: string;
@@ -43,7 +47,10 @@ interface Todo {
 const TodoArgs = Schema.Struct({ id: Schema.String, title: Schema.String, isDone: Schema.Boolean });
 const todoSet = Mutator.make("todo/set", TodoArgs);
 const mutations = Mutator.registry([
-  { mutator: todoSet, local: (args, writer) => writer.put("todos", (args as Todo).id, args) },
+  {
+    mutator: todoSet,
+    local: (args, writer) => writer.put("todos", decodeIdentified(args).id, args),
+  },
 ]);
 
 const Todo = Node.make("todos", { attributes: { title: Schema.String, isDone: Schema.Boolean } });
@@ -57,15 +64,13 @@ const sleepReal = (millis: number) =>
   });
 
 /** Poll until `read` passes `until`, with a bounded number of attempts. */
-const eventually = <A>(read: Effect.Effect<A>, until: (value: A) => boolean) =>
-  Effect.gen(function* () {
-    for (let attempt = 0; attempt < 300; attempt++) {
-      const value = yield* read;
-      if (until(value)) return value;
-      yield* sleepReal(10);
-    }
-    return yield* Effect.die(new TestFailure({ message: "eventually: condition never held" }));
-  });
+const eventually = <A>(read: Effect.Effect<A>, until: (value: A) => boolean) => {
+  const attempt = (n: number): Effect.Effect<A> =>
+    n === 300
+      ? Effect.die(new TestFailure({ message: "eventually: condition never held" }))
+      : Effect.filterOrElse(read, until, () => Effect.andThen(sleepReal(10), attempt(n + 1)));
+  return attempt(0);
+};
 
 /** Every `role` stream's current value (re-reads live — see `SubscriptionRef.changes`). */
 const currentRole = (role: Stream.Stream<Role>) =>
@@ -107,12 +112,15 @@ const makeFakeLockManager = (): LockManager => {
     if (next !== undefined) next();
   };
 
-  const request = ((name: string, optionsOrCallback: unknown, maybeCallback?: unknown) => {
-    const isOptions = !P.isFunction(optionsOrCallback);
-    const options = (isOptions ? optionsOrCallback : {}) as LockOptions;
-    const callback = (
-      isOptions ? maybeCallback : optionsOrCallback
-    ) as LockGrantedCallback<unknown>;
+  // SAFETY: one implementation serves both of `request`'s overloads, which
+  // differ only in whether `options` comes before the callback.
+  const request = ((
+    name: string,
+    optionsOrCallback: LockOptions | LockGrantedCallback<unknown>,
+    maybeCallback?: LockGrantedCallback<unknown>
+  ) => {
+    const options: LockOptions = P.isFunction(optionsOrCallback) ? {} : optionsOrCallback;
+    const callback = P.isFunction(optionsOrCallback) ? optionsOrCallback : maybeCallback;
     return new Promise<unknown>((resolve, reject) => {
       let settled = false;
       const attempt = () => {
@@ -124,7 +132,7 @@ const makeFakeLockManager = (): LockManager => {
           return;
         }
         held.add(name);
-        Promise.resolve(callback({ mode: options.mode ?? "exclusive", name })).then(
+        Promise.resolve(defined(callback)({ mode: options.mode ?? "exclusive", name })).then(
           (value) => {
             held.delete(name);
             settled = true;
@@ -303,7 +311,9 @@ describe("ElectedHost", () => {
             survivor.client.query({ collection: "todos" }).pipe(Effect.orDie),
             (current) => current.length === 1
           );
-          expect(rows.map((row) => (row.value as Todo).title)).toEqual(["written by the leader"]);
+          expect(rows.map((row) => decodeTitled(row.value).title)).toEqual([
+            "written by the leader",
+          ]);
 
           // And tab B, now the host, can journal new mutations itself.
           yield* survivor.client

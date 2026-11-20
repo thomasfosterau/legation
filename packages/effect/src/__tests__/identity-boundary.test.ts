@@ -38,6 +38,9 @@ import {
 } from "../index.js";
 import { ClientEngine, ClientView, Cvr, InvalidationBus, Subset, SyncServer } from "../internal.js";
 import type { PushRequest } from "../Protocol.js";
+import { idOf, stringField } from "./shapes.js";
+
+const bodyOf = stringField("body");
 
 const Secret = Node.make("secrets", { attributes: { body: Schema.String } });
 const nodes = Node.registry([Secret]);
@@ -46,7 +49,7 @@ const secretSet = Mutator.make("secret/set", Schema.Unknown);
 const mutations = Mutator.registry([
   {
     mutator: secretSet,
-    local: (args, writer) => writer.put("secrets", (args as { id: string }).id, args),
+    local: (args: { id: string }, writer) => writer.put("secrets", args.id, args),
   },
 ]);
 
@@ -55,9 +58,7 @@ const allSecrets = Subset.make({ collection: "secrets" });
 const makeHandler = Effect.fn("makeHandler")(function* () {
   const backend = yield* MemoryBackend.make(
     MemoryBackend.validatedHandlers([
-      MemoryBackend.handler(secretSet, (args, writer) =>
-        writer.put("secrets", (args as { id: string }).id, args)
-      ),
+      MemoryBackend.handler(secretSet, (args, writer) => writer.put("secrets", idOf(args), args)),
     ])
   );
   return yield* SyncServer.make.pipe(
@@ -99,7 +100,7 @@ const engineOver = (store: ClientStore.ClientStore, transport: Transport.ClientT
   );
 
 const bodies = (rows: ReadonlyArray<{ readonly value: unknown }>) =>
-  rows.map((row) => (row.value as { body: string }).body).toSorted();
+  rows.map((row) => bodyOf(row.value)).toSorted();
 
 const ALICE: Identity.Fingerprint = "sha256:alice-subject-hash";
 const BOB: Identity.Fingerprint = "sha256:bob-subject-hash";
@@ -332,7 +333,7 @@ describe("switching identities on a shared device", () => {
           yield* bob.push;
 
           const sent = (yield* Ref.get(pushes)).flatMap((request) => request.mutations);
-          expect(sent.map((m) => (m.args as { body: string }).body)).toEqual(["bob's own write"]);
+          expect(sent.map((m) => bodyOf(m.args))).toEqual(["bob's own write"]);
 
           // Not discarded either: parked under A's fingerprint, intact.
           expect(yield* bobStore.quarantines).toEqual([ALICE]);
@@ -367,9 +368,7 @@ describe("switching identities on a shared device", () => {
 
           yield* alice.push;
           const sent = (yield* Ref.get(pushes)).flatMap((request) => request.mutations);
-          expect(sent.map((m) => (m.args as { body: string }).body)).toEqual([
-            "alice's unsent write",
-          ]);
+          expect(sent.map((m) => bodyOf(m.args))).toEqual(["alice's unsent write"]);
         })
       )
     );

@@ -8,9 +8,11 @@
  */
 import { describe, expect, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
+import * as Schema from "effect/Schema";
 import type { SyncContext } from "../Backend.js";
 import * as MemoryBackend from "../MemoryBackend.js";
 import type { Mutation } from "../Protocol.js";
+import { idOf } from "./shapes.js";
 
 const context: SyncContext = { clientGroupId: "memory-hints-group" };
 const clientId = "memory-hints-client";
@@ -24,13 +26,15 @@ const mutation = (mutationId: number, mutator: string, args: unknown): Mutation 
   createdAt: 0,
 });
 
+const decodePut = Schema.decodeUnknownSync(Schema.Struct({ id: Schema.String, n: Schema.Finite }));
+
 const handlers = {
   "test/put": (raw, writer) => {
-    const { id, n } = raw as { readonly id: string; readonly n: number };
+    const { id, n } = decodePut(raw);
     return writer.put(rows, id, { n });
   },
   "test/del": (raw, writer) => {
-    const { id } = raw as { readonly id: string };
+    const id = idOf(raw);
     return writer.del(rows, id);
   },
 } satisfies Record<string, MemoryBackend.BackendHandler>;
@@ -102,7 +106,7 @@ describe("MemoryBackend change hints across mutations", () => {
     Effect.gen(function* () {
       const backend = yield* MemoryBackend.make({
         "test/put-del": (raw, writer) => {
-          const { id, n } = raw as { readonly id: string; readonly n: number };
+          const { id, n } = decodePut(raw);
           return writer.put(rows, id, { n }).pipe(Effect.andThen(writer.del(rows, id)));
         },
       });

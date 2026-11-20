@@ -44,6 +44,7 @@ import {
   type ServerHandler,
 } from "../Transport.js";
 import { defined } from "./defined.js";
+import { idOf, titleOf } from "./shapes.js";
 
 interface Todo {
   readonly id: string;
@@ -54,12 +55,12 @@ interface Todo {
 const mutators = Mutator.registry([
   {
     mutator: Mutator.make("todo/set", Schema.Unknown),
-    local: (args, writer) => writer.put("todos", (args as Todo).id, args),
+    local: (args: Todo, writer) => writer.put("todos", args.id, args),
   },
 ]);
 
 const backendHandlers = {
-  "todo/set": (args, writer) => Effect.asVoid(writer.put("todos", (args as Todo).id, args)),
+  "todo/set": (args, writer) => Effect.asVoid(writer.put("todos", idOf(args), args)),
 } satisfies Record<string, MemoryBackend.BackendHandler>;
 
 const makeServer = Effect.fn("makeServer")(function* (): Effect.fn.Return<
@@ -135,8 +136,8 @@ const makeLoggingServer = Effect.fn("makeLoggingServer")(function* () {
   const applied: Array<string> = [];
   const backend = yield* MemoryBackend.make({
     "todo/set": (args, writer) =>
-      Effect.sync(() => void applied.push((args as Todo).title)).pipe(
-        Effect.andThen(writer.put("todos", (args as Todo).id, args)),
+      Effect.sync(() => void applied.push(titleOf(args))).pipe(
+        Effect.andThen(writer.put("todos", idOf(args), args)),
         Effect.asVoid
       ),
   });
@@ -154,8 +155,7 @@ const makeLoggingServer = Effect.fn("makeLoggingServer")(function* () {
   return { handler, applied, backend };
 });
 
-const titlesOf = (mutations: ReadonlyArray<Mutation>) =>
-  mutations.map((m) => (m.args as Todo).title);
+const titlesOf = (mutations: ReadonlyArray<Mutation>) => mutations.map((m) => titleOf(m.args));
 
 /** Fail after the server has applied the push: the response is lost in transit. */
 const lossyAfterApply = (base: CT, mode: Ref.Ref<"ok" | "response-lost" | "request-lost">): CT => ({
@@ -193,17 +193,20 @@ describe("Paced", () => {
       const { engine, store, counter } = yield* setup();
       const paced = yield* Paced.coalesce(engine, "todo/set");
 
-      for (let i = 0; i < 10; i++) yield* paced.call("t1", todo("t1", `v${i}`));
+      yield* Effect.forEach(Arr.range(0, 9), (i) => paced.call("t1", todo("t1", `v${i}`)), {
+        concurrency: 1,
+        discard: true,
+      });
       yield* paced.call("t2", todo("t2", "other"));
 
       const pending = yield* store.pendingMutations;
       // Ten calls for t1 collapse to its newest entry; t2 is untouched by that
       // compaction — two keys, two surviving entries.
       expect(pending).toHaveLength(2);
-      const t1 = defined(pending.find((m) => (m.args as Todo).id === "t1"));
-      const t2 = defined(pending.find((m) => (m.args as Todo).id === "t2"));
-      expect((t1.args as Todo).title).toBe("v9");
-      expect((t2.args as Todo).title).toBe("other");
+      const t1 = defined(pending.find((m) => idOf(m.args) === "t1"));
+      const t2 = defined(pending.find((m) => idOf(m.args) === "t2"));
+      expect(titleOf(t1.args)).toBe("v9");
+      expect(titleOf(t2.args)).toBe("other");
       // Every call journaled (fully durable): eleven appends, nine of them
       // (t1's v0..v8) compacted away afterwards — and the survivors renumbered
       // so the ids the backend sees are gap-free.
@@ -220,20 +223,24 @@ describe("Paced", () => {
         const { engine, store, counter } = yield* setup();
         const paced = yield* Paced.debounce(engine, "todo/set", Duration.millis(200));
 
-        for (let i = 0; i < 50; i++) yield* paced.call("t1", todo("t1", `keystroke-${i}`));
+        yield* Effect.forEach(
+          Arr.range(0, 49),
+          (i) => paced.call("t1", todo("t1", `keystroke-${i}`)),
+          { concurrency: 1, discard: true }
+        );
 
         // Still inside the window: only the leading-edge entry exists.
         const during = yield* store.pendingMutations;
         expect(during).toHaveLength(1);
         expect(defined(during[0]).mutationId).toBe(1);
-        expect((defined(during[0]).args as Todo).title).toBe("keystroke-0");
+        expect(titleOf(defined(during[0]).args)).toBe("keystroke-0");
 
         // The window closes: the trailing flush supersedes the leading entry
         // with the latest args.
         yield* TestClock.adjust(Duration.millis(200));
         const after = yield* store.pendingMutations;
         expect(after).toHaveLength(1);
-        expect((defined(after[0]).args as Todo).title).toBe("keystroke-49");
+        expect(titleOf(defined(after[0]).args)).toBe("keystroke-49");
         // Exactly two `mutateWithAck` calls happened for 50 keystrokes — i.e.
         // exactly two journal writes / overlay invalidations, not fifty:
         // "bounded overlay replays". The survivor was renumbered back to 1 so
@@ -278,7 +285,7 @@ describe("Paced", () => {
       yield* TestClock.adjust(Duration.millis(100));
       let pending = yield* store.pendingMutations;
       expect(pending).toHaveLength(1);
-      expect((defined(pending[0]).args as Todo).title).toBe("v2");
+      expect(titleOf(defined(pending[0]).args)).toBe("v2");
       expect(counter.appends).toBe(2);
       expect(defined(pending[0]).mutationId).toBe(1); // renumbered
 
@@ -287,7 +294,7 @@ describe("Paced", () => {
       yield* TestClock.adjust(Duration.millis(100));
       pending = yield* store.pendingMutations;
       expect(pending).toHaveLength(1);
-      expect((defined(pending[0]).args as Todo).title).toBe("v3");
+      expect(titleOf(defined(pending[0]).args)).toBe("v3");
       expect(counter.appends).toBe(3);
       expect(defined(pending[0]).mutationId).toBe(1);
 
@@ -345,7 +352,7 @@ describe("Paced", () => {
       yield* paced.call("t1", todo("t1", "third"));
       const final = yield* store.pendingMutations;
       expect(final).toHaveLength(1);
-      expect((defined(final[0]).args as Todo).title).toBe("third");
+      expect(titleOf(defined(final[0]).args)).toBe("third");
     }).pipe(Effect.scoped)
   );
 
@@ -368,21 +375,26 @@ describe("Paced", () => {
           return seed / 0x7fffffff;
         };
 
-        for (let round = 0; round < 300; round++) {
-          const strategy = defined(strategies[Math.floor(next() * strategies.length)]);
-          const key = `k${Math.floor(next() * 4)}`;
-          yield* strategy.call(key, todo(key, `r${round}`));
-          if (next() < 0.25) yield* TestClock.adjust(Duration.millis(10));
+        yield* Effect.forEach(
+          Arr.range(0, 299),
+          (round) =>
+            Effect.gen(function* () {
+              const strategy = defined(strategies[Math.floor(next() * strategies.length)]);
+              const key = `k${Math.floor(next() * 4)}`;
+              yield* strategy.call(key, todo(key, `r${round}`));
+              if (next() < 0.25) yield* TestClock.adjust(Duration.millis(10));
 
-          const pending = yield* store.pendingMutations;
-          const ids = idsOf(pending.filter((m) => m.clientId === "client-a"));
-          // Nothing has been pushed, so the journal is the contiguous run
-          // 1..n in journal (array) order: compaction removes entries and
-          // renumbers the survivors but never reorders them, and never
-          // leaves a gap the backend would reject — even under adversarial
-          // interleaving of all three strategies.
-          expect(ids).toEqual(ids.map((_, i) => i + 1));
-        }
+              const pending = yield* store.pendingMutations;
+              const ids = idsOf(pending.filter((m) => m.clientId === "client-a"));
+              // Nothing has been pushed, so the journal is the contiguous run
+              // 1..n in journal (array) order: compaction removes entries and
+              // renumbers the survivors but never reorders them, and never
+              // leaves a gap the backend would reject — even under adversarial
+              // interleaving of all three strategies.
+              expect(ids).toEqual(ids.map((_, i) => i + 1));
+            }),
+          { concurrency: 1, discard: true }
+        );
 
         // Let every outstanding trailing/periodic timer settle.
         yield* TestClock.adjust(Duration.seconds(1));
@@ -398,7 +410,10 @@ describe("paced compaction renumbers the journal", () => {
     Effect.gen(function* () {
       const { engine, store, applied, backend } = yield* setupLossy();
       const paced = yield* Paced.coalesce(engine, "todo/set");
-      for (let n = 1; n <= 3; n++) yield* paced.call("1", todo("1", `e${n}`));
+      yield* Effect.forEach(Arr.range(1, 3), (n) => paced.call("1", todo("1", `e${n}`)), {
+        concurrency: 1,
+        discard: true,
+      });
 
       // The reproduction from the issue: before the fix this was `[3]`, and
       // the push below failed with "Mutation id gap for client client-a: got
@@ -418,10 +433,15 @@ describe("paced compaction renumbers the journal", () => {
       const { engine, store, applied } = yield* setupLossy();
       const debounced = yield* Paced.debounce(engine, "todo/set", Duration.millis(50));
       const throttled = yield* Paced.throttle(engine, "todo/set", Duration.millis(50));
-      for (let n = 1; n <= 5; n++) {
-        yield* debounced.call("d", todo("d", `d${n}`));
-        yield* throttled.call("t", todo("t", `t${n}`));
-      }
+      yield* Effect.forEach(
+        Arr.range(1, 5),
+        (n) =>
+          Effect.gen(function* () {
+            yield* debounced.call("d", todo("d", `d${n}`));
+            yield* throttled.call("t", todo("t", `t${n}`));
+          }),
+        { concurrency: 1, discard: true }
+      );
       yield* TestClock.adjust(Duration.millis(500));
 
       const pending = yield* store.pendingMutations;
@@ -663,37 +683,44 @@ describe("paced compaction renumbers the journal", () => {
         const lastCall = new Map<string, string>();
         const gapFailures: Array<string> = [];
 
-        for (let round = 0; round < 400; round++) {
-          const which = Math.floor(next() * strategies.length);
-          const strategy = defined(strategies[which]);
-          // Keys are per strategy: a debounce buffer and a coalescer racing on
-          // one key is a different (caller-visible) ordering question than
-          // the gap-free journal this property is about.
-          const key = `s${which}k${Math.floor(next() * 4)}`;
-          const title = `${key}-r${round}`;
-          yield* strategy.call(key, todo(key, title));
-          lastCall.set(key, title);
-          if (next() < 0.3) yield* TestClock.adjust(Duration.millis(10));
+        yield* Effect.forEach(
+          Arr.range(0, 399),
+          (round) =>
+            Effect.gen(function* () {
+              const which = Math.floor(next() * strategies.length);
+              const strategy = defined(strategies[which]);
+              // Keys are per strategy: a debounce buffer and a coalescer racing on
+              // one key is a different (caller-visible) ordering question than
+              // the gap-free journal this property is about.
+              const key = `s${which}k${Math.floor(next() * 4)}`;
+              const title = `${key}-r${round}`;
+              yield* strategy.call(key, todo(key, title));
+              lastCall.set(key, title);
+              if (next() < 0.3) yield* TestClock.adjust(Duration.millis(10));
 
-          const roll = next();
-          if (roll < 0.15) {
-            // A healthy push.
-            const exit = yield* Effect.exit(engine.push);
-            if (Exit.isFailure(exit)) gapFailures.push(String(exit.cause));
-          } else if (roll < 0.25) {
-            // The server applies the push but the client never hears back.
-            yield* Ref.set(mode, next() < 0.5 ? "response-lost" : "request-lost");
-            yield* Effect.exit(engine.push);
-            yield* Ref.set(mode, "ok");
-          }
+              const roll = next();
+              if (roll < 0.15) {
+                // A healthy push.
+                const exit = yield* Effect.exit(engine.push);
+                if (Exit.isFailure(exit)) gapFailures.push(String(exit.cause));
+              } else if (roll < 0.25) {
+                // The server applies the push but the client never hears back.
+                yield* Ref.set(mode, next() < 0.5 ? "response-lost" : "request-lost");
+                yield* Effect.exit(engine.push);
+                yield* Ref.set(mode, "ok");
+              }
 
-          // The invariant that makes the journal drainable: contiguous ids,
-          // in journal order, at every step.
-          const ids = idsOf(
-            (yield* store.pendingMutations).filter((m) => m.clientId === "client-a")
-          );
-          for (let i = 1; i < ids.length; i++) expect(ids[i]).toBe(defined(ids[i - 1]) + 1);
-        }
+              // The invariant that makes the journal drainable: contiguous ids,
+              // in journal order, at every step.
+              const ids = idsOf(
+                (yield* store.pendingMutations).filter((m) => m.clientId === "client-a")
+              );
+              Arr.forEach(Arr.zip(Arr.drop(ids, 1), ids), ([id, previous]) =>
+                expect(id).toBe(previous + 1)
+              );
+            }),
+          { concurrency: 1, discard: true }
+        );
 
         yield* TestClock.adjust(Duration.seconds(1)); // flush every debounce/throttle buffer
         yield* engine.push;
@@ -861,10 +888,15 @@ describe("a committed compaction is never lost to a failure or an interrupt", ()
   it.effect("the memory store's compaction cannot be interrupted between journal and counter", () =>
     Effect.gen(function* () {
       const store = yield* ClientStoreModule.makeMemory;
-      for (let n = 1; n <= 3; n++) {
-        const id = yield* store.nextMutationId("client-a");
-        yield* store.appendMutation({ ...stale(id), mutator: "todo/set" });
-      }
+      yield* Effect.forEach(
+        Arr.range(1, 3),
+        () =>
+          Effect.gen(function* () {
+            const id = yield* store.nextMutationId("client-a");
+            yield* store.appendMutation({ ...stale(id), mutator: "todo/set" });
+          }),
+        { concurrency: 1, discard: true }
+      );
       const caller = yield* Effect.forkChild(store.compactPending("client-a", [1]));
       // The fork runs the compaction up to its internal yield point (journal
       // renumbered, counter not yet); interrupt it right there.

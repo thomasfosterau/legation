@@ -68,7 +68,7 @@ describe("HintSource.fromStream", () => {
       // give a still-running consumer the chance to publish the offer before
       // the sentinel; without them the sentinel would win the race either way.
       yield* Queue.offer(queue, [{ collection: "todos", ids: ["2"] }]);
-      for (let i = 0; i < 20; i++) yield* Effect.yieldNow;
+      yield* Effect.replicateEffect(Effect.yieldNow, 20, { discard: true });
       const sentinel: ReadonlyArray<ChangeHint> = [{ collection: "lists", ids: ["sentinel"] }];
       yield* bus.publish(sentinel);
       expect(yield* subscription.take).toEqual(sentinel);

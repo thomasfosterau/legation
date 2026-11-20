@@ -57,7 +57,9 @@ const rotateSingleLeft = <T>(left: Tree<T>, value: T, right: Node<T>): Node<T> =
   node(node(left, value, right.left), right.value, right.right);
 
 const rotateDoubleLeft = <T>(left: Tree<T>, value: T, right: Node<T>): Node<T> => {
-  const rl = right.left as Node<T>; // right is heavier than left, so right.left exists
+  // SAFETY: `balance` takes a double rotation only when `right.left` outweighs
+  // half of `right.right`, and `right` has at least two nodes, so it exists.
+  const rl = right.left as Node<T>;
   return node(node(left, value, rl.left), rl.value, node(rl.right, right.value, right.right));
 };
 
@@ -65,6 +67,8 @@ const rotateSingleRight = <T>(left: Node<T>, value: T, right: Tree<T>): Node<T> 
   node(left.left, left.value, node(left.right, value, right));
 
 const rotateDoubleRight = <T>(left: Node<T>, value: T, right: Tree<T>): Node<T> => {
+  // SAFETY: mirror of `rotateDoubleLeft`: `balance` takes a double rotation only
+  // when `left.right` outweighs half of `left.left`, so it exists.
   const lr = left.right as Node<T>;
   return node(node(left.left, left.value, lr.left), lr.value, node(lr.right, value, right));
 };
@@ -75,12 +79,14 @@ const balance = <T>(left: Tree<T>, value: T, right: Tree<T>): Node<T> => {
   const rs = sizeOf(right);
   if (ls + rs <= 1) return node(left, value, right);
   if (rs > DELTA * ls) {
+    // SAFETY: `rs > DELTA * ls >= 0`, so `right` is not empty.
     const r = right as Node<T>;
     return sizeOf(r.left) < RATIO * sizeOf(r.right)
       ? rotateSingleLeft(left, value, r)
       : rotateDoubleLeft(left, value, r);
   }
   if (ls > DELTA * rs) {
+    // SAFETY: `ls > DELTA * rs >= 0`, so `left` is not empty.
     const l = left as Node<T>;
     return sizeOf(l.right) < RATIO * sizeOf(l.left)
       ? rotateSingleRight(l, value, right)

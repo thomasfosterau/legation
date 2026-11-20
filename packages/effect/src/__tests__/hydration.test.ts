@@ -27,6 +27,7 @@ import * as Subset from "../Subset.js";
 import * as SyncServer from "../SyncServer.js";
 import { ClientTransport, makeInMemory, ServerHandler } from "../Transport.js";
 import * as Json from "../internal/Json.js";
+import { idOf } from "./shapes.js";
 
 interface Todo {
   readonly id: string;
@@ -37,18 +38,12 @@ interface Todo {
 const setTodo = Mutator.registry([
   {
     mutator: Mutator.make("todo/set", Schema.Unknown),
-    local: (args, writer) => {
-      const todo = args as Todo;
-      return writer.put("todos", todo.id, todo);
-    },
+    local: (todo: Todo, writer) => writer.put("todos", todo.id, todo),
   },
 ]);
 
 const backendHandlers = {
-  "todo/set": (args, writer) => {
-    const todo = args as Todo;
-    return Effect.asVoid(writer.put("todos", todo.id, todo));
-  },
+  "todo/set": (args, writer) => Effect.asVoid(writer.put("todos", idOf(args), args)),
 } satisfies Record<string, MemoryBackend.BackendHandler>;
 
 const authPolicy = Authorization.policy({ todos: Authorization.allowAll });
@@ -182,7 +177,9 @@ describe("Hydration.dehydrate/hydrate", () => {
       yield* engine.mutate("todo/set", { id: "2", title: "pending", done: false });
 
       const snapshot = yield* Hydration.dehydrate(store);
-      const parsed = Json.parse(Json.stringify(snapshot)) as Hydration.Snapshot;
+      const parsed = yield* Schema.decodeUnknownEffect(Hydration.Snapshot)(
+        Json.parse(Json.stringify(snapshot))
+      );
 
       const target = yield* ClientStoreModule.makeMemory;
       yield* Hydration.hydrate(target, parsed);

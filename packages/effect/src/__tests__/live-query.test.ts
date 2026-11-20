@@ -21,12 +21,13 @@ import * as Subset from "../Subset.js";
 import * as SyncServer from "../SyncServer.js";
 import { ClientTransport, makeInMemory } from "../Transport.js";
 import { TestFailure } from "./test-failure.js";
+import { titleOf } from "./shapes.js";
 
 const TodoArgs = Schema.Struct({ id: Schema.String, title: Schema.String });
 type Todo = typeof TodoArgs.Type;
 const todoSet = Mutator.make("todo/set", TodoArgs);
 const mutators = Mutator.registry([
-  { mutator: todoSet, local: (args, writer) => writer.put("todos", (args as Todo).id, args) },
+  { mutator: todoSet, local: (args: Todo, writer) => writer.put("todos", args.id, args) },
 ]);
 
 const allTodos = Subset.make({ collection: "todos" });
@@ -82,17 +83,19 @@ describe("LiveQuery", () => {
 
       type LiveRow = { readonly id: string; readonly value: unknown };
       const read = Effect.sync(() => registry.get(atom));
-      const await1 = (predicate: (rows: ReadonlyArray<LiveRow>) => boolean) =>
-        Effect.gen(function* () {
-          for (let attempt = 0; attempt < 200; attempt++) {
+      const await1 = (predicate: (rows: ReadonlyArray<LiveRow>) => boolean) => {
+        const poll = (remaining: number): Effect.Effect<ReadonlyArray<LiveRow>> =>
+          Effect.gen(function* () {
             const result = yield* read;
             if (AsyncResult.isSuccess(result) && predicate(result.value)) return result.value;
             yield* sleepReal(5);
-          }
-          return yield* Effect.die(
-            new TestFailure({ message: "atom never reached the expected state" })
-          );
-        });
+            if (remaining > 1) return yield* poll(remaining - 1);
+            return yield* Effect.die(
+              new TestFailure({ message: "atom never reached the expected state" })
+            );
+          });
+        return poll(200);
+      };
 
       // Initial emission: empty collection.
       yield* await1((current) => Arr.isReadonlyArrayEmpty(current));
@@ -100,7 +103,7 @@ describe("LiveQuery", () => {
       // Optimistic mutate re-emits with the new row.
       yield* engine.mutate("todo/set", { id: "1", title: "reactive" });
       const rows = yield* await1((current) => current.length === 1);
-      expect(rows.map((row) => (row.value as Todo).title)).toEqual(["reactive"]);
+      expect(rows.map((row) => titleOf(row.value))).toEqual(["reactive"]);
     })
   );
 

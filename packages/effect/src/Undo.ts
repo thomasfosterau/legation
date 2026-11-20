@@ -38,6 +38,7 @@
 
 import * as Arr from "effect/Array";
 import * as Effect from "effect/Effect";
+import * as Option from "effect/Option";
 import * as Ref from "effect/Ref";
 import * as Stream from "effect/Stream";
 import * as SubscriptionRef from "effect/SubscriptionRef";
@@ -145,8 +146,8 @@ export const make = <E>(handle: MutateHandle<E>): Effect.Effect<UndoManager<E>> 
 
   return Effect.gen(function* () {
     const history = yield* SubscriptionRef.make<History>(EMPTY_HISTORY);
-    // The current group's accumulator, or `undefined` when not grouping.
-    const groupBuffer = yield* Ref.make<ReadonlyArray<UndoEntry> | undefined>(undefined);
+    // The current group's accumulator, or `None` when not grouping.
+    const groupBuffer = yield* Ref.make(Option.none<ReadonlyArray<UndoEntry>>());
 
     // Push a completed step; a new action always clears the redo stack.
     const pushStep = (step: Step): Effect.Effect<void> =>
@@ -157,20 +158,21 @@ export const make = <E>(handle: MutateHandle<E>): Effect.Effect<UndoManager<E>> 
     const record = (entry: UndoEntry): Effect.Effect<void> =>
       Ref.get(groupBuffer).pipe(
         Effect.flatMap((buffer) =>
-          buffer === undefined ? pushStep([entry]) : Ref.set(groupBuffer, [...buffer, entry])
+          Option.isNone(buffer)
+            ? pushStep([entry])
+            : Ref.set(groupBuffer, Option.some([...buffer.value, entry]))
         )
       );
 
     const run: UndoManager<E>["run"] = (entry) =>
       runIntent(entry.execute).pipe(Effect.andThen(record(entry)));
 
-    // Pop the top of one stack without touching the other; `undefined` when empty.
-    const take = (from: "undo" | "redo"): Effect.Effect<Step | undefined> =>
-      SubscriptionRef.modify(history, (h) => {
+    // Pop the top of one stack without touching the other; `None` when empty.
+    const take = (from: "undo" | "redo"): Effect.Effect<Option.Option<Step>> =>
+      SubscriptionRef.modify(history, (h): readonly [Option.Option<Step>, History] => {
         const stack = h[from];
-        const step = stack.at(-1);
-        if (step === undefined) return [undefined, h] as const;
-        return [step, { ...h, [from]: stack.slice(0, -1) }] as const;
+        const top = Arr.last(stack);
+        return Option.isNone(top) ? [top, h] : [top, { ...h, [from]: stack.slice(0, -1) }];
       });
 
     const pushOnto = (onto: "undo" | "redo", step: Step): Effect.Effect<void> =>
@@ -180,9 +182,9 @@ export const make = <E>(handle: MutateHandle<E>): Effect.Effect<UndoManager<E>> 
     const step = (from: "undo" | "redo", onto: "undo" | "redo"): Effect.Effect<void, E> =>
       take(from).pipe(
         Effect.flatMap((popped) =>
-          popped === undefined
+          Option.isNone(popped)
             ? Effect.void
-            : replay(popped, from).pipe(Effect.andThen(pushOnto(onto, popped)))
+            : replay(popped.value, from).pipe(Effect.andThen(pushOnto(onto, popped.value)))
         )
       );
 
@@ -199,7 +201,9 @@ export const make = <E>(handle: MutateHandle<E>): Effect.Effect<UndoManager<E>> 
     // Flush the open group as one step (nothing to push for an empty group).
     const flushGroup: Effect.Effect<void> = Ref.get(groupBuffer).pipe(
       Effect.flatMap((buffer) =>
-        buffer !== undefined && Arr.isReadonlyArrayNonEmpty(buffer) ? pushStep(buffer) : Effect.void
+        Option.isSome(buffer) && Arr.isReadonlyArrayNonEmpty(buffer.value)
+          ? pushStep(buffer.value)
+          : Effect.void
       )
     );
 
@@ -207,12 +211,12 @@ export const make = <E>(handle: MutateHandle<E>): Effect.Effect<UndoManager<E>> 
       Ref.get(groupBuffer).pipe(
         Effect.flatMap((existing) =>
           // Already grouping → join the outer group; its members keep accumulating.
-          existing !== undefined
+          Option.isSome(existing)
             ? effect
-            : Ref.set(groupBuffer, []).pipe(
+            : Ref.set(groupBuffer, Option.some<ReadonlyArray<UndoEntry>>([])).pipe(
                 Effect.andThen(effect),
                 Effect.tap(() => flushGroup),
-                Effect.ensuring(Ref.set(groupBuffer, undefined))
+                Effect.ensuring(Ref.set(groupBuffer, Option.none()))
               )
         )
       );

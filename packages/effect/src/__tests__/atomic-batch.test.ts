@@ -32,6 +32,7 @@ import { ClientTransport, makeInMemory } from "../Transport.js";
 import { defined } from "./defined.js";
 import { TestFailure } from "./test-failure.js";
 import * as Json from "../internal/Json.js";
+import { idOf, optionalCountOf } from "./shapes.js";
 
 // ─── Harness ─────────────────────────────────────────────────────────────────
 
@@ -260,13 +261,18 @@ describe("the atomic batch on the key-value store", () => {
       const recordStore = yield* openStore(recorded.kv);
 
       const history = [mutation("c", 1), mutation("c", 2), mutation("c", 3)];
-      for (const store of [batchStore, recordStore]) {
-        yield* Effect.forEach(history, (m) => store.appendMutation(m), {
-          concurrency: 1,
-          discard: true,
-        });
-        yield* store.putRow("counters", { id: "a", version: 1, value: { id: "a", n: 0 } });
-      }
+      yield* Effect.forEach(
+        [batchStore, recordStore],
+        (store) =>
+          Effect.gen(function* () {
+            yield* Effect.forEach(history, (m) => store.appendMutation(m), {
+              concurrency: 1,
+              discard: true,
+            });
+            yield* store.putRow("counters", { id: "a", version: 1, value: { id: "a", n: 0 } });
+          }),
+        { concurrency: 1, discard: true }
+      );
 
       // Acknowledge the first two, then release them with a pull; then release the last one with a
       // pull; then a pull that clears the rows.
@@ -426,7 +432,7 @@ describe("the atomic batch on the key-value store", () => {
       (store) => defined(store.commitAcknowledgement)([mutation("c", 2)], {}),
     ],
   ];
-  for (const [member, call] of batchMemberCalls) {
+  Arr.forEach(batchMemberCalls, ([member, call]) => {
     it.effect(
       `${member} finishes an outstanding release record first, or fails with nothing written`,
       () =>
@@ -447,7 +453,7 @@ describe("the atomic batch on the key-value store", () => {
           expect(data.has(RECORD)).toBe(true);
         })
     );
-  }
+  });
 
   it.effect("a store written through the batch reads back on the record path", () =>
     Effect.gen(function* () {
@@ -642,11 +648,6 @@ describe("the atomic batch on the key-value store", () => {
 
 // ─── Engine harness (as unpulled-tail.test.ts) ───────────────────────────────
 
-interface Counter {
-  readonly id: string;
-  readonly n: number;
-}
-
 const incrementCounter = <E>(
   writer: {
     readonly get: (collection: string, id: string) => Effect.Effect<unknown, E>;
@@ -655,19 +656,19 @@ const incrementCounter = <E>(
   id: string
 ): Effect.Effect<void, E> =>
   Effect.gen(function* () {
-    const current = (yield* writer.get("counters", id)) as Counter | undefined;
-    yield* writer.put("counters", id, { id, n: (current?.n ?? 0) + 1 });
+    const current = optionalCountOf(yield* writer.get("counters", id));
+    yield* writer.put("counters", id, { id, n: (current ?? 0) + 1 });
   });
 
 const counterMutators = Mutator.registry([
   {
     mutator: Mutator.make("counter/inc", Schema.Unknown),
-    local: (args, writer) => incrementCounter(writer, (args as { readonly id: string }).id),
+    local: (args: { readonly id: string }, writer) => incrementCounter(writer, args.id),
   },
 ]);
 
 const backendHandlers = {
-  "counter/inc": (args, writer) => incrementCounter(writer, (args as { readonly id: string }).id),
+  "counter/inc": (args, writer) => incrementCounter(writer, idOf(args)),
 } satisfies Record<string, MemoryBackend.BackendHandler>;
 
 const authPolicy = Authorization.policy({ counters: Authorization.allowAll });
@@ -706,9 +707,7 @@ const makeCounterEngine = (
 const counterValue = (engine: ClientEngineModule.ClientEngine) =>
   engine
     .query(countersSubset)
-    .pipe(
-      Effect.map((rows) => (rows.find((row) => row.id === "c")?.value as Counter | undefined)?.n)
-    );
+    .pipe(Effect.map((rows) => optionalCountOf(rows.find((row) => row.id === "c")?.value)));
 
 const tailOf = (store: ClientStore) =>
   store.unpulled.pipe(Effect.map((entries) => entries.map((m) => `${m.clientId}#${m.mutationId}`)));

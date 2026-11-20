@@ -12,12 +12,15 @@ import { Authorization, type Backend, MemoryBackend, Mutator, Predicate } from "
 import { Subset, SyncServer } from "../internal.js";
 
 const put = Mutator.make("row/put", Schema.Unknown);
+const decodeRowRef = Schema.decodeUnknownSync(
+  Schema.Struct({ collection: Schema.String, id: Schema.String })
+);
 
 const makeBackend = Effect.fn("makeBackend")(function* () {
   const memory = yield* MemoryBackend.make({
     [put.name]: (args, writer) => {
-      const row = args as { readonly collection: string; readonly id: string };
-      return writer.put(row.collection, row.id, row);
+      const { collection, id } = decodeRowRef(args);
+      return writer.put(collection, id, args);
     },
   });
   yield* memory.applyMutations(

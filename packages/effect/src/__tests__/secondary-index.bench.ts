@@ -163,7 +163,7 @@ const makeBulkSeededStore = (
 const mutators = Mutator.registry([
   {
     mutator: Mutator.make("item/set", Schema.Unknown),
-    local: (a, w) => w.put("items", (a as { id: string }).id, a),
+    local: (a: { id: string }, w) => w.put("items", a.id, a),
   },
 ]);
 

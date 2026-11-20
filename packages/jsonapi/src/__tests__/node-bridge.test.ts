@@ -28,6 +28,11 @@ import * as NodeBridge from "../NodeBridge.js";
 import { defined } from "./defined.js";
 import { TestFailure } from "./test-failure.js";
 
+const decodeIdentified = Schema.decodeUnknownSync(Schema.Struct({ id: Schema.String }));
+const decodeIdentifiedRows = Schema.decodeUnknownSync(
+  Schema.Array(Schema.Struct({ id: Schema.String }))
+);
+
 // The commerce trio, declared once as JSON:API resources. The graph is
 // acyclic (the library's resource types expand eagerly): products point at
 // reviews, and a review carries its `productId` as a plain attribute that
@@ -203,15 +208,13 @@ const sleepReal = (millis: number) =>
     return Effect.sync(() => clearTimeout(timer));
   });
 
-const eventually = <A>(read: Effect.Effect<A>, until: (value: A) => boolean) =>
-  Effect.gen(function* () {
-    for (let attempt = 0; attempt < 500; attempt++) {
-      const value = yield* read;
-      if (until(value)) return value;
-      yield* sleepReal(10);
-    }
-    return yield* Effect.die(new TestFailure({ message: "eventually: condition never held" }));
-  });
+const eventually = <A>(read: Effect.Effect<A>, until: (value: A) => boolean) => {
+  const attempt = (n: number): Effect.Effect<A> =>
+    n === 500
+      ? Effect.die(new TestFailure({ message: "eventually: condition never held" }))
+      : Effect.filterOrElse(read, until, () => Effect.andThen(sleepReal(10), attempt(n + 1)));
+  return attempt(0);
+};
 
 describe("a bridged registry over a real engine", () => {
   it.effect("windowed includes resolve through bridged edges", () =>
@@ -224,21 +227,21 @@ describe("a bridged registry over a real engine", () => {
         const mutations = Mutator.registry([
           {
             mutator: productSet,
-            local: (args, writer) => writer.put("products", (args as { id: string }).id, args),
+            local: (args, writer) => writer.put("products", decodeIdentified(args).id, args),
           },
           {
             mutator: reviewSet,
-            local: (args, writer) => writer.put("reviews", (args as { id: string }).id, args),
+            local: (args, writer) => writer.put("reviews", decodeIdentified(args).id, args),
           },
         ]);
 
         const backend = yield* MemoryBackend.make(
           MemoryBackend.validatedHandlers([
             MemoryBackend.handler(productSet, (args, writer) =>
-              writer.put("products", (args as { id: string }).id, args)
+              writer.put("products", decodeIdentified(args).id, args)
             ),
             MemoryBackend.handler(reviewSet, (args, writer) =>
-              writer.put("reviews", (args as { id: string }).id, args)
+              writer.put("reviews", decodeIdentified(args).id, args)
             ),
           ])
         );
@@ -281,8 +284,7 @@ describe("a bridged registry over a real engine", () => {
         yield* Effect.forkScoped(
           Stream.runForEach(
             client.observe({ collection: "products", include: { reviews: { first: 2 } } }),
-            (rows) =>
-              Ref.set(latest, (rows[0]?.related["reviews"] ?? []) as ReadonlyArray<{ id: string }>)
+            (rows) => Ref.set(latest, decodeIdentifiedRows(rows[0]?.related["reviews"] ?? []))
           ).pipe(Effect.ignore)
         );
         // The bridged paginated edge windows the join: newest two, edge order.

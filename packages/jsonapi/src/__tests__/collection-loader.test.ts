@@ -14,6 +14,8 @@ import { Filter } from "@thomasfosterau/effect-jsonapi";
 import * as CollectionLoader from "../CollectionLoader.js";
 import * as Schema from "effect/Schema";
 
+const decodeTitled = Schema.decodeUnknownSync(Schema.Struct({ title: Schema.String }));
+
 const JsonText = Schema.fromJsonString(Schema.Unknown);
 const encodeJson = Schema.encodeSync(JsonText);
 
@@ -128,7 +130,7 @@ describe("load / loadOne", () => {
     scoped.effect("loads a collection into rows", () =>
       Effect.gen(function* () {
         const loaded = yield* CollectionLoader.load("todos");
-        expect(loaded.rows.map((r) => (r.value.attributes as { title: string }).title)).toEqual([
+        expect(loaded.rows.map((r) => decodeTitled(r.value.attributes).title)).toEqual([
           "one",
           "two",
         ]);

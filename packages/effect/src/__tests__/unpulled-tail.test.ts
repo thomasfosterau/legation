@@ -14,6 +14,7 @@ import * as Exit from "effect/Exit";
 import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
 import * as Logger from "effect/Logger";
+import * as Option from "effect/Option";
 import * as Ref from "effect/Ref";
 import * as References from "effect/References";
 import * as Schedule from "effect/Schedule";
@@ -39,13 +40,9 @@ import * as Telemetry from "../Telemetry.js";
 import { ClientTransport, makeInMemory } from "../Transport.js";
 import { defined } from "./defined.js";
 import * as Json from "../internal/Json.js";
+import { countOf, idOf, optionalCountOf } from "./shapes.js";
 
 const decodeSnapshot = Schema.decodeSync(Hydration.SnapshotFromJson);
-
-interface Counter {
-  readonly id: string;
-  readonly n: number;
-}
 
 // A non-idempotent counter: a double application shows as an extra count.
 const incrementCounter = <E>(
@@ -56,19 +53,19 @@ const incrementCounter = <E>(
   id: string
 ): Effect.Effect<void, E> =>
   Effect.gen(function* () {
-    const current = (yield* writer.get("counters", id)) as Counter | undefined;
-    yield* writer.put("counters", id, { id, n: (current?.n ?? 0) + 1 });
+    const current = optionalCountOf(yield* writer.get("counters", id));
+    yield* writer.put("counters", id, { id, n: (current ?? 0) + 1 });
   });
 
 const counterMutators = Mutator.registry([
   {
     mutator: Mutator.make("counter/inc", Schema.Unknown),
-    local: (args, writer) => incrementCounter(writer, (args as { readonly id: string }).id),
+    local: (args: { readonly id: string }, writer) => incrementCounter(writer, args.id),
   },
 ]);
 
 const backendHandlers = {
-  "counter/inc": (args, writer) => incrementCounter(writer, (args as { readonly id: string }).id),
+  "counter/inc": (args, writer) => incrementCounter(writer, idOf(args)),
 } satisfies Record<string, MemoryBackend.BackendHandler>;
 
 const authPolicy = Authorization.policy({ counters: Authorization.allowAll });
@@ -128,9 +125,7 @@ const makeCounterEngine = (
 const counterValue = (engine: ClientEngineModule.ClientEngine) =>
   engine
     .query(countersSubset)
-    .pipe(
-      Effect.map((rows) => (rows.find((row) => row.id === "c")?.value as Counter | undefined)?.n)
-    );
+    .pipe(Effect.map((rows) => optionalCountOf(rows.find((row) => row.id === "c")?.value)));
 
 /** The tail's entries as `client#id`, in tail order. */
 const tailOf = (store: ClientStore) =>
@@ -247,7 +242,7 @@ const gatedKeyValue = (
 
 // The row `id`'s counter value, or `undefined` when the store holds no such row.
 const rowCount = (store: ClientStore, id: string) =>
-  store.getRow("counters", id).pipe(Effect.map((row) => (row?.value as Counter | undefined)?.n));
+  store.getRow("counters", id).pipe(Effect.map((row) => optionalCountOf(row?.value)));
 
 const putCounter = (store: ClientStore, id: string, n: number) =>
   store.putRow("counters", { id, version: 1, value: { id, n } });
@@ -311,15 +306,18 @@ const spyKeyValue = (key: string) =>
 // Reads of other keys pass through, and nothing fails until armed.
 const failRecordRead = (base: KeyValueStore.KeyValueStore) =>
   Effect.gen(function* () {
-    // `undefined` is disarmed; otherwise the reads that still pass before the next one fails.
-    const passes = yield* Ref.make<number | undefined>(undefined);
+    // `None` is disarmed; otherwise the reads that still pass before the next one fails.
+    const passes = yield* Ref.make(Option.none<number>());
     const kv: KeyValueStore.KeyValueStore = {
       ...base,
       get: (key: string) =>
         key !== "legation/releaseIntent"
           ? base.get(key)
-          : Ref.modify(passes, (n): readonly [boolean, number | undefined] =>
-              n === undefined ? [false, undefined] : n === 0 ? [true, undefined] : [false, n - 1]
+          : Ref.modify(passes, (armed): readonly [boolean, Option.Option<number>] =>
+              Option.match(armed, {
+                onNone: () => [false, Option.none()],
+                onSome: (n) => (n === 0 ? [true, Option.none()] : [false, Option.some(n - 1)]),
+              })
             ).pipe(
               Effect.flatMap((fail) =>
                 fail
@@ -334,7 +332,7 @@ const failRecordRead = (base: KeyValueStore.KeyValueStore) =>
               )
             ),
     } satisfies KeyValueStore.KeyValueStore;
-    return { kv, arm: (n: number) => Ref.set(passes, n) };
+    return { kv, arm: (n: number) => Ref.set(passes, Option.some(n)) };
   });
 
 // The same contract over both implementations: the memory store and the
@@ -345,7 +343,7 @@ const stores = [
 ] as const;
 
 describe("ClientStore's unpulled tail", () => {
-  for (const [name, open] of stores) {
+  Arr.forEach(stores, ([name, open]) => {
     layer(KeyValueStore.layerMemory)((scoped) => {
       scoped.effect(`${name}: parked entries leave the journal and stay readable in order`, () =>
         Effect.gen(function* () {
@@ -425,7 +423,7 @@ describe("ClientStore's unpulled tail", () => {
           })
       );
     });
-  }
+  });
 
   layer(KeyValueStore.layerMemory)((scoped) => {
     scoped.effect(
@@ -533,8 +531,8 @@ describe("ClientStore's unpulled tail", () => {
   layer(KeyValueStore.layerMemory)((scoped) => {
     scoped.effect("key-value: an identity reset at open clears the tail with the rows", () =>
       Effect.gen(function* () {
-        const alice = "sha256:alice" as Identity.Fingerprint;
-        const bob = "sha256:bob" as Identity.Fingerprint;
+        const alice: Identity.Fingerprint = "sha256:alice";
+        const bob: Identity.Fingerprint = "sha256:bob";
         const first = yield* ClientStoreModule.makeKeyValue({ identity: alice });
         yield* first.parkUnpulled([mutation("c1", 1)]);
 
@@ -546,7 +544,7 @@ describe("ClientStore's unpulled tail", () => {
 });
 
 describe("the tail in an engine", () => {
-  for (const limit of [0, -1, 1.5, Number.NaN]) {
+  Arr.forEach([0, -1, 1.5, Number.NaN], (limit) => {
     layer(KeyValueStore.layerMemory)((scoped) => {
       scoped.effect(
         `an unpulledLimit that is not a positive integer is a defect when the engine is made (${limit})`,
@@ -559,7 +557,7 @@ describe("the tail in an engine", () => {
           }).pipe(Effect.scoped)
       );
     });
-  }
+  });
 
   layer(KeyValueStore.layerMemory)((scoped) => {
     scoped.effect(
@@ -733,7 +731,9 @@ describe("the tail in an engine", () => {
         const store = yield* ClientStoreModule.makeMemory;
         const engine = yield* makeCounterEngine(server, store);
         yield* engine.subscribe(countersSubset);
-        for (let i = 0; i < 3; i++) yield* engine.mutate("counter/inc", { id: "c" });
+        yield* Effect.replicateEffect(engine.mutate("counter/inc", { id: "c" }), 3, {
+          discard: true,
+        });
         yield* engine.push;
         expect(yield* tailOf(store)).toEqual(["client-a#1", "client-a#2", "client-a#3"]);
         yield* engine.pull;
@@ -754,7 +754,9 @@ describe("the tail in an engine", () => {
           const refusing = yield* Ref.make(false);
           const engine = yield* makeCounterEngine(server, store, undefined, refusing);
           yield* engine.subscribe(countersSubset);
-          for (let i = 0; i < count; i++) yield* engine.mutate("counter/inc", { id: "c" });
+          yield* Effect.replicateEffect(engine.mutate("counter/inc", { id: "c" }), count, {
+            discard: true,
+          });
           // Pulls are refused. The first push sends the threshold (512) and then needs a pull, which fails. The
           // second fills the tail to the bound with its first chunk, and fails on the pull before the next one.
           yield* Ref.set(refusing, true);
@@ -938,7 +940,7 @@ describe("the tail's crash windows and interleavings", () => {
           // A pull started now must wait for the push. Yielding lets it run as far as it can:
           // without the lock it would release the entry and the push would re-add it.
           const pulling = yield* Effect.forkChild(engine.pull);
-          for (let i = 0; i < 100; i++) yield* Effect.yieldNow;
+          yield* Effect.replicateEffect(Effect.yieldNow, 100, { discard: true });
           yield* Deferred.succeed(resume, undefined);
           yield* Fiber.join(pushing);
           yield* Fiber.join(pulling);
@@ -1184,7 +1186,7 @@ const releaseScenario = (store: ClientStore) =>
 // The release record's review follow-up: the store-level guarantees, over both implementations
 // where both can exhibit them.
 describe("a release record's guarantees across both stores", () => {
-  for (const [name, open] of stores) {
+  Arr.forEach(stores, ([name, open]) => {
     layer(KeyValueStore.layerMemory)((scoped) => {
       scoped.effect(`${name}: clearUnpulled also ends a release in progress`, () =>
         Effect.gen(function* () {
@@ -1369,7 +1371,7 @@ describe("a release record's guarantees across both stores", () => {
         })
       );
     });
-  }
+  });
 
   layer(KeyValueStore.layerMemory)((scoped) => {
     scoped.effect("key-value: a row write that finishes a release is the one an open leaves", () =>
@@ -1420,7 +1422,7 @@ describe("a release record's guarantees across both stores", () => {
           // Queued behind the finish, before it fails. Once it fails the store is sealed, so this must not
           // write `d` over the outstanding record.
           const queued = yield* Effect.forkChild(putCounter(store, "d", 1));
-          for (let i = 0; i < 100; i++) yield* Effect.yieldNow;
+          yield* Effect.replicateEffect(Effect.yieldNow, 100, { discard: true });
           yield* Deferred.succeed(release, undefined);
           expect(Exit.isFailure(yield* Effect.exit(Fiber.join(finishing)))).toBe(true);
           expect(Exit.isFailure(yield* Effect.exit(Fiber.join(queued)))).toBe(true);
@@ -1775,7 +1777,7 @@ describe("the engine's release failure paths", () => {
           const reading = yield* Effect.forkChild(
             counterValue(engine).pipe(Effect.tap(() => Ref.set(done, true)))
           );
-          for (let i = 0; i < 100; i++) yield* Effect.yieldNow;
+          yield* Effect.replicateEffect(Effect.yieldNow, 100, { discard: true });
           expect(yield* Ref.get(done)).toBe(false);
           yield* Deferred.succeed(release, undefined);
           yield* Fiber.join(seeding);
@@ -1818,7 +1820,7 @@ describe("the engine's release failure paths", () => {
         const reading = yield* Effect.forkChild(
           counterValue(engine).pipe(Effect.tap(() => Ref.set(done, true)))
         );
-        for (let i = 0; i < 100; i++) yield* Effect.yieldNow;
+        yield* Effect.replicateEffect(Effect.yieldNow, 100, { discard: true });
         expect(yield* Ref.get(done)).toBe(false);
         yield* Deferred.succeed(release, undefined);
         yield* Fiber.join(resetting);
@@ -1899,7 +1901,10 @@ describe("the in-process finish reads the record, and seals only after it writes
         yield* store.beginRelease({ lastMutationIds: {}, patch: [] });
         yield* putCounter(store, "c", 1);
         yield* Ref.set(reads, 0);
-        for (let i = 0; i < 20; i++) yield* putCounter(store, `r${i}`, i);
+        yield* Effect.forEach(Arr.range(0, 19), (i) => putCounter(store, `r${i}`, i), {
+          concurrency: 1,
+          discard: true,
+        });
         yield* store.delRow("counters", "r0");
         expect(yield* Ref.get(reads)).toBe(0);
       })
@@ -1941,7 +1946,7 @@ describeWrapped("the engine's clears", (it) => {
       const reading = yield* Effect.forkChild(
         counterValue(engine).pipe(Effect.tap(() => Ref.set(done, true)))
       );
-      for (let i = 0; i < 100; i++) yield* Effect.yieldNow;
+      yield* Effect.replicateEffect(Effect.yieldNow, 100, { discard: true });
       expect(yield* Ref.get(done)).toBe(false);
       yield* Deferred.succeed(release, undefined);
       yield* Fiber.join(clearing);
@@ -1954,13 +1959,15 @@ describeWrapped("the engine's clears", (it) => {
  * Yields until `condition` holds, and says whether it did. The explicit wait for a background pull:
  * bounded, so a pull that never comes makes the caller's `expect` fail rather than hang the test.
  */
-const settles = <E>(condition: Effect.Effect<boolean, E>): Effect.Effect<boolean, E> =>
+const settles = <E>(
+  condition: Effect.Effect<boolean, E>,
+  triesLeft = 2000
+): Effect.Effect<boolean, E> =>
   Effect.gen(function* () {
-    for (let i = 0; i < 2000; i++) {
-      if (yield* condition) return true;
-      yield* Effect.yieldNow;
-    }
-    return false;
+    if (triesLeft === 0) return false;
+    if (yield* condition) return true;
+    yield* Effect.yieldNow;
+    return yield* settles(condition, triesLeft - 1);
   });
 
 /**
@@ -1973,13 +1980,15 @@ const probedTransport = (inner: ClientTransport) =>
     const pulls = yield* Ref.make(0);
     const failed = yield* Ref.make(0);
     const failing = yield* Ref.make(false);
-    const gate = yield* Ref.make<Deferred.Deferred<void> | undefined>(undefined);
+    const gate = yield* Ref.make(Option.none<Deferred.Deferred<void>>());
     const transport: ClientTransport = {
       ...inner,
       pull: (request) =>
         Ref.update(pulls, (n) => n + 1).pipe(
           Effect.andThen(Ref.get(gate)),
-          Effect.flatMap((held) => (held === undefined ? Effect.void : Deferred.await(held))),
+          Effect.flatMap((held) =>
+            Option.isNone(held) ? Effect.void : Deferred.await(held.value)
+          ),
           Effect.andThen(Ref.get(failing)),
           Effect.flatMap((down) =>
             down
@@ -2060,19 +2069,24 @@ describeWrapped("a push that takes the tail to half the bound pulls ahead of it"
           yield* engine.subscribe(countersSubset);
 
           let widest = 0;
-          for (let i = 1; i <= 3 * SMALL_LIMIT; i++) {
-            yield* engine.mutate("counter/inc", { id: "c" });
-            yield* engine.push;
-            const depth = (yield* store.unpulled).length;
-            widest = Math.max(widest, depth);
-            // A crossing starts a pull that releases the whole tail. Wait for it, so the next push
-            // sees the pull's effect; without the trigger the wait gives up and the tail reaches the bound.
-            if (depth >= pullAheadAt) {
-              yield* settles(
-                store.unpulled.pipe(Effect.map((tail) => Arr.isReadonlyArrayEmpty(tail)))
-              );
-            }
-          }
+          yield* Effect.forEach(
+            Arr.range(1, 3 * SMALL_LIMIT),
+            () =>
+              Effect.gen(function* () {
+                yield* engine.mutate("counter/inc", { id: "c" });
+                yield* engine.push;
+                const depth = (yield* store.unpulled).length;
+                widest = Math.max(widest, depth);
+                // A crossing starts a pull that releases the whole tail. Wait for it, so the next push
+                // sees the pull's effect; without the trigger the wait gives up and the tail reaches the bound.
+                if (depth >= pullAheadAt) {
+                  yield* settles(
+                    store.unpulled.pipe(Effect.map((tail) => Arr.isReadonlyArrayEmpty(tail)))
+                  );
+                }
+              }),
+            { concurrency: 1, discard: true }
+          );
 
           // Nothing is released early, so the widest tail is the check on the bound; no pull is needed to keep it there.
           expect(warnings, "the engine logs no warning in this run").toEqual([]);
@@ -2095,12 +2109,17 @@ describeWrapped("a push that takes the tail to half the bound pulls ahead of it"
 
           // The first pull the burst starts is held at the gate; every push below must still complete.
           const release = yield* Deferred.make<void>();
-          yield* Ref.set(probe.gate, release);
+          yield* Ref.set(probe.gate, Option.some(release));
           const burst = 40;
-          for (let i = 0; i < burst; i++) {
-            yield* engine.mutate("counter/inc", { id: "c" });
-            yield* engine.push;
-          }
+          yield* Effect.forEach(
+            Arr.range(0, burst - 1),
+            () =>
+              Effect.gen(function* () {
+                yield* engine.mutate("counter/inc", { id: "c" });
+                yield* engine.push;
+              }),
+            { concurrency: 1, discard: true }
+          );
           expect((yield* store.unpulled).length).toBe(burst);
 
           expect(
@@ -2108,7 +2127,7 @@ describeWrapped("a push that takes the tail to half the bound pulls ahead of it"
             "the pull the burst starts"
           ).toBe(true);
           // Give any second pull the burst might start its chance to run: none may, while one is held.
-          for (let i = 0; i < 20; i++) yield* Effect.yieldNow;
+          yield* Effect.replicateEffect(Effect.yieldNow, 20, { discard: true });
           expect(yield* Ref.get(probe.pulls), "pulls while one is held").toBe(1);
           // The pull lock would skip a second fibre's pull, so only the fibres themselves show a leak.
           expect(pullFibres(spans), "pull fibres forked while one is held").toBe(1);
@@ -2149,24 +2168,35 @@ describeWrapped("a push that takes the tail to half the bound pulls ahead of it"
         });
 
         // Crossing the threshold starts a pull, and it fails.
-        for (let i = 0; i < BURST_LIMIT / 2; i++) yield* pushOne();
+        yield* Effect.replicateEffect(pushOne(), BURST_LIMIT / 2, { discard: true });
         expect(
           yield* settles(Ref.get(probe.failed).pipe(Effect.map((n) => n >= 1))),
           "the pull ahead to fail"
         ).toBe(true);
         // Pushes carry on while the pull is down: each is acknowledged and the journal drains.
-        for (let i = 0; i < 8; i++) {
-          yield* pushOne();
-          expect(yield* store.pendingMutations).toEqual([]);
-        }
+        yield* Effect.forEach(
+          Arr.range(0, 7),
+          () =>
+            Effect.gen(function* () {
+              yield* pushOne();
+              expect(yield* store.pendingMutations).toEqual([]);
+            }),
+          { concurrency: 1, discard: true }
+        );
 
         // The connection returns. A push that starts a pull after the failed one has ended releases the
         // tail; a push that lands while it is still ending starts none, so keep pushing until one does.
         yield* Ref.set(probe.failing, false);
-        for (let i = 0; i < 16 && Arr.isReadonlyArrayNonEmpty(yield* store.unpulled); i++) {
-          yield* pushOne();
-          yield* Effect.yieldNow;
-        }
+        const pushUntilReleased = (
+          pushesLeft: number
+        ): Effect.Effect<void, Effect.Error<ReturnType<typeof pushOne>> | StoreError> =>
+          Effect.gen(function* () {
+            if (pushesLeft === 0 || !Arr.isReadonlyArrayNonEmpty(yield* store.unpulled)) return;
+            yield* pushOne();
+            yield* Effect.yieldNow;
+            yield* pushUntilReleased(pushesLeft - 1);
+          });
+        yield* pushUntilReleased(16);
         expect(
           yield* settles(store.unpulled.pipe(Effect.map((tail) => Arr.isReadonlyArrayEmpty(tail)))),
           "a later pull to release the tail"
@@ -2254,7 +2284,7 @@ describe("dehydrate reads one state of the store", () => {
           yield* Deferred.await(reached);
           // The pull lands now, if nothing holds it off: it writes the row, the cookie and the release.
           const pulling = yield* Effect.forkChild(engine.pull);
-          for (let i = 0; i < 200; i++) yield* Effect.yieldNow;
+          yield* Effect.replicateEffect(Effect.yieldNow, 200, { discard: true });
           yield* Deferred.succeed(release, undefined);
           const snapshot = yield* Fiber.join(snapshotting);
           yield* Fiber.join(pulling);
@@ -2299,7 +2329,7 @@ describe("dehydrate reads one state of the store", () => {
         const snapshotting = yield* Effect.forkChild(Hydration.dehydrate(source));
         yield* Deferred.await(reached);
         const pushing = yield* Effect.forkChild(engine.push);
-        for (let i = 0; i < 200; i++) yield* Effect.yieldNow;
+        yield* Effect.replicateEffect(Effect.yieldNow, 200, { discard: true });
         yield* Deferred.succeed(release, undefined);
         const snapshot = yield* Fiber.join(snapshotting);
         yield* Fiber.join(pushing);
@@ -2350,22 +2380,32 @@ describeWrapped("a memory snapshot is one pull's state", (it) => {
       let torn = 0;
       const seen = new Set<number | undefined>();
       const pulls = Effect.fn("pulls")(function* () {
-        for (let k = 1; k <= rounds; k++) {
-          yield* defined(store.commitPull)({
-            lastMutationIds: {},
-            cookie: `c${k}`,
-            patch: [{ _tag: "Put", collection: "counters", id: "a", version: k, value: { n: k } }],
-          });
-        }
+        yield* Effect.forEach(
+          Arr.range(1, rounds),
+          (k) =>
+            defined(store.commitPull)({
+              lastMutationIds: {},
+              cookie: `c${k}`,
+              patch: [
+                { _tag: "Put", collection: "counters", id: "a", version: k, value: { n: k } },
+              ],
+            }),
+          { concurrency: 1, discard: true }
+        );
       });
       const reads = Effect.fn("reads")(function* () {
-        for (let i = 0; i < rounds * 2; i++) {
-          const state = yield* defined(store.snapshot);
-          const row = state.rows.find((entry) => entry.row.id === "a")?.row;
-          const n = row === undefined ? undefined : (row.value as { readonly n: number }).n;
-          seen.add(n);
-          if (state.cookie !== (n === undefined ? undefined : `c${n}`)) torn++;
-        }
+        yield* Effect.forEach(
+          Arr.range(0, rounds * 2 - 1),
+          () =>
+            Effect.gen(function* () {
+              const state = yield* defined(store.snapshot);
+              const row = state.rows.find((entry) => entry.row.id === "a")?.row;
+              const n = row === undefined ? undefined : countOf(row.value);
+              seen.add(n);
+              if (state.cookie !== (n === undefined ? undefined : `c${n}`)) torn++;
+            }),
+          { concurrency: 1, discard: true }
+        );
       });
       const pulling = yield* Effect.forkChild(pulls());
       const reading = yield* Effect.forkChild(reads());

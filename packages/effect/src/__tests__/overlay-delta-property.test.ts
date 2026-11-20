@@ -37,58 +37,54 @@ import * as Subset from "../Subset.js";
 import * as SyncServer from "../SyncServer.js";
 import { ClientTransport, makeInMemory, type ServerHandler } from "../Transport.js";
 import { defined } from "./defined.js";
+import { idOf } from "./shapes.js";
 
-interface PutArgs {
-  readonly id: string;
-  readonly value: number;
-}
+const PutArgs = Schema.Struct({ id: Schema.String, value: Schema.Finite });
+type PutArgs = typeof PutArgs.Type;
 interface IdArgs {
   readonly id: string;
 }
 
-const asPut = (args: unknown) => args as PutArgs;
-const asId = (args: unknown) => args as IdArgs;
+const asPut = Schema.decodeUnknownSync(PutArgs);
+/** A row's current value: the number a put or bump wrote, absent before the first. */
+const asStored = Schema.decodeUnknownSync(Schema.UndefinedOr(Schema.Finite));
 
 const mutators = Mutator.registry([
   {
     mutator: Mutator.make("todo/put", Schema.Unknown),
-    local: (args, writer) => writer.put("todos", asPut(args).id, asPut(args).value),
+    local: (args: PutArgs, writer) => writer.put("todos", args.id, args.value),
   },
   {
     mutator: Mutator.make("todo/del", Schema.Unknown),
-    local: (args, writer) => writer.del("todos", asId(args).id),
+    local: (args: IdArgs, writer) => writer.del("todos", args.id),
   },
   {
     // Read-modify-write: exercises `writer.get` through the tracked-write path.
     mutator: Mutator.make("todo/bump", Schema.Unknown),
-    local: (args, writer) =>
+    local: (args: IdArgs, writer) =>
       writer
-        .get("todos", asId(args).id)
+        .get("todos", args.id)
         .pipe(
-          Effect.flatMap((current) =>
-            writer.put("todos", asId(args).id, ((current as number | undefined) ?? 0) + 1)
-          )
+          Effect.flatMap((current) => writer.put("todos", args.id, (asStored(current) ?? 0) + 1))
         ),
   },
   {
     // Applies optimistically like `todo/put`, but the backend always
     // permanently rejects it — exercises the reject/drop-the-overlay path.
     mutator: Mutator.make("todo/reject", Schema.Unknown),
-    local: (args, writer) => writer.put("todos", asPut(args).id, asPut(args).value),
+    local: (args: PutArgs, writer) => writer.put("todos", args.id, args.value),
   },
 ]);
 
 const backendHandlers = {
   "todo/put": (args, writer) =>
     Effect.asVoid(writer.put("todos", asPut(args).id, asPut(args).value)),
-  "todo/del": (args, writer) => Effect.asVoid(writer.del("todos", asId(args).id)),
+  "todo/del": (args, writer) => Effect.asVoid(writer.del("todos", idOf(args))),
   "todo/bump": (args, writer) =>
     writer
-      .get("todos", asId(args).id)
+      .get("todos", idOf(args))
       .pipe(
-        Effect.flatMap((current) =>
-          writer.put("todos", asId(args).id, ((current as number | undefined) ?? 0) + 1)
-        )
+        Effect.flatMap((current) => writer.put("todos", idOf(args), (asStored(current) ?? 0) + 1))
       ),
   "todo/reject": () => Effect.fail(new MutationRejected({ reason: "property test rejection" })),
 } satisfies Record<string, MemoryBackend.BackendHandler>;
@@ -247,23 +243,31 @@ describe("optimistic overlay delta-maintenance property", () => {
   it.effect(
     `the cache (via engine.query) matches a from-scratch materialization after every step, across ${SEEDS} randomized mutate/push/pull/reject interleavings`,
     () =>
-      Effect.gen(function* () {
-        for (let seed = 1; seed <= SEEDS; seed++) {
-          const rng = mulberry32(seed * 7919);
-          const handler = yield* makeServer();
-          const store = yield* ClientStoreModule.makeMemory;
-          const engine = yield* makeEngine(handler, store, `seed-${seed}`);
-          yield* engine.subscribe(allTodos);
-          const tail = yield* Ref.make<ReadonlyArray<Mutation>>([]);
+      Effect.forEach(
+        Arr.range(1, SEEDS),
+        (seed) =>
+          Effect.gen(function* () {
+            const rng = mulberry32(seed * 7919);
+            const handler = yield* makeServer();
+            const store = yield* ClientStoreModule.makeMemory;
+            const engine = yield* makeEngine(handler, store, `seed-${seed}`);
+            yield* engine.subscribe(allTodos);
+            const tail = yield* Ref.make<ReadonlyArray<Mutation>>([]);
 
-          for (let step = 0; step < STEPS_PER_SEED; step++) {
-            yield* runTracked(engine, store, tail, randomStep(rng, IDS));
-            const actual = sortRows(yield* engine.query(allTodos));
-            const expected = sortMap(yield* referenceOverlay(store, yield* Ref.get(tail)));
-            expect(actual, `seed ${seed}, step ${step}`).toEqual(expected);
-          }
-        }
-      })
+            yield* Effect.forEach(
+              Arr.range(0, STEPS_PER_SEED - 1),
+              (step) =>
+                Effect.gen(function* () {
+                  yield* runTracked(engine, store, tail, randomStep(rng, IDS));
+                  const actual = sortRows(yield* engine.query(allTodos));
+                  const expected = sortMap(yield* referenceOverlay(store, yield* Ref.get(tail)));
+                  expect(actual, `seed ${seed}, step ${step}`).toEqual(expected);
+                }),
+              { concurrency: 1, discard: true }
+            );
+          }),
+        { concurrency: 1, discard: true }
+      )
   );
 
   // Real clock: `observe`'s changes flow through the change PubSub on a
@@ -272,32 +276,37 @@ describe("optimistic overlay delta-maintenance property", () => {
   it.live(
     "an observer's incrementally-folded LiveView matches the from-scratch materialization after a randomized run",
     () =>
-      Effect.gen(function* () {
-        for (let seed = 1; seed <= 5; seed++) {
-          const rng = mulberry32(seed * 104729);
-          const handler = yield* makeServer();
-          const store = yield* ClientStoreModule.makeMemory;
-          const engine = yield* makeEngine(handler, store, `observer-seed-${seed}`);
-          yield* engine.subscribe(allTodos);
+      Effect.forEach(
+        Arr.range(1, 5),
+        (seed) =>
+          Effect.gen(function* () {
+            const rng = mulberry32(seed * 104729);
+            const handler = yield* makeServer();
+            const store = yield* ClientStoreModule.makeMemory;
+            const engine = yield* makeEngine(handler, store, `observer-seed-${seed}`);
+            yield* engine.subscribe(allTodos);
 
-          const latest = yield* Ref.make<ReadonlyArray<{ id: string; value: unknown }>>([]);
-          yield* Effect.forkScoped(
-            Stream.runForEach(engine.observe(allTodos), (rows) => Ref.set(latest, rows))
-          );
-          yield* Effect.sleep(Duration.millis(20));
+            const latest = yield* Ref.make<ReadonlyArray<{ id: string; value: unknown }>>([]);
+            yield* Effect.forkScoped(
+              Stream.runForEach(engine.observe(allTodos), (rows) => Ref.set(latest, rows))
+            );
+            yield* Effect.sleep(Duration.millis(20));
 
-          const tail = yield* Ref.make<ReadonlyArray<Mutation>>([]);
-          for (let step = 0; step < 40; step++) {
-            yield* runTracked(engine, store, tail, randomStep(rng, IDS));
-          }
-          yield* Effect.sleep(Duration.millis(80));
+            const tail = yield* Ref.make<ReadonlyArray<Mutation>>([]);
+            yield* Effect.forEach(
+              Arr.range(0, 39),
+              () => runTracked(engine, store, tail, randomStep(rng, IDS)),
+              { concurrency: 1, discard: true }
+            );
+            yield* Effect.sleep(Duration.millis(80));
 
-          const observed = sortRows(yield* Ref.get(latest));
-          const queried = sortRows(yield* engine.query(allTodos));
-          const reference = sortMap(yield* referenceOverlay(store, yield* Ref.get(tail)));
-          expect(queried, `seed ${seed}`).toEqual(reference);
-          expect(observed, `seed ${seed}`).toEqual(reference);
-        }
-      })
+            const observed = sortRows(yield* Ref.get(latest));
+            const queried = sortRows(yield* engine.query(allTodos));
+            const reference = sortMap(yield* referenceOverlay(store, yield* Ref.get(tail)));
+            expect(queried, `seed ${seed}`).toEqual(reference);
+            expect(observed, `seed ${seed}`).toEqual(reference);
+          }),
+        { concurrency: 1, discard: true }
+      )
   );
 });

@@ -140,10 +140,7 @@ export const journaled = (
  * ack sweep) should fold every transition first and evict once — see
  * {@link acknowledgedMany} — rather than evicting after each one.
  */
-const evictTerminal = (
-  map: MutationStateMap,
-  options: RetentionOptions | undefined
-): MutationStateMap => {
+const evictTerminal = (map: MutationStateMap, options?: RetentionOptions): MutationStateMap => {
   const maxTerminal = options?.maxTerminal ?? DEFAULT_MAX_TERMINAL;
   const terminal = [...HashMap.values(map)]
     .filter((state) => state.phase !== "pending")
@@ -175,7 +172,7 @@ const transition = (
   mutationId: number,
   phase: "acknowledged" | "rejected" | "dropped",
   settledAt: number,
-  reason: string | undefined
+  reason?: string
 ): MutationStateMap => {
   const current = HashMap.get(map, mutationId);
   // Not tracked (already evicted, or settled before this engine instance

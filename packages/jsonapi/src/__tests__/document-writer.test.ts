@@ -15,6 +15,12 @@ import * as DocumentWriter from "../DocumentWriter.js";
 import * as JsonApiQuery from "../JsonApiQuery.js";
 import { defined } from "./defined.js";
 
+/** A link that must be a plain URL string, not a link object. */
+const decodeLink = Schema.decodeUnknownSync(Schema.String);
+const decodeManyLinkage = Schema.decodeUnknownSync(
+  Schema.Struct({ data: Schema.Array(Schema.Struct({ id: Schema.String })) })
+);
+
 const JsonText = Schema.fromJsonString(Schema.Unknown);
 const encodeJson = Schema.encodeSync(JsonText);
 
@@ -224,9 +230,7 @@ describe("DocumentWriter.collection", () => {
         // and the included variants are full (no fields[variants]).
         const linked = new Set(
           document.data.flatMap((resource) => {
-            const linkage = defined(defined(resource.relationships)["variants"]) as {
-              data: ReadonlyArray<{ id: string }>;
-            };
+            const linkage = decodeManyLinkage(defined(resource.relationships)["variants"]);
             return linkage.data.map((identifier) => identifier.id);
           })
         );
@@ -349,7 +353,7 @@ describe("DocumentWriter.collection", () => {
       Effect.gen(function* () {
         const read: Query.Read = { collection: "products", order: ["name"], offset: 0, first: 2 };
         const page = DocumentWriter.collection({ nodes, read, rows: [row(desk), row(lamp)] });
-        const next = yield* JsonApiQuery.parseRead(nodes, defined(page.links).next as string);
+        const next = yield* JsonApiQuery.parseRead(nodes, decodeLink(defined(page.links).next));
         expect(next.read).toEqual({ ...read, offset: 2 });
         expect(next.read.after).toBeUndefined();
       })
@@ -374,7 +378,7 @@ describe("DocumentWriter.collection", () => {
           fields,
           prefix: "/api",
         });
-        const next = yield* JsonApiQuery.parseRead(nodes, defined(page.links).next as string);
+        const next = yield* JsonApiQuery.parseRead(nodes, decodeLink(defined(page.links).next));
         // The same read, `after` at the last row — as `Subset.apply` continues it —
         // with the projection still beside it; nothing else moved.
         expect(next).toEqual({
@@ -383,7 +387,7 @@ describe("DocumentWriter.collection", () => {
           id: Option.none(),
         });
         expect(JsonApiQuery.canonical(nodes, next.read, Option.getOrUndefined(next.fields))).toBe(
-          (defined(page.links).next as string).slice("/api".length)
+          decodeLink(defined(page.links).next).slice("/api".length)
         );
         // The advanced read's own document continues the chain from where it stood.
         const second = DocumentWriter.collection({

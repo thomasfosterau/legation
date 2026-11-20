@@ -244,17 +244,19 @@ export const edgeSelects = (compiled: Plan): ReadonlyArray<Related.EdgeSelect> =
  * out of what it fetched. `offset` alone (no `first`) compiles to no
  * limit: the read wants every row past `offset`.
  */
-const rootLimit = (read: Read): number | undefined =>
-  read.offset === undefined
-    ? read.first
-    : read.first === undefined
-      ? undefined
-      : read.offset + read.first;
+const rootLimit = (read: Read): Option.Option<number> =>
+  Option.map(Option.fromUndefinedOr(read.first), (first) =>
+    read.offset === undefined ? first : read.offset + first
+  );
+
+/** A `where` given as a predicate tree, not a field → literal record: it carries a `_tag`. */
+const isPredicateWhere = (where: NonNullable<Read["where"]>): where is Predicate.Predicate =>
+  "_tag" in where;
 
 /** Compile a `where` to the plan's predicate representation. */
 const compileWhere = (where: Read["where"]): Predicate.Predicate => {
   if (where === undefined) return Predicate.always;
-  if ("_tag" in where) return where as Predicate.Predicate;
+  if (isPredicateWhere(where)) return where;
   const terms = Object.entries(where).map(([field, value]) => Predicate.eq(field, value));
   const only = terms[0];
   return terms.length === 1 && only !== undefined ? only : Predicate.and(...terms);
@@ -283,7 +285,7 @@ export interface Plan {
  * declared order) plus the read's per-edge window.
  */
 export const plan = (nodes: Node.NodeRegistry, read: Read): Plan => {
-  const limit = rootLimit(read);
+  const limit = Option.getOrUndefined(rootLimit(read));
   const root = Subset.make({
     collection: read.collection,
     where: compileWhere(read.where),
@@ -337,7 +339,10 @@ const edgeOrder =
   (a, b) => {
     // The first term whose fields differ decides; equal on every term is a tie.
     const decided = Arr.findFirst(edgePlan.order, (term) => {
+      // SAFETY: only the type changes, so that `<` type-checks: the raw field
+      // literals (ADR-0028) are compared as JavaScript compares them.
       const left = Predicate.fieldValue(a, term.field) as string | number;
+      // SAFETY: as for `left`.
       const right = Predicate.fieldValue(b, term.field) as string | number;
       if (left === right) return Option.none();
       const ascending = left < right;

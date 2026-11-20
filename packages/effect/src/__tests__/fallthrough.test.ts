@@ -31,6 +31,9 @@ import {
 import { ClientEngine, ClientView, EngineHost, MirrorChannel, Subset } from "../internal.js";
 import { defined } from "./defined.js";
 import { TestFailure } from "./test-failure.js";
+import { idOf, stringField } from "./shapes.js";
+
+const nameOf = stringField("name");
 
 const Product = Node.make("products", {
   attributes: { name: Schema.String },
@@ -47,11 +50,11 @@ const reviewSet = Mutator.make("review/set", Schema.Unknown);
 const mutations = Mutator.registry([
   {
     mutator: productSet,
-    local: (args, writer) => writer.put("products", (args as { id: string }).id, args),
+    local: (args: { id: string }, writer) => writer.put("products", args.id, args),
   },
   {
     mutator: reviewSet,
-    local: (args, writer) => writer.put("reviews", (args as { id: string }).id, args),
+    local: (args: { id: string }, writer) => writer.put("reviews", args.id, args),
   },
 ]);
 
@@ -61,26 +64,26 @@ const sleepReal = (millis: number) =>
     return Effect.sync(() => clearTimeout(timer));
   });
 
-const eventually = <A>(read: Effect.Effect<A>, until: (value: A) => boolean) =>
-  Effect.gen(function* () {
-    for (let attempt = 0; attempt < 500; attempt++) {
+const eventually = <A>(read: Effect.Effect<A>, until: (value: A) => boolean) => {
+  const poll = (remaining: number): Effect.Effect<A> =>
+    Effect.gen(function* () {
       const value = yield* read;
       if (until(value)) return value;
       yield* sleepReal(10);
-    }
-    return yield* Effect.die(new TestFailure({ message: "eventually: condition never held" }));
-  });
+      if (remaining > 1) return yield* poll(remaining - 1);
+      return yield* Effect.die(new TestFailure({ message: "eventually: condition never held" }));
+    });
+  return poll(500);
+};
 
 const makeServer = (policy?: Authorization.AuthPolicy) =>
   Effect.gen(function* () {
     const backend = yield* MemoryBackend.make(
       MemoryBackend.validatedHandlers([
         MemoryBackend.handler(productSet, (args, writer) =>
-          writer.put("products", (args as { id: string }).id, args)
+          writer.put("products", idOf(args), args)
         ),
-        MemoryBackend.handler(reviewSet, (args, writer) =>
-          writer.put("reviews", (args as { id: string }).id, args)
-        ),
+        MemoryBackend.handler(reviewSet, (args, writer) => writer.put("reviews", idOf(args), args)),
       ])
     );
     const server = yield* Server.make({
@@ -144,7 +147,7 @@ describe("the server tier", () => {
         const rows = yield* client.query({ collection: "products" });
         expect(
           Arr.sort(
-            rows.map((row) => (row.value as { name: string }).name),
+            rows.map((row) => nameOf(row.value)),
             Order.String
           )
         ).toEqual(["Desk", "Lamp"]);
@@ -244,7 +247,7 @@ describe("the server tier", () => {
           order: ["name"],
         });
         expect(rows).toHaveLength(2);
-        const reviews = defined(rows[0]).related.reviews as ReadonlyArray<{ id: string }>;
+        const reviews = defined(rows[0]).related.reviews;
         expect(reviews.map((row) => row.id)).toEqual(["r-3", "r-2"]);
         // Still nothing registered or replicated.
         expect(yield* engine.activeSubscriptions).toHaveLength(0);
@@ -297,9 +300,7 @@ describe("over a hosted engine", () => {
           order: ["name"],
         });
         expect(rows).toHaveLength(2);
-        expect(
-          defined((defined(rows[0]).related.reviews as ReadonlyArray<{ id: string }>)[0]).id
-        ).toBe("r-3");
+        expect(defined(defined(rows[0]).related.reviews[0]).id).toBe("r-3");
         // The host registered nothing for it.
         expect(yield* engine.activeSubscriptions).toHaveLength(0);
       })

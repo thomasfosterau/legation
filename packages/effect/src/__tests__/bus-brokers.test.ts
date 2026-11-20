@@ -168,6 +168,8 @@ const makeFakeRedis = Effect.fn("makeFakeRedis")(function* () {
   // Refusal is decided inside `Effect.suspend`, so each run of a command sees the
   // current `down` state, not the state when the command was built. Each refusal
   // is also timestamped on the TestClock.
+  // SAFETY: a fake of the generic `send`; each command it answers replies in the
+  // shape real Redis gives, which is the `A` the broker asks for.
   const send = (<A>(
     command: string,
     ...args: ReadonlyArray<string>

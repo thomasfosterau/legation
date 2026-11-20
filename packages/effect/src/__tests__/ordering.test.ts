@@ -9,6 +9,7 @@
  */
 import * as Arr from "effect/Array";
 import * as Effect from "effect/Effect";
+import * as Option from "effect/Option";
 import * as Random from "effect/Random";
 import { describe, expect, it } from "@effect/vitest";
 import * as Predicate from "../Predicate.js";
@@ -21,10 +22,13 @@ import { defined } from "./defined.js";
 const referenceCompare = (a: string, b: string): number => {
   const xs = Array.from(a, (c) => defined(c.codePointAt(0)));
   const ys = Array.from(b, (c) => defined(c.codePointAt(0)));
-  for (let i = 0; i < Math.min(xs.length, ys.length); i++) {
-    if (xs[i] !== ys[i]) return defined(xs[i]) < defined(ys[i]) ? -1 : 1;
-  }
-  return xs.length === ys.length ? 0 : xs.length < ys.length ? -1 : 1;
+  return Option.match(
+    Arr.findFirst(Arr.zip(xs, ys), ([x, y]) => x !== y),
+    {
+      onNone: () => (xs.length === ys.length ? 0 : xs.length < ys.length ? -1 : 1),
+      onSome: ([x, y]) => (x < y ? -1 : 1),
+    }
+  );
 };
 
 /** UTF-16 code-unit order (JS `<`), the order this ADR moves away from. */

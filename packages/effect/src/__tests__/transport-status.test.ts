@@ -16,6 +16,7 @@ import { TransportError, VersionNotSupportedError } from "../Errors.js";
 import type {
   PullRequest,
   PullResponse,
+  PushRequest,
   PushResponse,
   ReadRequest,
   ReadResponse,
@@ -30,6 +31,7 @@ const pullRequest: PullRequest = {
   clientGroupId: "g",
   subscriptions: [],
 };
+const pushRequest: PushRequest = { clientGroupId: "g", mutations: [] };
 const readRequest: ReadRequest = { clientGroupId: "g", subsets: [] };
 const readResponse = (from: string): ReadResponse => ({
   rows: [{ collection: "todos", id: from, version: 1, value: {} }],
@@ -96,7 +98,7 @@ describe("Transport.withInferredStatus", () => {
         expect(yield* wrapped.status).toBe("disconnected");
 
         yield* Ref.set(fake.failing, false);
-        yield* wrapped.push({} as never);
+        yield* wrapped.push(pushRequest);
         expect(yield* wrapped.status).toBe("connected");
       })
     )
@@ -324,20 +326,23 @@ const awaitSeen = (
   seen: Ref.Ref<ReadonlyArray<Transport.ConnectionStatus>>,
   count: number,
   maxTurns = 1_000
-) =>
-  Effect.gen(function* () {
-    for (let turn = 0; turn < maxTurns; turn++) {
-      if ((yield* Ref.get(seen)).length >= count) return undefined;
+) => {
+  const turn = (taken: number): Effect.Effect<undefined> =>
+    Effect.gen(function* () {
+      const all = yield* Ref.get(seen);
+      if (all.length >= count) return undefined;
+      if (taken === maxTurns) {
+        return yield* Effect.die(
+          new TestFailure({
+            message: `awaitSeen: ${count} statuses never arrived in ${maxTurns} turns; saw ${all.join()}`,
+          })
+        );
+      }
       yield* Effect.yieldNow;
-    }
-    const all = yield* Ref.get(seen);
-    if (all.length >= count) return undefined;
-    return yield* Effect.die(
-      new TestFailure({
-        message: `awaitSeen: ${count} statuses never arrived in ${maxTurns} turns; saw ${all.join()}`,
-      })
-    );
-  });
+      return yield* turn(taken + 1);
+    });
+  return turn(0);
+};
 
 describe("Transport.simulateOffline", () => {
   it.effect("passes calls through while online, fails them while toggled offline", () =>

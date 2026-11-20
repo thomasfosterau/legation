@@ -33,8 +33,8 @@ export const make = (
           Queue.offerUnsafe(queue, event.data);
         };
         yield* Effect.acquireRelease(
-          Effect.sync(() => channel.addEventListener("message", listener as EventListener)),
-          () => Effect.sync(() => channel.removeEventListener("message", listener as EventListener))
+          Effect.sync(() => channel.addEventListener("message", listener)),
+          () => Effect.sync(() => channel.removeEventListener("message", listener))
         );
         return { take: Queue.take(queue).pipe(Effect.orDie) };
       }),

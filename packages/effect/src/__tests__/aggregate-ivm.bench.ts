@@ -32,13 +32,14 @@ import * as Subset from "../Subset.js";
 import * as SyncServer from "../SyncServer.js";
 import { layerInMemory, ServerHandler } from "../Transport.js";
 import { awaitPromise } from "./await-promise.js";
+import { idOf } from "./shapes.js";
 
 const ROWS = 10_000;
 
 const mutators = Mutator.registry([
   {
     mutator: Mutator.make("row/set", Schema.Unknown),
-    local: (a, w) => w.put("rows", (a as { id: string }).id, a),
+    local: (a: { id: string }, w) => w.put("rows", a.id, a),
   },
 ]);
 
@@ -46,8 +47,7 @@ const allRows = Subset.make({ collection: "rows" });
 
 const makeServer = Effect.fnUntraced(function* () {
   const backend = yield* MemoryBackend.make({
-    "row/set": (args, writer) =>
-      Effect.asVoid(writer.put("rows", (args as { id: string }).id, args)),
+    "row/set": (args, writer) => Effect.asVoid(writer.put("rows", idOf(args), args)),
   });
   const cvrStore = yield* Cvr.makeMemoryStore;
   const bus = yield* InvalidationBus.makeInProcess;

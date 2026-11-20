@@ -53,22 +53,19 @@ import {
 } from "../index.js";
 import { TestFailure } from "../../__tests__/test-failure.js";
 
-interface Todo {
-  readonly id: string;
-  readonly title: string;
-}
+const decodeIdentified = Schema.decodeUnknownSync(Schema.Struct({ id: Schema.String }));
 
 const mutations = Mutation.registry([
   {
     mutator: Mutation.make("todo/set", Schema.Unknown),
-    local: (args, writer) => writer.put("todos", (args as Todo).id, args),
+    local: (args, writer) => writer.put("todos", decodeIdentified(args).id, args),
   },
 ]);
 
 const nodes = Node.registry([Node.make("todos", { attributes: { title: Schema.String } })]);
 
 const handlers = {
-  "todo/set": (args, writer) => Effect.asVoid(writer.put("todos", (args as Todo).id, args)),
+  "todo/set": (args, writer) => Effect.asVoid(writer.put("todos", decodeIdentified(args).id, args)),
 } satisfies Record<string, MemoryBackend.BackendHandler>;
 
 const makeServer = Effect.fn("makeServer")(function* (): Effect.fn.Return<

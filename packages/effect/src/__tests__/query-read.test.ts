@@ -24,6 +24,7 @@ import {
 import { ClientEngine, ClientView, Cvr, InvalidationBus, SyncServer } from "../internal.js";
 import { defined } from "./defined.js";
 import { TestFailure } from "./test-failure.js";
+import { idOf, idsOf } from "./shapes.js";
 
 const Category = Node.make("categories", { attributes: { name: Schema.String } });
 const Product = Node.make("products", {
@@ -109,14 +110,19 @@ const sleepReal = (millis: number) =>
     return Effect.sync(() => clearTimeout(timer));
   });
 
-const eventually = <A>(read: Effect.Effect<A>, until: (value: A) => boolean) =>
+const eventually = <A>(
+  read: Effect.Effect<A>,
+  until: (value: A) => boolean,
+  attemptsLeft = 500
+): Effect.Effect<A> =>
   Effect.gen(function* () {
-    for (let attempt = 0; attempt < 500; attempt++) {
-      const value = yield* read;
-      if (until(value)) return value;
-      yield* sleepReal(10);
+    if (attemptsLeft === 0) {
+      return yield* Effect.die(new TestFailure({ message: "eventually: condition never held" }));
     }
-    return yield* Effect.die(new TestFailure({ message: "eventually: condition never held" }));
+    const value = yield* read;
+    if (until(value)) return value;
+    yield* sleepReal(10);
+    return yield* eventually(read, until, attemptsLeft - 1);
   });
 
 const productSet = Mutator.make("product/set", Schema.Unknown);
@@ -124,23 +130,19 @@ const reviewSet = Mutator.make("review/set", Schema.Unknown);
 const mutators = Mutator.registry([
   {
     mutator: productSet,
-    local: (args, writer) => writer.put("products", (args as { id: string }).id, args),
+    local: (args: { id: string }, writer) => writer.put("products", args.id, args),
   },
   {
     mutator: reviewSet,
-    local: (args, writer) => writer.put("reviews", (args as { id: string }).id, args),
+    local: (args: { id: string }, writer) => writer.put("reviews", args.id, args),
   },
 ]);
 
 const makeEngine = Effect.fn("makeEngine")(function* () {
   const backend = yield* MemoryBackend.make(
     MemoryBackend.validatedHandlers([
-      MemoryBackend.handler(productSet, (args, writer) =>
-        writer.put("products", (args as { id: string }).id, args)
-      ),
-      MemoryBackend.handler(reviewSet, (args, writer) =>
-        writer.put("reviews", (args as { id: string }).id, args)
-      ),
+      MemoryBackend.handler(productSet, (args, writer) => writer.put("products", idOf(args), args)),
+      MemoryBackend.handler(reviewSet, (args, writer) => writer.put("reviews", idOf(args), args)),
     ])
   );
   const handler = yield* SyncServer.make.pipe(
@@ -197,8 +199,7 @@ describe("Query.run / Query.observe", () => {
         Query.make({ collection: "products", include: { reviews: { first: 2 }, category: true } })
       );
       expect(windowed).toHaveLength(1);
-      const reviews = defined(windowed[0]).related["reviews"] as ReadonlyArray<{ id: string }>;
-      expect(reviews.map((row) => row.id)).toEqual(["r-2", "r-3"]);
+      expect(idsOf(defined(windowed[0]).related["reviews"])).toEqual(["r-2", "r-3"]);
     })
   );
 
@@ -217,10 +218,10 @@ describe("Query.run / Query.observe", () => {
         });
 
         const read = Query.make({ collection: "products", include: { reviews: { first: 5 } } });
-        const latest = yield* Ref.make<ReadonlyArray<{ id: string }>>([]);
+        const latest = yield* Ref.make<ReadonlyArray<string>>([]);
         yield* Effect.forkScoped(
           Stream.runForEach(Query.observe(view, nodes, read), (rows) =>
-            Ref.set(latest, (rows[0]?.related["reviews"] ?? []) as ReadonlyArray<{ id: string }>)
+            Ref.set(latest, idsOf(rows[0]?.related["reviews"] ?? []))
           ).pipe(Effect.ignore)
         );
         yield* eventually(Ref.get(latest), (reviews) => reviews.length === 1);
@@ -231,8 +232,8 @@ describe("Query.run / Query.observe", () => {
           createdAt: "2026-02-01",
           productId: "p-1",
         });
-        const reviews = yield* eventually(Ref.get(latest), (rows) => rows.length === 2);
-        expect(reviews.map((row) => row.id)).toEqual(["r-2", "r-1"]);
+        const reviews = yield* eventually(Ref.get(latest), (ids) => ids.length === 2);
+        expect(reviews).toEqual(["r-2", "r-1"]);
       })
     )
   );

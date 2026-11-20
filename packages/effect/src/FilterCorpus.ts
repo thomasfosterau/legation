@@ -132,7 +132,7 @@ interface ResolvedOptions {
   readonly booleanOrder: boolean;
 }
 
-const resolveOptions = (options: CorpusOptions | undefined): ResolvedOptions => ({
+const resolveOptions = (options?: CorpusOptions): ResolvedOptions => ({
   nulls: options?.nulls ?? true,
   astral: options?.astral ?? true,
   booleanOrder: options?.booleanOrder ?? true,
@@ -271,18 +271,18 @@ const planRows = (columns: ReadonlyArray<Column>, options: ResolvedOptions): Row
   };
 };
 
-/** A random field value: NULL, absent (`undefined`), or a pool value. */
+/** A random field value: NULL, absent (`None`), or a pool value. */
 const randomField = (
   pool: ReadonlyArray<Predicate.Literal>,
   nulls: boolean
-): Effect.Effect<Predicate.Literal | undefined> =>
+): Effect.Effect<Option.Option<Predicate.Literal>> =>
   Effect.gen(function* () {
     if (nulls) {
       const roll = yield* Random.next;
-      if (roll < NULL_RATE) return null;
-      if (roll < NULL_RATE + ABSENT_RATE) return undefined;
+      if (roll < NULL_RATE) return Option.some(null);
+      if (roll < NULL_RATE + ABSENT_RATE) return Option.none();
     }
-    return yield* pick(pool);
+    return Option.some(yield* pick(pool));
   });
 
 const generateRow = (plan: RowPlan, index: number): Effect.Effect<CorpusRow> =>
@@ -293,12 +293,12 @@ const generateRow = (plan: RowPlan, index: number): Effect.Effect<CorpusRow> =>
       ([c, column]) =>
         Effect.gen(function* () {
           const pool = plan.pools[c] ?? [];
-          let field: Predicate.Literal | undefined;
-          if (index < plan.pinned) field = index === 0 ? null : undefined;
+          let field: Option.Option<Predicate.Literal>;
+          if (index < plan.pinned) field = index === 0 ? Option.some(null) : Option.none();
           else if (index < plan.pinned + plan.sweep)
-            field = pool[(index - plan.pinned) % pool.length];
+            field = Option.fromUndefinedOr(pool[(index - plan.pinned) % pool.length]);
           else field = yield* randomField(pool, plan.nulls);
-          if (field !== undefined) value[column.name] = field;
+          if (Option.isSome(field)) value[column.name] = field.value;
         }),
       { concurrency: 1, discard: true }
     );

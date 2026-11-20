@@ -48,6 +48,9 @@ import { Backend } from "../index.js";
 import * as Predicate from "../Predicate.js";
 import { defined } from "./defined.js";
 import { TestFailure } from "./test-failure.js";
+import { idOf, stringField } from "./shapes.js";
+
+const bodyOf = stringField("body");
 
 const Product = Node.make("products", {
   attributes: { name: Schema.String },
@@ -138,9 +141,13 @@ const waitingPoke = (pokes: FanoutBroker.TopicPokes) =>
     // Zero-length turns, not one: a routed batch is handed over within a few
     // scheduler turns however the taker is queued, and the clock does not move,
     // so a batch still missing after the bound is genuinely not routed.
-    for (let turn = 0; turn < 50 && taker.pollUnsafe() === undefined; turn++) {
-      yield* TestClock.adjust("0 millis");
-    }
+    const turns = (remaining: number): Effect.Effect<void> =>
+      Effect.gen(function* () {
+        if (remaining === 0 || taker.pollUnsafe() !== undefined) return;
+        yield* TestClock.adjust("0 millis");
+        yield* turns(remaining - 1);
+      });
+    yield* turns(50);
     const exit = taker.pollUnsafe();
     yield* Fiber.interrupt(taker);
     return exit !== undefined && Exit.isSuccess(exit) ? exit.value : undefined;
@@ -181,19 +188,21 @@ describe("FanoutBroker leases", () => {
 // fires the timers due by then. Time is virtual: the bound is a number of
 // steps, not a wall-clock budget, so machine load cannot exhaust it, and
 // 200 steps (2 s) stay far inside the clients' 10-minute pull interval.
-const advanceUntil = <A>(read: Effect.Effect<A>, until: (value: A) => boolean, maxSteps = 200) =>
-  Effect.gen(function* () {
-    for (let attempt = 0; attempt < maxSteps; attempt++) {
+const advanceUntil = <A>(read: Effect.Effect<A>, until: (value: A) => boolean, maxSteps = 200) => {
+  const poll = (remaining: number): Effect.Effect<A> =>
+    Effect.gen(function* () {
       const value = yield* read;
       if (until(value)) return value;
+      if (remaining === 0) {
+        return yield* Effect.die(
+          new TestFailure({ message: `advanceUntil: condition never held in ${maxSteps} steps` })
+        );
+      }
       yield* TestClock.adjust(Duration.millis(10));
-    }
-    const value = yield* read;
-    if (until(value)) return value;
-    return yield* Effect.die(
-      new TestFailure({ message: `advanceUntil: condition never held in ${maxSteps} steps` })
-    );
-  });
+      return yield* poll(remaining - 1);
+    });
+  return poll(maxSteps);
+};
 
 /**
  * The broker, recording what reaches it: each room's latest registered topic
@@ -226,7 +235,7 @@ const reviewSet = Mutation.make("review/set", Schema.Unknown);
 const mutations = Mutation.registry([
   {
     mutator: reviewSet,
-    local: (args, writer) => writer.put("reviews", (args as { id: string }).id, args),
+    local: (args: { id: string }, writer) => writer.put("reviews", args.id, args),
   },
 ]);
 
@@ -277,7 +286,7 @@ const recordPushes = (handler: Transport.ServerHandler) =>
             Effect.tap(() =>
               Ref.update(pushes, (all) => [
                 ...all,
-                request.mutations.map((mutation) => (mutation.args as { id: string }).id),
+                request.mutations.map((mutation) => idOf(mutation.args)),
               ])
             )
           ),
@@ -309,7 +318,7 @@ describe("two rooms over one broker", () => {
         const backend = yield* MemoryBackend.make(
           MemoryBackend.validatedHandlers([
             MemoryBackend.handler(reviewSet, (args, writer) =>
-              writer.put("reviews", (args as { id: string }).id, args)
+              writer.put("reviews", idOf(args), args)
             ),
           ])
         );
@@ -367,7 +376,7 @@ describe("two rooms over one broker", () => {
         });
         yield* advanceUntil(Ref.get(roomB.pushes), (pushes) => Arr.isReadonlyArrayNonEmpty(pushes));
         const rows = yield* advanceUntil(Ref.get(latest), (current) => current.length === 1);
-        expect((defined(rows[0]).value as { body: string }).body).toBe("cross-room");
+        expect(bodyOf(defined(rows[0]).value)).toBe("cross-room");
         expect(yield* Ref.get(roomAPokes)).toEqual([["reviews/productId=p-1"]]);
 
         // A write to ANOTHER parent must not poke room A (routing precision):

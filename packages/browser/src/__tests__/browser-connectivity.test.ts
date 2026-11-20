@@ -41,27 +41,17 @@ import { vi } from "vite-plus/test";
 import * as BrowserConnectivity from "../BrowserConnectivity.js";
 import { TestFailure } from "./test-failure.js";
 
-interface Todo {
-  readonly id: string;
-  readonly title: string;
-  readonly done: boolean;
-}
+const decodeIdentified = Schema.decodeUnknownSync(Schema.Struct({ id: Schema.String }));
 
 const setTodo = Mutator.registry([
   {
     mutator: Mutator.make("todo/set", Schema.Unknown),
-    local: (args, writer) => {
-      const todo = args as Todo;
-      return writer.put("todos", todo.id, todo);
-    },
+    local: (args, writer) => writer.put("todos", decodeIdentified(args).id, args),
   },
 ]);
 
 const backendHandlers = {
-  "todo/set": (args, writer) => {
-    const todo = args as Todo;
-    return Effect.asVoid(writer.put("todos", todo.id, todo));
-  },
+  "todo/set": (args, writer) => Effect.asVoid(writer.put("todos", decodeIdentified(args).id, args)),
 } satisfies Record<string, MemoryBackend.BackendHandler>;
 
 const authPolicy = Authorization.policy({ todos: Authorization.allowAll });
@@ -97,17 +87,22 @@ const setVisible = () =>
 // (a status change, a push+pull leg) gets to finish. Time is virtual: the bound
 // is a number of steps, not a wall-clock budget, so machine load cannot
 // exhaust it.
-const advanceUntil = <E>(condition: Effect.Effect<boolean, E>, maxSteps = 200) =>
-  Effect.gen(function* () {
-    for (let attempt = 0; attempt < maxSteps; attempt++) {
-      if (yield* condition) return undefined;
-      yield* TestClock.adjust(Duration.millis(1));
-    }
-    if (yield* condition) return undefined;
-    return yield* Effect.die(
-      new TestFailure({ message: `advanceUntil: condition never held in ${maxSteps} steps` })
+const advanceUntil = <E>(condition: Effect.Effect<boolean, E>, maxSteps = 200) => {
+  // Check, then step, `maxSteps` times; one last check after the final step.
+  const attempt = (n: number): Effect.Effect<undefined, E> =>
+    Effect.flatMap(condition, (held) =>
+      held
+        ? Effect.undefined
+        : n < maxSteps
+          ? Effect.andThen(TestClock.adjust(Duration.millis(1)), attempt(n + 1))
+          : Effect.die(
+              new TestFailure({
+                message: `advanceUntil: condition never held in ${maxSteps} steps`,
+              })
+            )
     );
-  });
+  return attempt(0);
+};
 
 // A service worker's globals: no `window` or `document`, and a `navigator`
 // whose `onLine` the test flips. Restored when the enclosing scope closes.

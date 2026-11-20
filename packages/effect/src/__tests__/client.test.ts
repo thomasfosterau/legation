@@ -13,6 +13,7 @@ import * as Arr from "effect/Array";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
+import * as Option from "effect/Option";
 import * as R from "effect/Record";
 import * as Ref from "effect/Ref";
 import * as Schema from "effect/Schema";
@@ -44,6 +45,9 @@ import {
 } from "../internal.js";
 import { defined } from "./defined.js";
 import { TestFailure } from "./test-failure.js";
+import { idOf, idsOf, stringField } from "./shapes.js";
+
+const nameOf = stringField("name");
 
 const Product = Node.make("products", {
   attributes: { name: Schema.String, categoryId: Schema.String },
@@ -60,11 +64,11 @@ const reviewSet = Mutator.make("review/set", Schema.Unknown);
 const mutations = Mutator.registry([
   {
     mutator: productSet,
-    local: (args, writer) => writer.put("products", (args as { id: string }).id, args),
+    local: (args: { id: string }, writer) => writer.put("products", args.id, args),
   },
   {
     mutator: reviewSet,
-    local: (args, writer) => writer.put("reviews", (args as { id: string }).id, args),
+    local: (args: { id: string }, writer) => writer.put("reviews", args.id, args),
   },
 ]);
 
@@ -74,25 +78,23 @@ const sleepReal = (millis: number) =>
     return Effect.sync(() => clearTimeout(timer));
   });
 
-const eventually = <A>(read: Effect.Effect<A>, until: (value: A) => boolean) =>
-  Effect.gen(function* () {
-    for (let attempt = 0; attempt < 500; attempt++) {
+const eventually = <A>(read: Effect.Effect<A>, until: (value: A) => boolean) => {
+  const poll = (remaining: number): Effect.Effect<A> =>
+    Effect.gen(function* () {
       const value = yield* read;
       if (until(value)) return value;
       yield* sleepReal(10);
-    }
-    return yield* Effect.die(new TestFailure({ message: "eventually: condition never held" }));
-  });
+      if (remaining > 1) return yield* poll(remaining - 1);
+      return yield* Effect.die(new TestFailure({ message: "eventually: condition never held" }));
+    });
+  return poll(500);
+};
 
 const makeHandler = Effect.fn("makeHandler")(function* () {
   const backend = yield* MemoryBackend.make(
     MemoryBackend.validatedHandlers([
-      MemoryBackend.handler(productSet, (args, writer) =>
-        writer.put("products", (args as { id: string }).id, args)
-      ),
-      MemoryBackend.handler(reviewSet, (args, writer) =>
-        writer.put("reviews", (args as { id: string }).id, args)
-      ),
+      MemoryBackend.handler(productSet, (args, writer) => writer.put("products", idOf(args), args)),
+      MemoryBackend.handler(reviewSet, (args, writer) => writer.put("reviews", idOf(args), args)),
     ])
   );
   return yield* SyncServer.make.pipe(
@@ -203,8 +205,7 @@ describe("Client over an owned engine", () => {
         yield* Effect.forkScoped(
           Stream.runForEach(
             client.observe({ collection: "products", include: { reviews: { first: 2 } } }),
-            (rows) =>
-              Ref.set(latest, (rows[0]?.related.reviews ?? []) as ReadonlyArray<{ id: string }>)
+            (rows) => Ref.set(latest, rows[0]?.related.reviews ?? [])
           ).pipe(Effect.ignore)
         );
         const reviews = yield* eventually(Ref.get(latest), (rows) => rows.length === 2);
@@ -567,19 +568,25 @@ const stubUrls: Client.UrlReads = {
       }
       const where: Record<string, string> = {};
       const include: Record<string, true> = {};
-      for (const [key, value] of searchParams) {
+      const entries = Arr.fromIterable(searchParams);
+      const unsupported = Arr.findFirst(
+        entries,
+        ([key]) => key !== "include" && !/^filter\[(\w+)\]$/.test(key)
+      );
+      if (Option.isSome(unsupported)) {
+        const [key] = unsupported.value;
+        return Effect.fail(
+          new QueryError({ message: `Unsupported ${key}`, query: collection, parameter: key })
+        );
+      }
+      Arr.forEach(entries, ([key, value]) => {
         const filter = /^filter\[(\w+)\]$/.exec(key);
         if (filter !== null) where[defined(filter[1])] = value;
-        else if (key === "include")
+        else
           Arr.forEach(value.split(","), (edge) => {
             include[edge] = true;
           });
-        else {
-          return Effect.fail(
-            new QueryError({ message: `Unsupported ${key}`, query: collection, parameter: key })
-          );
-        }
-      }
+      });
       return Effect.succeed({
         collection,
         ...Defined.fields({ where: R.isEmptyReadonlyRecord(where) ? undefined : where }),
@@ -748,7 +755,7 @@ describe("Client.make defaults (zero wiring)", () => {
         yield* client.mutate("product/set", { id: "p-1", name: "Desk" });
         const rows = yield* client.query({ collection: "products" });
         expect(rows).toHaveLength(1);
-        expect((defined(rows[0]).value as { name: string }).name).toBe("Desk");
+        expect(nameOf(defined(rows[0]).value)).toBe("Desk");
 
         // Live reads work too — entirely against the local replica.
         const latest = yield* Ref.make<ReadonlyArray<Client.ResolvedRow>>([]);
@@ -871,10 +878,9 @@ describe("Client.connect over a hosted engine", () => {
         const rows = yield* eventually(
           Ref.get(latest),
           (current) =>
-            current.length === 1 &&
-            ((defined(current[0]).related.reviews ?? []) as ReadonlyArray<unknown>).length === 1
+            current.length === 1 && idsOf(defined(current[0]).related.reviews ?? []).length === 1
         );
-        expect((defined(rows[0]).value as { name: string }).name).toBe("Desk");
+        expect(nameOf(defined(rows[0]).value)).toBe("Desk");
       })
     )
   );
@@ -900,6 +906,20 @@ const makeRacePair = Effect.fn("makeRacePair")(function* () {
     });
   return { reader: yield* make("client-reader"), writer: yield* make("client-writer") };
 });
+
+/** Pulls, then reads the coverage, until it is `Covered` or `attempts` pulls have run. */
+const pullUntilCovered = <E, R>(
+  pull: Effect.Effect<unknown, never, R>,
+  coverage: Effect.Effect<{ readonly _tag: string }, E, R>,
+  attempts: number
+): Effect.Effect<void, E, R> =>
+  Effect.gen(function* () {
+    yield* pull;
+    yield* Effect.yieldNow;
+    if ((yield* coverage)._tag !== "Covered" && attempts > 1) {
+      yield* pullUntilCovered(pull, coverage, attempts - 1);
+    }
+  });
 
 describe("Client.query judges and answers from one snapshot", () => {
   it.effect(
@@ -959,11 +979,11 @@ describe("Client.query judges and answers from one snapshot", () => {
 
           // Pin the reviewed products and pull until their root and review windows are pulled.
           yield* client.subscribe(reviewed);
-          for (let attempt = 0; attempt < 20; attempt++) {
-            yield* reader.pull.pipe(Effect.orDie);
-            yield* Effect.yieldNow;
-            if ((yield* client.coverageOf(reviewed))._tag === "Covered") break;
-          }
+          yield* pullUntilCovered(
+            reader.pull.pipe(Effect.orDie),
+            Effect.suspend(() => client.coverageOf(reviewed)),
+            20
+          );
           expect((yield* client.coverageOf(reviewed))._tag).toBe("Covered");
 
           yield* Ref.set(armed, true);
@@ -971,14 +991,7 @@ describe("Client.query judges and answers from one snapshot", () => {
           // One read of the root for the whole answer: the verdict and the answer share it.
           expect(yield* Ref.get(rootReads)).toBe(1);
           // The answer is the snapshot the verdict judged: p-1 and p-2, each with its reviews.
-          expect(
-            rows.map((row) => [
-              row.id,
-              ((row.related.reviews ?? []) as ReadonlyArray<{ id: string }>).map(
-                (review) => review.id
-              ),
-            ])
-          ).toEqual([
+          expect(rows.map((row) => [row.id, idsOf(row.related.reviews ?? [])])).toEqual([
             ["p-1", ["r-1"]],
             ["p-2", ["r-2"]],
           ]);
@@ -1002,11 +1015,11 @@ it.effect("a snapshot of another subset is not judged over", () =>
       const client = Client.fromView(nodes, ClientView.fromEngine(reader));
       const reviewed: Query.Read = { collection: "products", include: { reviews: true } };
       yield* client.subscribe(reviewed);
-      for (let attempt = 0; attempt < 20; attempt++) {
-        yield* reader.pull.pipe(Effect.orDie);
-        yield* Effect.yieldNow;
-        if ((yield* client.coverageOf(reviewed))._tag === "Covered") break;
-      }
+      yield* pullUntilCovered(
+        reader.pull.pipe(Effect.orDie),
+        Effect.suspend(() => client.coverageOf(reviewed)),
+        20
+      );
       expect((yield* client.coverageOf(reviewed))._tag).toBe("Covered");
       // p-2 reaches the replica's products without its reviews window: the read now links to a
       // window that is not pulled.

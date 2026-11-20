@@ -1,5 +1,6 @@
 <script lang="ts">
   import type { Query } from "@thomasfosterau/legation";
+  import * as Schema from "effect/Schema";
   import { AsyncResult } from "effect/reactivity";
   import { setClientRuntime, type ClientRuntime } from "../../index.svelte.js";
   import { useQuery } from "../../index.svelte.js";
@@ -12,6 +13,9 @@
     read: Query.Read;
   } = $props();
 
+  const decodeNamed = Schema.decodeUnknownSync(Schema.Struct({ name: Schema.String }));
+  const decodeTitled = Schema.decodeUnknownSync(Schema.Struct({ title: Schema.String }));
+
   // svelte-ignore state_referenced_locally
   setClientRuntime(runtime);
 
@@ -22,8 +26,8 @@
     AsyncResult.getOrElse(rows.current, () => []).map((row) => {
       const author = row.related["author"];
       const name =
-        author === null || author === undefined ? "nobody" : (author as { name: string }).name;
-      return `${(row.value as { title: string }).title}:${name}`;
+        author === null || author === undefined ? "nobody" : decodeNamed(author).name;
+      return `${decodeTitled(row.value).title}:${name}`;
     })
   );
 </script>

@@ -58,9 +58,7 @@ export interface IndexedDbClientStoreOptions {
 }
 
 /** The store options that reach core, absent keys left absent. */
-const keyValueOptions = (
-  options: IndexedDbClientStoreOptions | undefined
-): ClientStore.KeyValueOptions => ({
+const keyValueOptions = (options?: IndexedDbClientStoreOptions): ClientStore.KeyValueOptions => ({
   ...Defined.fields({ prefix: options?.prefix, identity: options?.identity }),
 });
 

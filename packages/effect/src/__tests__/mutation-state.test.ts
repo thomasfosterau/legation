@@ -24,6 +24,15 @@ const mutation = (mutationId: number, mutator = "todo/set"): Mutation => ({
 const get = (map: MutationState.MutationStateMap, id: number) =>
   Option.getOrUndefined(HashMap.get(map, id));
 
+/** Journals a `todo/set` with id `id`, journaled at `id`. */
+const journal = (map: MutationState.MutationStateMap, id: number) =>
+  MutationState.journaled(map, {
+    mutationId: id,
+    mutator: "todo/set",
+    args: {},
+    journaledAt: id,
+  });
+
 describe("MutationState", () => {
   it("seed reflects every pending journal entry as pending", () => {
     const map = MutationState.seed([mutation(1), mutation(2, "todo/remove")]);
@@ -120,17 +129,10 @@ describe("MutationState", () => {
   });
 
   it("a mutation storm never exceeds the configured terminal bound", () => {
-    let map = MutationState.seed([]);
     const retention = { maxTerminal: 5 };
-    for (let id = 1; id <= 500; id++) {
-      map = MutationState.journaled(map, {
-        mutationId: id,
-        mutator: "todo/set",
-        args: {},
-        journaledAt: id,
-      });
-      map = MutationState.acknowledged(map, id, id + 1, retention);
-    }
+    const map = Arr.reduce(Arr.range(1, 500), MutationState.seed([]), (acc, id) =>
+      MutationState.acknowledged(journal(acc, id), id, id + 1, retention)
+    );
     expect(HashMap.size(map)).toBeLessThanOrEqual(5);
     // The most recently settled survive; the oldest 495 were evicted.
     expect(HashMap.has(map, 500)).toBe(true);
@@ -139,41 +141,19 @@ describe("MutationState", () => {
   });
 
   it("a mix of still-pending and settled mutations stays bounded to pending + maxTerminal", () => {
-    let map = MutationState.seed([]);
     const retention = { maxTerminal: 3 };
     // 20 pending mutations never settle...
-    for (let id = 1; id <= 20; id++) {
-      map = MutationState.journaled(map, {
-        mutationId: id,
-        mutator: "todo/set",
-        args: {},
-        journaledAt: id,
-      });
-    }
+    const pending = Arr.reduce(Arr.range(1, 20), MutationState.seed([]), journal);
     // ...while 50 more journal and immediately settle (a storm on top).
-    for (let id = 21; id <= 70; id++) {
-      map = MutationState.journaled(map, {
-        mutationId: id,
-        mutator: "todo/set",
-        args: {},
-        journaledAt: id,
-      });
-      map = MutationState.acknowledged(map, id, id + 1, retention);
-    }
+    const map = Arr.reduce(Arr.range(21, 70), pending, (acc, id) =>
+      MutationState.acknowledged(journal(acc, id), id, id + 1, retention)
+    );
     expect(HashMap.size(map)).toBeLessThanOrEqual(20 + 3);
-    for (let id = 1; id <= 20; id++) expect(get(map, id)?.phase).toBe("pending");
+    Arr.forEach(Arr.range(1, 20), (id) => expect(get(map, id)?.phase).toBe("pending"));
   });
 
   it("acknowledgedMany folds a batch of ids and evicts exactly once, bounded to maxTerminal", () => {
-    let map = MutationState.seed([]);
-    for (let id = 1; id <= 10; id++) {
-      map = MutationState.journaled(map, {
-        mutationId: id,
-        mutator: "todo/set",
-        args: {},
-        journaledAt: id,
-      });
-    }
+    const map = Arr.reduce(Arr.range(1, 10), MutationState.seed([]), journal);
     // A single ack sweep settles all ten at once (they share one settledAt,
     // as a real push-ack batch does) — the batch exceeds maxTerminal, so
     // eviction must still bring it down to the bound in one pass.

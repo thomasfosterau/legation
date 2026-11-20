@@ -16,6 +16,7 @@ import * as Effect from "effect/Effect";
 import { awaitPromise } from "./await-promise.js";
 import * as Option from "effect/Option";
 import * as Order from "effect/Order";
+import * as P from "effect/Predicate";
 import * as Ref from "effect/Ref";
 import * as Schema from "effect/Schema";
 import type * as Scope from "effect/Scope";
@@ -65,10 +66,14 @@ const variants = Node.make("variants", {
 });
 const nodes = Node.registry([categories, products, variants]);
 
-interface SeedRow {
-  readonly id: string;
-  readonly [field: string]: Schema.Json;
-}
+const SeedRow = Schema.StructWithRest(Schema.Struct({ id: Schema.String }), [
+  Schema.Record(Schema.String, Schema.Json),
+]);
+type SeedRow = typeof SeedRow.Type;
+const decodeSeedRow = Schema.decodeUnknownSync(SeedRow);
+const decodeSeedPut = Schema.decodeUnknownSync(
+  Schema.Struct({ collection: Schema.String, value: Schema.Unknown })
+);
 
 const seed = {
   categories: [
@@ -124,7 +129,7 @@ const mutators = Mutator.registry([
       Effect.flatMap(writer.get("products", args.id), (current) =>
         current === undefined
           ? Effect.void
-          : writer.put("products", args.id, { ...(current as SeedRow), name: args.name })
+          : writer.put("products", args.id, { ...decodeSeedRow(current), name: args.name })
       ),
   },
 ]);
@@ -147,8 +152,8 @@ const allowEverything = Authorization.policy(
 const makeReplica = Effect.fn("makeReplica")(function* () {
   const backend = yield* MemoryBackend.make({
     "seed/put": (args, writer) => {
-      const { collection, value } = args as { collection: string; value: { id: string } };
-      return writer.put(collection, value.id, value);
+      const { collection, value } = decodeSeedPut(args);
+      return writer.put(collection, decodeSeedRow(value).id, value);
     },
   });
   const puts = Object.entries(seed).flatMap(([collection, rows]) =>
@@ -253,11 +258,22 @@ const makeFacade = (
     // A relational pin registers its edge windows once its rows are observed, and a pull marks
     // them: pull until the relational pin of the fixture is covered, so the replica holds
     // the rows a covered read links to. Each pull is in memory, so no time passes between them.
-    for (let attempt = 0; attempt < 20; attempt++) {
-      yield* engine.pull;
-      yield* Effect.yieldNow;
-      if ((yield* client.coverageOf(variantsOfProducts))._tag === "Covered") break;
-    }
+    const pullUntilCovered = (
+      attempt: number
+    ): Effect.Effect<
+      void,
+      Effect.Error<typeof engine.pull> | Effect.Error<ReturnType<typeof client.coverageOf>>
+    > =>
+      attempt === 20
+        ? Effect.void
+        : engine.pull.pipe(
+            Effect.andThen(Effect.yieldNow),
+            Effect.andThen(client.coverageOf(variantsOfProducts)),
+            Effect.flatMap((coverage) =>
+              P.isTagged(coverage, "Covered") ? Effect.void : pullUntilCovered(attempt + 1)
+            )
+          );
+    yield* pullUntilCovered(0);
     // A pinned relational read must be covered once the loop has pulled: a silent fall-through
     // here would make the covered-answer tests below pass or fail for the wrong reason.
     const relationalCoverage = pins.includes(RELATIONAL_PIN)
@@ -288,7 +304,38 @@ const jsonApi = (url: string, init: RequestInit = {}): Request =>
 
 const bytes = (document: unknown) => encodeJson(document);
 
-const body = (response: Response) => awaitPromise(() => response.json() as Promise<unknown>);
+/** The parts of the documents these tests read, decoded so a wrong shape fails the test. */
+const decodeCollection = Schema.decodeUnknownSync(
+  Schema.Struct({
+    data: Schema.Array(Schema.Struct({ id: Schema.String })),
+    meta: Schema.optionalKey(Schema.Unknown),
+  })
+);
+const decodeNamedResource = Schema.decodeUnknownSync(
+  Schema.Struct({ data: Schema.Struct({ attributes: Schema.Struct({ name: Schema.String }) }) })
+);
+const decodeErrors = Schema.decodeUnknownSync(
+  Schema.Struct({
+    errors: Schema.Array(Schema.Struct({ source: Schema.optionalKey(Schema.Unknown) })),
+  })
+);
+const decodeSelfLinked = Schema.decodeUnknownSync(
+  Schema.Struct({ links: Schema.Struct({ self: Schema.String }) })
+);
+const decodeVariantLinkage = Schema.decodeUnknownSync(
+  Schema.Struct({
+    data: Schema.Array(
+      Schema.Struct({
+        id: Schema.String,
+        relationships: Schema.Struct({
+          variants: Schema.Struct({ data: Schema.Array(Schema.Unknown) }),
+        }),
+      })
+    ),
+  })
+);
+
+const body = (response: Response) => awaitPromise<unknown>(() => response.json());
 
 // ─── Tests ───────────────────────────────────────────────────────────────────
 
@@ -317,7 +364,7 @@ describe("JsonApiFacade", () => {
         const local = yield* docs.fromUrl(client.view, url, { total: 2 });
         expect(bytes(yield* body(defined(response)))).toBe(bytes(local));
         // The rows themselves: audio products by name descending, with linkage.
-        const document = local as { data: ReadonlyArray<{ id: string }> };
+        const document = decodeCollection(local);
         expect(document.data.map((row) => row.id)).toEqual(["p-2", "p-3"]);
       })
     )
@@ -344,9 +391,7 @@ describe("JsonApiFacade", () => {
           expect(yield* Ref.get(rootReads)).toBe(1);
           expect(response).toBeDefined();
           expect(defined(response).status).toBe(200);
-          const document = (yield* body(defined(response))) as {
-            data: ReadonlyArray<{ id: string }>;
-          };
+          const document = decodeCollection(yield* body(defined(response)));
           expect(
             Arr.sort(
               document.data.map((row) => row.id),
@@ -385,9 +430,7 @@ describe("JsonApiFacade", () => {
         const response = Option.getOrUndefined(
           yield* handler.handle(jsonApi("/jsonapi/products/p-1"))
         );
-        const document = (yield* body(defined(response))) as {
-          data: { attributes: { name: string } };
-        };
+        const document = decodeNamedResource(yield* body(defined(response)));
         // The same view `Client.query` reads: the journal's overlay is visible
         // before any push, as ADR-0029 §4 documents for covered requests.
         expect(document.data.attributes.name).toBe("Standing desk");
@@ -433,12 +476,11 @@ describe("JsonApiFacade", () => {
           expect(defined(response).status).toBe(200);
           // The window holds 2 of the 3 products; `meta.total` is the collection's 3,
           // the pull's total for the pinned subscription, not the window's 2.
-          // SAFETY: a 200 from the façade is a collection document.
-          const served = (yield* body(defined(response))) as { meta?: { total: number } };
-          expect(served.meta).toEqual({ total: 3 });
+          const served = yield* body(defined(response));
+          expect(decodeCollection(served).meta).toEqual({ total: 3 });
           const local = yield* docs.fromUrl(client.view, url, { total: 3 });
           expect(bytes(served)).toBe(bytes(local));
-          const document = local as { data: ReadonlyArray<{ id: string }> };
+          const document = decodeCollection(local);
           expect(document.data.map((row) => row.id)).toEqual(["p-3", "p-1"]);
         })
       )
@@ -484,14 +526,11 @@ describe("JsonApiFacade", () => {
           const url = "/jsonapi/products?sort=name&page[limit]=2";
           const response = Option.getOrUndefined(yield* handler.handle(jsonApi(url)));
           expect(defined(response).status).toBe(200);
-          // SAFETY: a 200 from the façade is a collection document.
-          const local = (yield* body(defined(response))) as {
-            data: ReadonlyArray<{ id: string }>;
-            meta?: unknown;
-          };
+          const local = yield* body(defined(response));
+          const window = decodeCollection(local);
           // Two rows in the window, three products in the collection.
-          expect(local.data).toHaveLength(2);
-          expect(local.meta).toEqual({ total: 3 });
+          expect(window.data).toHaveLength(2);
+          expect(window.meta).toEqual({ total: 3 });
           const rest = RestHandlers.make({
             nodes,
             backend,
@@ -544,7 +583,7 @@ describe("JsonApiFacade", () => {
           // Counted from the replica, which the unwindowed pin holds whole.
           const local = yield* docs.fromUrl(client.view, url, { total: 3 });
           expect(bytes(yield* body(defined(response)))).toBe(bytes(local));
-          const document = local as { data: ReadonlyArray<{ id: string }> };
+          const document = decodeCollection(local);
           expect(document.data.map((row) => row.id)).toEqual(["p-1"]);
         })
       )
@@ -560,9 +599,7 @@ describe("JsonApiFacade", () => {
             yield* handler.handle(jsonApi("/jsonapi/products?page[offset]=1&page[after]=p-1"))
           );
           expect(defined(response).status).toBe(400);
-          const document = (yield* body(defined(response))) as {
-            errors: ReadonlyArray<{ source?: unknown }>;
-          };
+          const document = decodeErrors(yield* body(defined(response)));
           expect(defined(document.errors[0]).source).toEqual({ parameter: "page[offset]" });
         })
       )
@@ -729,7 +766,7 @@ describe("JsonApiFacade", () => {
         );
         expect(defined(served).status).toBe(200);
         // Links keep the route's own prefix: the server mounts the api as declared.
-        const document = (yield* body(defined(served))) as { links: { self: string } };
+        const document = decodeSelfLinked(yield* body(defined(served)));
         expect(document.links.self).toBe("/jsonapi/products");
 
         const proxied = yield* makeFacade(["/jsonapi/products", "/jsonapi/variants"], {
@@ -764,7 +801,7 @@ describe("JsonApiFacade", () => {
         );
         expect(defined(response).status).toBe(200);
         expect(defined(response).headers.get(JsonApiFacade.servedAtHeader)).not.toBe("");
-        expect((yield* body(defined(response))) as { data: unknown }).toEqual({
+        expect(yield* body(defined(response))).toEqual({
           data: [
             { type: "categories", id: "c-audio", attributes: { name: "Audio" } },
             { type: "categories", id: "c-desk", attributes: { name: "Desk" } },
@@ -798,14 +835,7 @@ describe("JsonApiFacade", () => {
         yield* engine.pull.pipe(Effect.orDie);
         const response = Option.getOrUndefined(yield* handler.handle(jsonApi("/jsonapi/products")));
         expect(defined(response).status).toBe(200);
-        const document = (yield* body(defined(response))) as {
-          readonly data: ReadonlyArray<{
-            readonly id: string;
-            readonly relationships: {
-              readonly variants: { readonly data: ReadonlyArray<unknown> };
-            };
-          }>;
-        };
+        const document = decodeVariantLinkage(yield* body(defined(response)));
         const linkage = Object.fromEntries(
           document.data.map((product) => [product.id, product.relationships.variants.data.length])
         );

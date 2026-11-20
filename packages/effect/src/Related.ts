@@ -23,6 +23,7 @@ import * as Defined from "./Defined.js";
 import * as Arr from "effect/Array";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
+import * as Option from "effect/Option";
 import * as P from "effect/Predicate";
 import * as Queue from "effect/Queue";
 import * as Ref from "effect/Ref";
@@ -108,16 +109,16 @@ export interface Strategy {
 const groupByField = (
   rows: ReadonlyArray<LocalRow>,
   field: string
-): Map<Predicate.Literal, ReadonlyArray<LocalRow>> => {
-  const map = new Map<Predicate.Literal, Array<LocalRow>>();
-  for (const row of rows) {
+): Map<Predicate.Literal, ReadonlyArray<LocalRow>> =>
+  Arr.reduce(rows, new Map<Predicate.Literal, Array<LocalRow>>(), (map, row) => {
+    // SAFETY: a join key is the raw field literal (ADR-0028); a non-literal
+    // value keys a bucket no literal looks up.
     const key = Predicate.fieldValue(row.value, field) as Predicate.Literal;
     const bucket = map.get(key);
     if (bucket === undefined) map.set(key, [row]);
     else bucket.push(row);
-  }
-  return map;
-};
+    return map;
+  });
 
 /** Two resolved relationship values are equal when they share row references. */
 const sameRelated = (a: RelatedValue, b: RelatedValue): boolean => {
@@ -146,13 +147,13 @@ const sameJoin = (a: ReadonlyArray<RelatedRow>, b: ReadonlyArray<RelatedRow>): b
 /** The per-parent window a selected relationship pins, when it does. */
 const windowOf = (
   relationship: Collection.Relationship & { readonly first?: number }
-): Target["window"] | undefined =>
+): Option.Option<NonNullable<Target["window"]>> =>
   relationship.kind === "paginated" &&
   relationship.first !== undefined &&
   relationship.order !== undefined &&
   Arr.isReadonlyArrayNonEmpty(relationship.order)
-    ? { orderBy: relationship.order, limit: relationship.first }
-    : undefined;
+    ? Option.some({ orderBy: relationship.order, limit: relationship.first })
+    : Option.none();
 
 /** Collect the non-null `localField` values a relationship pins. */
 const pinIds = (
@@ -162,7 +163,11 @@ const pinIds = (
 ): void => {
   for (const row of baseRows) {
     const value = Predicate.fieldValue(row.value, localField);
-    if (value !== undefined && value !== null) ids.add(value as Predicate.Literal);
+    if (value !== undefined && value !== null) {
+      // SAFETY: a join key is the raw field literal (ADR-0028); the ids only feed
+      // an `In` over the related collection's field.
+      ids.add(value as Predicate.Literal);
+    }
   }
 };
 
@@ -188,7 +193,11 @@ export const fieldMappingStrategy = (
   targets: (baseRows) => {
     const entries = new Map<
       string,
-      { field: string; ids: Set<Predicate.Literal>; window: Target["window"] | undefined }
+      {
+        field: string;
+        ids: Set<Predicate.Literal>;
+        window: Option.Option<NonNullable<Target["window"]>>;
+      }
     >();
     for (const relationship of relationships) {
       const existing = entries.get(relationship.collection);
@@ -199,7 +208,7 @@ export const fieldMappingStrategy = (
       };
       // A second relationship pinning the same collection: fall back to the
       // unwindowed superset (sound, merely over-syncs).
-      if (existing !== undefined) entry.window = undefined;
+      if (existing !== undefined) entry.window = Option.none();
       pinIds(entry.ids, baseRows, relationship.localField);
       entries.set(relationship.collection, entry);
     }
@@ -208,7 +217,7 @@ export const fieldMappingStrategy = (
       map.set(collection, {
         field: entry.field,
         ids: entry.ids,
-        ...Defined.fields({ window: entry.window }),
+        ...Defined.fields({ window: Option.getOrUndefined(entry.window) }),
       });
     }
     return map;
@@ -216,6 +225,8 @@ export const fieldMappingStrategy = (
   resolveRow: (index, baseRow) => {
     const related: Record<string, RelatedValue> = {};
     for (const relationship of relationships) {
+      // SAFETY: a join key is the raw field literal (ADR-0028), looked up in the
+      // buckets `groupByField` keyed the same way.
       const key = Predicate.fieldValue(baseRow.value, relationship.localField) as Predicate.Literal;
       const bucket = index.get(relationship.collection)?.get(key);
       const first = bucket?.[0];
@@ -237,18 +248,13 @@ const selectRelationships = (
   edges: ReadonlyArray<string | EdgeSelect>
 ): ReadonlyArray<Collection.Relationship & { readonly first?: number }> => {
   const all = Collection.relationshipsOf(registry, collectionName);
-  const selected: Array<Collection.Relationship & { readonly first?: number }> = [];
-  for (const input of edges) {
+  return Arr.flatMap(edges, (input) => {
     const select = edgeSelect(input);
     const relationship = all.get(select.name);
-    if (relationship !== undefined) {
-      selected.push({
-        ...relationship,
-        ...Defined.fields({ first: select.first }),
-      });
-    }
-  }
-  return selected;
+    return relationship === undefined
+      ? []
+      : [{ ...relationship, ...Defined.fields({ first: select.first }) }];
+  });
 };
 
 // ─── Generic plumbing (strategy-parameterised) ───────────────────────────────
@@ -273,17 +279,19 @@ const primeIndex = (
 ): Effect.Effect<Map<string, ReadonlyMap<Predicate.Literal, ReadonlyArray<LocalRow>>>> =>
   Effect.gen(function* () {
     const index = new Map<string, ReadonlyMap<Predicate.Literal, ReadonlyArray<LocalRow>>>();
-    for (const [collection, target] of targets) {
-      const rows =
-        target.ids.size === 0
-          ? []
-          : yield* view
+    yield* Effect.forEach(
+      targets,
+      ([collection, target]) =>
+        (target.ids.size === 0
+          ? Effect.succeed<ReadonlyArray<LocalRow>>([])
+          : view
               .query(
                 Subset.make({ collection, where: Predicate.isIn(target.field, [...target.ids]) })
               )
-              .pipe(Effect.orDie);
-      index.set(collection, groupByField(rows, target.field));
-    }
+              .pipe(Effect.orDie)
+        ).pipe(Effect.map((rows) => index.set(collection, groupByField(rows, target.field)))),
+      { concurrency: 1, discard: true }
+    );
     return index;
   });
 
@@ -546,6 +554,8 @@ export const makeJoinEngine = (strategy: Strategy): JoinEngine => {
     rows: ReadonlyArray<LocalRow>
   ): ReadonlySet<Predicate.Literal> => {
     const changedKeys = new Set<Predicate.Literal>();
+    // SAFETY: a join key is the raw field literal (ADR-0028); a non-literal
+    // value keys a bucket no literal looks up.
     const keyOf = (row: LocalRow) =>
       Predicate.fieldValue(row.value, state.target.field) as Predicate.Literal;
     const putInto = (key: Predicate.Literal, row: LocalRow): void => {
@@ -632,9 +642,9 @@ export const hydrateFromScratch = (
 ): ReadonlyArray<RelatedRow> => {
   const targets = strategy.targets(base);
   const index = new Map<string, ReadonlyMap<Predicate.Literal, ReadonlyArray<LocalRow>>>();
-  for (const [collection, target] of targets) {
-    index.set(collection, groupByField(foreignRows.get(collection) ?? [], target.field));
-  }
+  Arr.forEach(targets, ([collection, target]) =>
+    index.set(collection, groupByField(foreignRows.get(collection) ?? [], target.field))
+  );
   return hydrate(strategy, base, index);
 };
 
@@ -704,8 +714,14 @@ export const observeWith = (
               P.isTagged(event, "base")
                 ? Effect.gen(function* () {
                     const { added, removed, result } = engine.applyBase(event.rows);
-                    for (const collection of removed) yield* stopCollection(collection);
-                    for (const collection of added) yield* startCollection(collection);
+                    yield* Effect.forEach(removed, stopCollection, {
+                      concurrency: 1,
+                      discard: true,
+                    });
+                    yield* Effect.forEach(added, startCollection, {
+                      concurrency: 1,
+                      discard: true,
+                    });
                     yield* emit(result);
                   })
                 : emit(engine.applyForeign(event.collection, event.rows).result)
@@ -773,21 +789,18 @@ const reconcile = (
 ): Effect.Effect<boolean> =>
   Effect.gen(function* () {
     const previous = yield* Ref.get(subscribed);
-    let changed = false;
-    for (const stale of previous) {
-      if (!hasSubset(desired, stale)) {
-        yield* engine.unsubscribe(stale);
-        changed = true;
-      }
-    }
-    for (const next of desired) {
-      if (!hasSubset(previous, next)) {
-        yield* engine.subscribe(next);
-        changed = true;
-      }
-    }
+    const stale = Arr.filter(previous, (subset) => !hasSubset(desired, subset));
+    const fresh = Arr.filter(desired, (subset) => !hasSubset(previous, subset));
+    yield* Effect.forEach(stale, (subset) => engine.unsubscribe(subset), {
+      concurrency: 1,
+      discard: true,
+    });
+    yield* Effect.forEach(fresh, (subset) => engine.subscribe(subset), {
+      concurrency: 1,
+      discard: true,
+    });
     yield* Ref.set(subscribed, desired);
-    return changed;
+    return Arr.isReadonlyArrayNonEmpty(stale) || Arr.isReadonlyArrayNonEmpty(fresh);
   });
 
 /** Whether a background pull is running, and whether another is wanted after it. */
@@ -920,7 +933,7 @@ export const queryVia = <E>(
       ? []
       : yield* fetchRows(foreignSubsets);
     const index = new Map<string, ReadonlyMap<Predicate.Literal, ReadonlyArray<LocalRow>>>();
-    for (const [collection, target] of targets) {
+    Arr.forEach(targets, ([collection, target]) =>
       index.set(
         collection,
         groupByField(
@@ -929,8 +942,8 @@ export const queryVia = <E>(
             .map(({ id, value }) => ({ id, value })),
           target.field
         )
-      );
-    }
+      )
+    );
     return hydrate(strategy, base, index);
   });
 

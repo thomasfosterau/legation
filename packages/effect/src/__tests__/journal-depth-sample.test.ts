@@ -9,6 +9,7 @@
  * serves and assert that no `journal/*` body is read by a sample.
  */
 import { describe, expect, it } from "@effect/vitest";
+import * as Arr from "effect/Array";
 import * as Effect from "effect/Effect";
 import * as Metric from "effect/Metric";
 import * as Schema from "effect/Schema";
@@ -82,7 +83,7 @@ const harness = Effect.fn("harness")(function* () {
     mutators: Mutator.registry([
       {
         mutator: todoSet,
-        local: (args, writer) => writer.put("todos", (args as { id: string }).id, args),
+        local: (args: { id: string }, writer) => writer.put("todos", args.id, args),
       },
     ]),
   }).pipe(
@@ -96,7 +97,10 @@ describe("journal-depth sampling reads no journal bodies", () => {
   it.effect("a mutate against a long journal reads no pending body", () =>
     Effect.gen(function* () {
       const { engine, store, kv } = yield* harness();
-      for (let n = 1; n <= 50; n++) yield* engine.mutate("todo/set", { id: `t${n}` });
+      yield* Effect.forEach(Arr.range(1, 50), (n) => engine.mutate("todo/set", { id: `t${n}` }), {
+        concurrency: 1,
+        discard: true,
+      });
       // The overlay cache is warm: the mutate path tracks onto it, so neither
       // the gauge sample nor the tracked-write fallback needs the journal.
       yield* engine.query(allTodos);
@@ -112,7 +116,10 @@ describe("journal-depth sampling reads no journal bodies", () => {
   it.effect("a paced compaction of the tail reads no pending body", () =>
     Effect.gen(function* () {
       const { engine, store, kv } = yield* harness();
-      for (let n = 1; n <= 50; n++) yield* engine.mutate("todo/set", { id: `t${n}` });
+      yield* Effect.forEach(Arr.range(1, 50), (n) => engine.mutate("todo/set", { id: `t${n}` }), {
+        concurrency: 1,
+        discard: true,
+      });
 
       // The usual paced shape: the superseded entry is the newest one, so the
       // compaction moves nothing and the sample after it counts.
@@ -142,7 +149,10 @@ describe("ClientStore.pendingCount", () => {
         Effect.provideService(KeyValueStore.KeyValueStore, kv.store)
       );
       expect(yield* store.pendingCount).toBe(0);
-      for (let n = 1; n <= 20; n++) yield* store.appendMutation(entry(n));
+      yield* Effect.forEach(Arr.range(1, 20), (n) => store.appendMutation(entry(n)), {
+        concurrency: 1,
+        discard: true,
+      });
       yield* store.appendMutation(entry(1, "c2"));
 
       kv.reads.length = 0;

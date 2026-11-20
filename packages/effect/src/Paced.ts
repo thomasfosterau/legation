@@ -71,6 +71,7 @@
 import * as Arr from "effect/Array";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
+import * as Option from "effect/Option";
 import * as Semaphore from "effect/Semaphore";
 import type * as Duration from "effect/Duration";
 import type * as Scope from "effect/Scope";
@@ -150,7 +151,7 @@ interface Entry {
   latestArgs: unknown;
   /** Whether `latestArgs` has landed since the last flush for this key. */
   dirty: boolean;
-  timer: Fiber.Fiber<void> | undefined;
+  timer: Option.Option<Fiber.Fiber<void>>;
 }
 
 /**
@@ -270,15 +271,15 @@ export const debounce = (
           let entry = entries.get(key);
           if (entry === undefined) {
             // Leading edge: journal now so the overlay reflects it immediately.
-            entry = { latestArgs: args, dirty: false, timer: undefined };
+            entry = { latestArgs: args, dirty: false, timer: Option.none() };
             entries.set(key, entry);
             yield* flush(engine, mutator, lastIdByKey, key, args);
           } else {
-            if (entry.timer !== undefined) yield* Fiber.interrupt(entry.timer);
+            if (Option.isSome(entry.timer)) yield* Fiber.interrupt(entry.timer.value);
             entry.latestArgs = args;
             entry.dirty = true;
           }
-          entry.timer = yield* Effect.forkIn(trailing(key), scope);
+          entry.timer = Option.some(yield* Effect.forkIn(trailing(key), scope));
         })
       );
 
@@ -318,7 +319,7 @@ export const throttle = (
               entry.dirty = false;
               const args = entry.latestArgs;
               yield* flushBackground(engine, mutator, lastIdByKey, key, args);
-              entry.timer = yield* Effect.forkIn(tick(key), scope);
+              entry.timer = Option.some(yield* Effect.forkIn(tick(key), scope));
             })
           )
         )
@@ -331,10 +332,10 @@ export const throttle = (
           const entry = entries.get(key);
           if (entry === undefined) {
             // Leading edge: journal now and start this key's window.
-            const created: Entry = { latestArgs: args, dirty: false, timer: undefined };
+            const created: Entry = { latestArgs: args, dirty: false, timer: Option.none() };
             entries.set(key, created);
             yield* flush(engine, mutator, lastIdByKey, key, args);
-            created.timer = yield* Effect.forkIn(tick(key), scope);
+            created.timer = Option.some(yield* Effect.forkIn(tick(key), scope));
             return;
           }
           // A window is already running for this key: buffer, don't reset it.

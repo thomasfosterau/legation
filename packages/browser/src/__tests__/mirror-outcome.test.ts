@@ -28,28 +28,24 @@ import * as Fiber from "effect/Fiber";
 import * as Schema from "effect/Schema";
 import { TestFailure } from "./test-failure.js";
 
-interface Todo {
-  readonly id: string;
-  readonly title: string;
-  readonly done: boolean;
-}
+const decodeIdentified = Schema.decodeUnknownSync(Schema.Struct({ id: Schema.String }));
 
 const mutators = Mutator.registry([
   {
     mutator: Mutator.make("todo/set", Schema.Unknown),
-    local: (args, writer) => writer.put("todos", (args as Todo).id, args),
+    local: (args, writer) => writer.put("todos", decodeIdentified(args).id, args),
   },
   {
     mutator: Mutator.make("todo/forbidden", Schema.Unknown),
-    local: (args, writer) => writer.put("todos", (args as Todo).id, args),
+    local: (args, writer) => writer.put("todos", decodeIdentified(args).id, args),
   },
 ]);
 
 const backendHandlers = {
-  "todo/set": (args, writer) => Effect.asVoid(writer.put("todos", (args as Todo).id, args)),
+  "todo/set": (args, writer) => Effect.asVoid(writer.put("todos", decodeIdentified(args).id, args)),
   "todo/forbidden": (args, writer) =>
     writer
-      .put("todos", (args as Todo).id, args)
+      .put("todos", decodeIdentified(args).id, args)
       .pipe(Effect.andThen(Effect.fail(new MutationRejected({ reason: "permission revoked" })))),
 } satisfies Record<string, MemoryBackend.BackendHandler>;
 
@@ -60,15 +56,13 @@ const sleepReal = (millis: number) =>
     return Effect.sync(() => clearTimeout(timer));
   });
 
-const eventually = <A, E>(read: Effect.Effect<A, E>, until: (value: A) => boolean) =>
-  Effect.gen(function* () {
-    for (let attempt = 0; attempt < 200; attempt++) {
-      const value = yield* read;
-      if (until(value)) return value;
-      yield* sleepReal(5);
-    }
-    return yield* Effect.die(new TestFailure({ message: "eventually: condition never held" }));
-  });
+const eventually = <A, E>(read: Effect.Effect<A, E>, until: (value: A) => boolean) => {
+  const attempt = (n: number): Effect.Effect<A, E> =>
+    n === 200
+      ? Effect.die(new TestFailure({ message: "eventually: condition never held" }))
+      : Effect.filterOrElse(read, until, () => Effect.andThen(sleepReal(5), attempt(n + 1)));
+  return attempt(0);
+};
 
 const makeEngine = Effect.fn("makeEngine")(function* () {
   const backend = yield* MemoryBackend.make(backendHandlers);

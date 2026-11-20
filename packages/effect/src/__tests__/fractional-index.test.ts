@@ -7,7 +7,6 @@
 import * as Arr from "effect/Array";
 import { describe, expect, it } from "vite-plus/test";
 import * as FractionalIndex from "../FractionalIndex.js";
-import { defined } from "./defined.js";
 
 describe("FractionalIndex", () => {
   it("generates a key with no bounds", () => {
@@ -54,16 +53,13 @@ describe("FractionalIndex", () => {
   });
 
   it("repeated insertion at the same boundary keeps splitting correctly", () => {
-    let hi = FractionalIndex.generateBetween();
-    const keys = [hi];
-    for (let i = 0; i < 50; i++) {
-      hi = FractionalIndex.generateBetween(undefined, hi);
-      keys.push(hi);
-    }
+    const keys = Arr.scan(Arr.range(1, 50), FractionalIndex.generateBetween(), (hi) =>
+      FractionalIndex.generateBetween(undefined, hi)
+    );
     // Strictly decreasing (each new key is the tightest lower neighbor so far).
-    for (let i = 1; i < keys.length; i++) {
-      expect(FractionalIndex.compare(defined(keys[i]), defined(keys[i - 1]))).toBeLessThan(0);
-    }
+    Arr.forEach(Arr.zip(keys, Arr.drop(keys, 1)), ([previous, key]) => {
+      expect(FractionalIndex.compare(key, previous)).toBeLessThan(0);
+    });
   });
 
   it("generateNBetween produces N strictly increasing keys within bounds", () => {
@@ -82,9 +78,9 @@ describe("FractionalIndex", () => {
   it("generateNBetween with no bounds still produces N increasing keys", () => {
     const keys = FractionalIndex.generateNBetween(undefined, undefined, 10);
     expect(keys.length).toBe(10);
-    for (let i = 1; i < keys.length; i++) {
-      expect(FractionalIndex.compare(defined(keys[i - 1]), defined(keys[i]))).toBeLessThan(0);
-    }
+    Arr.forEach(Arr.zip(keys, Arr.drop(keys, 1)), ([previous, key]) => {
+      expect(FractionalIndex.compare(previous, key)).toBeLessThan(0);
+    });
   });
 
   it("generateNBetween(0) is empty and (1) matches generateBetween", () => {
@@ -107,16 +103,15 @@ describe("FractionalIndex", () => {
       state ^= state << 5;
       return (state >>> 0) / 0xffffffff;
     };
-    let keys = [FractionalIndex.generateBetween()];
-    for (let i = 0; i < 300; i++) {
-      const index = Math.floor(next() * keys.length);
-      const lo = index > 0 ? keys[index - 1] : undefined;
-      const hi = keys[index];
+    const keys = Arr.reduce(Arr.range(0, 299), [FractionalIndex.generateBetween()], (current) => {
+      const index = Math.floor(next() * current.length);
+      const lo = index > 0 ? current[index - 1] : undefined;
+      const hi = current[index];
       const inserted = FractionalIndex.generateBetween(lo, hi);
-      keys = [...keys.slice(0, index), inserted, ...keys.slice(index)];
-    }
-    for (let i = 1; i < keys.length; i++) {
-      expect(FractionalIndex.compare(defined(keys[i - 1]), defined(keys[i]))).toBeLessThan(0);
-    }
+      return [...current.slice(0, index), inserted, ...current.slice(index)];
+    });
+    Arr.forEach(Arr.zip(keys, Arr.drop(keys, 1)), ([previous, key]) => {
+      expect(FractionalIndex.compare(previous, key)).toBeLessThan(0);
+    });
   });
 });

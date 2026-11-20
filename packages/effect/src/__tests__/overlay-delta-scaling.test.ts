@@ -29,7 +29,7 @@ const LIVE_QUERIES = 5;
 const mutators = Mutator.registry([
   {
     mutator: Mutator.make("todo/set", Schema.Unknown),
-    local: (a, w) => w.put("todos", (a as { id: string }).id, a),
+    local: (a: { id: string }, w) => w.put("todos", a.id, a),
   },
 ]);
 

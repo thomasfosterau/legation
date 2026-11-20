@@ -10,6 +10,7 @@ import { vi } from "vite-plus/test";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
+import * as Option from "effect/Option";
 import * as Ref from "effect/Ref";
 import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
@@ -25,6 +26,7 @@ import type { PullResponse } from "../Protocol.js";
 import * as Subset from "../Subset.js";
 import { ClientTransport, makeInMemory, type ServerHandler } from "../Transport.js";
 import { defined } from "./defined.js";
+import { booleanField } from "./shapes.js";
 
 // ─── CollectionIndex (pure module) ───────────────────────────────────────────
 
@@ -191,10 +193,13 @@ interface Item {
   readonly done: boolean;
 }
 
+const doneOf = booleanField("done");
+const decodePriority = Schema.decodeUnknownSync(Schema.Struct({ priority: Schema.Finite }));
+
 const setItem = Mutator.registry([
   {
     mutator: Mutator.make("item/set", Schema.Unknown),
-    local: (args, writer) => writer.put("items", (args as Item).id, args),
+    local: (args: Item, writer) => writer.put("items", args.id, args),
   },
 ]);
 
@@ -206,11 +211,11 @@ interface User {
 const setItemAndUser = Mutator.registry([
   {
     mutator: Mutator.make("item/set", Schema.Unknown),
-    local: (args, writer) => writer.put("items", (args as Item).id, args),
+    local: (args: Item, writer) => writer.put("items", args.id, args),
   },
   {
     mutator: Mutator.make("user/set", Schema.Unknown),
-    local: (args, writer) => writer.put("users", (args as User).id, args),
+    local: (args: User, writer) => writer.put("users", args.id, args),
   },
 ]);
 
@@ -238,25 +243,27 @@ interface Parked {
 interface ParkingStore {
   readonly store: ClientStoreModule.ClientStore;
   readonly calls: Ref.Ref<number>;
-  readonly gate: Ref.Ref<Parked | undefined>;
+  readonly gate: Ref.Ref<Option.Option<Parked>>;
 }
 
 const parkingStore = Effect.fn("parkingStore")(function* () {
   const memory = yield* ClientStoreModule.makeMemory;
   const calls = yield* Ref.make(0);
-  const gate = yield* Ref.make<Parked | undefined>(undefined);
+  const gate = yield* Ref.make(Option.none<Parked>());
   const store = ClientStore.of({
     ...memory,
     listRows: (collection) =>
       Effect.gen(function* () {
         const call = yield* Ref.updateAndGet(calls, (n) => n + 1);
         const rows = yield* memory.listRows(collection);
-        const parked = yield* Ref.modify(gate, (g) =>
-          g?.at === call ? ([g, undefined] as const) : ([undefined, g] as const)
+        const parked = yield* Ref.modify(
+          gate,
+          (g): readonly [Option.Option<Parked>, Option.Option<Parked>] =>
+            Option.exists(g, (armed) => armed.at === call) ? [g, Option.none()] : [Option.none(), g]
         );
-        if (parked !== undefined) {
-          yield* Deferred.succeed(parked.reached, undefined);
-          yield* Deferred.await(parked.release);
+        if (Option.isSome(parked)) {
+          yield* Deferred.succeed(parked.value.reached, undefined);
+          yield* Deferred.await(parked.value.release);
         }
         return rows;
       }),
@@ -270,7 +277,7 @@ const armPark = (parking: ParkingStore) =>
     const reached = yield* Deferred.make<void>();
     const release = yield* Deferred.make<void>();
     const callsBefore = yield* Ref.get(parking.calls);
-    yield* Ref.set(parking.gate, { at: callsBefore + 1, reached, release });
+    yield* Ref.set(parking.gate, Option.some({ at: callsBefore + 1, reached, release }));
     return { callsBefore, reached, release };
   });
 
@@ -358,7 +365,7 @@ describe("ClientEngine + CollectionIndex", () => {
         yield* seedEngine(engine, items(50));
         const done = Predicate.eq("done", true);
         const first = yield* engine.query(Subset.make({ collection: "items", where: done }));
-        expect(first.every((r) => (r.value as Item).done)).toBe(true);
+        expect(first.every((r) => doneOf(r.value))).toBe(true);
 
         // Widen the collection after the field was auto-indexed; the index must
         // rebuild to cover the new rows, not serve a stale snapshot.
@@ -710,7 +717,7 @@ describe("ClientEngine + CollectionIndex", () => {
       expect((yield* at(3)).map((r) => r.id)).toEqual(["i1"]);
       // The unindexed view agrees: the row it holds is the stored one.
       const all = yield* engine.query(Subset.make({ collection: "items" }));
-      expect(all.map((r) => (r.value as Item).priority)).toEqual([3]);
+      expect(all.map((r) => decodePriority(r.value).priority)).toEqual([3]);
     })
   );
 

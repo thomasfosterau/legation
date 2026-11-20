@@ -5,10 +5,13 @@
  * only a mounted component, for its `$effect`.
  */
 import { afterEach, describe, expect, it } from "vite-plus/test";
+import * as Schema from "effect/Schema";
 import { mount, unmount } from "svelte";
 import { Subset, Undo } from "@thomasfosterau/legation/internal";
 import UndoHarness from "./fixtures/UndoHarness.svelte";
 import { buttonByLabel, makeClientRuntime, run, until } from "./world.js";
+
+const decodeTitled = Schema.decodeUnknownSync(Schema.Struct({ title: Schema.String }));
 
 const allTodos = Subset.make({ collection: "todos" });
 const text = () => document.body.textContent ?? "";
@@ -36,7 +39,7 @@ describe("useUndo", () => {
 
     const titles = async (): Promise<ReadonlyArray<string>> =>
       (await run(runtime, (engine) => engine.query(allTodos))).map(
-        (row) => (row.value as { title: string }).title
+        (row) => decodeTitled(row.value).title
       );
     expect(await titles()).toEqual(["after"]);
 

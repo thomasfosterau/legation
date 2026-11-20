@@ -28,6 +28,12 @@ import { IDBKeyRange, indexedDB } from "fake-indexeddb";
 import * as IndexedDbClientStore from "../IndexedDbClientStore.js";
 import { withLayer } from "./with-layer.js";
 
+const decodeIdentified = Schema.decodeUnknownSync(Schema.Struct({ id: Schema.String }));
+const decodeTitled = Schema.decodeUnknownSync(Schema.Struct({ title: Schema.String }));
+const decodeCounter = Schema.decodeUnknownSync(
+  Schema.UndefinedOr(Schema.Struct({ n: Schema.Finite }))
+);
+
 const fakeIndexedDb = Layer.succeed(IndexedDb.IndexedDb)(
   IndexedDb.make({ indexedDB, IDBKeyRange })
 );
@@ -140,7 +146,7 @@ describe("IndexedDbClientStore", () => {
       yield* Effect.gen(function* () {
         const store = yield* ClientStore.ClientStore;
         const rows = yield* store.listRows("todos");
-        expect(rows.map((row) => (row.value as { title: string }).title)).toEqual(["alice's"]);
+        expect(rows.map((row) => decodeTitled(row.value).title)).toEqual(["alice's"]);
       }).pipe(withLayer(namespacedLayer("two-users", ALICE)));
     })
   );
@@ -155,7 +161,7 @@ const incrementCounter = <E>(
   id: string
 ): Effect.Effect<void, E> =>
   Effect.gen(function* () {
-    const current = (yield* writer.get("counters", id)) as { n: number } | undefined;
+    const current = decodeCounter(yield* writer.get("counters", id));
     yield* writer.put("counters", id, { id, n: (current?.n ?? 0) + 1 });
   });
 
@@ -165,11 +171,11 @@ describe("IndexedDbClientStore: the unpulled tail", () => {
   const counterMutators = Mutator.registry([
     {
       mutator: Mutator.make("counter/inc", Schema.Unknown),
-      local: (args, writer) => incrementCounter(writer, (args as { readonly id: string }).id),
+      local: (args, writer) => incrementCounter(writer, decodeIdentified(args).id),
     },
   ]);
   const backendHandlers = {
-    "counter/inc": (args, writer) => incrementCounter(writer, (args as { readonly id: string }).id),
+    "counter/inc": (args, writer) => incrementCounter(writer, decodeIdentified(args).id),
   } satisfies Record<string, MemoryBackend.BackendHandler>;
   const countersSubset = Subset.make({ collection: "counters" });
   const authPolicy = Authorization.policy({ counters: Authorization.allowAll });
@@ -198,11 +204,7 @@ describe("IndexedDbClientStore: the unpulled tail", () => {
   const counterValue = (engine: ClientEngine.ClientEngine) =>
     engine
       .query(countersSubset)
-      .pipe(
-        Effect.map(
-          (rows) => (rows.find((row) => row.id === "c")?.value as { n: number } | undefined)?.n
-        )
-      );
+      .pipe(Effect.map((rows) => decodeCounter(rows.find((row) => row.id === "c")?.value)?.n));
 
   it.effect("a restart before the pull keeps the acknowledged effect; the pull releases it", () =>
     Effect.gen(function* () {

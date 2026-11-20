@@ -58,6 +58,7 @@
 import type * as Cause from "effect/Cause";
 import type * as Scope from "effect/Scope";
 import * as Effect from "effect/Effect";
+import * as Option from "effect/Option";
 import * as Stream from "effect/Stream";
 import { Atom, type AsyncResult } from "effect/reactivity";
 import type * as ClientView from "./ClientView.js";
@@ -110,8 +111,8 @@ const isChangeTagged = <A, E>(source: Source<A, E>): source is Source<A, E> & Ch
 
 const changesOf = <A, E>(
   source: Source<A, E>
-): Stream.Stream<ReadonlyArray<RowChange<Row<A>>>, E> | undefined =>
-  isChangeTagged(source) ? source[CHANGES] : undefined;
+): Option.Option<Stream.Stream<ReadonlyArray<RowChange<Row<A>>>, E>> =>
+  isChangeTagged(source) ? Option.some(source[CHANGES]) : Option.none();
 
 // ─── Dedup ───────────────────────────────────────────────────────────────────
 
@@ -144,8 +145,8 @@ const samePage = <A>(a: ReadonlyArray<Row<A>>, b: ReadonlyArray<Row<A>>): boolea
  */
 const toDeltaStream = <A, E>(source: Source<A, E>): Stream.Stream<Incremental.Delta<A>, E> => {
   const changes = changesOf(source);
-  return changes !== undefined
-    ? changes.pipe(
+  return Option.isSome(changes)
+    ? changes.value.pipe(
         Stream.mapAccum(
           () => new Map<string, Row<A>>(),
           (known, batch) => [known, [Incremental.deltaFromChanges(known, batch)]] as const

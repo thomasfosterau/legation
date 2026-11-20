@@ -533,8 +533,8 @@ const sendsJsonApi = (header: Option.Option<string>): boolean => {
 };
 
 const navigatorOnline = (): boolean => {
-  const navigator = (globalThis as { navigator?: { onLine?: boolean } }).navigator;
-  return navigator?.onLine !== false;
+  const navigator = P.hasProperty(globalThis, "navigator") ? globalThis.navigator : undefined;
+  return !P.isObject(navigator) || navigator.onLine !== false;
 };
 
 /** A candidate request: the route it matched and its URL, parsed once. */

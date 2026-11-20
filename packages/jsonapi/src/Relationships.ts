@@ -99,6 +99,8 @@ export const hydrate = (
 const linkageStrategy = (names: ReadonlyArray<string>): Related.Strategy => ({
   targets: (baseRows) => {
     const map = new Map<string, { field: string; ids: Set<string> }>();
+    // SAFETY: the subset is of a JSON:API collection (this module's contract),
+    // whose rows are `JsonApiRow`s (`Derive.collectionFor`'s schema).
     const links = baseRows.flatMap((row) =>
       names.flatMap((name) => linksOf(row.value as JsonApiRow, name))
     );
@@ -110,11 +112,14 @@ const linkageStrategy = (names: ReadonlyArray<string>): Related.Strategy => ({
     return map;
   },
   resolveRow: (index, baseRow) => {
+    // SAFETY: the indexed rows are of the JSON:API collections `targets` named,
+    // whose rows are `JsonApiRow`s (`Derive.collectionFor`'s schema).
     const lookup: Lookup = (collection, id) =>
       Option.map(
         Option.fromUndefinedOr(index.get(collection)?.get(id)?.[0]),
         (row) => row.value as JsonApiRow
       );
+    // SAFETY: the base row is of a JSON:API collection, as in `targets`.
     return hydrate(lookup, baseRow.value as JsonApiRow, names);
   },
 });
@@ -129,6 +134,8 @@ export const query = (
   subset: Subset.Subset,
   names: ReadonlyArray<string>
 ): Effect.Effect<ReadonlyArray<RelatedRow>> =>
+  // SAFETY: the rows are of a JSON:API collection, so each value is a
+  // `JsonApiRow`; only the row type is narrowed.
   Related.queryWith(engine, linkageStrategy(names), subset) as Effect.Effect<
     ReadonlyArray<RelatedRow>
   >;
@@ -144,6 +151,7 @@ export const observe = (
   subset: Subset.Subset,
   names: ReadonlyArray<string>
 ): Stream.Stream<ReadonlyArray<RelatedRow>> =>
+  // SAFETY: as in `query`.
   Related.observeWith(engine, linkageStrategy(names), subset) as Stream.Stream<
     ReadonlyArray<RelatedRow>
   >;
@@ -160,6 +168,7 @@ export const related = (
   subset: Subset.Subset,
   names: ReadonlyArray<string>
 ): Effect.Effect<Stream.Stream<ReadonlyArray<RelatedRow>>, never, Scope.Scope> =>
+  // SAFETY: as in `query`.
   Related.relatedWith(engine, linkageStrategy(names), subset) as Effect.Effect<
     Stream.Stream<ReadonlyArray<RelatedRow>>,
     never,

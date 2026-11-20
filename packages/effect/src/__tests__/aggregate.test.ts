@@ -29,6 +29,7 @@ import * as SyncServer from "../SyncServer.js";
 import { ClientTransport, makeInMemory, type ServerHandler } from "../Transport.js";
 import { defined } from "./defined.js";
 import * as Json from "../internal/Json.js";
+import { idOf } from "./shapes.js";
 
 const rowsOf = (...values: ReadonlyArray<unknown>) =>
   values.map((value, i) => ({ id: `${i}`, value }));
@@ -111,7 +112,7 @@ interface Todo {
 const put =
   (collection: string): MemoryBackend.BackendHandler =>
   (args, writer) =>
-    Effect.asVoid(writer.put(collection, (args as { id: string }).id, args));
+    Effect.asVoid(writer.put(collection, idOf(args), args));
 
 const handlers = { "todo/set": put("todos") } satisfies Record<
   string,
@@ -120,7 +121,7 @@ const handlers = { "todo/set": put("todos") } satisfies Record<
 const mutators = Mutator.registry([
   {
     mutator: Mutator.make("todo/set", Schema.Unknown),
-    local: (a, w) => w.put("todos", (a as Todo).id, a),
+    local: (a: Todo, w) => w.put("todos", a.id, a),
   },
 ]);
 
@@ -401,6 +402,6 @@ const checkIncrementalSeed = (seed: number): void => {
 
 describe("Aggregate incremental state", () => {
   it("matches compute/computeGrouped from scratch after every prefix of a randomized delta sequence", () => {
-    for (let seed = 0; seed < 40; seed++) checkIncrementalSeed(seed);
+    Arr.forEach(Arr.range(0, 39), (seed) => checkIncrementalSeed(seed));
   });
 });
