@@ -558,7 +558,7 @@ export const listen = (options: ListenOptions): Listener => {
     Effect.gen(function* () {
       const entry: Attached = {
         flush: flush(engine, { identity: options.identity }),
-        services: yield* Effect.context<never>(),
+        services: yield* Effect.context(),
       };
       yield* Effect.acquireRelease(SubscriptionRef.set(attached, Option.some(entry)), () =>
         // Detach only ourselves: a newer host may already have attached.

@@ -145,7 +145,7 @@ export interface ClientView {
     collectionName: string,
     subset: Subset.Subset,
     edges: ReadonlyArray<string | Related.EdgeSelect>
-  ) => Effect.Effect<Stream.Stream<ReadonlyArray<Related.RelatedRow>, never>, never, Scope.Scope>;
+  ) => Effect.Effect<Stream.Stream<ReadonlyArray<Related.RelatedRow>>, never, Scope.Scope>;
   /**
    * The current resolved rows of a relational read this view holds through
    * {@link related} or {@link pinEdges}, read once. A `Mirror` answers

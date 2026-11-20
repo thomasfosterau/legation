@@ -70,7 +70,7 @@ export interface PromiseFacade<R> {
  * await facade.dispose();
  * ```
  */
-export const make = <R, ER>(layer: Layer.Layer<R, ER, never>): PromiseFacade<R> => {
+export const make = <R, ER>(layer: Layer.Layer<R, ER>): PromiseFacade<R> => {
   // The error channel of the layer is surfaced when effects run, so the
   // facade itself treats the runtime as infallible for ergonomic typing.
   const runtime = ManagedRuntime.make(layer) as ManagedRuntime.ManagedRuntime<R, never>;

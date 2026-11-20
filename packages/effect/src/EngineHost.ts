@@ -183,7 +183,7 @@ interface Active {
    */
   readonly loop: Effect.Effect<void, unknown>;
   /** The fiber running {@link loop} now; replaced when the loop is restarted. */
-  readonly fiber: Ref.Ref<Fiber.Fiber<void, never>>;
+  readonly fiber: Ref.Ref<Fiber.Fiber<void>>;
   /** Engine-side release beyond interrupting the fiber (e.g. unsubscribe). */
   readonly teardown: Effect.Effect<void>;
   /** Re-hydrate a newly-joining mirror from the current result. */

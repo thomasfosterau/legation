@@ -72,7 +72,7 @@ const makeServer: Effect.Effect<ServerHandler, never, Scope.Scope> = Effect.gen(
 
 const allTodos = Subset.make({ collection: "todos" });
 const isTransient = (error: { readonly _tag: string }): boolean => error._tag === "TransportError";
-const fast: Schedule.Schedule<unknown, unknown> = Schedule.max([
+const fast: Schedule.Schedule<unknown> = Schedule.max([
   Schedule.spaced(Duration.millis(10)),
   Schedule.recurs(5),
 ]);

@@ -50,7 +50,7 @@ const canonicalPage = <A>(rows: ReadonlyArray<Row<A>>): ReadonlyArray<readonly [
 const source = <A>(...pages: ReadonlyArray<ReadonlyArray<Row<A>>>): Derive.Source<A, never> =>
   Stream.fromIterable(pages);
 
-const lastEmission = <A>(stream: Stream.Stream<A, never>): Effect.Effect<A> =>
+const lastEmission = <A>(stream: Stream.Stream<A>): Effect.Effect<A> =>
   Stream.runCollect(stream).pipe(Effect.map((all) => defined(all[all.length - 1])));
 
 describe("Derive — composition (queries-from-queries)", () => {

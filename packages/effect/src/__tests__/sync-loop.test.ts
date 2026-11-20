@@ -79,7 +79,7 @@ const makeClient = (
   handler: ServerHandler,
   name: string,
   syncLoop?: ClientEngineModule.SyncLoopOptions,
-  opts?: { readonly pokes?: Stream.Stream<Poke, never>; readonly counters?: Counters }
+  opts?: { readonly pokes?: Stream.Stream<Poke>; readonly counters?: Counters }
 ) =>
   Effect.gen(function* () {
     const store = yield* ClientStoreModule.makeMemory;

@@ -210,7 +210,7 @@ export const listen = (options: ListenOptions): Listener => {
 
   const serve: Listener["serve"] = (engine) =>
     Effect.gen(function* () {
-      const host: Attached = { engine, run: Effect.runPromiseWith(yield* Effect.context<never>()) };
+      const host: Attached = { engine, run: Effect.runPromiseWith(yield* Effect.context()) };
       yield* Effect.acquireRelease(
         Effect.sync(() => {
           attached = Option.some(host);

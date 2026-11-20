@@ -186,6 +186,7 @@ export default defineConfig({
       "eslint/no-shadow": "error",
       "effecttsgo/prefer-typed-schema-decoder": "error",
       "effecttsgo/unnecessary-effect-gen": "error",
+      "typescript/no-unnecessary-type-arguments": "error",
     },
     overrides: [
       // ---- Genuine can't-applies ------------------------------------------

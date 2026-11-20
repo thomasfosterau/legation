@@ -266,7 +266,7 @@ export interface Mirror {
     collectionName: string,
     subset: Subset.Subset,
     edges: ReadonlyArray<string | Related.EdgeSelect>
-  ) => Effect.Effect<Stream.Stream<ReadonlyArray<Related.RelatedRow>, never>, never, Scope.Scope>;
+  ) => Effect.Effect<Stream.Stream<ReadonlyArray<Related.RelatedRow>>, never, Scope.Scope>;
   /** The host's current rows of a held relational read; see {@link ClientView.ClientView.queryRelated}. */
   readonly queryRelated: (
     registry: Collection.CollectionRegistry,
