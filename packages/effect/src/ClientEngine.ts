@@ -425,10 +425,10 @@ export interface SyncLoopOptions {
  * {@link defaultRetryPolicy}.
  */
 export interface RetryOptions {
-  readonly push?: Schedule.Schedule<unknown, unknown>;
-  readonly pull?: Schedule.Schedule<unknown, unknown>;
+  readonly push?: Schedule.Schedule<unknown>;
+  readonly pull?: Schedule.Schedule<unknown>;
   /** Re-establishment policy for a failed poke stream. */
-  readonly pokes?: Schedule.Schedule<unknown, unknown>;
+  readonly pokes?: Schedule.Schedule<unknown>;
 }
 
 /**
@@ -436,7 +436,7 @@ export interface RetryOptions {
  * bounded to 5 retries — mirroring TanStack Query's 1s→30s policy. No jitter,
  * so it composes predictably; add `Schedule.jittered` to taste.
  */
-export const defaultRetryPolicy: Schedule.Schedule<unknown, unknown> = Schedule.max([
+export const defaultRetryPolicy: Schedule.Schedule<unknown> = Schedule.max([
   Schedule.min([
     Schedule.exponential(Duration.seconds(1), 2),
     Schedule.spaced(Duration.seconds(30)),

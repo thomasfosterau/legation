@@ -270,7 +270,7 @@ const hydrate = (
 const primeIndex = (
   view: ClientView.Reader,
   targets: ReadonlyMap<string, Target>
-): Effect.Effect<Map<string, ReadonlyMap<Predicate.Literal, ReadonlyArray<LocalRow>>>, never> =>
+): Effect.Effect<Map<string, ReadonlyMap<Predicate.Literal, ReadonlyArray<LocalRow>>>> =>
   Effect.gen(function* () {
     const index = new Map<string, ReadonlyMap<Predicate.Literal, ReadonlyArray<LocalRow>>>();
     for (const [collection, target] of targets) {
@@ -295,7 +295,7 @@ export const queryWith = (
   view: ClientView.Reader,
   strategy: Strategy,
   subset: Subset.Subset
-): Effect.Effect<ReadonlyArray<RelatedRow>, never> =>
+): Effect.Effect<ReadonlyArray<RelatedRow>> =>
   Effect.gen(function* () {
     const base = yield* view.query(subset).pipe(Effect.orDie);
     return yield* joinRowsWith(view, strategy, base);
@@ -310,7 +310,7 @@ const joinRowsWith = (
   view: ClientView.Reader,
   strategy: Strategy,
   base: ReadonlyArray<LocalRow>
-): Effect.Effect<ReadonlyArray<RelatedRow>, never> =>
+): Effect.Effect<ReadonlyArray<RelatedRow>> =>
   Effect.gen(function* () {
     const index = yield* primeIndex(view, strategy.targets(base));
     return hydrate(strategy, base, index);
@@ -657,12 +657,12 @@ export const observeWith = (
   view: ClientView.Reader,
   strategy: Strategy,
   subset: Subset.Subset
-): Stream.Stream<ReadonlyArray<RelatedRow>, never> =>
+): Stream.Stream<ReadonlyArray<RelatedRow>> =>
   Stream.callback<ReadonlyArray<RelatedRow>>((output) =>
     Effect.gen(function* () {
       const engine = makeJoinEngine(strategy);
       const events = yield* Queue.unbounded<JoinEvent>();
-      const collectionFibers = new Map<string, Fiber.Fiber<void, never>>();
+      const collectionFibers = new Map<string, Fiber.Fiber<void>>();
 
       const emit = (result: ReadonlyArray<RelatedRow> | undefined) =>
         result === undefined ? Effect.void : Effect.asVoid(Queue.offer(output, result));
@@ -880,7 +880,7 @@ export const relatedWith = (
   engine: ClientEngine,
   strategy: Strategy,
   subset: Subset.Subset
-): Effect.Effect<Stream.Stream<ReadonlyArray<RelatedRow>, never>, never, Scope.Scope> =>
+): Effect.Effect<Stream.Stream<ReadonlyArray<RelatedRow>>, never, Scope.Scope> =>
   trackWith(engine, strategy, subset).pipe(Effect.as(observeWith(engine, strategy, subset)));
 
 /** A row from an external source, tagged with its collection. */
@@ -939,7 +939,7 @@ export const query = (
   collectionName: string,
   subset: Subset.Subset,
   edges: ReadonlyArray<string | EdgeSelect>
-): Effect.Effect<ReadonlyArray<RelatedRow>, never> =>
+): Effect.Effect<ReadonlyArray<RelatedRow>> =>
   queryWith(
     view,
     fieldMappingStrategy(selectRelationships(registry, collectionName, edges)),
@@ -958,7 +958,7 @@ export const queryRows = (
   collectionName: string,
   base: ReadonlyArray<LocalRow>,
   edges: ReadonlyArray<string | EdgeSelect>
-): Effect.Effect<ReadonlyArray<RelatedRow>, never> =>
+): Effect.Effect<ReadonlyArray<RelatedRow>> =>
   joinRowsWith(
     view,
     fieldMappingStrategy(selectRelationships(registry, collectionName, edges)),
@@ -972,7 +972,7 @@ export const observe = (
   collectionName: string,
   subset: Subset.Subset,
   edges: ReadonlyArray<string | EdgeSelect>
-): Stream.Stream<ReadonlyArray<RelatedRow>, never> =>
+): Stream.Stream<ReadonlyArray<RelatedRow>> =>
   observeWith(
     view,
     fieldMappingStrategy(selectRelationships(registry, collectionName, edges)),
@@ -1009,7 +1009,7 @@ export const related = (
   collectionName: string,
   subset: Subset.Subset,
   edges: ReadonlyArray<string | EdgeSelect>
-): Effect.Effect<Stream.Stream<ReadonlyArray<RelatedRow>, never>, never, Scope.Scope> =>
+): Effect.Effect<Stream.Stream<ReadonlyArray<RelatedRow>>, never, Scope.Scope> =>
   relatedWith(
     engine,
     fieldMappingStrategy(selectRelationships(registry, collectionName, edges)),
@@ -1026,7 +1026,7 @@ export const related = (
 export const resolveExistsLocally = (
   view: ClientView.Reader,
   predicate: Predicate.Predicate
-): Effect.Effect<Predicate.Predicate, never> =>
+): Effect.Effect<Predicate.Predicate> =>
   Predicate.resolveExists(predicate, (node) =>
     view.query(Subset.make({ collection: node.collection })).pipe(
       Effect.map((rows) =>

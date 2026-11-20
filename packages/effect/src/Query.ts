@@ -388,7 +388,7 @@ export const run = (
   view: ClientView.Reader,
   nodes: Node.NodeRegistry,
   read: Read
-): Effect.Effect<ReadonlyArray<Related.RelatedRow>, never> => {
+): Effect.Effect<ReadonlyArray<Related.RelatedRow>> => {
   const compiled = plan(nodes, read);
   if (Arr.isReadonlyArrayEmpty(compiled.edges)) {
     return view.query(compiled.root).pipe(
@@ -415,7 +415,7 @@ export const runRows = (
   nodes: Node.NodeRegistry,
   read: Read,
   rows: ReadonlyArray<LocalRow>
-): Effect.Effect<ReadonlyArray<Related.RelatedRow>, never> => {
+): Effect.Effect<ReadonlyArray<Related.RelatedRow>> => {
   const compiled = plan(nodes, read);
   if (Arr.isReadonlyArrayEmpty(compiled.edges)) {
     return Effect.succeed(rows.map((row) => ({ ...row, related: {} })));
@@ -476,7 +476,7 @@ export const observe = (
   view: ClientView.Reader,
   nodes: Node.NodeRegistry,
   read: Read
-): Stream.Stream<ReadonlyArray<Related.RelatedRow>, never> => {
+): Stream.Stream<ReadonlyArray<Related.RelatedRow>> => {
   const compiled = plan(nodes, read);
   if (Arr.isReadonlyArrayEmpty(compiled.edges)) {
     return view.observe(compiled.root).pipe(

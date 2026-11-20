@@ -128,11 +128,9 @@ export const query = (
   engine: ClientEngine.ClientEngine,
   subset: Subset.Subset,
   names: ReadonlyArray<string>
-): Effect.Effect<ReadonlyArray<RelatedRow>, never, never> =>
+): Effect.Effect<ReadonlyArray<RelatedRow>> =>
   Related.queryWith(engine, linkageStrategy(names), subset) as Effect.Effect<
-    ReadonlyArray<RelatedRow>,
-    never,
-    never
+    ReadonlyArray<RelatedRow>
   >;
 
 /**
@@ -145,11 +143,9 @@ export const observe = (
   engine: ClientEngine.ClientEngine,
   subset: Subset.Subset,
   names: ReadonlyArray<string>
-): Stream.Stream<ReadonlyArray<RelatedRow>, never, never> =>
+): Stream.Stream<ReadonlyArray<RelatedRow>> =>
   Related.observeWith(engine, linkageStrategy(names), subset) as Stream.Stream<
-    ReadonlyArray<RelatedRow>,
-    never,
-    never
+    ReadonlyArray<RelatedRow>
   >;
 
 /**
@@ -163,9 +159,9 @@ export const related = (
   engine: ClientEngine.ClientEngine,
   subset: Subset.Subset,
   names: ReadonlyArray<string>
-): Effect.Effect<Stream.Stream<ReadonlyArray<RelatedRow>, never, never>, never, Scope.Scope> =>
+): Effect.Effect<Stream.Stream<ReadonlyArray<RelatedRow>>, never, Scope.Scope> =>
   Related.relatedWith(engine, linkageStrategy(names), subset) as Effect.Effect<
-    Stream.Stream<ReadonlyArray<RelatedRow>, never, never>,
+    Stream.Stream<ReadonlyArray<RelatedRow>>,
     never,
     Scope.Scope
   >;

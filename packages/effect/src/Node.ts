@@ -63,7 +63,7 @@ export const Id = <const Type extends string>(type: Type): Id<Type> =>
 type ViaFields<Edges extends Record<string, Edge.Edge>> = {
   readonly [
     K in keyof Edges as Edges[K] extends Edge.One<string, infer Via> ? Via : never
-  ]: Edges[K] extends Edge.One<infer Target, string> ? Id<Target> : never;
+  ]: Edges[K] extends Edge.One<infer Target> ? Id<Target> : never;
 };
 
 /**
@@ -155,7 +155,7 @@ export interface Node<
  * to a template-literal brand. The bound keeps it a string-encoded branded id
  * schema, whose decoded type is `string & Brand<string>`.
  */
-export type AnyNode = Omit<Node<string, Schema.Struct.Fields, Record<string, Edge.Edge>>, "Id"> & {
+export type AnyNode = Omit<Node, "Id"> & {
   readonly Id: Schema.Codec<string & Brand.Brand<string>, string>;
 };
 

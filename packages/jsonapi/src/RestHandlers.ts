@@ -160,15 +160,13 @@ export interface GetInput {
 /** The collection document type of a resource's default `Endpoint.list` success. */
 export type CollectionDocumentOf<R extends Resource.Any> = Document.CollectionDocument<
   R,
-  Resource.DefaultIncluded<R["relationships"]>,
-  typeof Document.AnyMeta
+  Resource.DefaultIncluded<R["relationships"]>
 >["Type"];
 
 /** The single-resource document type of a resource's default `Endpoint.get` success. */
 export type DataDocumentOf<R extends Resource.Any> = Document.DataDocument<
   R,
-  Resource.DefaultIncluded<R["relationships"]>,
-  typeof Document.AnyMeta
+  Resource.DefaultIncluded<R["relationships"]>
 >["Type"];
 
 /** Options of a derived `get`: the endpoint's own 404. */

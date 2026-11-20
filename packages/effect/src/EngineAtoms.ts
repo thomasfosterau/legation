@@ -96,7 +96,7 @@ export type MutationsForResult = AsyncResult.AsyncResult<
 /** The engine's reactive surface, built from its layer. */
 export interface EngineAtoms {
   /** The runtime backing every engine atom; the registry owns its scope. */
-  readonly runtime: Atom.AtomRuntime<ClientEngine, never>;
+  readonly runtime: Atom.AtomRuntime<ClientEngine>;
   /**
    * The Atom for a subset's live results. Stable per subset identity
    * (`Subset.hash`): the same subset yields the same Atom, so mounting it
