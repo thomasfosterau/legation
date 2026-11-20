@@ -58,7 +58,11 @@
   "publishConfig": {
     "access": "public"
   },
+  "scripts": {
+    "docgen": "docgen"
+  },
   "devDependencies": {
+    "@effect/docgen": "catalog:",
     "@effect/platform-node": "catalog:",
     "@effect/sql-pg": "catalog:",
     "@effect/sql-sqlite-node": "catalog:",

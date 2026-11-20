@@ -41,10 +41,14 @@
   "publishConfig": {
     "access": "public"
   },
+  "scripts": {
+    "docgen": "docgen"
+  },
   "dependencies": {
     "@thomasfosterau/legation": "workspace:^"
   },
   "devDependencies": {
+    "@effect/docgen": "catalog:",
     "@effect/vitest": "catalog:",
     "@thomasfosterau/effect-jsonapi": "catalog:",
     "effect": "catalog:",

@@ -42,12 +42,16 @@
   "publishConfig": {
     "access": "public"
   },
+  "scripts": {
+    "docgen": "docgen"
+  },
   "dependencies": {
     "@thomasfosterau/legation": "workspace:^"
   },
   "devDependencies": {
     "@alchemy.run/cloudflare": "catalog:",
     "@cloudflare/workers-types": "catalog:",
+    "@effect/docgen": "catalog:",
     "@effect/vitest": "catalog:",
     "alchemy": "catalog:",
     "effect": "catalog:",
