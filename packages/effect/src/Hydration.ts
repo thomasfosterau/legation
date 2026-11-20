@@ -246,10 +246,7 @@ export const hydrate = (store: ClientStore, snapshot: Snapshot): Effect.Effect<v
       yield* store.finishRelease;
       yield* Effect.forEach(
         decoded.rows,
-        ({ collection, ...row }) =>
-          Effect.gen(function* () {
-            yield* store.putRow(collection, row);
-          }),
+        ({ collection, ...row }) => store.putRow(collection, row),
         { concurrency: 1, discard: true }
       );
       if (decoded.cookie !== undefined) yield* store.setCookie(decoded.cookie);
@@ -598,10 +595,7 @@ const renderOver = (
     }).pipe(Effect.provideService(ClientStore, store));
     yield* Effect.forEach(
       options.reads,
-      (read) =>
-        Effect.gen(function* () {
-          yield* engine.subscribe(Query.plan(options.nodes, read).root);
-        }),
+      (read) => engine.subscribe(Query.plan(options.nodes, read).root),
       { concurrency: 1, discard: true }
     );
     yield* engine.pull;

@@ -273,9 +273,7 @@ describe("a bridged registry over a real engine", () => {
             ["r-3", "2026-02-01"],
           ] as const,
           ([id, at]) =>
-            Effect.gen(function* () {
-              yield* client.mutate("review/set", { id, body: id, createdAt: at, productId: "p-1" });
-            }),
+            client.mutate("review/set", { id, body: id, createdAt: at, productId: "p-1" }),
           { concurrency: 1, discard: true }
         );
 

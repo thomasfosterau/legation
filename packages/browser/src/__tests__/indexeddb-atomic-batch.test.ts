@@ -326,13 +326,11 @@ describe("IndexedDbClientStore's atomic batch", () => {
 
   it.effect("an open connection yields to a later version, so the upgrade is not blocked", () =>
     Effect.gen(function* () {
-      yield* Effect.gen(function* () {
-        // The layer holds its connections open for the scope.
-        yield* ClientStore.ClientStore;
-        const outcome = yield* awaitPromise(() => upgradeTo("atomic-upgrade", 2));
-        expect(outcome).toBe("upgraded");
-      }).pipe(withLayer(storeLayer("atomic-upgrade")));
-    })
+      // The layer holds its connections open for the scope.
+      yield* ClientStore.ClientStore;
+      const outcome = yield* awaitPromise(() => upgradeTo("atomic-upgrade", 2));
+      expect(outcome).toBe("upgraded");
+    }).pipe(withLayer(storeLayer("atomic-upgrade")))
   );
 
   it.effect(

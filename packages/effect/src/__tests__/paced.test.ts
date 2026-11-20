@@ -442,10 +442,7 @@ describe("paced compaction renumbers the journal", () => {
           ["b", "b2"],
           ["a", "a3"],
         ] as const,
-        ([key, title]) =>
-          Effect.gen(function* () {
-            yield* paced.call(key, todo(key, title));
-          }),
+        ([key, title]) => paced.call(key, todo(key, title)),
         { concurrency: 1, discard: true }
       );
 

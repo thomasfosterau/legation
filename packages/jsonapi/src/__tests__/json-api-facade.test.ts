@@ -246,14 +246,7 @@ const makeFacade = (
 ): Effect.Effect<Facade, never, Scope.Scope> =>
   Effect.gen(function* () {
     const { client, engine, store, arm, rootReads, racePut, backend } = yield* makeReplica;
-    yield* Effect.forEach(
-      pins,
-      (url) =>
-        Effect.gen(function* () {
-          yield* client.subscribe(url);
-        }),
-      { concurrency: 1, discard: true }
-    );
+    yield* Effect.forEach(pins, (url) => client.subscribe(url), { concurrency: 1, discard: true });
     // A relational pin registers its edge windows once its rows are observed, and a pull marks
     // them: pull until the relational pin of the fixture is covered, so the replica holds
     // the rows a covered read links to. Each pull is in memory, so no time passes between them.

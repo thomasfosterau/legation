@@ -245,18 +245,16 @@ export const makeRedisBroker = (
           yield* Effect.forEach(
             reply,
             ([, entries]) =>
-              Effect.gen(function* () {
-                yield* Effect.forEach(
-                  entries,
-                  ([id, fields]) =>
-                    Effect.gen(function* () {
-                      cursor.id = id;
-                      const payload = payloadOf(fields);
-                      if (payload !== undefined) yield* Queue.offer(queue, payload);
-                    }),
-                  { concurrency: 1, discard: true }
-                );
-              }),
+              Effect.forEach(
+                entries,
+                ([id, fields]) =>
+                  Effect.gen(function* () {
+                    cursor.id = id;
+                    const payload = payloadOf(fields);
+                    if (payload !== undefined) yield* Queue.offer(queue, payload);
+                  }),
+                { concurrency: 1, discard: true }
+              ),
             { concurrency: 1, discard: true }
           );
         }).pipe(

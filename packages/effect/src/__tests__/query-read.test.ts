@@ -182,9 +182,7 @@ describe("Query.run / Query.observe", () => {
           ["r-3", "2026-02-01"],
         ] as const,
         ([id, at]) =>
-          Effect.gen(function* () {
-            yield* engine.mutate("review/set", { id, body: id, createdAt: at, productId: "p-1" });
-          }),
+          engine.mutate("review/set", { id, body: id, createdAt: at, productId: "p-1" }),
         { concurrency: 1, discard: true }
       );
 
