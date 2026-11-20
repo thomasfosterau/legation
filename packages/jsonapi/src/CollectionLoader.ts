@@ -72,7 +72,8 @@ const identifier = (ref: ResourceIdentifier) => ({ type: ref.type, id: ref.id })
  * `ReadonlyArray` members the schema-derived document types use. This guard
  * narrows them correctly.
  */
-const isReadonlyArray = (value: unknown): value is ReadonlyArray<unknown> => Array.isArray(value);
+const isReadonlyArray = <A>(value: A | ReadonlyArray<A>): value is ReadonlyArray<A> =>
+  Array.isArray(value);
 
 /** Map a resource (or bare identifier) to a collection row. */
 export const resourceToRow = (resource: ResourceObject | ResourceIdentifier): CollectionRow => {

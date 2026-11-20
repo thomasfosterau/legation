@@ -239,9 +239,9 @@ export const toFilterAst = (predicate: Predicate.Predicate): Option.Option<Filte
 /** The definite-false predicate: the empty disjunction (`Some(false)` for every row). */
 const FALSE: Predicate.Predicate = { _tag: "Or", predicates: [] };
 
-const isTrue = (predicate: Predicate.Predicate): boolean => predicate._tag === "True";
+const isTrue = (predicate: Predicate.Predicate): boolean => P.isTagged(predicate, "True");
 const isFalse = (predicate: Predicate.Predicate): boolean =>
-  predicate._tag === "Or" && Arr.isReadonlyArrayEmpty(predicate.predicates);
+  P.isTagged(predicate, "Or") && Arr.isReadonlyArrayEmpty(predicate.predicates);
 
 /** Kleene `And` over folded members: any false is false; true members vanish. */
 const foldAnd = (members: ReadonlyArray<Predicate.Predicate>): Predicate.Predicate => {
@@ -317,7 +317,7 @@ const literalSchema = (kind: FilterPolicy.LiteralKind): Schema.Top =>
  * is not an attribute (JSON:API reserves the name, and effect-jsonapi
  * refuses it since 0.19): it is the resource's id, see {@link idOf}.
  */
-const attributesOf = (node: Node.AnyNode): Record<string, Schema.Top> => {
+const attributesOf = (node: Node.AnyNode) => {
   const filterable: Record<string, Schema.Top> = R.map(
     R.filter(node.filterable, (_, field) => field !== RESOURCE_ID),
     (declared) => literalSchema(declared.kind).pipe(Filter.able(declared.operators))
@@ -579,7 +579,7 @@ export interface ParsedRead {
 /** The flat query record: `URLSearchParams` with repeated keys as arrays (as `UrlParams.toRecord` does). */
 const recordOf = (
   params: URLSearchParams | Readonly<Record<string, string | ReadonlyArray<string>>>
-): Record<string, string | ReadonlyArray<string>> => {
+) => {
   if (!(params instanceof URLSearchParams)) return { ...params };
   const record: Record<string, string | ReadonlyArray<string>> = {};
   params.forEach((value, key) => {

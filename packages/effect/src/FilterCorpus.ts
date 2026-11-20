@@ -31,6 +31,7 @@
  * meaning.
  */
 
+import * as P from "effect/Predicate";
 import * as Arr from "effect/Array";
 import * as Effect from "effect/Effect";
 import * as Match from "effect/Match";
@@ -610,7 +611,7 @@ export const shrinkPredicate = (
   Match.value(predicate).pipe(
     Match.withReturnType<ReadonlyArray<Predicate.Predicate>>(),
     Match.tag("And", "Or", (junction) => {
-      const rebuild = junction._tag === "And" ? Predicate.and : Predicate.or;
+      const rebuild = P.isTagged(junction, "And") ? Predicate.and : Predicate.or;
       const children = junction.predicates;
       const out: Array<Predicate.Predicate> = [];
       if (children.length > 1) {
@@ -629,7 +630,7 @@ export const shrinkPredicate = (
       ...shrinkPredicate(negation.predicate).map(Predicate.not),
     ]),
     Match.tag("In", "NotIn", (list) => {
-      const rebuild = list._tag === "In" ? Predicate.isIn : Predicate.notIn;
+      const rebuild = P.isTagged(list, "In") ? Predicate.isIn : Predicate.notIn;
       return list.values.length > 1
         ? list.values.map((_, i) => rebuild(list.field, without(list.values, i)))
         : [];

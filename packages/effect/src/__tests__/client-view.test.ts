@@ -38,10 +38,10 @@ const mutators = Mutator.registry([
   },
 ]);
 
-const handlers: Record<string, MemoryBackend.BackendHandler> = {
+const handlers = {
   "todo/set": (args, writer) => Effect.asVoid(writer.put("todos", (args as Todo).id, args)),
   "todo/reject": () => Effect.fail(new MutationRejected({ reason: "not allowed" })),
-};
+} satisfies Record<string, MemoryBackend.BackendHandler>;
 
 const engineLayer = ClientEngineModule.layer({
   clientId: "c1",

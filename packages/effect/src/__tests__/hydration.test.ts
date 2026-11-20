@@ -5,6 +5,7 @@
  * JSON; `ensureSubset` prefetches and dedupes concurrent pulls. Uses the same
  * MemoryBackend + SyncServer scaffolding as `engine.test.ts`.
  */
+import * as P from "effect/Predicate";
 import { describe, expect, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as Ref from "effect/Ref";
@@ -42,16 +43,20 @@ const setTodo = Mutator.registry([
   },
 ]);
 
-const backendHandlers: Record<string, MemoryBackend.BackendHandler> = {
+const backendHandlers = {
   "todo/set": (args, writer) => {
     const todo = args as Todo;
     return Effect.asVoid(writer.put("todos", todo.id, todo));
   },
-};
+} satisfies Record<string, MemoryBackend.BackendHandler>;
 
 const authPolicy = Authorization.policy({ todos: Authorization.allowAll });
 
-const makeServer: Effect.Effect<ServerHandler, never, Scope.Scope> = Effect.gen(function* () {
+const makeServer = Effect.fn("makeServer")(function* (): Effect.fn.Return<
+  ServerHandler,
+  never,
+  Scope.Scope
+> {
   const backend = yield* MemoryBackend.make(backendHandlers);
   const cvrStore = yield* Cvr.makeMemoryStore;
   const bus = yield* InvalidationBus.makeInProcess;
@@ -122,7 +127,7 @@ describe("ClientEngine.seed", () => {
     "renders seeded rows synchronously with no transport, then pull converges (no Clear)",
     () =>
       Effect.gen(function* () {
-        const handler = yield* makeServer;
+        const handler = yield* makeServer();
         // A real client establishes genuine confirmed rows + cookie in one group.
         const a = yield* makeClient(handler, "server", "group-shared");
         yield* a.engine.subscribe(allTodos);
@@ -157,7 +162,7 @@ describe("ClientEngine.seed", () => {
         yield* b.engine.pull;
         const patches = yield* Ref.get(recorder.patches);
         const ops = patches.flat();
-        expect(ops.some((op) => op._tag === "Clear")).toBe(false);
+        expect(ops.some((op) => P.isTagged(op, "Clear"))).toBe(false);
         expect((yield* b.engine.query(allTodos)).map((row) => row.id)).toEqual(["1"]);
       })
   );
@@ -166,7 +171,7 @@ describe("ClientEngine.seed", () => {
 describe("Hydration.dehydrate/hydrate", () => {
   it.effect("round-trips rows + cookie + journal through JSON", () =>
     Effect.gen(function* () {
-      const handler = yield* makeServer;
+      const handler = yield* makeServer();
       const { engine, store } = yield* makeClient(handler, "a", "group-a");
       yield* engine.subscribe(allTodos);
       yield* engine.mutate("todo/set", { id: "1", title: "confirmed", done: false });
@@ -189,7 +194,7 @@ describe("Hydration.dehydrate/hydrate", () => {
 
   it.effect("a reused clientId resumes from its acked counter after the journal drained", () =>
     Effect.gen(function* () {
-      const handler = yield* makeServer;
+      const handler = yield* makeServer();
       const a = yield* makeClient(handler, "a", "group-a");
       yield* a.engine.subscribe(allTodos);
       yield* a.engine.mutate("todo/set", { id: "1", title: "first", done: false });
@@ -259,7 +264,7 @@ describe("Hydration.dehydrate/hydrate", () => {
 describe("ClientEngine.ensureSubset", () => {
   it.effect("prefetches a subset and dedupes concurrent calls into one pull", () =>
     Effect.gen(function* () {
-      const handler = yield* makeServer;
+      const handler = yield* makeServer();
       // Seed the backend with a row another client can prefetch.
       const writer = yield* makeClient(handler, "writer", "group-writer");
       yield* writer.engine.subscribe(allTodos);
@@ -296,7 +301,7 @@ describe("Hydration.snapshot (SSR)", () => {
     "produces rows + cookie over a request-scoped engine; the client continues without a reset",
     () =>
       Effect.gen(function* () {
-        const handler = yield* makeServer;
+        const handler = yield* makeServer();
         // Authoritative rows exist server-side, established by a writer client.
         const writer = yield* makeClient(handler, "writer", "group-writer");
         yield* writer.engine.subscribe(allTodos);
@@ -335,7 +340,7 @@ describe("Hydration.snapshot (SSR)", () => {
         // The first client pull continues from the carried cookie: no reset.
         yield* browser.engine.pull;
         const ops = (yield* Ref.get(recorder.patches)).flat();
-        expect(ops.some((op) => op._tag === "Clear")).toBe(false);
+        expect(ops.some((op) => P.isTagged(op, "Clear"))).toBe(false);
         const ids = (yield* browser.engine.query(allTodos)).map((row) => row.id);
         expect(ids.toSorted()).toEqual(["1", "2"]);
 

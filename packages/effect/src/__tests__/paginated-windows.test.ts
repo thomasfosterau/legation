@@ -66,7 +66,7 @@ const eventually = <A>(read: Effect.Effect<A>, until: (value: A) => boolean) =>
     return yield* Effect.die(new TestFailure({ message: "eventually: condition never held" }));
   });
 
-const makeServer = Effect.gen(function* () {
+const makeServer = Effect.fn("makeServer")(function* () {
   const backend = yield* MemoryBackend.make(
     MemoryBackend.validatedHandlers([
       MemoryBackend.handler(productSet, (args, writer) =>
@@ -123,7 +123,7 @@ describe("per-parent windowed subsets", () => {
   it.effect("an included paginated edge registers one windowed subset per parent", () =>
     Effect.scoped(
       Effect.gen(function* () {
-        const { server } = yield* makeServer;
+        const { server } = yield* makeServer();
         const engine = yield* makeEngine(server.handler, "group-reg");
         const client = Client.fromView(nodes, ClientView.fromEngine(engine));
 
@@ -156,7 +156,7 @@ describe("per-parent windowed subsets", () => {
   it.effect("the replica syncs the window, not the dependent collection", () =>
     Effect.scoped(
       Effect.gen(function* () {
-        const { server } = yield* makeServer;
+        const { server } = yield* makeServer();
 
         // A writer group seeds five reviews authoritatively.
         const writerEngine = yield* makeEngine(server.handler, "group-writer");
@@ -202,7 +202,7 @@ describe("per-parent windowed subsets", () => {
   it.effect("a newer child shifts the window on the poke-driven pull", () =>
     Effect.scoped(
       Effect.gen(function* () {
-        const { server } = yield* makeServer;
+        const { server } = yield* makeServer();
         const writerEngine = yield* makeEngine(server.handler, "group-shift-w");
         const writer = Client.fromView(nodes, ClientView.fromEngine(writerEngine));
         yield* writer.mutate("product/set", { id: "p-1", name: "Desk", featured: true });
@@ -257,7 +257,7 @@ describe("per-parent windowed subsets", () => {
   it.effect("a parent leaving the root window releases its edge window", () =>
     Effect.scoped(
       Effect.gen(function* () {
-        const { server } = yield* makeServer;
+        const { server } = yield* makeServer();
         const engine = yield* makeEngine(server.handler, "group-leave");
         const client = Client.fromView(nodes, ClientView.fromEngine(engine));
 
@@ -285,7 +285,7 @@ describe("per-parent windowed subsets", () => {
   it.effect("an unwindowed many-style include keeps the IN subset", () =>
     Effect.scoped(
       Effect.gen(function* () {
-        const { server } = yield* makeServer;
+        const { server } = yield* makeServer();
         const engine = yield* makeEngine(server.handler, "group-in");
         const client = Client.fromView(nodes, ClientView.fromEngine(engine));
 
@@ -312,7 +312,7 @@ describe("over a hosted engine", () => {
   it.effect("windows cross the mirror protocol and register host-side", () =>
     Effect.scoped(
       Effect.gen(function* () {
-        const { server } = yield* makeServer;
+        const { server } = yield* makeServer();
         const engine = yield* makeEngine(server.handler, "group-hosted");
         const pair = yield* MirrorChannel.makeLoopbackPair;
         yield* EngineHost.run({ channel: pair.host, engine, registry: nodes.collections });

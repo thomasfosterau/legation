@@ -61,7 +61,7 @@ const eventually = <A>(read: Effect.Effect<A>, until: (value: A) => boolean) =>
     return yield* Effect.die(new TestFailure({ message: "eventually: condition never held" }));
   });
 
-const makeEngine = Effect.gen(function* () {
+const makeEngine = Effect.fn("makeEngine")(function* () {
   const backend = yield* MemoryBackend.make(
     MemoryBackend.validatedHandlers([
       MemoryBackend.handler(todoSet, (args, writer) => writer.put("todos", args.id, args)),
@@ -106,7 +106,7 @@ describe("EngineHost ↔ Mirror.mutationStates", () => {
   it.effect("a mirror sees the host's mutation states, pending then acknowledged", () =>
     Effect.scoped(
       Effect.gen(function* () {
-        const { engine } = yield* makeEngine;
+        const { engine } = yield* makeEngine();
         const { host, mirror: mirrorChannel } = yield* MirrorChannel.makeLoopbackPair;
         yield* EngineHost.run({ channel: host, engine });
         const mirror = yield* Mirror.make({ channel: mirrorChannel, mutators });
@@ -129,7 +129,7 @@ describe("EngineHost ↔ Mirror.mutationStates", () => {
     () =>
       Effect.scoped(
         Effect.gen(function* () {
-          const { engine } = yield* makeEngine;
+          const { engine } = yield* makeEngine();
           const { host, mirror: mirrorChannel } = yield* MirrorChannel.makeLoopbackPair;
           yield* EngineHost.run({ channel: host, engine });
 

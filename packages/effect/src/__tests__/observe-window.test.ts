@@ -10,6 +10,7 @@
  * were it re-subscribing/rebuilding, a `Rebuild` (and its `ViewRebuilt`)
  * would fire.
  */
+import * as P from "effect/Predicate";
 import { describe, expect, it } from "@effect/vitest";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
@@ -44,11 +45,11 @@ const mutators = Mutator.registry([
   },
 ]);
 
-const handlers: Record<string, MemoryBackend.BackendHandler> = {
+const handlers = {
   "item/set": (args, writer) => Effect.asVoid(writer.put("items", (args as Item).id, args)),
-};
+} satisfies Record<string, MemoryBackend.BackendHandler>;
 
-const makeServer = Effect.gen(function* () {
+const makeServer = Effect.fn("makeServer")(function* () {
   const backend = yield* MemoryBackend.make(handlers);
   return yield* SyncServer.make.pipe(
     Effect.provideService(Backend, backend),
@@ -105,7 +106,7 @@ describe("ClientEngine.observeWindow", () => {
     "retarget widens the page without an extra rebuild, over rows already synced",
     () =>
       Effect.gen(function* () {
-        const handler = yield* makeServer;
+        const handler = yield* makeServer();
         const writer = yield* makeClient(handler, "writer-window");
         const reader = yield* makeClient(handler, "reader-window");
         yield* reader.subscribe(Subset.make({ collection: "items" }));
@@ -125,7 +126,7 @@ describe("ClientEngine.observeWindow", () => {
         const rebuilds = yield* Ref.make(0);
         yield* Effect.forkScoped(
           Stream.runForEach(reader.engineEvents, (event) =>
-            event._tag === "ViewRebuilt" ? Ref.update(rebuilds, (n) => n + 1) : Effect.void
+            P.isTagged(event, "ViewRebuilt") ? Ref.update(rebuilds, (n) => n + 1) : Effect.void
           ).pipe(Effect.ignore)
         );
         yield* settle;
@@ -171,7 +172,7 @@ describe("ClientEngine.observeWindow", () => {
     "advancing the cursor slides the window forward, reusing the maintained order",
     () =>
       Effect.gen(function* () {
-        const handler = yield* makeServer;
+        const handler = yield* makeServer();
         const writer = yield* makeClient(handler, "writer-cursor");
         const reader = yield* makeClient(handler, "reader-cursor");
         yield* reader.subscribe(Subset.make({ collection: "items" }));
@@ -213,7 +214,7 @@ describe("ClientEngine.observeWindow", () => {
     "a genuine engine change after a retarget is folded over the retargeted window",
     () =>
       Effect.gen(function* () {
-        const handler = yield* makeServer;
+        const handler = yield* makeServer();
         const writer = yield* makeClient(handler, "writer-mixed");
         const reader = yield* makeClient(handler, "reader-mixed");
         yield* reader.subscribe(Subset.make({ collection: "items" }));
@@ -265,7 +266,7 @@ describe("Subscriptions.acquireWindow", () => {
     "retarget keeps the engine's tracked subscription in step, and release drops the current one",
     () =>
       Effect.gen(function* () {
-        const handler = yield* makeServer;
+        const handler = yield* makeServer();
         const engine = yield* makeClient(handler, "subs-window");
         const subs = yield* Subscriptions.make(engine, { ttl: Duration.minutes(5) });
 

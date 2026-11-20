@@ -44,7 +44,7 @@ const mutators = Mutator.registry([
 
 const allRows = Subset.make({ collection: "rows" });
 
-const makeServer = Effect.gen(function* () {
+const makeServer = Effect.fnUntraced(function* () {
   const backend = yield* MemoryBackend.make({
     "row/set": (args, writer) =>
       Effect.asVoid(writer.put("rows", (args as { id: string }).id, args)),
@@ -70,7 +70,7 @@ describe("incremental aggregates", () => {
     `single-row churn over ${ROWS} rows (Count + Sum + grouped Count live)`,
     ({ bench }) =>
       Effect.gen(function* () {
-        const server = yield* makeServer;
+        const server = yield* makeServer();
         const store = yield* ClientStoreModule.makeMemory;
         const transport = yield* Layer.build(
           layerInMemory("bench").pipe(Layer.provide(Layer.succeed(ServerHandler)(server)))

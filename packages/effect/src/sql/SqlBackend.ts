@@ -1097,7 +1097,7 @@ export const make = (config: SqlBackendConfig): Backend.Backend => {
     Effect.gen(function* () {
       const { clientGroupId } = unit.context;
       const { clientId, mutationId } = unit.mutation;
-      if (outcome._tag === "Rejected") {
+      if (P.isTagged(outcome, "Rejected")) {
         yield* executor.run({ text: `ROLLBACK TO SAVEPOINT ${unit.savepoint}`, params: [] });
         yield* executor.run({ text: `RELEASE SAVEPOINT ${unit.savepoint}`, params: [] });
         yield* recordRejection(clientGroupId, clientId, mutationId, outcome.reason);

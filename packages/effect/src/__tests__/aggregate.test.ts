@@ -5,6 +5,7 @@
  * must re-emit on a relevant write and, crucially, stay silent when a write
  * leaves the aggregate value unchanged.
  */
+import * as P from "effect/Predicate";
 import { describe, expect, it } from "@effect/vitest";
 import * as Arr from "effect/Array";
 import * as Duration from "effect/Duration";
@@ -111,7 +112,10 @@ const put =
   (args, writer) =>
     Effect.asVoid(writer.put(collection, (args as { id: string }).id, args));
 
-const handlers: Record<string, MemoryBackend.BackendHandler> = { "todo/set": put("todos") };
+const handlers = { "todo/set": put("todos") } satisfies Record<
+  string,
+  MemoryBackend.BackendHandler
+>;
 const mutators = Mutator.registry([
   {
     mutator: Mutator.make("todo/set", Schema.Unknown),
@@ -119,7 +123,7 @@ const mutators = Mutator.registry([
   },
 ]);
 
-const makeServer = Effect.gen(function* () {
+const makeServer = Effect.fn("makeServer")(function* () {
   const backend = yield* MemoryBackend.make(handlers);
   const cvrStore = yield* Cvr.makeMemoryStore;
   const bus = yield* InvalidationBus.makeInProcess;
@@ -151,7 +155,7 @@ const settle = Effect.sleep(Duration.millis(50));
 describe("observeAggregate over a synced collection", () => {
   it.live("re-emits on a relevant write and stays silent on a no-op write", () =>
     Effect.gen(function* () {
-      const handler = yield* makeServer;
+      const handler = yield* makeServer();
       const writer = yield* makeClient(handler, "writer");
       const reader = yield* makeClient(handler, "reader");
 
@@ -196,7 +200,7 @@ describe("observeAggregate over a synced collection", () => {
 
   it.live("observeAggregateGrouped produces per-group values", () =>
     Effect.gen(function* () {
-      const handler = yield* makeServer;
+      const handler = yield* makeServer();
       const writer = yield* makeClient(handler, "gwriter");
       const reader = yield* makeClient(handler, "greader");
 
@@ -223,7 +227,7 @@ describe("observeAggregate over a synced collection", () => {
     "observeAggregateGrouped folds later writes in incrementally, including a group move",
     () =>
       Effect.gen(function* () {
-        const handler = yield* makeServer;
+        const handler = yield* makeServer();
         const client = yield* makeClient(handler, "gincremental");
 
         yield* client.mutate("todo/set", { id: "t1", title: "a", done: false });
@@ -331,7 +335,7 @@ const applyOpToState = (
   agg: Aggregate.Aggregate,
   op: RandomOp
 ): Aggregate.State =>
-  op._tag === "Del"
+  P.isTagged(op, "Del")
     ? Aggregate.applyDel(state, agg, op.id)
     : Aggregate.applyPut(state, agg, INCREMENTAL_WHERE, op.id, op.value);
 
@@ -341,7 +345,7 @@ const applyOpToGroupedState = (
   agg: Aggregate.Aggregate,
   op: RandomOp
 ): Aggregate.GroupedState =>
-  op._tag === "Del"
+  P.isTagged(op, "Del")
     ? Aggregate.applyGroupedDel(state, agg, op.id)
     : Aggregate.applyGroupedPut(
         state,
@@ -379,7 +383,7 @@ const checkIncrementalSeed = (seed: number): void => {
   );
 
   Arr.forEach(ops, (op) => {
-    if (op._tag === "Del") truth.delete(op.id);
+    if (P.isTagged(op, "Del")) truth.delete(op.id);
     else truth.set(op.id, op.value);
 
     Arr.forEach(INCREMENTAL_AGGS, (agg) => {

@@ -37,19 +37,19 @@ interface Todo {
   readonly title: string;
 }
 
-const handlers: Record<string, MemoryBackend.BackendHandler> = {
+const handlers = {
   "todo/set": (args, writer) => Effect.asVoid(writer.put("todos", (args as Todo).id, args)),
   "todo/remove": (args, writer) => writer.del("todos", (args as { id: string }).id),
-};
+} satisfies Record<string, MemoryBackend.BackendHandler>;
 
 const authPolicy = Authorization.policy({ todos: Authorization.allowAll });
 
 /** A server exposing its bus so tests can publish raw (value-less) hints. */
-const makeServer: Effect.Effect<
+const makeServer = Effect.fn("makeServer")(function* (): Effect.fn.Return<
   { readonly handler: ServerHandler; readonly bus: InvalidationBus.InvalidationBus },
   never,
   Scope.Scope
-> = Effect.gen(function* () {
+> {
   const backend = yield* MemoryBackend.make(handlers);
   const cvrStore = yield* Cvr.makeMemoryStore;
   const bus = yield* InvalidationBus.makeInProcess;
@@ -127,7 +127,7 @@ const wasPoked = (handler: ServerHandler, group: string) =>
 describe("predicate-aware fan-out matching", () => {
   it.effect("pokes only the group whose predicate the write matches", () =>
     Effect.gen(function* () {
-      const { handler } = yield* makeServer;
+      const { handler } = yield* makeServer();
       yield* subscribe(handler, "group-a", tenant("a"));
       yield* subscribe(handler, "group-b", tenant("b"));
 
@@ -145,7 +145,7 @@ describe("predicate-aware fan-out matching", () => {
 
   it.effect("a value-less hint falls back to a collection-level match", () =>
     Effect.gen(function* () {
-      const { handler, bus } = yield* makeServer;
+      const { handler, bus } = yield* makeServer();
       yield* subscribe(handler, "group-a", tenant("a"));
       yield* subscribe(handler, "group-b", tenant("b"));
 
@@ -159,7 +159,7 @@ describe("predicate-aware fan-out matching", () => {
 
   it.effect("an Exists predicate is poked on any change to its collection", () =>
     Effect.gen(function* () {
-      const { handler } = yield* makeServer;
+      const { handler } = yield* makeServer();
       const withExists = Subset.make({
         collection: "todos",
         where: Predicate.exists({
@@ -185,7 +185,7 @@ describe("predicate-aware fan-out matching", () => {
 
   it.effect("a delete pokes a group whose CVR holds the row (CVR-precise)", () =>
     Effect.gen(function* () {
-      const { handler } = yield* makeServer;
+      const { handler } = yield* makeServer();
       // Seed a row and let its hint drain before any group subscribes, so the
       // seed does not race the subscriptions and skew the counters.
       yield* fanoutDeltas(

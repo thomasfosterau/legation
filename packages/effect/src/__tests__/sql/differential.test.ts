@@ -305,8 +305,8 @@ const differentialLayer = Layer.effect(Differential)(
       booleanOrder: false,
     });
     const restrictedQ = prefixedCorpus("q", restricted);
-    const sqliteEngine = yield* makeSqlite;
-    const postgresEngine = yield* makePostgres;
+    const sqliteEngine = yield* makeSqlite();
+    const postgresEngine = yield* makePostgres();
     // Both SQL legs hold the union of every row set used below; ids are
     // disjoint across corpora and focused cases, so restriction is exact.
     const loaded = [...full.rows, ...restrictedQ.rows, ...focusedRows];

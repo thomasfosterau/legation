@@ -33,14 +33,14 @@ const groupId = "group-a";
 const clientId = "client-a";
 const allTodos = Subset.make({ collection: "todos" });
 
-const handlers: Record<string, MemoryBackend.BackendHandler> = {
+const handlers = {
   "todo/set": (args, writer) =>
     Effect.asVoid(writer.put("todos", (args as { readonly id: string }).id, args)),
   "todo/forbidden": (args, writer) =>
     writer
       .put("todos", (args as { readonly id: string }).id, args)
       .pipe(Effect.andThen(Effect.fail(new MutationRejected({ reason: "permission revoked" })))),
-};
+} satisfies Record<string, MemoryBackend.BackendHandler>;
 
 const mutators = Mutator.registry([
   {
@@ -89,7 +89,7 @@ const stateOf = (engine: ClientEngineModule.ClientEngine, mutationId: number) =>
     )
   );
 
-const makeLossyEngine = Effect.gen(function* () {
+const makeLossyEngine = Effect.fn("makeLossyEngine")(function* () {
   const backend = yield* MemoryBackend.make(handlers);
   const handler = yield* serverFor(backend);
   const store = yield* ClientStoreModule.makeMemory;
@@ -110,7 +110,7 @@ const makeLossyEngine = Effect.gen(function* () {
 describe("ClientEngine settles a pull-carried rejection", () => {
   it.effect("a lost push response then a pull settles the rejected mutation as rejected", () =>
     Effect.gen(function* () {
-      const { backend, engine, store, lose } = yield* makeLossyEngine;
+      const { backend, engine, store, lose } = yield* makeLossyEngine();
       const handle = yield* engine.mutateWithAck("todo/forbidden", {
         id: "x",
         title: "doomed",
@@ -143,7 +143,7 @@ describe("ClientEngine settles a pull-carried rejection", () => {
 
   it.effect("a lost push response then a pull settles an applied mutation as applied", () =>
     Effect.gen(function* () {
-      const { engine, store, lose } = yield* makeLossyEngine;
+      const { engine, store, lose } = yield* makeLossyEngine();
       const handle = yield* engine.mutateWithAck("todo/set", {
         id: "y",
         title: "kept",

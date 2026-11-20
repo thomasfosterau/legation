@@ -299,7 +299,7 @@ export const fromEngine = (raw: ClientEngine): ClientView => {
           : (subsets: ReadonlyArray<Subset.Subset>) =>
               readThrough(subsets).pipe(
                 Effect.mapError((error) =>
-                  error._tag === "VersionNotSupportedError"
+                  P.isTagged(error, "VersionNotSupportedError")
                     ? new TransportError({ message: error.message, cause: error })
                     : error
                 )

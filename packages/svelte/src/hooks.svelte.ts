@@ -534,7 +534,7 @@ export interface UndoControls {
 const edge = ManagedRuntime.make(Layer.empty);
 
 /** Drain a boolean stream into `$state`, interrupting on teardown. */
-const useFlag = (changes: Stream.Stream<boolean>): { readonly current: boolean } => {
+const useFlag = (changes: Stream.Stream<boolean>) => {
   let value = $state(false);
   $effect(() => {
     // The manager's streams close over the engine (no `R`), so they run on the

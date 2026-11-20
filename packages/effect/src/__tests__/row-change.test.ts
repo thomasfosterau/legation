@@ -21,6 +21,7 @@
  * convention of a tiny seeded PRNG instead, so a failure prints a
  * reproducible seed.
  */
+import * as P from "effect/Predicate";
 import * as Arr from "effect/Array";
 import * as Match from "effect/Match";
 import { describe, expect, it } from "vite-plus/test";
@@ -110,9 +111,9 @@ const applyMutation = (
   }
   const after = LiveView.result(next);
   Arr.forEach(RowChange.diff(before, after), (change) => {
-    if (change._tag === "enter" || change._tag === "update")
+    if (P.isTagged(change, "enter") || P.isTagged(change, "update"))
       folded.set(change.row.id, change.row.value);
-    else if (change._tag === "exit") folded.delete(change.id);
+    else if (P.isTagged(change, "exit")) folded.delete(change.id);
   });
   return next;
 };
@@ -129,7 +130,7 @@ interface LateObserver {
 const seedLateObserver = (view: LiveView.LiveView, startedAtStep: number): LateObserver => {
   const folded = new Map<string, unknown>();
   Arr.forEach(RowChange.enters(LiveView.result(view)), (change) => {
-    if (change._tag === "enter") folded.set(change.row.id, change.row.value);
+    if (P.isTagged(change, "enter")) folded.set(change.row.id, change.row.value);
   });
   return { startedAtStep, folded };
 };

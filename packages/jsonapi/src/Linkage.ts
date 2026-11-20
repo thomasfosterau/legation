@@ -140,10 +140,10 @@ export const planOf = (
 
 /** The read to run: the URL's read with the root linkage edges selected beside its includes. */
 export const withLinkage = (plan: Plan, read: Query.Read): Query.Read => {
-  const include: Record<string, true | Query.IncludeOptions> = {
+  const include = {
     ...R.fromIterableWith(plan.root, (name): [string, true] => [name, true]),
     ...read.include,
-  };
+  } satisfies Record<string, true | Query.IncludeOptions>;
   return R.isEmptyReadonlyRecord(include) ? read : { ...read, include };
 };
 

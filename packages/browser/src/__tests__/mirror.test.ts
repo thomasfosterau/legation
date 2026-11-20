@@ -133,7 +133,7 @@ const drain = (turns = 20) =>
 const is = (counter: Ref.Ref<number>, n: number) =>
   Effect.map(Ref.get(counter), (count) => count === n);
 
-const makeEngine = Effect.gen(function* () {
+const makeEngine = Effect.fn("makeEngine")(function* () {
   const backend = yield* MemoryBackend.make(
     MemoryBackend.validatedHandlers([
       MemoryBackend.handler(todoSet, (args, writer) => writer.put("todos", args.id, args)),
@@ -164,7 +164,7 @@ const makeEngine = Effect.gen(function* () {
 describe("EngineHost ↔ Mirror (loopback)", () => {
   it.effect("subscribe hydrates; mutate is acked and broadcast optimistically", () =>
     Effect.gen(function* () {
-      const { engine, store } = yield* makeEngine;
+      const { engine, store } = yield* makeEngine();
       const { host, mirror: mirrorChannel } = yield* MirrorChannel.makeLoopbackPair;
       yield* EngineHost.run({ channel: host, engine });
       const mirror = yield* Mirror.make({ channel: mirrorChannel, mutators });
@@ -191,7 +191,7 @@ describe("EngineHost ↔ Mirror (loopback)", () => {
 
   it.effect("a second mirror hydrates an already-active subset", () =>
     Effect.gen(function* () {
-      const { engine } = yield* makeEngine;
+      const { engine } = yield* makeEngine();
       const { host, mirror: mirrorChannel } = yield* MirrorChannel.makeLoopbackPair;
       yield* EngineHost.run({ channel: host, engine });
 
@@ -211,7 +211,7 @@ describe("EngineHost ↔ Mirror (loopback)", () => {
 
   it.effect("invalid args fail in the tab; host validation errors come back", () =>
     Effect.gen(function* () {
-      const { engine } = yield* makeEngine;
+      const { engine } = yield* makeEngine();
       const { host, mirror: mirrorChannel } = yield* MirrorChannel.makeLoopbackPair;
       yield* EngineHost.run({ channel: host, engine });
       const mirror = yield* Mirror.make({ channel: mirrorChannel, mutators });
@@ -226,7 +226,7 @@ describe("EngineHost ↔ Mirror (loopback)", () => {
 
   it.effect("foreign traffic on the channel is ignored", () =>
     Effect.gen(function* () {
-      const { engine } = yield* makeEngine;
+      const { engine } = yield* makeEngine();
       const { host, mirror: mirrorChannel } = yield* MirrorChannel.makeLoopbackPair;
       yield* EngineHost.run({ channel: host, engine });
       const mirror = yield* Mirror.make({ channel: mirrorChannel, mutators });
@@ -243,7 +243,7 @@ describe("EngineHost ↔ Mirror (loopback)", () => {
 describe("EngineHost subset refcounting", () => {
   it.effect("keeps a subset until its last tab leaves; disconnect releases it", () =>
     Effect.gen(function* () {
-      const { engine } = yield* makeEngine;
+      const { engine } = yield* makeEngine();
       const subs = yield* Ref.make(0);
       const unsubs = yield* Ref.make(0);
       // Count engine subscribe/unsubscribe; delegate everything else.
@@ -297,8 +297,8 @@ describe("EngineHost liveness (heartbeat)", () => {
   const liveness = { mirrorTimeout: "60 millis", sweepInterval: "15 millis" } as const;
 
   /** The engine with its subscribe and unsubscribe calls counted. */
-  const makeCountedEngine = Effect.gen(function* () {
-    const { engine } = yield* makeEngine;
+  const makeCountedEngine = Effect.fn("makeCountedEngine")(function* () {
+    const { engine } = yield* makeEngine();
     const subs = yield* Ref.make(0);
     const unsubs = yield* Ref.make(0);
     const counted = {
@@ -313,7 +313,7 @@ describe("EngineHost liveness (heartbeat)", () => {
 
   it.effect("reclaims a subset from a tab that stops heartbeating", () =>
     Effect.gen(function* () {
-      const { engine, subs, unsubs } = yield* makeCountedEngine;
+      const { engine, subs, unsubs } = yield* makeCountedEngine();
       const { host, mirror: mirrorChannel } = yield* MirrorChannel.makeLoopbackPair;
       yield* EngineHost.run({ channel: host, engine, liveness });
 
@@ -338,7 +338,7 @@ describe("EngineHost liveness (heartbeat)", () => {
 
   it.effect("keeps a live tab's subset across several sweeps", () =>
     Effect.gen(function* () {
-      const { engine, subs, unsubs } = yield* makeCountedEngine;
+      const { engine, subs, unsubs } = yield* makeCountedEngine();
       const { host, mirror: mirrorChannel } = yield* MirrorChannel.makeLoopbackPair;
       yield* EngineHost.run({ channel: host, engine, liveness });
       // A real mirror heartbeats faster than the timeout.
@@ -361,7 +361,7 @@ describe("EngineHost liveness (heartbeat)", () => {
 describe("EngineHost ↔ Mirror (BroadcastChannel)", () => {
   it.effect("syncs tab to host over a real BroadcastChannel pair", () =>
     Effect.gen(function* () {
-      const { engine } = yield* makeEngine;
+      const { engine } = yield* makeEngine();
       const name = `legation-test-${crypto.randomUUID()}`;
       const host = yield* BroadcastMirrorChannel.make(name);
       const mirrorChannel = yield* BroadcastMirrorChannel.make(name);
@@ -392,7 +392,7 @@ describe("Mirror: a forwarded request is never silently lost", () => {
         // a leader tab closing or crashing.
         yield* Effect.scoped(
           Effect.gen(function* () {
-            const { engine } = yield* makeEngine;
+            const { engine } = yield* makeEngine();
             const host = yield* BroadcastMirrorChannel.make(name);
             yield* EngineHost.run({ channel: host, engine });
             yield* mirror.mutate("todo/set", { id: "warm", title: "while alive", isDone: false });
@@ -409,7 +409,7 @@ describe("Mirror: a forwarded request is never silently lost", () => {
         // A new host takes over and announces itself — the SECOND HostReady
         // this mirror has ever seen, so the stale request is failed instead
         // of hanging forever.
-        const { engine: replacement } = yield* makeEngine;
+        const { engine: replacement } = yield* makeEngine();
         const newHost = yield* BroadcastMirrorChannel.make(name);
         yield* EngineHost.run({ channel: newHost, engine: replacement });
 
@@ -439,7 +439,7 @@ describe("Mirror: a forwarded request is never silently lost", () => {
 
   it.effect("the host's very first readiness announcement never fails a racing request", () =>
     Effect.gen(function* () {
-      const { engine } = yield* makeEngine;
+      const { engine } = yield* makeEngine();
       const name = `legation-test-first-ready-${crypto.randomUUID()}`;
       const mirrorChannel = yield* BroadcastMirrorChannel.make(name);
       const mirror = yield* Mirror.make({ channel: mirrorChannel, mutators });
@@ -512,7 +512,7 @@ const authorWindow = Subset.hash(
 describe("URL-keyed subscriptions over the mirror channel", () => {
   it.effect("a page with no Client registers by URL: SubscribeUrl pins root and edge windows", () =>
     Effect.gen(function* () {
-      const { engine } = yield* makeEngine;
+      const { engine } = yield* makeEngine();
       const { host, mirror: channel } = yield* MirrorChannel.makeLoopbackPair;
       yield* EngineHost.run({
         channel: host,
@@ -546,7 +546,7 @@ describe("URL-keyed subscriptions over the mirror channel", () => {
 
   it.effect("nodes alone suffice: the registry defaults to nodes.collections", () =>
     Effect.gen(function* () {
-      const { engine } = yield* makeEngine;
+      const { engine } = yield* makeEngine();
       const { host, mirror: channel } = yield* MirrorChannel.makeLoopbackPair;
       // No `registry`: an include URL must still pin its edge windows, not
       // just the root with a warning.
@@ -560,7 +560,7 @@ describe("URL-keyed subscriptions over the mirror channel", () => {
 
   it.effect("a host without URL reads ignores SubscribeUrl and keeps serving", () =>
     Effect.gen(function* () {
-      const { engine } = yield* makeEngine;
+      const { engine } = yield* makeEngine();
       const { host, mirror: channel } = yield* MirrorChannel.makeLoopbackPair;
       yield* EngineHost.run({ channel: host, engine });
       yield* channel.post({ _tag: "SubscribeUrl", mirrorId: "page", url: "/todos" });
@@ -577,7 +577,7 @@ describe("URL-keyed subscriptions over the mirror channel", () => {
     () =>
       Effect.scoped(
         Effect.gen(function* () {
-          const { engine } = yield* makeEngine;
+          const { engine } = yield* makeEngine();
           const { host, mirror: channel } = yield* MirrorChannel.makeLoopbackPair;
           yield* EngineHost.run({ channel: host, engine, registry: nodes.collections });
           const client = yield* Client.connect({
@@ -603,7 +603,7 @@ describe("URL-keyed subscriptions over the mirror channel", () => {
           expect(
             (yield* eventually(
               client.coverageOf({ collection: "todos", include: { author: true } }),
-              (verdict) => verdict._tag === "Covered"
+              (verdict) => P.isTagged(verdict, "Covered")
             ))._tag
           ).toBe("Covered");
 
@@ -633,7 +633,7 @@ describe("EngineHost.Host.registrations", () => {
     () =>
       Effect.scoped(
         Effect.gen(function* () {
-          const { engine } = yield* makeEngine;
+          const { engine } = yield* makeEngine();
           const { host: hostChannel, mirror: channel } = yield* MirrorChannel.makeLoopbackPair;
           const host = yield* EngineHost.run({
             channel: hostChannel,
@@ -681,9 +681,8 @@ describe("EngineHost.Host.registrations", () => {
                 const verdict = yield* coverageOf(read);
                 expect(verdict._tag, JSON.stringify(read)).toBe("Covered");
                 // The host tells the mirror which registrations are pulled, so the Client agrees once it hears.
-                const local = yield* eventually(
-                  client.coverageOf(read),
-                  (current) => current._tag === "Covered"
+                const local = yield* eventually(client.coverageOf(read), (current) =>
+                  P.isTagged(current, "Covered")
                 );
                 expect(verdict._tag).toBe(local._tag);
               }),
@@ -713,7 +712,7 @@ describe("EngineHost.Host.registrations", () => {
 
   it.effect("records a relational registration only once the engine holds it", () =>
     Effect.gen(function* () {
-      const { engine } = yield* makeEngine;
+      const { engine } = yield* makeEngine();
       const { host: hostChannel, mirror: channel } = yield* MirrorChannel.makeLoopbackPair;
       const host = yield* EngineHost.run({ channel: hostChannel, engine, nodes });
       const coverageOf = Coverage.coverageOf(
@@ -776,7 +775,7 @@ describe("EngineHost.Host.registrations", () => {
   it.effect("names a URL only while a party holds the registration by that URL", () =>
     Effect.scoped(
       Effect.gen(function* () {
-        const { engine } = yield* makeEngine;
+        const { engine } = yield* makeEngine();
         const { host: hostChannel, mirror: channel } = yield* MirrorChannel.makeLoopbackPair;
         const host = yield* EngineHost.run({ channel: hostChannel, engine, nodes, urls: stubUrls });
         const coverageOf = Coverage.coverageOf(
@@ -807,7 +806,7 @@ describe("EngineHost.Host.registrations", () => {
         expect(tabOnly).toMatchObject([{ root: allTodos, edges: [] }]);
         const verdict = yield* coverageOf({ collection: "todos" });
         expect(verdict._tag).toBe("Covered");
-        expect(verdict._tag === "Covered" && verdict.url).toBeUndefined();
+        expect(P.isTagged(verdict, "Covered") && verdict.url).toBeUndefined();
       })
     )
   );
@@ -815,7 +814,7 @@ describe("EngineHost.Host.registrations", () => {
   it.effect("tells a mirror when the host's replica holds its registration", () =>
     Effect.scoped(
       Effect.gen(function* () {
-        const { engine } = yield* makeEngine;
+        const { engine } = yield* makeEngine();
         const { host: hostChannel, mirror: channel } = yield* MirrorChannel.makeLoopbackPair;
         yield* EngineHost.run({ channel: hostChannel, engine });
         const mirror = yield* Mirror.make({ channel, mutators });
@@ -832,7 +831,7 @@ describe("EngineHost.Host.registrations", () => {
 
   it.effect("does not list named-query or mutation-state registrations", () =>
     Effect.gen(function* () {
-      const { engine } = yield* makeEngine;
+      const { engine } = yield* makeEngine();
       const { host: hostChannel, mirror: channel } = yield* MirrorChannel.makeLoopbackPair;
       const host = yield* EngineHost.run({ channel: hostChannel, engine });
       const mirror = yield* Mirror.make({ channel, mutators });

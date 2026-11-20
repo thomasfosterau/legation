@@ -194,13 +194,13 @@ export const makeRedisBroker = (
         // other start gets one bounded attempt here, so a publish made right after
         // `subscribe` returns is not missed while Redis answers in time. If the
         // attempt fails or times out, the reader's first step resolves it.
-        const cursor: { id: string | undefined } = { id: from === "0" ? "0" : undefined };
-        if (cursor.id === undefined) {
+        let cursor: string | undefined = from === "0" ? "0" : undefined;
+        if (cursor === undefined) {
           const first = yield* lastId.pipe(
             Effect.timeoutOption(START_LOOKUP_BOUND),
             Effect.orElseSucceed(() => Option.none<string>())
           );
-          if (Option.isSome(first)) cursor.id = first.value;
+          if (Option.isSome(first)) cursor = first.value;
         }
         // Per-subscription outage state: consecutive failed steps. The first failure
         // of an outage logs a warning, each further retry logs at debug, and the
@@ -229,8 +229,8 @@ export const makeRedisBroker = (
             return log.pipe(Effect.andThen(Effect.sleep(Duration.millis(delay))));
           });
         const readOnce = Effect.gen(function* () {
-          if (cursor.id === undefined) {
-            cursor.id = yield* lastId.pipe(
+          if (cursor === undefined) {
+            cursor = yield* lastId.pipe(
               Effect.timeoutOrElse({
                 duration: START_LOOKUP_BOUND,
                 orElse: () => Effect.fail(new StartLookupTimeout()),
@@ -239,7 +239,7 @@ export const makeRedisBroker = (
             );
           }
           const reply = yield* boundRead(
-            redis.send<XReadReply>("XREAD", "BLOCK", blockMs, "STREAMS", stream, cursor.id)
+            redis.send<XReadReply>("XREAD", "BLOCK", blockMs, "STREAMS", stream, cursor)
           ).pipe(Effect.tap(() => answered));
           if (reply === null) return;
           yield* Effect.forEach(
@@ -249,7 +249,7 @@ export const makeRedisBroker = (
                 entries,
                 ([id, fields]) =>
                   Effect.gen(function* () {
-                    cursor.id = id;
+                    cursor = id;
                     const payload = payloadOf(fields);
                     if (payload !== undefined) yield* Queue.offer(queue, payload);
                   }),

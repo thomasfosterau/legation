@@ -30,17 +30,21 @@ const setIssue = Mutator.make("issue/set", Schema.Unknown);
 const mutators = Mutator.registry([
   { mutator: setIssue, local: (args, writer) => writer.put("issues", (args as Issue).id, args) },
 ]);
-const handlers: Record<string, MemoryBackend.BackendHandler> = {
+const handlers = {
   "issue/set": (args, writer) => Effect.asVoid(writer.put("issues", (args as Issue).id, args)),
-};
+} satisfies Record<string, MemoryBackend.BackendHandler>;
+
+interface Lookup<A> {
+  readonly [key: string]: A;
+}
 
 // Membership: which projects each user belongs to (the "relationship").
-const memberships: Record<string, ReadonlyArray<string>> = {
+const memberships: Lookup<ReadonlyArray<string>> = {
   alice: ["p1"],
   bob: ["p2"],
 };
 // clientGroupId → user (a real carrier derives this from a verified token).
-const users: Record<string, string> = { "group-alice": "alice", "group-bob": "bob" };
+const users: Lookup<string> = { "group-alice": "alice", "group-bob": "bob" };
 
 // Relationship-scoped auth: visible issues are those whose projectId is one the
 // requesting user is a member of.
@@ -53,7 +57,7 @@ const identityResolver: Authorization.IdentityResolver = {
   resolve: ({ clientGroupId }) => Effect.succeed(users[clientGroupId]),
 };
 
-const handler = Effect.gen(function* () {
+const handler = Effect.fn("handler")(function* () {
   const backend = yield* MemoryBackend.make(handlers);
   const cvrStore = yield* Cvr.makeMemoryStore;
   const bus = yield* InvalidationBus.makeInProcess;
@@ -86,7 +90,7 @@ const ids = (rows: ReadonlyArray<{ readonly id: string }>) => rows.map((r) => r.
 describe("relationship-scoped read auth", () => {
   it.effect("each identity sees only its projects' issues", () =>
     Effect.gen(function* () {
-      const server = yield* handler;
+      const server = yield* handler();
       const alice = yield* makeClient(server, "alice");
       const bob = yield* makeClient(server, "bob");
 

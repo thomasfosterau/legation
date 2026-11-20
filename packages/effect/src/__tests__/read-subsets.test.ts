@@ -13,7 +13,7 @@ import { Subset, SyncServer } from "../internal.js";
 
 const put = Mutator.make("row/put", Schema.Unknown);
 
-const makeBackend = Effect.gen(function* () {
+const makeBackend = Effect.fn("makeBackend")(function* () {
   const memory = yield* MemoryBackend.make({
     [put.name]: (args, writer) => {
       const row = args as { readonly collection: string; readonly id: string };
@@ -62,7 +62,7 @@ describe("SyncServer.readSubsets", () => {
     "authorizes every subset before any backend call: a denied later subset costs nothing",
     () =>
       Effect.gen(function* () {
-        const { backend, calls } = yield* makeBackend;
+        const { backend, calls } = yield* makeBackend();
         const exit = yield* Effect.exit(
           SyncServer.readSubsets({ backend, authPolicy: policy }, context, {
             clientGroupId: "g",
@@ -81,7 +81,7 @@ describe("SyncServer.readSubsets", () => {
 
   it.effect("returns each subset's rows in the evaluated order, whatever getRows returns", () =>
     Effect.gen(function* () {
-      const { backend, calls } = yield* makeBackend;
+      const { backend, calls } = yield* makeBackend();
       const rows = yield* SyncServer.readSubsets({ backend, authPolicy: policy }, context, {
         clientGroupId: "g",
         subsets: [
@@ -99,7 +99,7 @@ describe("SyncServer.readSubsets", () => {
 
   it.effect("evaluates a batch with one evaluateMany and fetches once per collection", () =>
     Effect.gen(function* () {
-      const { backend: base } = yield* makeBackend;
+      const { backend: base } = yield* makeBackend();
       const counts = { evaluate: 0, evaluateMany: 0 };
       const fetchedFrom: Array<string> = [];
       const backend: Backend.Backend = {

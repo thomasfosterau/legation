@@ -87,53 +87,55 @@ interface GatedTransport {
   readonly cancelled: Effect.Effect<number>;
 }
 
-const makeGatedTransport: Effect.Effect<GatedTransport> = Effect.gen(function* () {
-  const issued = yield* Effect.all(
-    Array.from({ length: PULLS }, () => Deferred.make<PullRequest>()),
-    { concurrency: 1 }
-  );
-  const answers = yield* Effect.all(
-    Array.from({ length: PULLS }, () => Deferred.make<PullResponse, TransportError>()),
-    { concurrency: 1 }
-  );
-  const pokes = yield* Queue.unbounded<Poke>();
-  const calls = yield* Ref.make(0);
-  const clockSeen = yield* Ref.make<ReadonlyArray<number>>([]);
-  const interrupted = yield* Ref.make(0);
-  const pull = (request: PullRequest) =>
-    Effect.gen(function* () {
-      const index = yield* Ref.getAndUpdate(calls, (n) => n + 1);
-      const now = yield* Clock.currentTimeMillis;
-      yield* Ref.update(clockSeen, (seen) => [...seen, now]);
-      const signal = issued[index];
-      const answer = answers[index];
-      if (signal === undefined || answer === undefined) {
-        return yield* Effect.die(new TestFailure({ message: `unexpected pull #${index}` }));
-      }
-      yield* Deferred.succeed(signal, request);
-      return yield* Deferred.await(answer);
-    }).pipe(
-      // Installed before the call signals its arrival, so a caller that interrupts as soon as it
-      // sees the arrival still finds the hook in place.
-      Effect.onInterrupt(() => Ref.update(interrupted, (n) => n + 1))
+const makeGatedTransport = Effect.fn("makeGatedTransport")(
+  function* (): Effect.fn.Return<GatedTransport> {
+    const issued = yield* Effect.all(
+      Array.from({ length: PULLS }, () => Deferred.make<PullRequest>()),
+      { concurrency: 1 }
     );
-  const transport: ClientTransport = {
-    push: () => Effect.die(new TestFailure({ message: "push is not part of this test" })),
-    pull,
-    pokes: Stream.fromQueue(pokes),
-    status: Effect.succeed("disconnected"),
-    statusChanges: Stream.never,
-  };
-  return {
-    transport,
-    pokes,
-    issued,
-    answers,
-    count: Ref.get(calls),
-    clockSeen,
-    cancelled: Ref.get(interrupted),
-  };
-});
+    const answers = yield* Effect.all(
+      Array.from({ length: PULLS }, () => Deferred.make<PullResponse, TransportError>()),
+      { concurrency: 1 }
+    );
+    const pokes = yield* Queue.unbounded<Poke>();
+    const calls = yield* Ref.make(0);
+    const clockSeen = yield* Ref.make<ReadonlyArray<number>>([]);
+    const interrupted = yield* Ref.make(0);
+    const pull = (request: PullRequest) =>
+      Effect.gen(function* () {
+        const index = yield* Ref.getAndUpdate(calls, (n) => n + 1);
+        const now = yield* Clock.currentTimeMillis;
+        yield* Ref.update(clockSeen, (seen) => [...seen, now]);
+        const signal = issued[index];
+        const answer = answers[index];
+        if (signal === undefined || answer === undefined) {
+          return yield* Effect.die(new TestFailure({ message: `unexpected pull #${index}` }));
+        }
+        yield* Deferred.succeed(signal, request);
+        return yield* Deferred.await(answer);
+      }).pipe(
+        // Installed before the call signals its arrival, so a caller that interrupts as soon as it
+        // sees the arrival still finds the hook in place.
+        Effect.onInterrupt(() => Ref.update(interrupted, (n) => n + 1))
+      );
+    const transport: ClientTransport = {
+      push: () => Effect.die(new TestFailure({ message: "push is not part of this test" })),
+      pull,
+      pokes: Stream.fromQueue(pokes),
+      status: Effect.succeed("disconnected"),
+      statusChanges: Stream.never,
+    };
+    return {
+      transport,
+      pokes,
+      issued,
+      answers,
+      count: Ref.get(calls),
+      clockSeen,
+      cancelled: Ref.get(interrupted),
+    };
+  }
+);
 
 interface Client {
   readonly engine: ClientEngineModule.ClientEngine;
@@ -141,8 +143,12 @@ interface Client {
   readonly gated: GatedTransport;
 }
 
-const makeClient: Effect.Effect<Client, never, Scope.Scope> = Effect.gen(function* () {
-  const gated = yield* makeGatedTransport;
+const makeClient = Effect.fn("makeClient")(function* (): Effect.fn.Return<
+  Client,
+  never,
+  Scope.Scope
+> {
+  const gated = yield* makeGatedTransport();
   const store = yield* ClientStoreModule.makeMemory;
   const engine = yield* ClientEngineModule.make({
     clientId: "client-412",
@@ -168,7 +174,7 @@ describe("pull serialisation", () => {
     "a second pull is not issued while the first is in flight, and rows and cookie never revert",
     () =>
       Effect.gen(function* () {
-        const client = yield* makeClient;
+        const client = yield* makeClient();
         const { issued, answers, count } = client.gated;
 
         const first = yield* Effect.forkChild(client.engine.pull);
@@ -195,7 +201,7 @@ describe("pull serialisation", () => {
     "an explicit pull issued during a poke-triggered pull resolves only after a later pull is applied",
     () =>
       Effect.gen(function* () {
-        const client = yield* makeClient;
+        const client = yield* makeClient();
         const { issued, answers, count, pokes } = client.gated;
         const explicitDone = yield* Ref.make(false);
 
@@ -226,7 +232,7 @@ describe("pull serialisation", () => {
 
   it.effect("pokes that arrive during one pull coalesce into a single follow-up pull", () =>
     Effect.gen(function* () {
-      const client = yield* makeClient;
+      const client = yield* makeClient();
       const { issued, answers, count, pokes } = client.gated;
 
       yield* client.engine.runSync;
@@ -251,7 +257,7 @@ describe("pull serialisation", () => {
 
   it.effect("the caller's context reaches the transport call", () =>
     Effect.gen(function* () {
-      const client = yield* makeClient;
+      const client = yield* makeClient();
       const { issued, answers, clockSeen } = client.gated;
 
       const pulling = yield* Effect.forkChild(
@@ -268,7 +274,7 @@ describe("pull serialisation", () => {
 
   it.effect("interrupting a caller aborts its transport call, and the next pull proceeds", () =>
     Effect.gen(function* () {
-      const client = yield* makeClient;
+      const client = yield* makeClient();
       const { issued, answers, cancelled } = client.gated;
 
       const abandoned = yield* Effect.forkChild(client.engine.pull);
@@ -289,7 +295,7 @@ describe("pull serialisation", () => {
     "a failing pull fails its own caller, and a caller queued behind it then pulls for itself",
     () =>
       Effect.gen(function* () {
-        const client = yield* makeClient;
+        const client = yield* makeClient();
         const { issued, answers, count } = client.gated;
 
         const failing = yield* Effect.forkChild(client.engine.pull);
@@ -312,7 +318,7 @@ describe("pull serialisation", () => {
 
   it.effect("a poke burst during a hung pull causes exactly one follow-up pull", () =>
     Effect.gen(function* () {
-      const client = yield* makeClient;
+      const client = yield* makeClient();
       const { issued, answers, count, pokes } = client.gated;
 
       yield* client.engine.runSync;
@@ -338,7 +344,7 @@ describe("pull serialisation", () => {
 
   it.effect("a queued caller is skipped when a pull that started after its entry is applied", () =>
     Effect.gen(function* () {
-      const client = yield* makeClient;
+      const client = yield* makeClient();
       const { issued, answers, count } = client.gated;
 
       const first = yield* Effect.forkChild(client.engine.pull);
@@ -368,7 +374,7 @@ describe("pull serialisation", () => {
     "a queued caller does not skip on a failed pull, and pulls for itself after the next one fails",
     () =>
       Effect.gen(function* () {
-        const client = yield* makeClient;
+        const client = yield* makeClient();
         const { issued, answers, count } = client.gated;
 
         const first = yield* Effect.forkChild(client.engine.pull);

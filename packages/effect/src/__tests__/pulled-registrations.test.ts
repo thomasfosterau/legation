@@ -54,7 +54,7 @@ const products = { collection: "products" };
 const empty: PullResponse = { cookie: "cvr-1", patch: [], lastMutationIds: {} };
 
 /** A transport whose first pull waits for the test to release it; later pulls answer at once. */
-const makeGated = Effect.gen(function* () {
+const makeGated = Effect.fn("makeGated")(function* () {
   const issued = yield* Deferred.make<PullRequest>();
   const release = yield* Deferred.make<PullResponse, TransportError>();
   let calls = 0;
@@ -107,8 +107,8 @@ const engineOver = (transport: ClientTransport) =>
     );
   });
 
-const makeEngine = Effect.gen(function* () {
-  const gated = yield* makeGated;
+const makeEngine = Effect.fn("makeEngine")(function* () {
+  const gated = yield* makeGated();
   const engine = yield* engineOver(gated.transport);
   return { engine, gated };
 });
@@ -123,7 +123,7 @@ describe("pulled registrations", () => {
   it.effect("a registration made during an in-flight pull is not marked by that pull", () =>
     Effect.scoped(
       Effect.gen(function* () {
-        const { engine, gated } = yield* makeEngine;
+        const { engine, gated } = yield* makeEngine();
         const view = ClientView.fromEngine(engine);
         const client = Client.fromView(nodes, view);
         const root = Subset.make(products);
@@ -152,7 +152,7 @@ describe("pulled registrations", () => {
   it.effect("releasing the registration clears its mark; a fresh one starts unpulled", () =>
     Effect.scoped(
       Effect.gen(function* () {
-        const { engine, gated } = yield* makeEngine;
+        const { engine, gated } = yield* makeEngine();
         yield* Deferred.succeed(gated.release, empty);
         const view = ClientView.fromEngine(engine);
         const client = Client.fromView(nodes, view);
@@ -172,7 +172,7 @@ describe("pulled registrations", () => {
   it.effect("a subscribe the engine refuses leaves no open mark behind (S4)", () =>
     Effect.scoped(
       Effect.gen(function* () {
-        const { engine } = yield* makeEngine;
+        const { engine } = yield* makeEngine();
         const refusing: typeof engine = {
           ...engine,
           // A ClientEngine is typed infallible, but a transport-backed one can refuse at run time.
@@ -193,7 +193,7 @@ describe("pulled registrations", () => {
     () =>
       Effect.scoped(
         Effect.gen(function* () {
-          const { engine, gated } = yield* makeEngine;
+          const { engine, gated } = yield* makeEngine();
           yield* Deferred.succeed(gated.release, empty);
           // Count when the host's event listener subscribes: `engineEvents` subscribes when it runs.
           let listeners = 0;

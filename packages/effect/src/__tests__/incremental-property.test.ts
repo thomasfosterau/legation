@@ -96,7 +96,7 @@ const stepGround = <A>(
 
 // ─── Value generators / keys (module scope: shared, capture nothing) ─────────
 
-const doubleN = (v: { readonly n: number }): { readonly double: number } => ({
+const doubleN = (v: { readonly n: number }) => ({
   double: v.n * 2,
 });
 const teamKey = (v: { readonly team: string }): string => v.team;

@@ -308,7 +308,7 @@ export const registerOnJournal = (
       );
     yield* registerOn(
       engine.engineEvents.pipe(
-        Stream.filter((event) => event._tag === "MutationJournaled"),
+        Stream.filter((event) => P.isTagged(event, "MutationJournaled")),
         Stream.filterEffect(() => offline)
       )
     );
@@ -531,7 +531,7 @@ export const listen = (options: ListenOptions): Listener => {
         Effect.flatMap(({ flush: run, services }) =>
           run.pipe(
             Effect.tapError((error) =>
-              error._tag === "TransportError"
+              P.isTagged(error, "TransportError")
                 ? Effect.logDebug(
                     event.lastChance === true
                       ? "Background Sync flush failed on its last chance; the journal flushes on the next connectivity signal"

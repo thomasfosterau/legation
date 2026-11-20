@@ -273,6 +273,11 @@ describe("ClientStore.appendNext", () => {
   });
 });
 
+interface CountersState {
+  failCounters: boolean;
+  park: { reached: Deferred.Deferred<void>; gate: Deferred.Deferred<void> } | undefined;
+}
+
 /**
  * A KeyValueStore whose writes to the `counters` key can be made to fail, or
  * to park on a gate (to interrupt a fiber exactly between the index write and
@@ -280,10 +285,7 @@ describe("ClientStore.appendNext", () => {
  */
 const controlledCounters = () => {
   const data = new Map<string, string>();
-  const state: {
-    failCounters: boolean;
-    park: { reached: Deferred.Deferred<void>; gate: Deferred.Deferred<void> } | undefined;
-  } = { failCounters: false, park: undefined };
+  const state: CountersState = { failCounters: false, park: undefined };
   const kvs = KeyValueStore.makeStringOnly({
     get: (key) => Effect.sync(() => data.get(key)),
     set: (key, value) => {

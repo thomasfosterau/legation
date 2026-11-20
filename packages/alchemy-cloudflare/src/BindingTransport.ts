@@ -81,7 +81,7 @@ export interface MakeOptions {
 }
 
 /** The headers a binding call carries over from the inbound request. */
-const forwarded = (request: InboundRequest): Record<string, string> => {
+const forwarded = (request: InboundRequest) => {
   const headers: Record<string, string> = {};
   const cookie = request.headers.get("cookie");
   if (cookie !== null && cookie !== "") headers.cookie = cookie;

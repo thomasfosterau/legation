@@ -55,7 +55,7 @@ const countingKv = () => {
 const journalDepth = Metric.value(Telemetry.journalDepth).pipe(Effect.map((s) => s.value));
 
 /** An engine over a key-value `ClientStore` whose KVS counts its reads. */
-const harness = Effect.gen(function* () {
+const harness = Effect.fn("harness")(function* () {
   const backend = yield* MemoryBackend.make(
     MemoryBackend.validatedHandlers([
       MemoryBackend.handler(todoSet, (args, writer) => writer.put("todos", args.id, args)),
@@ -94,7 +94,7 @@ const harness = Effect.gen(function* () {
 describe("journal-depth sampling reads no journal bodies", () => {
   it.effect("a mutate against a long journal reads no pending body", () =>
     Effect.gen(function* () {
-      const { engine, store, kv } = yield* harness;
+      const { engine, store, kv } = yield* harness();
       for (let n = 1; n <= 50; n++) yield* engine.mutate("todo/set", { id: `t${n}` });
       // The overlay cache is warm: the mutate path tracks onto it, so neither
       // the gauge sample nor the tracked-write fallback needs the journal.
@@ -110,7 +110,7 @@ describe("journal-depth sampling reads no journal bodies", () => {
 
   it.effect("a paced compaction of the tail reads no pending body", () =>
     Effect.gen(function* () {
-      const { engine, store, kv } = yield* harness;
+      const { engine, store, kv } = yield* harness();
       for (let n = 1; n <= 50; n++) yield* engine.mutate("todo/set", { id: `t${n}` });
 
       // The usual paced shape: the superseded entry is the newest one, so the

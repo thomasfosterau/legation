@@ -74,7 +74,7 @@ const currentRole = (role: Stream.Stream<Role>) =>
     Effect.orDie
   );
 
-const makeServer = Effect.gen(function* () {
+const makeServer = Effect.fn("makeServer")(function* () {
   const backend = yield* MemoryBackend.make(
     MemoryBackend.validatedHandlers([
       MemoryBackend.handler(todoSet, (args, writer) => writer.put("todos", args.id, args)),
@@ -178,7 +178,7 @@ describe("ElectedHost", () => {
           const locks = makeFakeLockManager();
           const clientGroupId = `group-voice-${crypto.randomUUID()}`;
           const channelName = `legation-elected-voice-${crypto.randomUUID()}`;
-          const handler = yield* makeServer;
+          const handler = yield* makeServer();
           const store = yield* ClientStoreModule.makeMemory;
           // The engine's subscription list is observable through what each
           // pull carries: record it from the transport the host is wired with.
@@ -242,7 +242,7 @@ describe("ElectedHost", () => {
           const locks = makeFakeLockManager();
           const clientGroupId = `group-${crypto.randomUUID()}`;
           const channelName = `legation-elected-${crypto.randomUUID()}`;
-          const handler = yield* makeServer;
+          const handler = yield* makeServer();
           const store = yield* ClientStoreModule.makeMemory;
           const options = {
             clientGroupId,
@@ -327,7 +327,7 @@ describe("ElectedHost", () => {
         const locks = makeFakeLockManager();
         const clientGroupId = `group-kill-${crypto.randomUUID()}`;
         const channelName = `legation-elected-kill-${crypto.randomUUID()}`;
-        const handler = yield* makeServer;
+        const handler = yield* makeServer();
         const store = yield* ClientStoreModule.makeMemory;
         const options = {
           clientGroupId,
@@ -402,7 +402,7 @@ describe("ElectedHost", () => {
         Effect.gen(function* () {
           const clientGroupId = `group-nolocks-${crypto.randomUUID()}`;
           const channelName = `legation-elected-nolocks-${crypto.randomUUID()}`;
-          const handler = yield* makeServer;
+          const handler = yield* makeServer();
           const store = yield* ClientStoreModule.makeMemory;
           // No `locks` option: falls back to the ambient `navigator.locks`,
           // which this Node test environment doesn't have.

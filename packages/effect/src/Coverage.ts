@@ -43,6 +43,7 @@
  * superset list) is deliberately not built (ADR-0029 section 3).
  */
 
+import * as P from "effect/Predicate";
 import * as Defined from "./Defined.js";
 import * as Arr from "effect/Array";
 import * as Effect from "effect/Effect";
@@ -391,8 +392,8 @@ export const windowKey = (window: Subset.Subset): string =>
 const pinnedOf = (
   where: Predicate.Predicate
 ): { readonly field: string; readonly values: ReadonlyArray<string> } | undefined => {
-  if (where._tag === "In") return { field: where.field, values: where.values.map(literalKey) };
-  if (where._tag === "Compare" && where.op === "eq") {
+  if (P.isTagged(where, "In")) return { field: where.field, values: where.values.map(literalKey) };
+  if (P.isTagged(where, "Compare") && where.op === "eq") {
     return { field: where.field, values: [literalKey(where.value)] };
   }
   return undefined;

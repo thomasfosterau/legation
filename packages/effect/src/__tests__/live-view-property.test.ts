@@ -10,6 +10,7 @@
  * Uses a deterministic xorshift32 PRNG (not `Math.random`) so a failure is
  * reproducible from its seed alone.
  */
+import * as P from "effect/Predicate";
 import { describe, expect, it } from "vite-plus/test";
 import * as LiveView from "../LiveView.js";
 import * as Subset from "../Subset.js";
@@ -40,14 +41,20 @@ const randomDeltas = (next: () => number, count: number, rankRange: number): Rea
     return { _tag: "put" as const, id, rank: Math.floor(next() * rankRange) };
   });
 
+/** The incremental view and the from-scratch row map, side by side. */
+interface Stepped {
+  readonly view: LiveView.LiveView;
+  readonly reference: Map<string, LiveView.Row>;
+}
+
 /** Apply one delta to both the incremental view and the from-scratch row map. */
 const step = (
   view: LiveView.LiveView,
   reference: Map<string, LiveView.Row>,
   delta: Delta
-): { readonly view: LiveView.LiveView; readonly reference: Map<string, LiveView.Row> } => {
+): Stepped => {
   const nextReference = new Map(reference);
-  if (delta._tag === "del") {
+  if (P.isTagged(delta, "del")) {
     nextReference.delete(delta.id);
     return { view: LiveView.del(view, delta.id), reference: nextReference };
   }

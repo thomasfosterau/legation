@@ -79,11 +79,11 @@ const mutators = Mutator.registry([
   },
 ]);
 
-const backendHandlers: Record<string, MemoryBackend.BackendHandler> = {
+const backendHandlers = {
   "todo/set": (args, writer) => Effect.asVoid(writer.put("todos", (args as Todo).id, args)),
   // A write the backend can never accept: the permanent-rejection path.
   "todo/refused": () => Effect.fail(new MutationRejected({ reason: "not allowed" })),
-};
+} satisfies Record<string, MemoryBackend.BackendHandler>;
 
 const allTodos = Subset.make({ collection: "todos" });
 
@@ -165,7 +165,7 @@ const settle = (promise: Promise<unknown> | undefined) =>
 
 // ─── The engine under test ───────────────────────────────────────────────────
 
-const makeServer = Effect.gen(function* () {
+const makeServer = Effect.fn("makeServer")(function* () {
   const backend = yield* MemoryBackend.make(backendHandlers);
   return yield* SyncServer.make.pipe(
     Effect.provideService(Backend.Backend, backend),
@@ -192,7 +192,7 @@ const makeEngine = (
   > = {}
 ) =>
   Effect.gen(function* () {
-    const handler = yield* makeServer;
+    const handler = yield* makeServer();
     const inner = yield* Transport.makeInMemory(handler, "group-bg");
     yield* inner.setStatus("disconnected");
     const pushes = yield* Ref.make<ReadonlyArray<Protocol.PushRequest>>([]);

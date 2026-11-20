@@ -8,6 +8,7 @@
  * worker, bespoke) implement the same interfaces.
  */
 
+import * as P from "effect/Predicate";
 import * as Defined from "./Defined.js";
 import * as Clock from "effect/Clock";
 import * as Context from "effect/Context";
@@ -230,7 +231,7 @@ export const layerInMemory = (
 
 /** Only a TransportError signals carrier trouble; version rejections pass through. */
 const isTransportError = (error: TransportError | VersionNotSupportedError): boolean =>
-  error._tag === "TransportError";
+  P.isTagged(error, "TransportError");
 
 /** A transport wrapped by {@link simulateOffline}, plus the toggle driving it. */
 export interface SimulatedOffline {

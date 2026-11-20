@@ -52,7 +52,7 @@ const mutations = Mutator.registry([
 
 const allSecrets = Subset.make({ collection: "secrets" });
 
-const makeHandler = Effect.gen(function* () {
+const makeHandler = Effect.fn("makeHandler")(function* () {
   const backend = yield* MemoryBackend.make(
     MemoryBackend.validatedHandlers([
       MemoryBackend.handler(secretSet, (args, writer) =>
@@ -72,8 +72,8 @@ const makeHandler = Effect.gen(function* () {
 });
 
 /** An in-memory transport that records every push request it carries. */
-const recordingTransport = Effect.gen(function* () {
-  const handler = yield* makeHandler;
+const recordingTransport = Effect.fn("recordingTransport")(function* () {
+  const handler = yield* makeHandler();
   const inner = yield* Transport.makeInMemory(handler, "group-shared");
   const pushes = yield* Ref.make<ReadonlyArray<PushRequest>>([]);
   const transport: Transport.ClientTransport = {
@@ -267,7 +267,7 @@ describe("switching identities on a shared device", () => {
       () =>
         Effect.scoped(
           Effect.gen(function* () {
-            const { transport } = yield* recordingTransport;
+            const { transport } = yield* recordingTransport();
 
             // A syncs a private row legitimately.
             const aliceStore = yield* ClientStore.makeKeyValue({ identity: ALICE });
@@ -308,7 +308,7 @@ describe("switching identities on a shared device", () => {
     scoped.effect("A's quarantined journal entries are never pushed under B's session", () =>
       Effect.scoped(
         Effect.gen(function* () {
-          const { transport, pushes } = yield* recordingTransport;
+          const { transport, pushes } = yield* recordingTransport();
 
           const aliceStore = yield* ClientStore.makeKeyValue({ identity: ALICE });
           const alice = yield* engineOver(aliceStore, transport);
@@ -346,7 +346,7 @@ describe("switching identities on a shared device", () => {
     scoped.effect("A signing back in makes A's quarantined entries pushable again", () =>
       Effect.scoped(
         Effect.gen(function* () {
-          const { transport, pushes } = yield* recordingTransport;
+          const { transport, pushes } = yield* recordingTransport();
 
           const aliceStore = yield* ClientStore.makeKeyValue({ identity: ALICE });
           const alice = yield* engineOver(aliceStore, transport);
@@ -379,7 +379,7 @@ describe("switching identities on a shared device", () => {
     scoped.effect("a reset never discards a quarantine; only discardQuarantine does", () =>
       Effect.scoped(
         Effect.gen(function* () {
-          const { transport } = yield* recordingTransport;
+          const { transport } = yield* recordingTransport();
           const store = yield* ClientStore.makeKeyValue({ identity: ALICE });
           const engine = yield* engineOver(store, transport);
           const client = Client.fromView(nodes, ClientView.fromEngine(engine));
@@ -404,7 +404,7 @@ describe("switching identities on a shared device", () => {
     scoped.effect("anonymous → signed in keeps the warm replica, subscriptions and all", () =>
       Effect.scoped(
         Effect.gen(function* () {
-          const { transport } = yield* recordingTransport;
+          const { transport } = yield* recordingTransport();
           const store = yield* ClientStore.makeKeyValue({ identity: Identity.anonymous });
           const engine = yield* engineOver(store, transport);
           const client = Client.fromView(nodes, ClientView.fromEngine(engine));
@@ -435,7 +435,7 @@ describe("switching identities on a shared device", () => {
     scoped.effect("Client.make adopts the identity before the replica can answer a read", () =>
       Effect.scoped(
         Effect.gen(function* () {
-          const { transport } = yield* recordingTransport;
+          const { transport } = yield* recordingTransport();
           const aliceStore = yield* ClientStore.makeKeyValue({ identity: ALICE });
           const alice = yield* engineOver(aliceStore, transport);
           yield* alice.subscribe(allSecrets);
@@ -481,7 +481,7 @@ describe("switching identities on a shared device", () => {
           // no durable state of its own.
           const engine = yield* engineOver(
             yield* ClientStore.makeMemory,
-            (yield* recordingTransport).transport
+            (yield* recordingTransport()).transport
           );
           const { identityBoundary: _omitted, ...mirrorLike } = ClientView.fromEngine(engine);
           const client = Client.fromView(nodes, mirrorLike);

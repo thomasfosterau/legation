@@ -75,11 +75,11 @@ export const mutators = Mutator.registry([
   },
 ]);
 
-const handlers: Record<string, MemoryBackend.BackendHandler> = {
+const handlers = {
   "todo/set": (args, writer) => Effect.asVoid(writer.put("todos", (args as Todo).id, args)),
   "user/set": (args, writer) => Effect.asVoid(writer.put("users", (args as User).id, args)),
   "todo/reject": () => Effect.fail(new MutationRejected({ reason: "not allowed" })),
-};
+} satisfies Record<string, MemoryBackend.BackendHandler>;
 
 const queries = Query.registry([
   {
@@ -202,11 +202,14 @@ const countingEngineLayer = (pulls: Array<RecordedPull>): typeof engineLayer =>
     Layer.provide(ClientStore.layerMemory)
   );
 
-/** A fresh Client runtime per test, plus a live log of `pull` calls. */
-export const makeCountingClientRuntime = (): {
+/** A Client runtime and the live log of its `pull` calls. */
+export interface CountingClientRuntime {
   readonly runtime: ClientWorldRuntime;
   readonly pulls: Array<RecordedPull>;
-} => {
+}
+
+/** A fresh Client runtime per test, plus a live log of `pull` calls. */
+export const makeCountingClientRuntime = (): CountingClientRuntime => {
   const pulls: Array<RecordedPull> = [];
   const runtime = ManagedRuntime.make(
     Layer.effect(Client.Client)(

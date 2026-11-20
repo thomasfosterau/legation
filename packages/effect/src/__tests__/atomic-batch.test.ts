@@ -7,6 +7,7 @@
  * would. Without the seam the release-record path is unchanged
  * (unpulled-tail.test.ts).
  */
+import * as P from "effect/Predicate";
 import { describe, expect, it } from "@effect/vitest";
 import * as Arr from "effect/Array";
 import * as Clock from "effect/Clock";
@@ -108,7 +109,7 @@ const batchOver = (
         const commit = Effect.sync(() => {
           Arr.forEach(ops, (op) => {
             writes.push(op.key);
-            if (op._tag === "Set") data.set(op.key, op.value);
+            if (P.isTagged(op, "Set")) data.set(op.key, op.value);
             else data.delete(op.key);
           });
           state.afterCommit?.();
@@ -664,9 +665,9 @@ const counterMutators = Mutator.registry([
   },
 ]);
 
-const backendHandlers: Record<string, MemoryBackend.BackendHandler> = {
+const backendHandlers = {
   "counter/inc": (args, writer) => incrementCounter(writer, (args as { readonly id: string }).id),
-};
+} satisfies Record<string, MemoryBackend.BackendHandler>;
 
 const authPolicy = Authorization.policy({ counters: Authorization.allowAll });
 const countersSubset = Subset.make({ collection: "counters" });

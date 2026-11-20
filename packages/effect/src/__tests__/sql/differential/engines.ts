@@ -193,7 +193,11 @@ const makeEngine = (
 });
 
 /** SQLite on `:memory:` through the Effect SQL client. */
-export const makeSqlite: Effect.Effect<Engine, never, Scope.Scope> = Effect.gen(function* () {
+export const makeSqlite = Effect.fn("makeSqlite")(function* (): Effect.fn.Return<
+  Engine,
+  never,
+  Scope.Scope
+> {
   // effect-sql-sqlite-node 4.0.2 reports database setup failures as a typed SqlError;
   // a failed in-memory setup is a broken test environment, so it dies here.
   const context = yield* Layer.build(SqliteClient.layer({ filename: ":memory:" })).pipe(
@@ -210,7 +214,11 @@ export const makeSqlite: Effect.Effect<Engine, never, Scope.Scope> = Effect.gen(
 });
 
 /** Postgres in-process via PGlite: text `COLLATE "C"`, instants `timestamptz`. */
-export const makePostgres: Effect.Effect<Engine, never, Scope.Scope> = Effect.gen(function* () {
+export const makePostgres = Effect.fn("makePostgres")(function* (): Effect.fn.Return<
+  Engine,
+  never,
+  Scope.Scope
+> {
   const db = yield* Effect.acquireRelease(
     awaitPromise(async () => {
       const instance = new PGlite();

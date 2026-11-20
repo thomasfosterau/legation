@@ -40,6 +40,7 @@
  * membership/value, the same contract before position keys were
  * surfaced.
  */
+import * as P from "effect/Predicate";
 import * as Defined from "../Defined.js";
 import { describe, expect, it } from "@effect/vitest";
 import * as Arr from "effect/Array";
@@ -93,13 +94,13 @@ const mutators = Mutator.registry([
   },
 ]);
 
-const handlers: Record<string, MemoryBackend.BackendHandler> = {
+const handlers = {
   "todo/set": (args, writer) => Effect.asVoid(writer.put("todos", (args as Todo).id, args)),
   "todo/remove": (args, writer) => Effect.asVoid(writer.del("todos", (args as { id: string }).id)),
   "user/set": (args, writer) => Effect.asVoid(writer.put("users", (args as User).id, args)),
-};
+} satisfies Record<string, MemoryBackend.BackendHandler>;
 
-const makeServer = Effect.gen(function* () {
+const makeServer = Effect.fn("makeServer")(function* () {
   const backend = yield* MemoryBackend.make(handlers);
   const cvrStore = yield* Cvr.makeMemoryStore;
   const bus = yield* InvalidationBus.makeInProcess;
@@ -154,10 +155,10 @@ const foldBatches = (
   const folded = new Map<string, unknown>();
   Arr.forEach(batches, (batch) => {
     Arr.forEach(batch, (change) => {
-      if (change._tag === "reset") folded.clear();
-      else if (change._tag === "enter" || change._tag === "update") {
+      if (P.isTagged(change, "reset")) folded.clear();
+      else if (P.isTagged(change, "enter") || P.isTagged(change, "update")) {
         folded.set(change.row.id, change.row.value);
-      } else if (change._tag === "exit") folded.delete(change.id);
+      } else if (P.isTagged(change, "exit")) folded.delete(change.id);
     });
   });
   return folded;
@@ -221,7 +222,7 @@ describe("ClientEngine.observeChanges", () => {
     "Patch path: enter, then update, then exit",
     () =>
       Effect.gen(function* () {
-        const handler = yield* makeServer;
+        const handler = yield* makeServer();
         const writer = yield* makeClient(handler, "writer");
         const reader = yield* makeClient(handler, "reader");
         yield* reader.subscribe(todos);
@@ -266,7 +267,7 @@ describe("ClientEngine.observeChanges", () => {
     "includeInitial emits the current window as enters, exactly once, for a late subscriber",
     () =>
       Effect.gen(function* () {
-        const handler = yield* makeServer;
+        const handler = yield* makeServer();
         const writer = yield* makeClient(handler, "writer");
         const reader = yield* makeClient(handler, "reader");
         yield* reader.subscribe(todos);
@@ -282,7 +283,7 @@ describe("ClientEngine.observeChanges", () => {
         const seen = yield* Ref.get(batches);
         expect(seen).toHaveLength(1); // one batch: the initial enters, no gap/dup
         expect(
-          new Set((seen[0] ?? []).map((c) => (c._tag === "enter" ? c.row.id : undefined)))
+          new Set((seen[0] ?? []).map((c) => (P.isTagged(c, "enter") ? c.row.id : undefined)))
         ).toEqual(new Set(["1", "2"]));
       }),
     10000
@@ -292,7 +293,7 @@ describe("ClientEngine.observeChanges", () => {
     "a local mutation produces a precise Patch enter",
     () =>
       Effect.gen(function* () {
-        const handler = yield* makeServer;
+        const handler = yield* makeServer();
         const engine = yield* makeClient(handler, "solo");
         yield* engine.subscribe(todos);
 
@@ -319,7 +320,7 @@ describe("ClientEngine.observeChanges", () => {
     "Rebuild path (a pull racing a pending mutation): a reset marker followed by fresh enters",
     () =>
       Effect.gen(function* () {
-        const handler = yield* makeServer;
+        const handler = yield* makeServer();
         const writer = yield* makeClient(handler, "writer2");
         const reader = yield* makeClient(handler, "reader2");
         yield* reader.subscribe(todos);
@@ -348,7 +349,7 @@ describe("ClientEngine.observeChanges", () => {
         const entered = new Set(
           stripPositions(defined(seen[1]))
             .slice(1)
-            .map((c) => (c._tag === "enter" ? c.row.id : undefined))
+            .map((c) => (P.isTagged(c, "enter") ? c.row.id : undefined))
         );
         expect(entered).toEqual(new Set(["1", "2"])); // both the pulled row and the still-pending one
       }),
@@ -359,7 +360,7 @@ describe("ClientEngine.observeChanges", () => {
     "an observer of an untouched collection sees no spurious reset under a scoped rebuild",
     () =>
       Effect.gen(function* () {
-        const handler = yield* makeServer;
+        const handler = yield* makeServer();
         const writer = yield* makeClient(handler, "writer3");
         const reader = yield* makeClient(handler, "reader3");
         yield* reader.subscribe(todos);
@@ -400,7 +401,7 @@ describe("ClientEngine.observeChanges", () => {
     "a seq-gap collapse resets rather than losing the dropped deltas",
     () =>
       Effect.gen(function* () {
-        const handler = yield* makeServer;
+        const handler = yield* makeServer();
         const engine = yield* makeClient(handler, "storm", 4); // small bound → forced drops
         yield* engine.subscribe(todos);
 
@@ -483,7 +484,7 @@ describe("Mirror.observeChanges", () => {
     "diffs consecutive whole-page mirror updates into enter/update/exit",
     () =>
       Effect.gen(function* () {
-        const handler = yield* makeServer;
+        const handler = yield* makeServer();
         const engine = yield* makeEngine(handler);
         const pair = yield* MirrorChannel.makeLoopbackPair;
         yield* EngineHost.run({ channel: pair.host, engine });
@@ -520,7 +521,7 @@ describe("Mirror.observeChanges", () => {
     "includeInitial emits current rows as enters for a late subscriber",
     () =>
       Effect.gen(function* () {
-        const handler = yield* makeServer;
+        const handler = yield* makeServer();
         const engine = yield* makeEngine(handler);
         const pair = yield* MirrorChannel.makeLoopbackPair;
         yield* EngineHost.run({ channel: pair.host, engine });
@@ -602,7 +603,7 @@ describe("ClientEngine.observeChanges — randomized property through the real e
           (seed) =>
             Effect.scoped(
               Effect.gen(function* () {
-                const handler = yield* makeServer;
+                const handler = yield* makeServer();
                 // A tiny change-hub bound so an occasional burst forces a real
                 // seq-gap collapse, alongside the ordinary Patch/pending-pull-Rebuild
                 // paths — all three real triggers, randomized together.

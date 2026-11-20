@@ -83,7 +83,11 @@ const CONTRACT_DDL: ReadonlyArray<string> = [
   )`,
 ];
 
-const TABLES: Record<string, string> = {
+interface TableNames {
+  readonly [collection: string]: string;
+}
+
+const TABLES: TableNames = {
   __contract: "__contract",
   __contract_eval: "__contract_eval",
 };
@@ -111,7 +115,7 @@ const contractMutators = new Map<string, Mutator.AnyMutator>([
  * `ChangeHint`s since (unlike `MemoryBackend`) there is no shared writer to
  * derive them from.
  */
-const handlers: Record<string, SqlBackend.SqlHandler> = {
+const handlers = {
   [BackendContract.putRow.name]: (raw, tx) =>
     Effect.gen(function* () {
       const args = raw as {
@@ -178,7 +182,7 @@ const handlers: Record<string, SqlBackend.SqlHandler> = {
       });
       return yield* new MutationRejected({ reason: "contract/reject always rejects" });
     }),
-};
+} satisfies Record<string, SqlBackend.SqlHandler>;
 
 /** A fresh SQLite database with the contract tables; needs a scope. */
 const makeContractDatabase = Effect.fn("makeContractDatabase")(function* () {
@@ -446,7 +450,7 @@ const todoMutators = Mutator.registry([
   },
 ]);
 
-const todoHandlers: Record<string, SqlBackend.SqlHandler> = {
+const todoHandlers = {
   "todo/set": (raw, tx) =>
     Effect.gen(function* () {
       const args = raw as Todo;
@@ -456,7 +460,7 @@ const todoHandlers: Record<string, SqlBackend.SqlHandler> = {
       });
       return [{ collection: "todos", ids: [args.id] }];
     }),
-};
+} satisfies Record<string, SqlBackend.SqlHandler>;
 
 const allTodos = Subset.make({ collection: "todos" });
 
@@ -565,7 +569,7 @@ const PG_DDL: ReadonlyArray<string> = [
 const pgExecutor = PgExecutor.make;
 
 /** The contract mutators, as PostgreSQL statements (`$n` placeholders, `ON CONFLICT` upserts). */
-const pgHandlers: Record<string, SqlBackend.SqlHandler> = {
+const pgHandlers = {
   [BackendContract.putRow.name]: (raw, tx) =>
     Effect.gen(function* () {
       const args = raw as {
@@ -624,7 +628,7 @@ const pgHandlers: Record<string, SqlBackend.SqlHandler> = {
       });
       return yield* new BackendError({ message: "contract/write-then-fail fails after writing" });
     }),
-};
+} satisfies Record<string, SqlBackend.SqlHandler>;
 
 /** Runs `use` on a pooled PostgreSQL client against a freshly created contract schema. */
 const withPgContract = <A, E>(url: string, use: (sql: SqlClient) => Effect.Effect<A, E>) =>

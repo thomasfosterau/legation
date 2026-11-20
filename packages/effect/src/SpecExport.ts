@@ -295,9 +295,9 @@ export type Document = { readonly [key: string]: unknown };
 const ref = (name: string) => ({ $ref: `#/components/schemas/${name}` });
 const msgRef = (name: string) => ({ $ref: `#/components/messages/${name}` });
 const chanRef = (name: string) => ({ $ref: `#/channels/${name}` });
-const message = (payload: string): Document => ({ name: payload, payload: ref(payload) });
+const message = (payload: string) => ({ name: payload, payload: ref(payload) });
 
-const withDescription = (info: SpecInfo, extra: string): Document => ({
+const withDescription = (info: SpecInfo, extra: string) => ({
   title: info.title,
   version: info.version,
   description: info.description === undefined ? extra : `${info.description}\n\n${extra}`,
@@ -309,12 +309,7 @@ const withDescription = (info: SpecInfo, extra: string): Document => ({
  * every app type in `components.schemas`. Streamed pokes live in AsyncAPI.
  */
 export const toOpenApi = (spec: SyncSpec): Document => {
-  const operation = (
-    operationId: string,
-    summary: string,
-    request: string,
-    response: string
-  ): Document => ({
+  const operation = (operationId: string, summary: string, request: string, response: string) => ({
     post: {
       operationId,
       summary,

@@ -98,15 +98,27 @@ export const insert = <T>(tree: Tree<T>, value: T, compare: (a: T, b: T) => numb
   return node(tree.left, value, tree.right);
 };
 
+/** A non-empty tree's maximum value, paired with the tree minus it. */
+interface WithoutMax<T> {
+  readonly rest: Tree<T>;
+  readonly max: T;
+}
+
+/** A non-empty tree's minimum value, paired with the tree minus it. */
+interface WithoutMin<T> {
+  readonly rest: Tree<T>;
+  readonly min: T;
+}
+
 /** The maximum value of a non-empty tree, paired with the tree minus it. */
-const withoutMax = <T>(tree: Node<T>): { readonly rest: Tree<T>; readonly max: T } => {
+const withoutMax = <T>(tree: Node<T>): WithoutMax<T> => {
   if (tree.right === undefined) return { rest: tree.left, max: tree.value };
   const { rest, max } = withoutMax(tree.right);
   return { rest: balance(tree.left, tree.value, rest), max };
 };
 
 /** The minimum value of a non-empty tree, paired with the tree minus it. */
-const withoutMin = <T>(tree: Node<T>): { readonly rest: Tree<T>; readonly min: T } => {
+const withoutMin = <T>(tree: Node<T>): WithoutMin<T> => {
   if (tree.left === undefined) return { rest: tree.right, min: tree.value };
   const { rest, min } = withoutMin(tree.left);
   return { rest: balance(rest, tree.value, tree.right), min };

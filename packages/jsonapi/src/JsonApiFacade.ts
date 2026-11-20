@@ -655,7 +655,9 @@ export const fetchHandler = <Id extends string, Groups extends HttpApiGroup.Cons
     Effect.forEach(reads, (read) => coverageOf(read, { snapshot }), { concurrency: 1 }).pipe(
       Effect.map((verdicts) => {
         const first = verdicts[0];
-        return first?._tag === "Covered" && verdicts.every((verdict) => verdict._tag === "Covered")
+        return first !== undefined &&
+          P.isTagged(first, "Covered") &&
+          verdicts.every((verdict) => P.isTagged(verdict, "Covered"))
           ? Option.some(first)
           : Option.none();
       })

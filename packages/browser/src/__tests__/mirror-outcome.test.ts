@@ -45,13 +45,13 @@ const mutators = Mutator.registry([
   },
 ]);
 
-const backendHandlers: Record<string, MemoryBackend.BackendHandler> = {
+const backendHandlers = {
   "todo/set": (args, writer) => Effect.asVoid(writer.put("todos", (args as Todo).id, args)),
   "todo/forbidden": (args, writer) =>
     writer
       .put("todos", (args as Todo).id, args)
       .pipe(Effect.andThen(Effect.fail(new MutationRejected({ reason: "permission revoked" })))),
-};
+} satisfies Record<string, MemoryBackend.BackendHandler>;
 
 /** Real timers, independent of the test clock. */
 const sleepReal = (millis: number) =>
@@ -70,7 +70,7 @@ const eventually = <A, E>(read: Effect.Effect<A, E>, until: (value: A) => boolea
     return yield* Effect.die(new TestFailure({ message: "eventually: condition never held" }));
   });
 
-const makeEngine = Effect.gen(function* () {
+const makeEngine = Effect.fn("makeEngine")(function* () {
   const backend = yield* MemoryBackend.make(backendHandlers);
   const handler = yield* SyncServer.make.pipe(
     Effect.provideService(Backend.Backend, backend),
@@ -97,7 +97,7 @@ const makeEngine = Effect.gen(function* () {
 describe("Mirror.mutateWithAck", () => {
   it.effect("resolves applied once the host forwards the backend outcome", () =>
     Effect.gen(function* () {
-      const { engine, store } = yield* makeEngine;
+      const { engine, store } = yield* makeEngine();
       const { host, mirror: mirrorChannel } = yield* MirrorChannel.makeLoopbackPair;
       yield* EngineHost.run({ channel: host, engine });
       const mirror = yield* Mirror.make({ channel: mirrorChannel, mutators });
@@ -116,7 +116,7 @@ describe("Mirror.mutateWithAck", () => {
 
   it.effect("resolves rejected with the backend reason", () =>
     Effect.gen(function* () {
-      const { engine, store } = yield* makeEngine;
+      const { engine, store } = yield* makeEngine();
       const { host, mirror: mirrorChannel } = yield* MirrorChannel.makeLoopbackPair;
       yield* EngineHost.run({ channel: host, engine });
       const mirror = yield* Mirror.make({ channel: mirrorChannel, mutators });

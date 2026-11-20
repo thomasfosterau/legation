@@ -37,7 +37,7 @@ const sleepReal = (millis: number) =>
     return Effect.sync(() => clearTimeout(timer));
   });
 
-const makeEngine = Effect.gen(function* () {
+const makeEngine = Effect.fn("makeEngine")(function* () {
   const backend = yield* MemoryBackend.make(
     MemoryBackend.validatedHandlers([
       MemoryBackend.handler(todoSet, (args, writer) => writer.put("todos", args.id, args)),
@@ -68,7 +68,7 @@ const makeEngine = Effect.gen(function* () {
 describe("LiveQuery", () => {
   it.effect("an Atom reflects the live query and re-emits on mutate", () =>
     Effect.gen(function* () {
-      const { engine } = yield* makeEngine;
+      const { engine } = yield* makeEngine();
       yield* engine.subscribe(allTodos);
 
       const live = LiveQuery.make(engine);
@@ -106,7 +106,7 @@ describe("LiveQuery", () => {
 
   it.effect("the same subset yields the same Atom", () =>
     Effect.gen(function* () {
-      const { engine } = yield* makeEngine;
+      const { engine } = yield* makeEngine();
       const live = LiveQuery.make(engine);
       const a = live.atom(allTodos);
       const b = live.atom(Subset.make({ collection: "todos" }));

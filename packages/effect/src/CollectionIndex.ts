@@ -343,7 +343,7 @@ const intersect = (sets: ReadonlyArray<ReadonlySet<RowId>>): ReadonlySet<RowId> 
  * when no conjunct narrows — the caller's cue to fall back to a full scan.
  */
 export const plan = (index: CollectionIndex, predicate: Predicate.Predicate): Plan | undefined => {
-  const conjuncts = predicate._tag === "And" ? predicate.predicates : [predicate];
+  const conjuncts = P.isTagged(predicate, "And") ? predicate.predicates : [predicate];
   const narrowing: Array<ReadonlySet<RowId>> = [];
   const residual: Array<Predicate.Predicate> = [];
   for (const conjunct of conjuncts) {

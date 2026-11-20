@@ -228,7 +228,7 @@ describe("Relationships", () => {
 
         // observe's first emission matches a one-shot query.
         const first = yield* Stream.runHead(Relationships.observe(engine, issues, ["comments"]));
-        const initial = defined((first._tag === "Some" ? first.value : [])[0]);
+        const initial = defined((Option.isSome(first) ? first.value : [])[0]);
         expect(
           (initial.related.comments as ReadonlyArray<JsonApiRow>).map((c) => attr(c, "body"))
         ).toEqual([Option.some("first"), Option.some("second")]);
@@ -316,7 +316,7 @@ describe("Relationships", () => {
         // No manual subscribe of comments/people — related() does it.
         const stream = yield* Relationships.related(engine, issues, ["author", "comments"]);
         const head = yield* Stream.runHead(stream);
-        const issue = defined((head._tag === "Some" ? head.value : [])[0]);
+        const issue = defined((Option.isSome(head) ? head.value : [])[0]);
 
         expect(attr(issue.related.author as JsonApiRow, "name")).toEqual(Option.some("Ada"));
         expect(
@@ -339,7 +339,7 @@ describe("Relationships", () => {
         const engine = yield* ClientEngine.ClientEngine;
         const stream = yield* Relationships.related(engine, issues, ["author", "comments"]);
         const head = yield* Stream.runHead(stream);
-        const issue = defined((head._tag === "Some" ? head.value : [])[0]);
+        const issue = defined((Option.isSome(head) ? head.value : [])[0]);
 
         expect(
           (issue.related.comments as ReadonlyArray<JsonApiRow>).map((c) => attr(c, "body"))

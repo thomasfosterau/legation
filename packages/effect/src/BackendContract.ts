@@ -59,6 +59,7 @@
  * its totals are the unwindowed subset's size.
  */
 
+import * as P from "effect/Predicate";
 import * as Defined from "./Defined.js";
 import * as Arr from "effect/Array";
 import * as DateTime from "effect/DateTime";
@@ -366,9 +367,7 @@ const harnessExpectOk: Harness["expectOk"] = (rule, effect) =>
 
 const harnessExpectFail: Harness["expectFail"] = (rule, effect, what) =>
   Effect.exit(effect).pipe(
-    Effect.flatMap((exit) =>
-      harnessCheck(rule, exit._tag === "Failure", `Expected failure: ${what}`)
-    )
+    Effect.flatMap((exit) => harnessCheck(rule, Exit.isFailure(exit), `Expected failure: ${what}`))
   );
 
 const harnessExpectRegisteredFailure: Harness["expectRegisteredFailure"] = (
@@ -872,7 +871,7 @@ const NO_GATE = "";
 
 const retryTransient = <A>(effect: Effect.Effect<A, BackendError>) =>
   effect.pipe(
-    Effect.retry({ times: TRANSIENT_RETRIES, while: (error) => error._tag === "BackendError" })
+    Effect.retry({ times: TRANSIENT_RETRIES, while: (error) => P.isTagged(error, "BackendError") })
   );
 
 /** Runs the scheduler until `peerSettled` reads true, or `PEER_TURNS` turns have passed. */
@@ -934,7 +933,7 @@ const rule11CrossGroupLostUpdate: Rule = (h) =>
     const increment = (mutationId: number, gateName: string) =>
       h.mutation(mutationId, countUp.name, { collection: h.rows, id: row, gate: gateName });
 
-    const run = Effect.gen(function* () {
+    const run = Effect.fnUntraced(function* () {
       const first = yield* Effect.forkChild(
         retryTransient(h.backend.applyMutations(h.context, [increment(startId + 2, gate)]))
       );
@@ -996,7 +995,7 @@ const rule11CrossGroupLostUpdate: Rule = (h) =>
       );
     });
 
-    yield* run.pipe(
+    yield* run().pipe(
       Effect.ensuring(
         Effect.sync(() => parkGates.delete(gate)).pipe(
           Effect.andThen(Deferred.succeed(parked.release, undefined))

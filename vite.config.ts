@@ -132,10 +132,10 @@ export default defineConfig({
       "effect/require-safety-comment-for-type-assertion": "warn", // 621 sites
       "effect/imperative-loops": "warn", // 366 sites
       "effect/yield-in-for-loop": "warn", // 535 sites
-      "effect/avoid-direct-tag-checks": "warn", // 164 sites
+      "effect/avoid-direct-tag-checks": "warn", // 6 sites, the measured switches in internal/RowDispatch.ts
       "effect/avoid-direct-json": "warn", // 161 sites
-      "effect/prefer-effect-fn": "warn", // 124 sites
-      "effect/no-known-value-widening": "warn", // 98 sites
+      "effect/prefer-effect-fn": "warn", // 7 sites, exported effect values (public API)
+      "effect/no-known-value-widening": "warn", // 3 sites, exported return types (public API)
 
       // ---- Type-aware rules (oxlint-tsgolint) -------------------------------
       // Effect 4 marks much of its HTTP surface `@stability unstable`.

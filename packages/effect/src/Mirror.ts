@@ -822,7 +822,7 @@ export const make = (options: MirrorOptions): Effect.Effect<Mirror, never, Scope
     // Subscribe BEFORE the first read: a key published while the
     // initial read runs must land in this subscription's buffer, or a quiet
     // mirror never re-reads (gap detection needs a next item).
-    const subscribeToKeyHub = Effect.gen(function* () {
+    const subscribeToKeyHub = Effect.fnUntraced(function* () {
       const subscription = yield* PubSub.subscribe(keyHub);
       const startSeq = yield* Ref.get(keySeq);
       const lastSeenRef = yield* Ref.make(startSeq);
@@ -853,7 +853,7 @@ export const make = (options: MirrorOptions): Effect.Effect<Mirror, never, Scope
     const observeKey = <A>(key: string, read: Effect.Effect<A>): Stream.Stream<A> =>
       Stream.unwrap(
         Effect.gen(function* () {
-          const { subscription, lastSeenRef } = yield* subscribeToKeyHub;
+          const { subscription, lastSeenRef } = yield* subscribeToKeyHub();
           return Stream.concat(
             Stream.fromEffect(read),
             Stream.fromSubscription(subscription).pipe(
@@ -876,7 +876,7 @@ export const make = (options: MirrorOptions): Effect.Effect<Mirror, never, Scope
     ): Stream.Stream<ReadonlyArray<RowChange.RowChange<ClientEngine.LocalRow>>> =>
       Stream.unwrap(
         Effect.gen(function* () {
-          const { subscription, lastSeenRef } = yield* subscribeToKeyHub;
+          const { subscription, lastSeenRef } = yield* subscribeToKeyHub();
           const initialRows = yield* read;
           const previousRef = yield* Ref.make(initialRows);
           const initial: ReadonlyArray<ReadonlyArray<RowChange.RowChange<ClientEngine.LocalRow>>> =

@@ -132,7 +132,7 @@ const mutators = Mutator.registry([
   },
 ]);
 
-const makeEngine = Effect.gen(function* () {
+const makeEngine = Effect.fn("makeEngine")(function* () {
   const backend = yield* MemoryBackend.make(
     MemoryBackend.validatedHandlers([
       MemoryBackend.handler(productSet, (args, writer) =>
@@ -171,7 +171,7 @@ const makeEngine = Effect.gen(function* () {
 describe("Query.run / Query.observe", () => {
   it.effect("runs a root-only read and a read with windowed includes", () =>
     Effect.gen(function* () {
-      const engine = yield* makeEngine;
+      const engine = yield* makeEngine();
       const view = ClientView.fromEngine(engine);
 
       yield* engine.mutate("product/set", { id: "p-1", name: "Desk", categoryId: "c-1" });
@@ -205,7 +205,7 @@ describe("Query.run / Query.observe", () => {
   it.effect("observe re-emits when an included edge's rows change", () =>
     Effect.scoped(
       Effect.gen(function* () {
-        const engine = yield* makeEngine;
+        const engine = yield* makeEngine();
         const view = ClientView.fromEngine(engine);
 
         yield* engine.mutate("product/set", { id: "p-1", name: "Desk", categoryId: "c-1" });

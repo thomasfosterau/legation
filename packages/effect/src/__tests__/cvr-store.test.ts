@@ -4,6 +4,7 @@
  * store give a client cross-instance pull continuity (a cookie minted by
  * instance A is recognized by instance B, so no reset).
  */
+import * as P from "effect/Predicate";
 import { expect, layer, describe } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as Scope from "effect/Scope";
@@ -99,7 +100,7 @@ describe("shared CVR store across instances", () => {
           cookie: undefined,
           subscriptions: [allTodos],
         });
-        expect(first.patch.some((op: PatchOp) => op._tag === "Put")).toBe(true);
+        expect(first.patch.some((op: PatchOp) => P.isTagged(op, "Put"))).toBe(true);
 
         // Pull from B presenting A's cookie: B finds the CVR in shared storage,
         // so the view is unchanged — no reset (no Clear), no redundant puts.
@@ -108,7 +109,7 @@ describe("shared CVR store across instances", () => {
           cookie: first.cookie,
           subscriptions: [allTodos],
         });
-        expect(second.patch.some((op: PatchOp) => op._tag === "Clear")).toBe(false);
+        expect(second.patch.some((op: PatchOp) => P.isTagged(op, "Clear"))).toBe(false);
         expect(second.patch).toEqual([]);
       })
     );

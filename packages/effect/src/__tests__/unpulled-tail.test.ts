@@ -64,9 +64,9 @@ const counterMutators = Mutator.registry([
   },
 ]);
 
-const backendHandlers: Record<string, MemoryBackend.BackendHandler> = {
+const backendHandlers = {
   "counter/inc": (args, writer) => incrementCounter(writer, (args as { readonly id: string }).id),
-};
+} satisfies Record<string, MemoryBackend.BackendHandler>;
 
 const authPolicy = Authorization.policy({ counters: Authorization.allowAll });
 const countersSubset = Subset.make({ collection: "counters" });
@@ -2139,21 +2139,21 @@ describeWrapped("a push that takes the tail to half the bound pulls ahead of it"
         yield* Ref.set(probe.failing, true);
 
         let total = 0;
-        const pushOne = Effect.gen(function* () {
+        const pushOne = Effect.fn("pushOne")(function* () {
           yield* engine.mutate("counter/inc", { id: "c" });
           yield* engine.push;
           total += 1;
         });
 
         // Crossing the threshold starts a pull, and it fails.
-        for (let i = 0; i < BURST_LIMIT / 2; i++) yield* pushOne;
+        for (let i = 0; i < BURST_LIMIT / 2; i++) yield* pushOne();
         expect(
           yield* settles(Ref.get(probe.failed).pipe(Effect.map((n) => n >= 1))),
           "the pull ahead to fail"
         ).toBe(true);
         // Pushes carry on while the pull is down: each is acknowledged and the journal drains.
         for (let i = 0; i < 8; i++) {
-          yield* pushOne;
+          yield* pushOne();
           expect(yield* store.pendingMutations).toEqual([]);
         }
 
@@ -2161,7 +2161,7 @@ describeWrapped("a push that takes the tail to half the bound pulls ahead of it"
         // tail; a push that lands while it is still ending starts none, so keep pushing until one does.
         yield* Ref.set(probe.failing, false);
         for (let i = 0; i < 16 && Arr.isReadonlyArrayNonEmpty(yield* store.unpulled); i++) {
-          yield* pushOne;
+          yield* pushOne();
           yield* Effect.yieldNow;
         }
         expect(
@@ -2346,7 +2346,7 @@ describeWrapped("a memory snapshot is one pull's state", (it) => {
       const rounds = 200;
       let torn = 0;
       const seen = new Set<number | undefined>();
-      const pulls = Effect.gen(function* () {
+      const pulls = Effect.fn("pulls")(function* () {
         for (let k = 1; k <= rounds; k++) {
           yield* defined(store.commitPull)({
             lastMutationIds: {},
@@ -2355,7 +2355,7 @@ describeWrapped("a memory snapshot is one pull's state", (it) => {
           });
         }
       });
-      const reads = Effect.gen(function* () {
+      const reads = Effect.fn("reads")(function* () {
         for (let i = 0; i < rounds * 2; i++) {
           const state = yield* defined(store.snapshot);
           const row = state.rows.find((entry) => entry.row.id === "a")?.row;
@@ -2364,8 +2364,8 @@ describeWrapped("a memory snapshot is one pull's state", (it) => {
           if (state.cookie !== (n === undefined ? undefined : `c${n}`)) torn++;
         }
       });
-      const pulling = yield* Effect.forkChild(pulls);
-      const reading = yield* Effect.forkChild(reads);
+      const pulling = yield* Effect.forkChild(pulls());
+      const reading = yield* Effect.forkChild(reads());
       yield* Fiber.join(pulling);
       yield* Fiber.join(reading);
       // The reads must interleave with the pulls, or the check above is vacuous.

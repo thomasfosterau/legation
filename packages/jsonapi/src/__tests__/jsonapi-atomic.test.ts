@@ -113,7 +113,7 @@ const makeServer = (
   } = {}
 ) => {
   const requests: Array<Recorded> = [];
-  const rows: Record<string, StoredRow> = { ...options.rows };
+  const rows = { ...options.rows } satisfies Record<string, StoredRow>;
   const readStatuses = [...(options.readStatuses ?? [])];
   const readDocuments = [...(options.readDocuments ?? [])];
   let writes = 0;
@@ -299,10 +299,10 @@ describe("Convention.reflectAtomic", () => {
 });
 
 /** The rows the server holds before `three` is pushed: the update's and the delete's targets. */
-const threeRows: Rows = {
+const threeRows = {
   "2": { attributes: { title: "old second", done: false } },
   "3": { attributes: { title: "old third" } },
-};
+} satisfies Rows;
 const threeServer = (script: (request: Recorded, index: number) => Response) =>
   makeServer(script, { rows: threeRows });
 
@@ -1399,7 +1399,7 @@ const makeStatefulServer = () => {
 
 describe("JsonApiSync.layer atomic detection", () => {
   const all = Subset.make({ collection: "todos" });
-  const createAndSync = Effect.gen(function* () {
+  const createAndSync = Effect.fn("createAndSync")(function* () {
     const engine = yield* ClientEngine.ClientEngine;
     yield* engine.subscribe(all);
     yield* engine.mutate("todos/create", {
@@ -1415,7 +1415,7 @@ describe("JsonApiSync.layer atomic detection", () => {
   it.effect("pushes through the reflected operations endpoint", () =>
     Effect.gen(function* () {
       const server = makeStatefulServer();
-      const titles = yield* createAndSync.pipe(
+      const titles = yield* createAndSync().pipe(
         withLayer(
           JsonApiSync.layer(api, {
             baseUrl: "http://api.test",
@@ -1434,7 +1434,7 @@ describe("JsonApiSync.layer atomic detection", () => {
   it.effect("`atomic: false` keeps one request per mutation", () =>
     Effect.gen(function* () {
       const server = makeStatefulServer();
-      const titles = yield* createAndSync.pipe(
+      const titles = yield* createAndSync().pipe(
         withLayer(
           JsonApiSync.layer(api, {
             baseUrl: "http://api.test",

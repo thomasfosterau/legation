@@ -241,7 +241,7 @@ interface ParkingStore {
   readonly gate: Ref.Ref<Parked | undefined>;
 }
 
-const parkingStore = Effect.gen(function* () {
+const parkingStore = Effect.fn("parkingStore")(function* () {
   const memory = yield* ClientStoreModule.makeMemory;
   const calls = yield* Ref.make(0);
   const gate = yield* Ref.make<Parked | undefined>(undefined);
@@ -522,7 +522,7 @@ describe("ClientEngine + CollectionIndex", () => {
     () =>
       Effect.gen(function* () {
         // The build holds the pre-patch snapshot while the pull below writes and reveals.
-        const parking = yield* parkingStore;
+        const parking = yield* parkingStore();
         // i1 is seeded at priority 1; the pull moves it to priority 3.
         const patches = yield* Ref.make<ReadonlyArray<PullResponse["patch"]>>([
           [
@@ -590,7 +590,7 @@ describe("ClientEngine + CollectionIndex", () => {
 
   it.effect("a hydrate that lands mid-build is not installed as a stale index", () =>
     Effect.gen(function* () {
-      const parking = yield* parkingStore;
+      const parking = yield* parkingStore();
       const engine = yield* ClientEngineModule.make({
         clientId: "c",
         clientGroupId: "g",
@@ -857,7 +857,7 @@ describe("ClientEngine + CollectionIndex", () => {
         journal: [],
       };
       // A store that counts `listRows`: an engine re-read drops its overlay, so its next query lists rows.
-      const counting = Effect.gen(function* () {
+      const counting = Effect.fn("counting")(function* () {
         const memory = yield* ClientStoreModule.makeMemory;
         const reads = yield* Ref.make(0);
         const store = ClientStore.of({
@@ -870,7 +870,7 @@ describe("ClientEngine + CollectionIndex", () => {
       const all = Subset.make({ collection: "items" });
 
       // Build, seed and warm an engine, then close its scope. Its engine value stays in hand.
-      const closed = yield* counting;
+      const closed = yield* counting();
       const engine = yield* Effect.scoped(
         Effect.gen(function* () {
           const built = yield* priorityEngine(closed.store);
@@ -885,7 +885,7 @@ describe("ClientEngine + CollectionIndex", () => {
       expect(yield* Ref.get(closed.reads)).toBe(closedBefore);
 
       // Control: an engine still open re-reads on the same hydrate, so the same query lists rows.
-      const open = yield* counting;
+      const open = yield* counting();
       const live = yield* priorityEngine(open.store);
       yield* seedEngine(live, [{ id: "i1", priority: 1, done: false }]);
       yield* live.query(all);

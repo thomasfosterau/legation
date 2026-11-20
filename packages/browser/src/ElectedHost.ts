@@ -308,7 +308,7 @@ export const run = <Graph extends Node.NodeRegistry>(
     const viewRef = yield* SubscriptionRef.make<ClientView.ClientView>(mirror);
     const roleRef = yield* SubscriptionRef.make<Role>("mirror");
 
-    const becomeHost = Effect.gen(function* () {
+    const becomeHost = Effect.fnUntraced(function* () {
       const hostClientId = options.hostClientId ?? `host-${options.clientGroupId}`;
       // One counted voice for both fronts over this engine — the host
       // serving other tabs and this tab's own view — so a mirror releasing
@@ -350,7 +350,7 @@ export const run = <Graph extends Node.NodeRegistry>(
         "ElectedHost: navigator.locks is unavailable — becoming host immediately. " +
           "This is only correct for a single tab; see the README's topology docs."
       );
-      yield* becomeHost;
+      yield* becomeHost();
     } else {
       // A failure here (e.g. the durable store or transport failing to
       // construct) leaves this tab mirroring forever rather than crashing
@@ -358,7 +358,7 @@ export const run = <Graph extends Node.NodeRegistry>(
       // since there's nothing more useful to do with it from here.
       yield* Effect.forkScoped(
         electLeader(locks, options.clientGroupId).pipe(
-          Effect.andThen(becomeHost),
+          Effect.andThen(becomeHost()),
           Effect.tapCause((cause) => Effect.logError("ElectedHost: failed to become host", cause)),
           Effect.ignore
         )

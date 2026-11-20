@@ -267,13 +267,13 @@ const recordEffect = (
   id: string,
   effect: WriteEffect
 ): void => {
-  if (effect._tag === "delete") {
-    puts.get(collection)?.delete(id);
-  } else {
+  if (P.isTagged(effect, "put")) {
     puts.set(
       collection,
       (puts.get(collection) ?? new Map<string, unknown>()).set(id, effect.value)
     );
+  } else {
+    puts.get(collection)?.delete(id);
   }
 };
 
@@ -377,13 +377,18 @@ type AtomicOperation =
   | { readonly op: "add" | "update"; readonly data: WriteData }
   | { readonly op: "remove"; readonly ref: { readonly type: string; readonly id: string } };
 
+/** A JSON:API write body: one resource under `data`. */
+interface WriteBody {
+  readonly data: WriteData;
+}
+
 /** Build a JSON:API write body (`{ data: { type, id, attributes, ... } }`). */
 const writeBody = (
   type: string,
   id: string,
   attributes: WriteAttributes,
   relationships?: WriteRelationships
-): { readonly data: WriteData } => ({
+): WriteBody => ({
   data: {
     type,
     id,
@@ -1277,7 +1282,7 @@ export const make = (
                   Effect.succeed({ _tag: "rejected", reason: error.reason } as const)
                 )
               );
-              if (outcome._tag === "applied") {
+              if (P.isTagged(outcome, "applied")) {
                 recordApplied(acc, write, outcome.document);
                 yield* cacheApplied(acc, write);
               } else {
@@ -1386,7 +1391,7 @@ export const make = (
               atomic.path,
               pending.map((entry) => operationOf(entry.write))
             );
-            if (outcome._tag === "applied") return { pending, results: outcome.results };
+            if (P.isTagged(outcome, "applied")) return { pending, results: outcome.results };
             const refused = outcome.rejections.flatMap(({ index }) => {
               const entry = pending[index];
               return entry === undefined ? [] : [entry];

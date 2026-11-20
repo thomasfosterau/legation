@@ -57,28 +57,30 @@ const setTodo = Mutator.registry([
   },
 ]);
 
-const backendHandlers: Record<string, MemoryBackend.BackendHandler> = {
+const backendHandlers = {
   "todo/set": (args, writer) => {
     const todo = args as Todo;
     return Effect.asVoid(writer.put("todos", todo.id, todo));
   },
-};
+} satisfies Record<string, MemoryBackend.BackendHandler>;
 
 const authPolicy = Authorization.policy({ todos: Authorization.allowAll });
 
-const makeServer: Effect.Effect<Transport.ServerHandler, never, Scope.Scope> = Effect.gen(
-  function* () {
-    const backend = yield* MemoryBackend.make(backendHandlers);
-    const cvrStore = yield* Cvr.makeMemoryStore;
-    const bus = yield* InvalidationBus.makeInProcess;
-    return yield* SyncServer.make.pipe(
-      Effect.provideService(Backend.Backend, backend),
-      Effect.provideService(Authorization.AuthPolicy, authPolicy),
-      Effect.provideService(Cvr.CvrStore, cvrStore),
-      Effect.provideService(InvalidationBus.InvalidationBus, bus)
-    );
-  }
-);
+const makeServer = Effect.fn("makeServer")(function* (): Effect.fn.Return<
+  Transport.ServerHandler,
+  never,
+  Scope.Scope
+> {
+  const backend = yield* MemoryBackend.make(backendHandlers);
+  const cvrStore = yield* Cvr.makeMemoryStore;
+  const bus = yield* InvalidationBus.makeInProcess;
+  return yield* SyncServer.make.pipe(
+    Effect.provideService(Backend.Backend, backend),
+    Effect.provideService(Authorization.AuthPolicy, authPolicy),
+    Effect.provideService(Cvr.CvrStore, cvrStore),
+    Effect.provideService(InvalidationBus.InvalidationBus, bus)
+  );
+});
 
 const allTodos = Subset.make({ collection: "todos" });
 
@@ -130,7 +132,7 @@ describe("BrowserConnectivity", () => {
   it.effect("online/offline drives status; reconnect triggers push+pull; focus triggers pull", () =>
     Effect.gen(function* () {
       setVisible();
-      const handler = yield* makeServer;
+      const handler = yield* makeServer();
       const store = yield* ClientStore.makeMemory;
       const base = yield* Transport.makeInMemory(handler, "group-a");
 
@@ -204,7 +206,7 @@ describe("BrowserConnectivity", () => {
         Effect.gen(function* () {
           const navigatorStub = { onLine: true };
           yield* stubWorkerGlobals(navigatorStub);
-          const handler = yield* makeServer;
+          const handler = yield* makeServer();
           const store = yield* ClientStore.makeMemory;
           const base = yield* Transport.makeInMemory(handler, "group-a");
 
@@ -268,7 +270,7 @@ describe("BrowserConnectivity", () => {
         Effect.gen(function* () {
           const navigatorStub = { onLine: true };
           yield* stubWorkerGlobals(navigatorStub);
-          const handler = yield* makeServer;
+          const handler = yield* makeServer();
           const store = yield* ClientStore.makeMemory;
           const base = yield* Transport.makeInMemory(handler, "group-a");
 
@@ -329,7 +331,7 @@ describe("BrowserConnectivity", () => {
         // Offline from the start: the combined status is "disconnected".
         const navigatorStub = { onLine: false };
         yield* stubWorkerGlobals(navigatorStub);
-        const handler = yield* makeServer;
+        const handler = yield* makeServer();
         const store = yield* ClientStore.makeMemory;
         const base = yield* Transport.makeInMemory(handler, "group-a");
 

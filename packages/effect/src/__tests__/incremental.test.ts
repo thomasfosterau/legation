@@ -28,10 +28,10 @@ const put =
   (args, writer) =>
     Effect.asVoid(writer.put(collection, (args as { id: string }).id, args));
 
-const handlers: Record<string, MemoryBackend.BackendHandler> = {
+const handlers = {
   "todo/set": put("todos"),
   "user/set": put("users"),
-};
+} satisfies Record<string, MemoryBackend.BackendHandler>;
 const mutators = Mutator.registry([
   {
     mutator: Mutator.make("todo/set", Schema.Unknown),
@@ -43,7 +43,7 @@ const mutators = Mutator.registry([
   },
 ]);
 
-const makeServer = Effect.gen(function* () {
+const makeServer = Effect.fn("makeServer")(function* () {
   const backend = yield* MemoryBackend.make(handlers);
   const cvrStore = yield* Cvr.makeMemoryStore;
   const bus = yield* InvalidationBus.makeInProcess;
@@ -79,7 +79,7 @@ describe("selective live-query re-evaluation", () => {
     "re-evaluates a query only when its collection changes",
     () =>
       Effect.gen(function* () {
-        const handler = yield* makeServer;
+        const handler = yield* makeServer();
         const writer = yield* makeClient(handler, "writer");
         const reader = yield* makeClient(handler, "reader");
 
@@ -131,7 +131,7 @@ describe("selective live-query re-evaluation", () => {
           limit: 2,
         });
 
-        const handler = yield* makeServer;
+        const handler = yield* makeServer();
         const writer = yield* makeClient(handler, "writer");
         const reader = yield* makeClient(handler, "reader");
 

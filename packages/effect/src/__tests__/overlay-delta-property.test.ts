@@ -78,7 +78,7 @@ const mutators = Mutator.registry([
   },
 ]);
 
-const backendHandlers: Record<string, MemoryBackend.BackendHandler> = {
+const backendHandlers = {
   "todo/put": (args, writer) =>
     Effect.asVoid(writer.put("todos", asPut(args).id, asPut(args).value)),
   "todo/del": (args, writer) => Effect.asVoid(writer.del("todos", asId(args).id)),
@@ -91,9 +91,13 @@ const backendHandlers: Record<string, MemoryBackend.BackendHandler> = {
         )
       ),
   "todo/reject": () => Effect.fail(new MutationRejected({ reason: "property test rejection" })),
-};
+} satisfies Record<string, MemoryBackend.BackendHandler>;
 
-const makeServer: Effect.Effect<ServerHandler, never, Scope.Scope> = Effect.gen(function* () {
+const makeServer = Effect.fn("makeServer")(function* (): Effect.fn.Return<
+  ServerHandler,
+  never,
+  Scope.Scope
+> {
   const backend = yield* MemoryBackend.make(backendHandlers);
   const cvrStore = yield* Cvr.makeMemoryStore;
   const bus = yield* InvalidationBus.makeInProcess;
@@ -246,7 +250,7 @@ describe("optimistic overlay delta-maintenance property", () => {
       Effect.gen(function* () {
         for (let seed = 1; seed <= SEEDS; seed++) {
           const rng = mulberry32(seed * 7919);
-          const handler = yield* makeServer;
+          const handler = yield* makeServer();
           const store = yield* ClientStoreModule.makeMemory;
           const engine = yield* makeEngine(handler, store, `seed-${seed}`);
           yield* engine.subscribe(allTodos);
@@ -271,7 +275,7 @@ describe("optimistic overlay delta-maintenance property", () => {
       Effect.gen(function* () {
         for (let seed = 1; seed <= 5; seed++) {
           const rng = mulberry32(seed * 104729);
-          const handler = yield* makeServer;
+          const handler = yield* makeServer();
           const store = yield* ClientStoreModule.makeMemory;
           const engine = yield* makeEngine(handler, store, `observer-seed-${seed}`);
           yield* engine.subscribe(allTodos);

@@ -9,6 +9,7 @@
  * or the node graph's synthetic resources), `toCover`, the single-resource
  * shape of `/{type}/{id}`, and the grammar's rejection of a bad URL.
  */
+import * as Cause from "effect/Cause";
 import { assert, describe, expect, it } from "@effect/vitest";
 import * as Arr from "effect/Array";
 import * as Effect from "effect/Effect";
@@ -70,7 +71,11 @@ interface SeedRow {
   readonly [field: string]: Schema.Json;
 }
 
-const seed: Readonly<Record<string, ReadonlyArray<SeedRow>>> = {
+interface Seed {
+  readonly [collection: string]: ReadonlyArray<SeedRow>;
+}
+
+const seed: Seed = {
   categories: [{ id: "c-audio", name: "Audio" }],
   products: [
     { id: "p-1", categoryId: "c-audio", name: "Desk", priceCents: 300 },
@@ -390,7 +395,7 @@ describe("ReplicaDocuments over the replica", () => {
       assert(Exit.isFailure(exit));
       const error = defined(exit.cause.reasons[0]);
       expect(error._tag).toBe("Fail");
-      assert(error._tag === "Fail");
+      assert(Cause.isFailReason(error));
       expect(error.error).toBeInstanceOf(QueryError);
       expect(error.error.parameter).toBe("filter[name]");
     })
@@ -446,7 +451,7 @@ describe("ReplicaDocuments over the replica", () => {
         });
         // Nothing died: the failures were typed, so a façade can route the request on.
         const exit = yield* Effect.exit(docs.fromUrl(view, "/reviews"));
-        expect(Exit.isFailure(exit) && exit.cause.reasons.every((r) => r._tag === "Fail")).toBe(
+        expect(Exit.isFailure(exit) && exit.cause.reasons.every((r) => Cause.isFailReason(r))).toBe(
           true
         );
       })

@@ -55,7 +55,7 @@ const seed = (engine: ClientEngineModule.ClientEngine) =>
     { concurrency: 1, discard: true }
   );
 
-const scenario = Effect.gen(function* () {
+const scenario = Effect.fnUntraced(function* () {
   const store = yield* ClientStoreModule.makeMemory;
   const engine = yield* ClientEngineModule.make({
     clientId: "bench",
@@ -91,7 +91,7 @@ layer(transportLayer, { excludeTestServices: true })("write-path IVM", (it) => {
       const run = Effect.runPromiseWith(yield* Effect.context<ClientTransport>());
       yield* awaitPromise(() =>
         bench(`${MUTATIONS} mutates over ${ROWS} rows with ${OBSERVERS} observers`, async () => {
-          await run(scenario.pipe(Effect.scoped));
+          await run(scenario().pipe(Effect.scoped));
         }).run({ time: 1000 })
       ).pipe(Effect.orDie);
     })

@@ -54,6 +54,7 @@
  * sync that edge, so nothing may be credited for it.
  */
 
+import * as P from "effect/Predicate";
 import * as Defined from "./Defined.js";
 import type { UrlReads } from "./Client.js";
 import * as ClientEngine from "./ClientEngine.js";
@@ -878,7 +879,7 @@ export const run = (options: EngineHostOptions): Effect.Effect<Host, never, Scop
         _tag: "MutateSettled",
         ...replyTo(request),
         outcome: outcome._tag,
-        ...Defined.fields({ reason: outcome._tag === "rejected" ? outcome.reason : undefined }),
+        ...Defined.fields({ reason: P.isTagged(outcome, "rejected") ? outcome.reason : undefined }),
       });
 
     // A `Mutate` naming the reserved form mutator is an enhanced form submit's
@@ -1000,7 +1001,7 @@ export const run = (options: EngineHostOptions): Effect.Effect<Host, never, Scop
 
     // Liveness sweep: reclaim registrations from mirrors silent past the timeout.
     const { mirrorTimeout, sweepInterval } = livenessOf(options);
-    const sweep = Effect.gen(function* () {
+    const sweep = Effect.fnUntraced(function* () {
       const now = yield* Clock.currentTimeMillis;
       const cutoff = now - Duration.toMillis(mirrorTimeout);
       const stale = [...(yield* Ref.get(lastSeen))]
@@ -1012,7 +1013,7 @@ export const run = (options: EngineHostOptions): Effect.Effect<Host, never, Scop
       });
     });
     yield* Effect.forkScoped(
-      Effect.forever(sweep.pipe(Effect.andThen(Effect.sleep(sweepInterval))))
+      Effect.forever(sweep().pipe(Effect.andThen(Effect.sleep(sweepInterval))))
     );
 
     // A pull that applies may make a registration pulled: tell the mirrors. The
@@ -1026,7 +1027,7 @@ export const run = (options: EngineHostOptions): Effect.Effect<Host, never, Scop
           Effect.flatMap((events) =>
             Effect.forEach(
               events,
-              (event) => (event._tag === "PullCompleted" ? announce : Effect.void),
+              (event) => (P.isTagged(event, "PullCompleted") ? announce : Effect.void),
               { concurrency: 1, discard: true }
             )
           )

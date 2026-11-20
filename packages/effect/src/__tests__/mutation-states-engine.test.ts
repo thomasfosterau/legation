@@ -5,6 +5,7 @@
  * `mutateWithAck` (the state map must reflect every journaled mutation), and
  * bounded under a mutation storm.
  */
+import * as P from "effect/Predicate";
 import { describe, expect, it } from "@effect/vitest";
 import * as Deferred from "effect/Deferred";
 import * as Duration from "effect/Duration";
@@ -52,15 +53,19 @@ const mutators = Mutator.registry([
   },
 ]);
 
-const backendHandlers: Record<string, MemoryBackend.BackendHandler> = {
+const backendHandlers = {
   "todo/set": (args, writer) => Effect.asVoid(writer.put("todos", (args as Todo).id, args)),
   "todo/forbidden": (args, writer) =>
     writer
       .put("todos", (args as Todo).id, args)
       .pipe(Effect.andThen(Effect.fail(new MutationRejected({ reason: "permission revoked" })))),
-};
+} satisfies Record<string, MemoryBackend.BackendHandler>;
 
-const makeServer: Effect.Effect<ServerHandler, never, Scope.Scope> = Effect.gen(function* () {
+const makeServer = Effect.fn("makeServer")(function* (): Effect.fn.Return<
+  ServerHandler,
+  never,
+  Scope.Scope
+> {
   const backend = yield* MemoryBackend.make(backendHandlers);
   const cvrStore = yield* Cvr.makeMemoryStore;
   const bus = yield* InvalidationBus.makeInProcess;
@@ -100,7 +105,7 @@ const makeEngine = (
  * current value to a fresh subscriber, so a one-shot `runHead` is a snapshot. */
 const snapshot = (engine: ClientEngineModule.ClientEngine) =>
   Stream.runHead(engine.mutationStates).pipe(
-    Effect.map((option) => (option._tag === "Some" ? option.value : HashMap.empty()))
+    Effect.map((option) => (Option.isSome(option) ? option.value : HashMap.empty()))
   );
 
 const get = (map: MutationState.MutationStateMap, id: number) =>
@@ -109,7 +114,7 @@ const get = (map: MutationState.MutationStateMap, id: number) =>
 describe("ClientEngine.mutationStates", () => {
   it.effect("is empty before any mutation is journaled", () =>
     Effect.gen(function* () {
-      const handler = yield* makeServer;
+      const handler = yield* makeServer();
       const store = yield* ClientStoreModule.makeMemory;
       const engine = yield* makeEngine(handler, store);
       expect(HashMap.size(yield* snapshot(engine))).toBe(0);
@@ -118,7 +123,7 @@ describe("ClientEngine.mutationStates", () => {
 
   it.effect("seeds pending entries from the journal at boot (reload shows pending intents)", () =>
     Effect.gen(function* () {
-      const handler = yield* makeServer;
+      const handler = yield* makeServer();
       const store = yield* ClientStoreModule.makeMemory;
       // Simulate a reload: append directly to the store's journal before the
       // engine is constructed, as a durable journal would already hold.
@@ -145,7 +150,7 @@ describe("ClientEngine.mutationStates", () => {
 
   it.effect("a plain `mutate` is tracked as pending, then acknowledged after push", () =>
     Effect.gen(function* () {
-      const handler = yield* makeServer;
+      const handler = yield* makeServer();
       const store = yield* ClientStoreModule.makeMemory;
       const engine = yield* makeEngine(handler, store);
       yield* engine.subscribe(allTodos);
@@ -166,7 +171,7 @@ describe("ClientEngine.mutationStates", () => {
 
   it.effect("a plain `mutate` through a rejected mutator settles as rejected with a reason", () =>
     Effect.gen(function* () {
-      const handler = yield* makeServer;
+      const handler = yield* makeServer();
       const store = yield* ClientStoreModule.makeMemory;
       const engine = yield* makeEngine(handler, store);
       yield* engine.subscribe(allTodos);
@@ -182,7 +187,7 @@ describe("ClientEngine.mutationStates", () => {
 
   it.effect("mutateWithAck-journaled mutations are tracked the same way", () =>
     Effect.gen(function* () {
-      const handler = yield* makeServer;
+      const handler = yield* makeServer();
       const store = yield* ClientStoreModule.makeMemory;
       const engine = yield* makeEngine(handler, store);
       yield* engine.subscribe(allTodos);
@@ -199,7 +204,7 @@ describe("ClientEngine.mutationStates", () => {
 
   it.effect("a mutation storm bounds terminal entries without dropping pending ones", () =>
     Effect.gen(function* () {
-      const handler = yield* makeServer;
+      const handler = yield* makeServer();
       const store = yield* ClientStoreModule.makeMemory;
       const engine = yield* makeEngine(handler, store, {
         mutationStateRetention: { maxTerminal: 5 },
@@ -228,7 +233,7 @@ describe("ClientEngine.mutationStates", () => {
 
   it.effect("dropIfPending settles the compacted entry as 'dropped', not stuck pending", () =>
     Effect.gen(function* () {
-      const handler = yield* makeServer;
+      const handler = yield* makeServer();
       const store = yield* ClientStoreModule.makeMemory;
       const engine = yield* makeEngine(handler, store);
       yield* engine.subscribe(allTodos);
@@ -253,7 +258,7 @@ describe("ClientEngine.mutationStates", () => {
 
   it.effect("a 'dropped' state survives the mirror wire", () =>
     Effect.gen(function* () {
-      const handler = yield* makeServer;
+      const handler = yield* makeServer();
       const store = yield* ClientStoreModule.makeMemory;
       const engine = yield* makeEngine(handler, store);
       yield* engine.mutate("todo/set", { id: "1", title: "superseded", done: false });
@@ -279,7 +284,7 @@ describe("ClientEngine.mutationStates", () => {
   // tests — a TestClock would freeze the settle/join timeout).
   it.live("emits a fresh snapshot on every fold (reactive, not a one-shot read)", () =>
     Effect.gen(function* () {
-      const handler = yield* makeServer;
+      const handler = yield* makeServer();
       const store = yield* ClientStoreModule.makeMemory;
       const engine = yield* makeEngine(handler, store);
       yield* engine.subscribe(allTodos);
@@ -311,7 +316,7 @@ const openEvents = (engine: ClientEngineModule.ClientEngine) =>
     const pull = yield* Stream.toPull(engine.engineEvents);
     const seen = yield* Ref.make<ReadonlyArray<ClientEngineModule.EngineEvent>>([]);
     const pullsSeen = Ref.get(seen).pipe(
-      Effect.map((events) => events.filter((event) => event._tag === "PullCompleted").length)
+      Effect.map((events) => events.filter((event) => P.isTagged(event, "PullCompleted")).length)
     );
     yield* Effect.forkScoped(
       Effect.forever(
@@ -354,7 +359,7 @@ describe("hydrated journal entries in a running engine", () => {
     "a journal entry hydrated into a running engine is tracked as pending, then acknowledged once",
     () =>
       Effect.gen(function* () {
-        const handler = yield* makeServer;
+        const handler = yield* makeServer();
         const store = yield* ClientStoreModule.makeMemory;
         const engine = yield* makeEngine(handler, store);
         yield* engine.subscribe(allTodos);
@@ -392,7 +397,7 @@ describe("hydrated journal entries in a running engine", () => {
     "a hydrated entry the server rejects emits exactly one MutationRejected, and tracked phases hold",
     () =>
       Effect.gen(function* () {
-        const handler = yield* makeServer;
+        const handler = yield* makeServer();
         const store = yield* ClientStoreModule.makeMemory;
         const engine = yield* makeEngine(handler, store);
         yield* engine.subscribe(allTodos);
@@ -410,7 +415,7 @@ describe("hydrated journal entries in a running engine", () => {
         yield* engine.push;
 
         const seen = yield* events.read;
-        expect(seen.filter((event) => event._tag === "MutationRejected")).toEqual([
+        expect(seen.filter((event) => P.isTagged(event, "MutationRejected"))).toEqual([
           {
             _tag: "MutationRejected",
             clientId: "client-a",
@@ -429,7 +434,7 @@ describe("hydrated journal entries in a running engine", () => {
 
   it.effect("a hydrate does not reset an entry the engine already tracks as settled", () =>
     Effect.gen(function* () {
-      const handler = yield* makeServer;
+      const handler = yield* makeServer();
       const store = yield* ClientStoreModule.makeMemory;
       const engine = yield* makeEngine(handler, store);
       yield* engine.subscribe(allTodos);
@@ -465,7 +470,7 @@ describe("hydrated journal entries in a running engine", () => {
     "a persisted entry whose boot-time read failed is tracked at the next push, so its rejection is not silent",
     () =>
       Effect.gen(function* () {
-        const handler = yield* makeServer;
+        const handler = yield* makeServer();
         const memory = yield* ClientStoreModule.makeMemory;
         // The journal is unreadable until armed off: the boot read falls back to none.
         const unreadable = yield* Ref.make(true);
@@ -502,7 +507,7 @@ describe("hydrated journal entries in a running engine", () => {
     "a pull that trims a hydrated entry while its adoption read is in flight does not re-track it",
     () =>
       Effect.gen(function* () {
-        const handler = yield* makeServer;
+        const handler = yield* makeServer();
         const memory = yield* ClientStoreModule.makeMemory;
         // The first journal read after `armed` is cleared takes its snapshot, then parks until the
         // test releases it. Only `resyncAttachedEngines` runs in that window, so the parked read is
@@ -581,7 +586,7 @@ describe("hydrated journal entries in a running engine", () => {
         if (options.logLevel === "Warn") warnings.push(String(options.message));
       });
       return Effect.gen(function* () {
-        const handler = yield* makeServer;
+        const handler = yield* makeServer();
         const store = yield* ClientStoreModule.makeMemory;
         const inner = yield* makeInMemory(handler, "group-a");
         // Once `contradict` is set, every push reports id 1 as permanently rejected, though this

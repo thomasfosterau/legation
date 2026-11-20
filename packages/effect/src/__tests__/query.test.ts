@@ -31,9 +31,9 @@ const setTodo = Mutator.make("todo/set", Schema.Unknown);
 const mutators = Mutator.registry([
   { mutator: setTodo, local: (args, writer) => writer.put("todos", (args as Todo).id, args) },
 ]);
-const handlers: Record<string, MemoryBackend.BackendHandler> = {
+const handlers = {
   "todo/set": (args, writer) => Effect.asVoid(writer.put("todos", (args as Todo).id, args)),
-};
+} satisfies Record<string, MemoryBackend.BackendHandler>;
 
 // `visibleTodos`: the client renders *all* todos locally; the server narrows to
 // the non-archived ones. `todosByStatus`: shaped from client args.

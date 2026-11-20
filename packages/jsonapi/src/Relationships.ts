@@ -48,7 +48,7 @@ export type Lookup = (collection: string, id: string) => Option.Option<JsonApiRo
 const refOf = (value: JsonApiRow, name: string): RelationshipRef =>
   value.relationships?.[name] ?? null;
 
-const isLink = (value: unknown): value is { readonly type: string; readonly id: string } =>
+const isLink = <A>(value: A): value is A & { readonly type: string; readonly id: string } =>
   P.isObjectOrArray(value) && "type" in value && "id" in value;
 
 /** The `{ type, id }` links a row's named relationship points at. */

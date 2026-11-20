@@ -58,7 +58,8 @@ const INDEXED_FIELDS = ["a", "b", "mixed"];
 
 const makeRows = (rng: Rng, count: number): ReadonlyArray<TestRow> =>
   Array.from({ length: count }, (_, i) => {
-    const value: Record<string, Predicate.Literal> = { rank: i };
+    const value: Record<string, Predicate.Literal> = {};
+    value.rank = i;
     if (!chance(rng, 0.1)) value.a = int(rng, 5);
     value.b = chance(rng, 0.15) ? null : pick(rng, ["x", "y", "z"]);
     value.flag = chance(rng, 0.2) ? null : chance(rng, 0.5);

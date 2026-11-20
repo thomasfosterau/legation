@@ -4,6 +4,7 @@
  * closure/validation, the derivable set (ADR-0023), and the bridge — the
  * derived CollectionRegistry driving the EXISTING engine's Related joins.
  */
+import * as Option from "effect/Option";
 import { describe, expect, expectTypeOf, it } from "@effect/vitest";
 import * as Arr from "effect/Array";
 import * as Effect from "effect/Effect";
@@ -269,7 +270,7 @@ const mutators = Mutator.registry([
   },
 ]);
 
-const makeEngine = Effect.gen(function* () {
+const makeEngine = Effect.fn("makeEngine")(function* () {
   const backend = yield* MemoryBackend.make(
     MemoryBackend.validatedHandlers([
       MemoryBackend.handler(productSet, (args, writer) =>
@@ -323,7 +324,7 @@ const naturalKeyMutators = Mutator.registry([
   },
 ]);
 
-const makeNaturalKeyEngine = Effect.gen(function* () {
+const makeNaturalKeyEngine = Effect.fn("makeNaturalKeyEngine")(function* () {
   const backend = yield* MemoryBackend.make(
     MemoryBackend.validatedHandlers([
       MemoryBackend.handler(authorSet, (args, writer) =>
@@ -364,7 +365,7 @@ const makeNaturalKeyEngine = Effect.gen(function* () {
 /** The first emission of a `Related` stream. */
 const firstRows = <A, E, R>(stream: Stream.Stream<ReadonlyArray<A>, E, R>) =>
   Effect.map(Stream.runHead(Stream.take(stream, 1)), (head) =>
-    head._tag === "Some" ? head.value : []
+    Option.isSome(head) ? head.value : []
   );
 
 describe("Node registry over the existing engine", () => {
@@ -372,7 +373,7 @@ describe("Node registry over the existing engine", () => {
     Effect.scoped(
       Effect.gen(function* () {
         const { collections } = Node.registry([Category, Product, Review]);
-        const engine = yield* makeEngine;
+        const engine = yield* makeEngine();
 
         yield* engine.mutate("product/set", {
           id: "p-1",
@@ -395,7 +396,7 @@ describe("Node registry over the existing engine", () => {
           ["product"]
         );
         const first = yield* Stream.runHead(Stream.take(stream, 1));
-        const rows = first._tag === "Some" ? first.value : [];
+        const rows = Option.isSome(first) ? first.value : [];
         expect(rows).toHaveLength(1);
         expect((defined(rows[0]).related["product"] as { name: string }).name).toBe("Desk");
       })
@@ -406,7 +407,7 @@ describe("Node registry over the existing engine", () => {
     Effect.scoped(
       Effect.gen(function* () {
         const { collections } = Node.registry([Author, Post]);
-        const engine = yield* makeNaturalKeyEngine;
+        const engine = yield* makeNaturalKeyEngine();
 
         yield* engine.mutate("author/set", { username: "ada", bio: "engine" });
         yield* engine.mutate("post/set", {
