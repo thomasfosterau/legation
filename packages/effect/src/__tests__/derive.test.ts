@@ -288,7 +288,9 @@ describe("Derive — observed leaf consumes observeChanges, not page-diff", () =
       const view = ClientView.fromEngine(engine);
 
       const pipeline = yield* Derive.observed(subs, view, allTodos).pipe(
-        Effect.map((source) => Derive.filter(source, (v) => (v as Todo).title.startsWith("keep")))
+        Effect.map((upstream) =>
+          Derive.filter(upstream, (v) => (v as Todo).title.startsWith("keep"))
+        )
       );
       const atom = Derive.atom(pipeline);
       const registry = AtomRegistry.make();

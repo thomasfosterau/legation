@@ -872,7 +872,7 @@ export const make = (options: MirrorOptions): Effect.Effect<Mirror, never, Scope
     const observeKeyChanges = (
       key: string,
       read: Effect.Effect<ReadonlyArray<ClientEngine.LocalRow>>,
-      options?: { readonly includeInitial?: boolean }
+      observeOptions?: { readonly includeInitial?: boolean }
     ): Stream.Stream<ReadonlyArray<RowChange.RowChange<ClientEngine.LocalRow>>> =>
       Stream.unwrap(
         Effect.gen(function* () {
@@ -880,7 +880,7 @@ export const make = (options: MirrorOptions): Effect.Effect<Mirror, never, Scope
           const initialRows = yield* read;
           const previousRef = yield* Ref.make(initialRows);
           const initial: ReadonlyArray<ReadonlyArray<RowChange.RowChange<ClientEngine.LocalRow>>> =
-            options?.includeInitial === true && Arr.isReadonlyArrayNonEmpty(initialRows)
+            observeOptions?.includeInitial === true && Arr.isReadonlyArrayNonEmpty(initialRows)
               ? [RowChange.enters(initialRows)]
               : [];
           const live = Stream.fromSubscription(subscription).pipe(

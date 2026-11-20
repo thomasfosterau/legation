@@ -245,7 +245,7 @@ export const make = <R>(
         Effect.gen(function* () {
           // The scope lives as long as this in-memory instance; eviction tears
           // the whole isolate down, so no explicit close is needed.
-          const scope = yield* Scope.make();
+          const instanceScope = yield* Scope.make();
           const runtime = yield* RuntimeContext;
           const roomId = state.id.name ?? state.id.toString();
 
@@ -368,7 +368,7 @@ export const make = <R>(
               webSocketMessage: () => Effect.void,
               webSocketClose: () => Effect.void,
             } satisfies RoomObject;
-          }).pipe(Scope.provide(scope));
+          }).pipe(Scope.provide(instanceScope));
         })
       );
     }

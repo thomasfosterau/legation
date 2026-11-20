@@ -216,11 +216,11 @@ export const registry = (collections: ReadonlyArray<AnyCollection>): CollectionR
  * that select relationships by name.
  */
 export const relationshipsOf = (
-  registry: CollectionRegistry,
+  collections: CollectionRegistry,
   collectionName: string
 ): ReadonlyMap<string, Relationship> => {
   const map = new Map<string, Relationship>();
-  Arr.forEach(registry.get(collectionName)?.relationships ?? [], (relationship) => {
+  Arr.forEach(collections.get(collectionName)?.relationships ?? [], (relationship) => {
     map.set(relationship.name, relationship);
   });
   return map;

@@ -676,13 +676,13 @@ export const fetchHandler = <Id extends string, Groups extends HttpApiGroup.Cons
 
   /** The replica with the request's root window answered from `rows`: the rows coverage judged, not a second read. */
   const pinned = (
-    base: ClientView.Reader,
+    reader: ClientView.Reader,
     root: Subset.Subset,
     rows: ReadonlyArray<ClientEngine.LocalRow>
   ): ClientView.Reader => ({
     query: (subset) =>
-      Subset.hash(subset) === Subset.hash(root) ? Effect.succeed(rows) : base.query(subset),
-    observe: base.observe,
+      Subset.hash(subset) === Subset.hash(root) ? Effect.succeed(rows) : reader.query(subset),
+    observe: reader.observe,
   });
 
   /** A rejection as an outcome, with the cookie read for the response it may carry. */

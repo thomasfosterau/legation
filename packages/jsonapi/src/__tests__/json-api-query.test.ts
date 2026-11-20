@@ -976,7 +976,7 @@ const orderTokens = (orderBy: ReadonlyArray<Subset.OrderBy>): ReadonlyArray<stri
 // ─── The UrlReads seam ───────────────────────────────────────────────────────
 
 describe("JsonApiQuery.urlReads (Client.subscribe(url), ADR-0029 §2)", () => {
-  const products = "/products?include=category%2Cvariants&filter[name]=Desk";
+  const productsUrl = "/products?include=category%2Cvariants&filter[name]=Desk";
   const read: Query.Read = {
     collection: "products",
     where: { name: "Desk" },
@@ -992,17 +992,17 @@ describe("JsonApiQuery.urlReads (Client.subscribe(url), ADR-0029 §2)", () => {
     Effect.scoped(
       Effect.gen(function* () {
         const client = yield* makeClient;
-        yield* client.subscribe(products);
+        yield* client.subscribe(productsUrl);
         yield* client.subscribe(read);
-        expect(yield* client.subscriptions).toEqual([products]);
+        expect(yield* client.subscriptions).toEqual([productsUrl]);
         // Offline no pull lands, so the pin covers nothing yet; the
         // covered verdict and its URL are checked over a pulled engine in
         // packages/effect's client tests.
         expect((yield* client.coverageOf(read))._tag).toBe("Uncovered");
         // Both pins release one at a time; the entry lives until the last.
         yield* client.unsubscribe(read);
-        expect(yield* client.subscriptions).toEqual([products]);
-        yield* client.unsubscribe(products);
+        expect(yield* client.subscriptions).toEqual([productsUrl]);
+        yield* client.unsubscribe(productsUrl);
         expect(yield* client.subscriptions).toEqual([]);
         expect((yield* client.coverageOf(read))._tag).toBe("Uncovered");
       })
@@ -1021,7 +1021,7 @@ describe("JsonApiQuery.urlReads (Client.subscribe(url), ADR-0029 §2)", () => {
         yield* client.subscribe(
           "http://shop.test/jsonapi/products?include=variants,category&filter[name]=Desk&fields[products]=name"
         );
-        expect(yield* client.subscriptions).toEqual([products]);
+        expect(yield* client.subscriptions).toEqual([productsUrl]);
         yield* client.unsubscribe("/products?include=category,variants&filter[name]=Desk");
         yield* client.unsubscribe("/products?filter[name]=Desk&include=category&include=variants");
         expect(yield* client.subscriptions).toEqual([]);
@@ -1052,7 +1052,7 @@ describe("JsonApiQuery.urlReads (Client.subscribe(url), ADR-0029 §2)", () => {
   it.effect("canonical is the seam's identity; a read with no URL form fails it", () =>
     Effect.gen(function* () {
       const urls = JsonApiQuery.urlReads(nodes);
-      expect(yield* urls.canonical(read)).toBe(products);
+      expect(yield* urls.canonical(read)).toBe(productsUrl);
       expect(yield* urls.parse("/api/products/p-1?include=variants")).toEqual({
         collection: "products",
         where: Predicate.eq("id", "p-1"),
