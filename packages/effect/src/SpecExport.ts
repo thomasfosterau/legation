@@ -29,6 +29,7 @@
 
 import * as Arr from "effect/Array";
 import * as JsonSchema from "effect/JsonSchema";
+import * as MutableHashSet from "effect/MutableHashSet";
 import * as Schema from "effect/Schema";
 import type * as SchemaAST from "effect/SchemaAST";
 import * as SchemaRepresentation from "effect/SchemaRepresentation";
@@ -116,14 +117,14 @@ const sanitize = (name: string): string => {
 
 /** A namer that keeps identifiers unique by suffixing collisions (`_2`, `_3`). */
 const uniqueNamer = () => {
-  const seen = new Set<string>();
+  const seen = MutableHashSet.empty<string>();
   return (prefix: string, name: string): string => {
     const base = `${prefix}${sanitize(name)}`;
     // `base`, then `base_2`, `base_3`, … until one is free.
     const at = (n: number): string => (n < 2 ? base : `${base}_${n}`);
-    const free = (n: number): string => (seen.has(at(n)) ? free(n + 1) : at(n));
+    const free = (n: number): string => (MutableHashSet.has(seen, at(n)) ? free(n + 1) : at(n));
     const candidate = free(1);
-    seen.add(candidate);
+    MutableHashSet.add(seen, candidate);
     return candidate;
   };
 };

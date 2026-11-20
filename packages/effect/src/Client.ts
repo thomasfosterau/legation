@@ -52,6 +52,9 @@ import * as Arr from "effect/Array";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
+import * as HashMap from "effect/HashMap";
+import * as MutableHashMap from "effect/MutableHashMap";
+import * as MutableHashSet from "effect/MutableHashSet";
 import * as Option from "effect/Option";
 import * as P from "effect/Predicate";
 import * as R from "effect/Record";
@@ -579,8 +582,8 @@ export const fromView = <Graph extends Node.NodeRegistry>(
   // many registrations share it. Edge windows are held per registration in
   // a scope of their own.
   const ledger = Ref.makeUnsafe(new Map<string, Interest>());
-  const roots = Ref.makeUnsafe(new Map<string, number>());
-  const edgeScopes = new Map<string, Scope.Closeable>();
+  const roots = Ref.makeUnsafe(HashMap.empty<string, number>());
+  const edgeScopes = MutableHashMap.empty<string, Scope.Closeable>();
   // The ledger update and the view registration it decides are one
   // critical section: an unsubscribe interleaved with an in-flight
   // subscribe of the same read would otherwise release before the
@@ -592,8 +595,8 @@ export const fromView = <Graph extends Node.NodeRegistry>(
   const holdRoot = (root: Subset.Subset): Effect.Effect<void> =>
     Ref.modify(roots, (map) => {
       const key = Subset.hash(root);
-      const count = map.get(key) ?? 0;
-      return [count === 0, new Map(map).set(key, count + 1)] as const;
+      const count = Option.getOrElse(HashMap.get(map, key), () => 0);
+      return [count === 0, HashMap.set(map, key, count + 1)] as const;
     }).pipe(
       Effect.flatMap((first) => (first ? view.subscribe(root).pipe(Effect.orDie) : Effect.void))
     );
@@ -601,10 +604,8 @@ export const fromView = <Graph extends Node.NodeRegistry>(
   const dropRoot = (root: Subset.Subset): Effect.Effect<void> =>
     Ref.modify(roots, (map) => {
       const key = Subset.hash(root);
-      const count = map.get(key) ?? 0;
-      const next = new Map(map);
-      if (count <= 1) next.delete(key);
-      else next.set(key, count - 1);
+      const count = Option.getOrElse(HashMap.get(map, key), () => 0);
+      const next = count <= 1 ? HashMap.remove(map, key) : HashMap.set(map, key, count - 1);
       return [count === 1, next] as const;
     }).pipe(
       Effect.flatMap((last) => (last ? view.unsubscribe(root).pipe(Effect.ignore) : Effect.void))
@@ -623,14 +624,17 @@ export const fromView = <Graph extends Node.NodeRegistry>(
       yield* view
         .pinEdges(nodes.collections, root.collection, root, edges)
         .pipe(Scope.provide(scope));
-      edgeScopes.set(key, scope);
+      MutableHashMap.set(edgeScopes, key, scope);
     });
 
   const closeEdges = (key: string): Effect.Effect<void> =>
     Effect.suspend(() => {
-      const scope = edgeScopes.get(key);
-      edgeScopes.delete(key);
-      return scope === undefined ? Effect.void : Scope.close(scope, Exit.void);
+      const scope = MutableHashMap.get(edgeScopes, key);
+      MutableHashMap.remove(edgeScopes, key);
+      return Option.match(scope, {
+        onNone: () => Effect.void,
+        onSome: (open) => Scope.close(open, Exit.void),
+      });
     });
 
   // ─── The ledger ──────────────────────────────────────────────────────────
@@ -709,16 +713,16 @@ export const fromView = <Graph extends Node.NodeRegistry>(
     lock,
     Effect.gen(function* () {
       const entries = yield* Ref.getAndSet(ledger, new Map<string, Interest>());
-      yield* Ref.set(roots, new Map<string, number>());
-      const released = new Set<string>();
+      yield* Ref.set(roots, HashMap.empty<string, number>());
+      const released = MutableHashSet.empty<string>();
       yield* Effect.forEach(
         entries,
         ([key, interest]) =>
           Effect.gen(function* () {
             yield* closeEdges(key);
             const root = Subset.hash(interest.root);
-            if (released.has(root)) return;
-            released.add(root);
+            if (MutableHashSet.has(released, root)) return;
+            MutableHashSet.add(released, root);
             yield* view.unsubscribe(interest.root).pipe(Effect.ignore);
           }),
         { concurrency: 1, discard: true }

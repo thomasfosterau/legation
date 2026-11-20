@@ -11,6 +11,7 @@ import { describe, describeWrapped, expect, layer } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
 import * as Layer from "effect/Layer";
+import * as MutableHashMap from "effect/MutableHashMap";
 import * as Match from "effect/Match";
 import * as Schema from "effect/Schema";
 import { KeyValueStore } from "effect/persistence";
@@ -74,7 +75,7 @@ const readResource = (request: HttpClientRequest.HttpClientRequest) =>
 
 /** An in-memory JSON:API server exposed as an HttpClient. */
 const makeServer = (forbidCreate?: (id: string) => boolean) => {
-  const store = new Map<string, StoredResource>();
+  const store = MutableHashMap.empty<string, StoredResource>();
 
   const client = HttpClient.make((request, url) =>
     Effect.sync(() => {
@@ -84,9 +85,9 @@ const makeServer = (forbidCreate?: (id: string) => boolean) => {
         Match.withReturnType<Response>(),
         Match.when("GET", () =>
           id === undefined
-            ? doc([...store.values()])
-            : store.has(id)
-              ? doc(store.get(id))
+            ? doc([...MutableHashMap.values(store)])
+            : MutableHashMap.has(store, id)
+              ? doc(Option.getOrUndefined(MutableHashMap.get(store, id)))
               : empty(404)
         ),
         Match.when("POST", () => {
@@ -94,16 +95,16 @@ const makeServer = (forbidCreate?: (id: string) => boolean) => {
           if (forbidCreate?.(resource.id)) {
             return empty(403); // permanent rejection
           }
-          store.set(resource.id, {
+          MutableHashMap.set(store, resource.id, {
             type: resource.type,
             id: resource.id,
             attributes: resource.attributes ?? {},
           });
-          return doc(store.get(resource.id));
+          return doc(Option.getOrUndefined(MutableHashMap.get(store, resource.id)));
         }),
         Match.when("PATCH", () => {
           const patch = readResource(request);
-          const existing = store.get(defined(id)) ?? {
+          const existing = Option.getOrUndefined(MutableHashMap.get(store, defined(id))) ?? {
             type: "todos",
             id: defined(id),
             attributes: {},
@@ -112,11 +113,11 @@ const makeServer = (forbidCreate?: (id: string) => boolean) => {
             ...existing,
             attributes: { ...existing.attributes, ...patch.attributes },
           };
-          store.set(defined(id), merged);
+          MutableHashMap.set(store, defined(id), merged);
           return doc(merged);
         }),
         Match.when("DELETE", () => {
-          store.delete(defined(id));
+          MutableHashMap.remove(store, defined(id));
           return empty(204);
         }),
         Match.orElse(() => empty(405))
@@ -211,7 +212,7 @@ describe("end-to-end client-direct sync", () => {
           // Sync: push writes through, pull reveals authoritative state.
           yield* engine.push;
           yield* engine.pull;
-          expect(server.store.has("1")).toBe(true);
+          expect(MutableHashMap.has(server.store, "1")).toBe(true);
           expect(titles(yield* engine.query(todos))).toEqual(["first"]);
 
           // Update round trips.
@@ -222,11 +223,17 @@ describe("end-to-end client-direct sync", () => {
           });
           yield* engine.push;
           yield* engine.pull;
-          expect(server.store.get("1")?.attributes.title).toBe("edited");
+          expect(
+            Option.getOrUndefined(MutableHashMap.get(server.store, "1"))?.attributes.title
+          ).toBe("edited");
           expect(titles(yield* engine.query(todos))).toEqual(["edited"]);
 
           // A row created directly on the server arrives via pull.
-          server.store.set("2", { type: "todos", id: "2", attributes: { title: "remote" } });
+          MutableHashMap.set(server.store, "2", {
+            type: "todos",
+            id: "2",
+            attributes: { title: "remote" },
+          });
           yield* engine.pull;
           expect(titles(yield* engine.query(todos))).toEqual(["edited", "remote"]);
 
@@ -234,7 +241,7 @@ describe("end-to-end client-direct sync", () => {
           yield* engine.mutate("todos/delete", { type: "todos", id: "2" });
           yield* engine.push;
           yield* engine.pull;
-          expect(server.store.has("2")).toBe(false);
+          expect(MutableHashMap.has(server.store, "2")).toBe(false);
           expect(titles(yield* engine.query(todos))).toEqual(["edited"]);
         })
       );
@@ -281,8 +288,8 @@ describe("end-to-end client-direct sync", () => {
 
           // The forbidden create left no server row and its optimistic effect is
           // gone; the create queued behind it applied.
-          expect(server.store.has("x")).toBe(false);
-          expect(server.store.has("y")).toBe(true);
+          expect(MutableHashMap.has(server.store, "x")).toBe(false);
+          expect(MutableHashMap.has(server.store, "y")).toBe(true);
           expect(titles(yield* engine.query(todos))).toEqual(["kept"]);
         })
       );
@@ -382,7 +389,9 @@ describe("JsonApiSync.layer ledger default", () => {
           // A reload: a new layer over the same key/value store, with no `store` given. The
           // ledger acknowledged mutation 1, so a counter that restarted at 1 would skip this one.
           yield* mutate(kv, "2", "second");
-          expect(server.store.get("2")?.attributes.title).toBe("second");
+          expect(
+            Option.getOrUndefined(MutableHashMap.get(server.store, "2"))?.attributes.title
+          ).toBe("second");
           expect(yield* Ledger.keyValue(kv).read("group-1")).toEqual({
             lastMutationIds: { "client-1": 2 },
             rejections: [],

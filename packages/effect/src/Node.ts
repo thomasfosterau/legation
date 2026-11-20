@@ -35,6 +35,8 @@
 import * as Defined from "./Defined.js";
 import * as Arr from "effect/Array";
 import type * as Brand from "effect/Brand";
+import * as HashSet from "effect/HashSet";
+import * as R from "effect/Record";
 import * as Schema from "effect/Schema";
 import * as Collection from "./Collection.js";
 import * as Edge from "./Edge.js";
@@ -207,7 +209,7 @@ export const make = <
   const identity = options.id ?? "id";
   if (options.id !== undefined) assertTextIdentity(type, options.id, options.attributes);
   const viaFields: Record<string, Schema.Top> = {};
-  Arr.forEach(Object.values(edges), (edge) => {
+  Arr.forEach(R.values(edges), (edge) => {
     if (edge.kind === "one") viaFields[edge.via] = Id(edge.target);
   });
   // SAFETY: `filterable` maps field names (strings) to `FilterableInput`s, and
@@ -216,7 +218,7 @@ export const make = <
     collection: type,
     attributes: options.attributes,
     identity,
-    keyFields: [identity, ...Object.keys(viaFields)],
+    keyFields: [identity, ...R.keys(viaFields)],
     filterable: options.filterable as Readonly<Record<string, FilterPolicy.FilterableInput>>,
     sortable: options.sortable,
   });
@@ -275,7 +277,7 @@ const assertTextIdentity = (
  */
 export const derivableSet = (node: AnyNode): ReadonlySet<string> => {
   const fields = new Set<string>(node.hintKeys);
-  Arr.forEach(Object.values(node.edges), (edge) => {
+  Arr.forEach(R.values(node.edges), (edge) => {
     if (edge.kind === "one") fields.add(edge.via);
   });
   return fields;
@@ -373,7 +375,7 @@ const toCollection = (
   nodes: ReadonlyMap<string, AnyNode>
 ): Collection.AnyCollection => {
   const relationships: Array<Collection.Relationship> = [];
-  Arr.forEach(Object.entries(node.edges), ([name, edge]) => {
+  Arr.forEach(R.toEntries(node.edges), ([name, edge]) => {
     if (edge.kind === "one") {
       relationships.push({
         name,
@@ -420,13 +422,12 @@ const toCollection = (
  * `one`-edge keys. A declared identity is one of the attributes already; an
  * undeclared one is the synthetic `id`.
  */
-const rowFields = (node: AnyNode): ReadonlySet<string> => {
-  const fields = new Set<string>([node.id, ...Object.keys(node.attributes)]);
-  Arr.forEach(Object.values(node.edges), (edge) => {
-    if (edge.kind === "one") fields.add(edge.via);
-  });
-  return fields;
-};
+const rowFields = (node: AnyNode): HashSet.HashSet<string> =>
+  HashSet.fromIterable([
+    node.id,
+    ...R.keys(node.attributes),
+    ...Arr.flatMap(R.values(node.edges), (edge) => (edge.kind === "one" ? [edge.via] : [])),
+  ]);
 
 /**
  * A paginated edge's declared `order` is what its per-parent windows sort
@@ -439,10 +440,10 @@ const withEdgeOrders = <N extends AnyNode>(node: N, definitions: ReadonlyArray<A
   const sortable = new Set<string>(node.sortable);
   const fields = rowFields(node);
   Arr.forEach(definitions, (source) =>
-    Arr.forEach(Object.entries(source.edges), ([name, edge]) => {
+    Arr.forEach(R.toEntries(source.edges), ([name, edge]) => {
       if (edge.kind !== "paginated" || edge.target !== node.type) return;
       Arr.forEach(Subset.parseOrder(edge.order), (term) => {
-        if (!fields.has(term.field)) {
+        if (!HashSet.has(fields, term.field)) {
           throw new FilterDeclarationError({
             collection: node.type,
             field: term.field,
@@ -475,7 +476,7 @@ export const registry = <const Nodes extends AnyNode>(
     declared.set(node.type, node);
   });
   Arr.forEach(definitions, (node) => {
-    Arr.forEach(Object.entries(node.edges), ([name, edge]) => {
+    Arr.forEach(R.toEntries(node.edges), ([name, edge]) => {
       if (!declared.has(edge.target)) {
         throw new UnknownCollectionError({
           from: node.type,

@@ -15,6 +15,8 @@ import type { HttpEffect } from "alchemy/Http";
 import { RuntimeContext } from "alchemy/RuntimeContext";
 import * as Arr from "effect/Array";
 import * as Effect from "effect/Effect";
+import * as MutableHashMap from "effect/MutableHashMap";
+import * as Option from "effect/Option";
 import * as P from "effect/Predicate";
 import * as HttpServerRequest from "effect/http/HttpServerRequest";
 import * as HttpServerResponse from "effect/http/HttpServerResponse";
@@ -51,14 +53,19 @@ export const runtimeContext: RuntimeContext["Service"] = {
   set: (id) => Effect.succeed(id),
 };
 
-/** The raw workerd storage, over a Map. */
+/** The raw workerd storage, over a map. */
 export const makeRawStorage = (): cf.DurableObjectStorage => {
-  const data = new Map<string, unknown>();
+  const data = MutableHashMap.empty<string, unknown>();
+  const remove = (key: string): boolean => {
+    const had = MutableHashMap.has(data, key);
+    MutableHashMap.remove(data, key);
+    return had;
+  };
   return fakeBinding<cf.DurableObjectStorage>({
-    get: async (key: string) => data.get(key),
-    put: async (key: string, value: unknown) => void data.set(key, value),
+    get: async (key: string) => Option.getOrUndefined(MutableHashMap.get(data, key)),
+    put: async (key: string, value: unknown) => void MutableHashMap.set(data, key, value),
     delete: async (keys: string | ReadonlyArray<string>) =>
-      P.isString(keys) ? data.delete(keys) : keys.filter((key) => data.delete(key)).length,
+      P.isString(keys) ? remove(keys) : keys.filter(remove).length,
     list: async (options?: { prefix?: string }) => {
       const out = new Map<string, unknown>();
       Arr.forEach(data, ([key, value]) => {

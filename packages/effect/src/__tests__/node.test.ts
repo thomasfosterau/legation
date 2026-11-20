@@ -7,6 +7,7 @@
 import * as Option from "effect/Option";
 import { describe, expect, expectTypeOf, it } from "@effect/vitest";
 import * as Arr from "effect/Array";
+import * as R from "effect/Record";
 import * as Effect from "effect/Effect";
 import * as Order from "effect/Order";
 import * as Schema from "effect/Schema";
@@ -166,7 +167,7 @@ describe("Node identity attribute", () => {
   });
 
   it("drops the synthetic id from the row: the declared attribute carries it", () => {
-    expect(Object.keys(Author.row.fields)).toEqual(["username", "bio"]);
+    expect(R.keys(Author.row.fields)).toEqual(["username", "bio"]);
     const decoded = Schema.decodeSync(Post.row)({
       slug: "hello-world",
       title: "Hello",
@@ -176,7 +177,7 @@ describe("Node identity attribute", () => {
     // The declared identity is an ordinary attribute — no `id` to keep equal.
     expect("id" in decoded).toBe(false);
     // A node declaring nothing still gets the branded `id` in front.
-    expect(Object.keys(Bookmark.row.fields)).toEqual(["id", "note", "postSlug"]);
+    expect(R.keys(Bookmark.row.fields)).toEqual(["id", "note", "postSlug"]);
   });
 
   it("is the filterable and sortable key, with no phantom id", () => {

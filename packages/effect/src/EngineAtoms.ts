@@ -20,6 +20,8 @@ import type * as Cause from "effect/Cause";
 import type * as Layer from "effect/Layer";
 import * as Effect from "effect/Effect";
 import * as HashMap from "effect/HashMap";
+import * as MutableHashMap from "effect/MutableHashMap";
+import * as Option from "effect/Option";
 import * as Stream from "effect/Stream";
 import { Atom } from "effect/reactivity";
 import type { AsyncResult, AtomRegistry, Reactivity } from "effect/reactivity";
@@ -150,6 +152,14 @@ export interface EngineAtoms {
   >;
 }
 
+/** The cached value under `key`, made and cached on first use. */
+const memo = <A>(cache: MutableHashMap.MutableHashMap<string, A>, key: string, make: () => A): A =>
+  Option.getOrElse(MutableHashMap.get(cache, key), () => {
+    const made = make();
+    MutableHashMap.set(cache, key, made);
+    return made;
+  });
+
 /**
  * Build the engine's reactive surface from its layer. The layer must provide
  * `ClientEngine` with all of its own dependencies already satisfied —
@@ -161,61 +171,51 @@ export const fromLayer = (
 ): EngineAtoms => {
   const runtime = Atom.runtime(engineLayer);
 
-  const liveQueries = new Map<string, Atom.Atom<LiveQueryResult>>();
+  const liveQueries = MutableHashMap.empty<string, Atom.Atom<LiveQueryResult>>();
   const liveQuery = (subset: Subset.Subset): Atom.Atom<LiveQueryResult> => {
     const key = Subset.hash(subset);
-    const existing = liveQueries.get(key);
-    if (existing !== undefined) return existing;
-    const atom = runtime.atom(
-      Stream.unwrap(Effect.map(ClientEngine, (engine) => engine.observe(subset)))
+    return memo(liveQueries, key, () =>
+      runtime.atom(Stream.unwrap(Effect.map(ClientEngine, (engine) => engine.observe(subset))))
     );
-    liveQueries.set(key, atom);
-    return atom;
   };
 
-  const namedQueries = new Map<string, Atom.Atom<NamedQueryResult>>();
+  const namedQueries = MutableHashMap.empty<string, Atom.Atom<NamedQueryResult>>();
   const namedQuery = (name: string, args: unknown): Atom.Atom<NamedQueryResult> => {
     const key = `${name}:${Hash.canonicalJson(args)}`;
-    const existing = namedQueries.get(key);
-    if (existing !== undefined) return existing;
-    const atom = runtime.atom(
-      Stream.unwrap(Effect.map(ClientEngine, (engine) => engine.observeNamed(name, args)))
+    return memo(namedQueries, key, () =>
+      runtime.atom(
+        Stream.unwrap(Effect.map(ClientEngine, (engine) => engine.observeNamed(name, args)))
+      )
     );
-    namedQueries.set(key, atom);
-    return atom;
   };
 
-  const aggregates = new Map<string, Atom.Atom<AggregateResult>>();
+  const aggregates = MutableHashMap.empty<string, Atom.Atom<AggregateResult>>();
   const aggregate = (
     subset: Subset.Subset,
     agg: Aggregate.Aggregate
   ): Atom.Atom<AggregateResult> => {
     const key = `${Subset.hash(subset)}:${Hash.canonicalJson(agg)}`;
-    const existing = aggregates.get(key);
-    if (existing !== undefined) return existing;
-    const atom = runtime.atom(
-      Stream.unwrap(Effect.map(ClientEngine, (engine) => engine.observeAggregate(subset, agg)))
+    return memo(aggregates, key, () =>
+      runtime.atom(
+        Stream.unwrap(Effect.map(ClientEngine, (engine) => engine.observeAggregate(subset, agg)))
+      )
     );
-    aggregates.set(key, atom);
-    return atom;
   };
 
-  const groupedAggregates = new Map<string, Atom.Atom<GroupedAggregateResult>>();
+  const groupedAggregates = MutableHashMap.empty<string, Atom.Atom<GroupedAggregateResult>>();
   const aggregateGrouped = (
     subset: Subset.Subset,
     agg: Aggregate.Aggregate,
     groupBy: string
   ): Atom.Atom<GroupedAggregateResult> => {
     const key = `${Subset.hash(subset)}:${Hash.canonicalJson(agg)}:${groupBy}`;
-    const existing = groupedAggregates.get(key);
-    if (existing !== undefined) return existing;
-    const atom = runtime.atom(
-      Stream.unwrap(
-        Effect.map(ClientEngine, (engine) => engine.observeAggregateGrouped(subset, agg, groupBy))
+    return memo(groupedAggregates, key, () =>
+      runtime.atom(
+        Stream.unwrap(
+          Effect.map(ClientEngine, (engine) => engine.observeAggregateGrouped(subset, agg, groupBy))
+        )
       )
     );
-    groupedAggregates.set(key, atom);
-    return atom;
   };
 
   const mutation = runtime.fn((arg: MutationArg) =>
@@ -236,17 +236,15 @@ export const fromLayer = (
     Stream.unwrap(Effect.map(ClientEngine, (engine) => engine.mutationStates))
   );
 
-  const mutationsForCache = new Map<string, Atom.Atom<MutationsForResult>>();
+  const mutationsForCache = MutableHashMap.empty<string, Atom.Atom<MutationsForResult>>();
   const mutationsFor = (mutator: string): Atom.Atom<MutationsForResult> => {
-    const existing = mutationsForCache.get(mutator);
-    if (existing !== undefined) return existing;
-    const atom = Atom.mapResult(mutationStates, (states) =>
-      [...HashMap.values(states)]
-        .filter((state) => state.mutator === mutator)
-        .toSorted((a, b) => a.mutationId - b.mutationId)
+    return memo(mutationsForCache, mutator, () =>
+      Atom.mapResult(mutationStates, (states) =>
+        [...HashMap.values(states)]
+          .filter((state) => state.mutator === mutator)
+          .toSorted((a, b) => a.mutationId - b.mutationId)
+      )
     );
-    mutationsForCache.set(mutator, atom);
-    return atom;
   };
 
   return {

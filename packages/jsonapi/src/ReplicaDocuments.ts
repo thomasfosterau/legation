@@ -65,7 +65,9 @@
  */
 
 import * as Effect from "effect/Effect";
+import * as HashMap from "effect/HashMap";
 import * as Option from "effect/Option";
+import * as R from "effect/Record";
 import type { Relationship, Resource } from "@thomasfosterau/effect-jsonapi";
 import { type Node, type Query, QueryError } from "@thomasfosterau/legation";
 import type { ClientView, Subset } from "@thomasfosterau/legation/internal";
@@ -189,8 +191,8 @@ interface Binding {
 const bindAll = (
   nodes: Node.NodeRegistry,
   resources: ReadonlyMap<string, Resource.Any>
-): ReadonlyMap<string, Binding> => {
-  const bindings = new Map<string, Binding>();
+): HashMap.HashMap<string, Binding> => {
+  let bindings = HashMap.empty<string, Binding>();
   resources.forEach((resource) => {
     const node = nodes.nodes.get(resource.type);
     if (node === undefined) {
@@ -198,7 +200,11 @@ const bindAll = (
         message: `ReplicaDocuments: no node "${resource.type}" in the graph for the resource`,
       });
     }
-    bindings.set(resource.type, { node, resource, plan: Linkage.planOf(nodes, resource, node) });
+    bindings = HashMap.set(bindings, resource.type, {
+      node,
+      resource,
+      plan: Linkage.planOf(nodes, resource, node),
+    });
   });
   return bindings;
 };
@@ -209,7 +215,7 @@ const descriptorsOf = (resource: Resource.Any): Readonly<Record<string, Relation
 /** The types a resource's document can carry: its own and its relationships' targets. */
 const carriedTypes = (resource: Resource.Any): ReadonlyArray<string> => [
   resource.type,
-  ...Object.values(descriptorsOf(resource)).map((descriptor) => descriptor.ref().type),
+  ...R.values(descriptorsOf(resource)).map((descriptor) => descriptor.ref().type),
 ];
 
 /**
@@ -225,7 +231,7 @@ const undeclared = (
 ): Option.Option<QueryError> => {
   const { resource } = binding;
   const relationships = descriptorsOf(resource);
-  const name = Object.keys(parsed.read.include ?? {}).find(
+  const name = R.keys(parsed.read.include ?? {}).find(
     (included) => relationships[included] === undefined
   );
   if (name !== undefined) {
@@ -233,12 +239,12 @@ const undeclared = (
       JsonApiQuery.invalidParameter(
         resource.type,
         "include",
-        `"${name}" is not a relationship the "${resource.type}" resource declares (relationships: ${Object.keys(relationships).join(", ")})`
+        `"${name}" is not a relationship the "${resource.type}" resource declares (relationships: ${R.keys(relationships).join(", ")})`
       )
     );
   }
   const types = carriedTypes(resource);
-  const type = Object.keys(Option.getOrElse(parsed.fields, () => ({}))).find(
+  const type = R.keys(Option.getOrElse(parsed.fields, () => ({}))).find(
     (projected) => !types.includes(projected)
   );
   if (type !== undefined) {
@@ -260,17 +266,16 @@ export const make = (options: Options): ReplicaDocuments => {
   const bindings = bindAll(nodes, options.resources ?? JsonApiQuery.resourcesOf(nodes));
 
   /** The binding of a read's collection; a type nothing declares is the URL's failure, not a defect. */
-  const bound = (read: Query.Read): Effect.Effect<Binding, QueryError> => {
-    const binding = bindings.get(read.collection);
-    return binding === undefined
-      ? Effect.fail(
+  const bound = (read: Query.Read): Effect.Effect<Binding, QueryError> =>
+    Effect.fromOption(HashMap.get(bindings, read.collection)).pipe(
+      Effect.mapError(
+        () =>
           new QueryError({
             message: `No resource declares "${read.collection}"; the replica cannot serve it`,
             query: read.collection,
           })
-        )
-      : Effect.succeed(binding);
-  };
+      )
+    );
 
   /** The binding of a parsed read, with what the resource does not declare refused. */
   const checked = (parsed: JsonApiQuery.ParsedRead): Effect.Effect<Binding, QueryError> =>

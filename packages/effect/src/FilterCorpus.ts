@@ -37,6 +37,7 @@ import * as Effect from "effect/Effect";
 import * as Match from "effect/Match";
 import * as Option from "effect/Option";
 import * as Random from "effect/Random";
+import * as R from "effect/Record";
 import * as Predicate from "./Predicate.js";
 import * as Json from "./internal/Json.js";
 import type * as Subset from "./Subset.js";
@@ -727,7 +728,7 @@ export const formatDisagreement = (disagreement: Disagreement): string => {
   Arr.forEach(disagreement.rows, (row) => {
     lines.push(`  ${row.id} ${print(row.value)}`);
   });
-  Arr.forEach(Object.entries(disagreement.results), ([name, ids]) => {
+  Arr.forEach(R.toEntries(disagreement.results), ([name, ids]) => {
     lines.push(`${name}: ${Json.stringify(ids)}`);
   });
   return lines.join("\n");

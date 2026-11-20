@@ -37,6 +37,7 @@ import * as Layer from "effect/Layer";
 import * as ManagedRuntime from "effect/ManagedRuntime";
 import * as Order from "effect/Order";
 import * as P from "effect/Predicate";
+import * as R from "effect/Record";
 import type * as Ordering from "effect/Ordering";
 import { KeyValueStore } from "effect/persistence";
 import { IndexedDb } from "@effect/platform-browser";
@@ -365,7 +366,7 @@ const sectionB = async () => {
       "heap delta MB": Math.round(((h1 - h0) / 1048576) * 10) / 10,
     },
   ];
-  const evaluated = await sequential(Object.entries(predicates), async ([label, where]) => {
+  const evaluated = await sequential(R.toEntries(predicates), async ([label, where]) => {
     const runs = await sequential(Arr.range(1, 9), async () => {
       const [a, ta] = await timed(() => fullScan(where));
       const [b, tb] = await timed(() => CollectionIndex.evaluate(index, rowsById, where));

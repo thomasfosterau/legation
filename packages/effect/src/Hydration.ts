@@ -65,6 +65,7 @@ import * as Context from "effect/Context";
 import * as Deferred from "effect/Deferred";
 import type * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
+import * as HashSet from "effect/HashSet";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as R from "effect/Record";
@@ -258,14 +259,14 @@ export const hydrate = (store: ClientStore, snapshot: Snapshot): Effect.Effect<v
       // entry in both its journal and its tail, since the two reads are not one state. The tail copy wins:
       // it is not journaled again. The store's tail is read too, since an entry the store already
       // parked can sit in a snapshot's journal; `appendMutation` refuses such an entry, so it must be skipped.
-      const parked = new Set(
+      const parked = HashSet.fromIterable(
         (yield* store.unpulled).map((m) => `${m.clientId}\u0000${m.mutationId}`)
       );
       yield* Effect.forEach(
         decoded.journal,
         (mutation) =>
           Effect.gen(function* () {
-            if (parked.has(`${mutation.clientId}\u0000${mutation.mutationId}`)) return;
+            if (HashSet.has(parked, `${mutation.clientId}\u0000${mutation.mutationId}`)) return;
             yield* store.appendMutation(mutation);
           }),
         { concurrency: 1, discard: true }

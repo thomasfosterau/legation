@@ -15,6 +15,7 @@ import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
 import * as Layer from "effect/Layer";
 import * as Redacted from "effect/Redacted";
+import * as R from "effect/Record";
 import * as Ref from "effect/Ref";
 import * as Schedule from "effect/Schedule";
 import * as Schema from "effect/Schema";
@@ -261,7 +262,7 @@ describe("SqlBackend", () => {
         // not pass the write-then-fail rule.
         const name = BackendContract.writeThenFail.name;
         const backend = yield* makeContractBackend(
-          Object.fromEntries(Object.entries(handlers).filter(([key]) => key !== name)),
+          R.remove(handlers, name),
           new Map([...contractMutators].filter(([key]) => key !== name))
         );
         const failure = yield* Effect.flip(BackendContract.verifyBackendContract(backend));

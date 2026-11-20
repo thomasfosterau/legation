@@ -130,18 +130,22 @@ const unknownFormMutator = `Unknown mutator: ${MirrorProtocol.FORM_MUTATION_MUTA
 
 /** An empty map of requests awaiting the host's answer, keyed by requestId. */
 const makePending = <A>() =>
-  Ref.make(new Map<number, Deferred.Deferred<A, MutatorError | TransportError>>());
+  Ref.make(HashMap.empty<number, Deferred.Deferred<A, MutatorError | TransportError>>());
 
 /** Fail (and clear) every deferred still waiting in `ref`, never leaving a caller hanging. */
 const failPending = <A>(
-  ref: Ref.Ref<Map<number, Deferred.Deferred<A, MutatorError | TransportError>>>
+  ref: Ref.Ref<HashMap.HashMap<number, Deferred.Deferred<A, MutatorError | TransportError>>>
 ): Effect.Effect<void> =>
-  Ref.getAndSet(ref, new Map()).pipe(
+  Ref.getAndSet(ref, HashMap.empty()).pipe(
     Effect.flatMap((requests) =>
-      Effect.forEach(requests.values(), (deferred) => Deferred.fail(deferred, hostUnavailable), {
-        concurrency: 1,
-        discard: true,
-      })
+      Effect.forEach(
+        HashMap.values(requests),
+        (deferred) => Deferred.fail(deferred, hostUnavailable),
+        {
+          concurrency: 1,
+          discard: true,
+        }
+      )
     )
   );
 
@@ -287,21 +291,17 @@ export interface Mirror {
 // Take a request's deferred out of its map and complete it. A no-op when the
 // requestId is not in this map (so both maps can be swept on `MutateError`).
 const resolveIn = <A>(
-  ref: Ref.Ref<Map<number, Deferred.Deferred<A, MutatorError | TransportError>>>,
+  ref: Ref.Ref<HashMap.HashMap<number, Deferred.Deferred<A, MutatorError | TransportError>>>,
   requestId: number,
   complete: (
     deferred: Deferred.Deferred<A, MutatorError | TransportError>
   ) => Effect.Effect<boolean>
 ) =>
   Effect.gen(function* () {
-    const deferred = (yield* Ref.get(ref)).get(requestId);
-    if (deferred === undefined) return;
-    yield* Ref.update(ref, (map) => {
-      const next = new Map(map);
-      next.delete(requestId);
-      return next;
-    });
-    yield* complete(deferred);
+    const deferred = HashMap.get(yield* Ref.get(ref), requestId);
+    if (Option.isNone(deferred)) return;
+    yield* Ref.update(ref, HashMap.remove(requestId));
+    yield* complete(deferred.value);
   });
 
 /**
@@ -428,16 +428,16 @@ export const make = (options: MirrorOptions): Effect.Effect<Mirror, never, Scope
           releaseInterest(key, "observer")
         ).pipe(Effect.as(stream))
       );
-    const rows = yield* Ref.make(new Map<string, ReadonlyArray<ClientEngine.LocalRow>>());
+    const rows = yield* Ref.make(HashMap.empty<string, ReadonlyArray<ClientEngine.LocalRow>>());
     // Resolved relational rows, keyed by the host's related key. Kept apart
     // from `rows` because the row shape differs (base value + resolved names).
-    const relatedRows = yield* Ref.make(new Map<string, ReadonlyArray<Related.RelatedRow>>());
+    const relatedRows = yield* Ref.make(HashMap.empty<string, ReadonlyArray<Related.RelatedRow>>());
     // The mirrored mutation-state map, kept apart from `rows` because
     // it is a singleton (one map, not one per subset/named-query key) whose
     // shape differs from `LocalRow`.
     const mutationStatesRow = yield* Ref.make<MutationState.MutationStateMap>(HashMap.empty());
     // The host's pulled summaries of its registrations; see `PulledRegistrations`.
-    const pulledKeys = yield* SubscriptionRef.make<ReadonlyMap<string, Coverage.Pulled>>(new Map());
+    const pulledKeys = yield* SubscriptionRef.make(HashMap.empty<string, Coverage.Pulled>());
     // Monotonic seq stamped on every published key. The `rows` Ref is updated
     // before the key is published, so a re-read after a gap always sees the
     // latest rows even for a dropped key.
@@ -538,7 +538,7 @@ export const make = (options: MirrorOptions): Effect.Effect<Mirror, never, Scope
     // its requestId. A reply with no mirror id comes from a host that predates
     // the field, and is taken by its requestId as before.
     const resolveReply = <A>(
-      ref: Ref.Ref<Map<number, Deferred.Deferred<A, MutatorError | TransportError>>>,
+      ref: Ref.Ref<HashMap.HashMap<number, Deferred.Deferred<A, MutatorError | TransportError>>>,
       message: { readonly mirrorId?: string; readonly requestId: number },
       complete: (
         deferred: Deferred.Deferred<A, MutatorError | TransportError>
@@ -648,7 +648,8 @@ export const make = (options: MirrorOptions): Effect.Effect<Mirror, never, Scope
       ),
       Match.tag("MirrorUpdate", (message) =>
         Ref.update(rows, (map) =>
-          new Map(map).set(
+          HashMap.set(
+            map,
             message.key,
             message.rows.map((row) => ({ id: row.id, value: row.value }))
           )
@@ -656,7 +657,8 @@ export const make = (options: MirrorOptions): Effect.Effect<Mirror, never, Scope
       ),
       Match.tag("RelatedUpdate", (message) =>
         Ref.update(relatedRows, (map) =>
-          new Map(map).set(
+          HashMap.set(
+            map,
             message.key,
             message.rows.map((row) => ({
               id: row.id,
@@ -680,7 +682,7 @@ export const make = (options: MirrorOptions): Effect.Effect<Mirror, never, Scope
       Match.tag("PulledRegistrations", (message) =>
         SubscriptionRef.set(
           pulledKeys,
-          new Map(message.registrations.map((entry) => [entry.key, entry.pulled]))
+          HashMap.fromIterable(message.registrations.map((entry) => [entry.key, entry.pulled]))
         )
       ),
       Match.tag("MutateAck", (message) =>
@@ -755,10 +757,15 @@ export const make = (options: MirrorOptions): Effect.Effect<Mirror, never, Scope
     );
 
     const query = (subset: Subset.Subset) =>
-      Ref.get(rows).pipe(Effect.map((map) => map.get(Subset.hash(subset)) ?? []));
-    const readKey = (key: string) => Ref.get(rows).pipe(Effect.map((map) => map.get(key) ?? []));
+      Ref.get(rows).pipe(
+        Effect.map((map) => Option.getOrElse(HashMap.get(map, Subset.hash(subset)), () => []))
+      );
+    const readKey = (key: string) =>
+      Ref.get(rows).pipe(Effect.map((map) => Option.getOrElse(HashMap.get(map, key), () => [])));
     const readRelated = (key: string) =>
-      Ref.get(relatedRows).pipe(Effect.map((map) => map.get(key) ?? []));
+      Ref.get(relatedRows).pipe(
+        Effect.map((map) => Option.getOrElse(HashMap.get(map, key), () => []))
+      );
     const readMutationStates = Ref.get(mutationStatesRow);
 
     // Validate + encode args against the shared registry (fail fast in the mirror;
@@ -786,13 +793,13 @@ export const make = (options: MirrorOptions): Effect.Effect<Mirror, never, Scope
     // through `ref`. Registered after this mirror began closing, the request
     // can never be answered, so it fails at once instead of hanging.
     const awaitReply = <A>(
-      ref: Ref.Ref<Map<number, Deferred.Deferred<A, MutatorError | TransportError>>>,
+      ref: Ref.Ref<HashMap.HashMap<number, Deferred.Deferred<A, MutatorError | TransportError>>>,
       requestId: number,
       message: MirrorProtocol.MirrorMessage
     ) =>
       Effect.gen(function* () {
         const deferred = yield* Deferred.make<A, MutatorError | TransportError>();
-        yield* Ref.update(ref, (map) => new Map(map).set(requestId, deferred));
+        yield* Ref.update(ref, HashMap.set(requestId, deferred));
         if (yield* Ref.get(closed)) {
           return yield* resolveIn(ref, requestId, (waiting) =>
             Deferred.fail(waiting, hostUnavailable)
@@ -803,7 +810,7 @@ export const make = (options: MirrorOptions): Effect.Effect<Mirror, never, Scope
       });
 
     const forward = <A>(
-      ref: Ref.Ref<Map<number, Deferred.Deferred<A, MutatorError | TransportError>>>,
+      ref: Ref.Ref<HashMap.HashMap<number, Deferred.Deferred<A, MutatorError | TransportError>>>,
       mutator: string,
       encoded: unknown
     ) =>
@@ -1078,7 +1085,7 @@ export const make = (options: MirrorOptions): Effect.Effect<Mirror, never, Scope
             ReadonlyArray<ClientEngine.ReadRow>,
             MutatorError | TransportError
           >();
-          yield* Ref.update(pendingReads, (map) => new Map(map).set(requestId, deferred));
+          yield* Ref.update(pendingReads, HashMap.set(requestId, deferred));
           yield* channel.post({ _tag: "Read", requestId, mirrorId, subsets });
           return yield* Deferred.await(deferred);
         }),
@@ -1091,7 +1098,7 @@ export const make = (options: MirrorOptions): Effect.Effect<Mirror, never, Scope
         ).pipe(
           Effect.map(({ marks, rowsHere }) =>
             HashSet.has(rowsHere, key)
-              ? (marks.get(key) ?? Coverage.NOT_PULLED)
+              ? Option.getOrElse(HashMap.get(marks, key), () => Coverage.NOT_PULLED)
               : Coverage.NOT_PULLED
           )
         ),

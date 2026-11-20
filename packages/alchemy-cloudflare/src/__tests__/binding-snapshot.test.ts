@@ -29,6 +29,8 @@ import * as HttpServerRequest from "effect/http/HttpServerRequest";
 import * as HttpServerResponse from "effect/http/HttpServerResponse";
 import * as Layer from "effect/Layer";
 import * as ManagedRuntime from "effect/ManagedRuntime";
+import * as MutableHashMap from "effect/MutableHashMap";
+import * as MutableHashSet from "effect/MutableHashSet";
 import * as Option from "effect/Option";
 import {
   Authorization,
@@ -117,7 +119,7 @@ interface Api {
   /** The bound Worker's fetch handler — what `env.API.fetch` reaches. */
   readonly fetch: (request: Request) => Promise<Response>;
   /** Rooms that have actually served a request, by name. */
-  readonly rooms: ReadonlySet<string>;
+  readonly rooms: MutableHashSet.MutableHashSet<string>;
 }
 
 const badRequest = (error: TransportError | VersionNotSupportedError) =>
@@ -132,8 +134,8 @@ const badRequest = (error: TransportError | VersionNotSupportedError) =>
 const makeApi = Effect.fn("makeApi")(function* (): Effect.fn.Return<Api, never, Scope.Scope> {
   const backend = yield* MemoryBackend.make(backendHandlers);
   const policy = Authorization.policy({ products: Authorization.allowAll });
-  const handlers = new Map<string, Transport.ServerHandler>();
-  const served = new Set<string>();
+  const handlers = MutableHashMap.empty<string, Transport.ServerHandler>();
+  const served = MutableHashSet.empty<string>();
   const scope = yield* Effect.scope;
   // The service binding's `fetch` is Promise-based, so its callbacks run on a runtime this API owns
   // and disposes with the test's scope.
@@ -144,8 +146,8 @@ const makeApi = Effect.fn("makeApi")(function* (): Effect.fn.Return<Api, never, 
 
   const handlerFor = (room: string): Effect.Effect<Transport.ServerHandler> =>
     Effect.gen(function* () {
-      const existing = handlers.get(room);
-      if (existing !== undefined) return existing;
+      const existing = MutableHashMap.get(handlers, room);
+      if (Option.isSome(existing)) return existing.value;
       const cvrStore = yield* Cvr.makeMemoryStore;
       const bus = yield* InvalidationBus.makeInProcess;
       const handler = yield* SyncServer.make.pipe(
@@ -154,12 +156,12 @@ const makeApi = Effect.fn("makeApi")(function* (): Effect.fn.Return<Api, never, 
         Effect.provideService(Cvr.CvrStore, cvrStore),
         Effect.provideService(InvalidationBus.InvalidationBus, bus)
       );
-      handlers.set(room, handler);
+      MutableHashMap.set(handlers, room, handler);
       return handler;
     }).pipe(Scope.provide(scope));
 
   const rooms = makeNamespace(async (room, request) => {
-    served.add(room);
+    MutableHashSet.add(served, room);
     const handler = await runtime.runPromise(handlerFor(room));
     const path = routeOf(new URL(request.url).pathname);
     const body: unknown = await request.json();
@@ -384,8 +386,8 @@ describe("Hydration.snapshot over a service binding", () => {
       expect(snapshot.rows.map((row) => row.id)).toEqual(["p-1"]);
       expect(snapshot.cookie).toBeDefined();
       // The hop reached the session's own room, not the anonymous one.
-      expect(api.rooms.has("alice")).toBe(true);
-      expect(api.rooms.has("anonymous")).toBe(false);
+      expect(MutableHashSet.has(api.rooms, "alice")).toBe(true);
+      expect(MutableHashSet.has(api.rooms, "anonymous")).toBe(false);
 
       // Browser boot over the same front door.
       const patches = yield* Ref.make<ReadonlyArray<ReadonlyArray<Protocol.PatchOp>>>([]);
@@ -445,7 +447,7 @@ describe("Hydration.snapshot over a service binding", () => {
       // A test that merely asserts rows arrived passes here. Nothing surfaces.
       expect(snapshot.rows.map((row) => row.id)).toEqual(["p-1"]);
       expect(snapshot.cookie).toBeDefined();
-      expect(api.rooms.has("anonymous")).toBe(true);
+      expect(MutableHashSet.has(api.rooms, "anonymous")).toBe(true);
 
       const patches = yield* Ref.make<ReadonlyArray<ReadonlyArray<Protocol.PatchOp>>>([]);
       const browser = yield* makeEngine(

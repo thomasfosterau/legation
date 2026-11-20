@@ -256,7 +256,7 @@ export const policy = (
   filters: Readonly<Record<string, AuthFilter>>,
   options?: PolicyOptions
 ): AuthPolicy => ({
-  filters: new Map(Object.entries(filters)),
+  filters: new Map(R.toEntries(filters)),
   ...Defined.fields({
     declarations:
       options?.collections === undefined

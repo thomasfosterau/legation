@@ -25,6 +25,7 @@ import * as Clock from "effect/Clock";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
+import * as MutableHashMap from "effect/MutableHashMap";
 import { awaitPromise } from "./await-promise.js";
 import * as Exit from "effect/Exit";
 import * as HttpServerRequest from "effect/http/HttpServerRequest";
@@ -446,13 +447,13 @@ const makeCalls = <Call>() =>
 
 /** Build one value per name, once, however many fibers ask for it first. */
 const memoByName = <A>(build: (name: string) => Effect.Effect<A>) => {
-  const pending = new Map<string, Deferred.Deferred<A>>();
+  const pending = MutableHashMap.empty<string, Deferred.Deferred<A>>();
   return (name: string): Effect.Effect<A> =>
     Effect.suspend(() => {
-      const existing = pending.get(name);
-      if (existing !== undefined) return Deferred.await(existing);
+      const existing = MutableHashMap.get(pending, name);
+      if (Option.isSome(existing)) return Deferred.await(existing.value);
       const deferred = Deferred.makeUnsafe<A>();
-      pending.set(name, deferred);
+      MutableHashMap.set(pending, name, deferred);
       return build(name).pipe(Effect.tap((value) => Deferred.succeed(deferred, value)));
     });
 };

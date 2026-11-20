@@ -12,8 +12,10 @@ import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
 import * as Fiber from "effect/Fiber";
+import * as HashSet from "effect/HashSet";
 import * as Layer from "effect/Layer";
 import * as Logger from "effect/Logger";
+import * as MutableHashSet from "effect/MutableHashSet";
 import * as Option from "effect/Option";
 import * as Ref from "effect/Ref";
 import * as References from "effect/References";
@@ -142,7 +144,7 @@ const mutation = (clientId: string, mutationId: number): Mutation => ({
 // The writes a `flakyKeyValue` refuses: the keys, whether each refusal is the next write only, and
 // whether a refused write lands before it reports failure (an ambiguous abort).
 interface Refusal {
-  readonly keys: ReadonlySet<string>;
+  readonly keys: HashSet.HashSet<string>;
   readonly once: boolean;
   readonly landed: boolean;
 }
@@ -151,18 +153,18 @@ const refuse = (
   keys: ReadonlyArray<string>,
   once: boolean,
   landed = false
-) => Ref.set(refused, { keys: new Set(keys), once, landed });
+) => Ref.set(refused, { keys: HashSet.fromIterable(keys), once, landed });
 
 // Whether the next operation on `key` is refused, and whether a refused write lands anyway. A refusal
 // names the key once when `once` is set.
 const nextRefusal = (refused: Ref.Ref<Refusal>, key: string) =>
   Ref.modify(refused, (current) => {
-    if (!current.keys.has(key)) return [{ refused: false, landed: false }, current] as const;
+    if (!HashSet.has(current.keys, key)) {
+      return [{ refused: false, landed: false }, current] as const;
+    }
     const outcome = { refused: true, landed: current.landed };
     if (!current.once) return [outcome, current] as const;
-    const keys = new Set(current.keys);
-    keys.delete(key);
-    return [outcome, { ...current, keys }] as const;
+    return [outcome, { ...current, keys: HashSet.remove(current.keys, key) }] as const;
   });
 
 // A KeyValueStore whose writes to the refused keys fail, as a store error would: once per key, or
@@ -254,8 +256,12 @@ const rowKeyOf = (id: string) => `legation/row/counters/${id}`;
 const counterSetUp = (ids: ReadonlyArray<string>, unpulledLimit?: number) =>
   Effect.gen(function* () {
     const server = yield* serverOver(yield* MemoryBackend.make(backendHandlers));
-    const refused = yield* Ref.make<Refusal>({ keys: new Set(), once: false, landed: false });
-    const removals = yield* Ref.make<Refusal>({ keys: new Set(), once: false, landed: false });
+    const refused = yield* Ref.make<Refusal>({ keys: HashSet.empty(), once: false, landed: false });
+    const removals = yield* Ref.make<Refusal>({
+      keys: HashSet.empty(),
+      once: false,
+      landed: false,
+    });
     const flaky = yield* flakyKeyValue(refused, removals);
     const store = yield* ClientStoreModule.makeKeyValue().pipe(
       Effect.provideService(KeyValueStore.KeyValueStore, flaky)
@@ -1442,9 +1448,13 @@ describe("a release record's guarantees across both stores", () => {
       "key-value: a park whose journal trim failed is settled by the in-process finish",
       () =>
         Effect.gen(function* () {
-          const armed = yield* Ref.make<Refusal>({ keys: new Set(), once: false, landed: false });
+          const armed = yield* Ref.make<Refusal>({
+            keys: HashSet.empty(),
+            once: false,
+            landed: false,
+          });
           const kv = yield* flakyKeyValue(
-            yield* Ref.make<Refusal>({ keys: new Set(), once: false, landed: false }),
+            yield* Ref.make<Refusal>({ keys: HashSet.empty(), once: false, landed: false }),
             armed
           );
           const store = yield* ClientStoreModule.makeKeyValue().pipe(
@@ -1684,9 +1694,13 @@ describe("the engine's release failure paths", () => {
         Effect.gen(function* () {
           const kv = yield* KeyValueStore.KeyValueStore;
           const server = yield* serverOver(yield* MemoryBackend.make(backendHandlers));
-          const refused = yield* Ref.make<Refusal>({ keys: new Set(), once: false, landed: false });
+          const refused = yield* Ref.make<Refusal>({
+            keys: HashSet.empty(),
+            once: false,
+            landed: false,
+          });
           const removals = yield* Ref.make<Refusal>({
-            keys: new Set(),
+            keys: HashSet.empty(),
             once: false,
             landed: false,
           });
@@ -2378,7 +2392,7 @@ describeWrapped("a memory snapshot is one pull's state", (it) => {
       const store = yield* ClientStoreModule.makeMemory;
       const rounds = 200;
       let torn = 0;
-      const seen = new Set<number | undefined>();
+      const seen = MutableHashSet.empty<number | undefined>();
       const pulls = Effect.fn("pulls")(function* () {
         yield* Effect.forEach(
           Arr.range(1, rounds),
@@ -2401,7 +2415,7 @@ describeWrapped("a memory snapshot is one pull's state", (it) => {
               const state = yield* defined(store.snapshot);
               const row = state.rows.find((entry) => entry.row.id === "a")?.row;
               const n = row === undefined ? undefined : countOf(row.value);
-              seen.add(n);
+              MutableHashSet.add(seen, n);
               if (state.cookie !== (n === undefined ? undefined : `c${n}`)) torn++;
             }),
           { concurrency: 1, discard: true }
@@ -2412,7 +2426,7 @@ describeWrapped("a memory snapshot is one pull's state", (it) => {
       yield* Fiber.join(pulling);
       yield* Fiber.join(reading);
       // The reads must interleave with the pulls, or the check above is vacuous.
-      expect(seen.size).toBeGreaterThan(1);
+      expect(MutableHashSet.size(seen)).toBeGreaterThan(1);
       expect(torn).toBe(0);
     }).pipe(Effect.provideService(References.MaxOpsBeforeYield, 5))
   );

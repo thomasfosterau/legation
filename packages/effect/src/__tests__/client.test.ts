@@ -14,6 +14,7 @@ import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
 import * as Option from "effect/Option";
+import * as Order from "effect/Order";
 import * as R from "effect/Record";
 import * as Ref from "effect/Ref";
 import * as Schema from "effect/Schema";
@@ -394,8 +395,11 @@ describe("Client.query coverage (ADR-0029: conjunct subsumption with strict wind
         // The root window AND one per-parent review window (ADR-0024) are
         // registered with the engine — the same registration `observe` runs.
         const registered = yield* eventually(rootHashes(engine), (hashes) => hashes.length === 3);
-        expect(new Set(registered)).toEqual(
-          new Set([Subset.hash(root), perParent("p-1"), perParent("p-2")])
+        expect(Arr.sort(Arr.dedupe(registered), Order.String)).toEqual(
+          Arr.sort(
+            Arr.dedupe([Subset.hash(root), perParent("p-1"), perParent("p-2")]),
+            Order.String
+          )
         );
         yield* pulled(engine);
 
@@ -609,7 +613,7 @@ const stubUrls: Client.UrlReads = {
                 .toSorted()
                 .join(",")}`,
             ]),
-        ...Object.entries(where)
+        ...R.toEntries(where)
           .toSorted(([a], [b]) => (a < b ? -1 : 1))
           .map(([field, value]) => `filter[${field}]=${String(value)}`),
       ];

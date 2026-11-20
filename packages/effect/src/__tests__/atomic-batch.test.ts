@@ -13,6 +13,10 @@ import * as Arr from "effect/Array";
 import * as Clock from "effect/Clock";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
+import * as MutableHashMap from "effect/MutableHashMap";
+import * as MutableHashSet from "effect/MutableHashSet";
+import * as Option from "effect/Option";
+import * as R from "effect/Record";
 import * as Schema from "effect/Schema";
 import { KeyValueStore } from "effect/persistence";
 import * as Authorization from "../Authorization.js";
@@ -41,40 +45,41 @@ import { idOf, optionalCountOf } from "./shapes.js";
  * holds keys whose next `get` fails once, so a test can make one read fail and nothing else.
  */
 const recordingKeyValue = () => {
-  const data = new Map<string, string>();
+  const data = MutableHashMap.empty<string, string>();
   const writes: Array<string> = [];
-  const failGets = new Set<string>();
+  const failGets = MutableHashSet.empty<string>();
   const kv = KeyValueStore.make({
     get: (key: string) =>
       Effect.suspend(() => {
-        if (failGets.delete(key)) {
+        if (MutableHashSet.has(failGets, key)) {
+          MutableHashSet.remove(failGets, key);
           return Effect.fail(
             new KeyValueStore.KeyValueStoreError({ method: "get", message: `get "${key}" failed` })
           );
         }
-        return Effect.sync(() => data.get(key));
+        return Effect.sync(() => Option.getOrUndefined(MutableHashMap.get(data, key)));
       }),
     getUint8Array: () => Effect.undefined,
     set: (key: string, value: string | Uint8Array) =>
       Effect.sync(() => {
         writes.push(key);
-        data.set(key, String(value));
+        MutableHashMap.set(data, key, String(value));
       }),
     remove: (key: string) =>
       Effect.sync(() => {
         writes.push(key);
-        data.delete(key);
+        MutableHashMap.remove(data, key);
       }),
-    clear: Effect.sync(() => data.clear()),
-    size: Effect.sync(() => data.size),
-    keys: Effect.sync(() => [...data.keys()]),
+    clear: Effect.sync(() => MutableHashMap.clear(data)),
+    size: Effect.sync(() => MutableHashMap.size(data)),
+    keys: Effect.sync(() => [...MutableHashMap.keys(data)]),
   });
   return { kv, data, writes, failGets };
 };
 
 /** A store's full contents, sorted, for comparing two stores write for write. */
-const contents = (data: ReadonlyMap<string, string>) =>
-  [...data.entries()].toSorted(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0));
+const contents = (data: MutableHashMap.MutableHashMap<string, string>) =>
+  [...data].toSorted(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0));
 
 /**
  * The test batch: each `apply` either aborts before anything lands (a transaction that failed to
@@ -96,7 +101,7 @@ const newBatchState = (): BatchState => ({
 });
 
 const batchOver = (
-  data: Map<string, string>,
+  data: MutableHashMap.MutableHashMap<string, string>,
   writes: Array<string>,
   state: BatchState
 ): AtomicKeyValue =>
@@ -111,8 +116,8 @@ const batchOver = (
         const commit = Effect.sync(() => {
           Arr.forEach(ops, (op) => {
             writes.push(op.key);
-            if (P.isTagged(op, "Set")) data.set(op.key, op.value);
-            else data.delete(op.key);
+            if (P.isTagged(op, "Set")) MutableHashMap.set(data, op.key, op.value);
+            else MutableHashMap.remove(data, op.key);
           });
           state.afterCommit?.();
         });
@@ -167,7 +172,7 @@ const pullOnRecordPath = (store: ClientStore, release: PullRelease) =>
     yield* store.applyRowOps(release.patch);
     if (release.cookie !== undefined) yield* store.setCookie(release.cookie);
     yield* Effect.forEach(
-      Object.entries(release.lastMutationIds),
+      R.toEntries(release.lastMutationIds),
       ([clientId, upTo]) => store.acknowledge(clientId, upTo),
       { concurrency: 1, discard: true }
     );
@@ -183,7 +188,7 @@ const acknowledgeOnRecordPath = (
   Effect.gen(function* () {
     yield* store.parkUnpulled(parked);
     yield* Effect.forEach(
-      Object.entries(lastMutationIds),
+      R.toEntries(lastMutationIds),
       ([clientId, upTo]) => store.acknowledge(clientId, upTo),
       { concurrency: 1, discard: true }
     );
@@ -229,15 +234,15 @@ describe("the atomic batch on the key-value store", () => {
       const ops = state.batches.flat();
       const keys = ops.map((op) => op.key);
       // Three patch ops touch two rows, and the batch carries one operation per distinct key.
-      expect(keys).toHaveLength(new Set(keys).size);
+      expect(keys).toHaveLength(Arr.dedupe(keys).length);
       expect(keys.filter((key) => key === ROW_A)).toHaveLength(1);
       expect(keys.filter((key) => key === ROW_B)).toHaveLength(1);
       expect(keys).not.toContain(RECORD);
       // Nothing reached the key-value store directly, so no write escaped the batch.
       expect(writes).toEqual(keys);
       // The cookie and the row values are what the pull carried, the last write of `a` winning.
-      expect(data.get("legation/cookie")).toBe("cookie-1");
-      expect(Json.parse(data.get(ROW_A) ?? "null")).toEqual({
+      expect(Option.getOrUndefined(MutableHashMap.get(data, "legation/cookie"))).toBe("cookie-1");
+      expect(Json.parse(Option.getOrUndefined(MutableHashMap.get(data, ROW_A)) ?? "null")).toEqual({
         id: "a",
         version: 1,
         value: { id: "a", n: 3 },
@@ -370,7 +375,7 @@ describe("the atomic batch on the key-value store", () => {
           cookie: "k1",
           patch: [put("a", 7)],
         });
-        expect(data.has(RECORD)).toBe(true);
+        expect(MutableHashMap.has(data, RECORD)).toBe(true);
 
         const state = newBatchState();
         const reopened = yield* openStore(kv, batchOver(data, writes, state));
@@ -378,7 +383,7 @@ describe("the atomic batch on the key-value store", () => {
         expect(yield* reopened.getCookie).toBe("k1");
         expect(yield* reopened.getRow("counters", "a")).toMatchObject({ value: { id: "a", n: 7 } });
         expect(yield* reopened.unpulled).toEqual([]);
-        expect(data.has(RECORD)).toBe(false);
+        expect(MutableHashMap.has(data, RECORD)).toBe(false);
       })
   );
 
@@ -391,14 +396,14 @@ describe("the atomic batch on the key-value store", () => {
         const store = yield* openStore(kv, batchOver(data, writes, state));
         // A record-path pull begins and is never finished: its record stays outstanding.
         yield* store.beginRelease({ lastMutationIds: {}, cookie: "k1", patch: [put("a", 1)] });
-        expect(data.has(RECORD)).toBe(true);
+        expect(MutableHashMap.has(data, RECORD)).toBe(true);
         // The next read of the record fails, so the row write that would finish it fails too.
-        failGets.add(RECORD);
+        MutableHashSet.add(failGets, RECORD);
         const failed = yield* Effect.exit(
           store.putRow("counters", { id: "b", version: 1, value: { id: "b", n: 0 } })
         );
         expect(Exit.isFailure(failed)).toBe(true);
-        expect(data.has(RECORD)).toBe(true);
+        expect(MutableHashMap.has(data, RECORD)).toBe(true);
 
         // A newer pull commits. It finishes the stale record before it writes, so the record is not
         // left to replay over the batch's rows and cookie.
@@ -410,9 +415,11 @@ describe("the atomic batch on the key-value store", () => {
         // A later row write finishes whatever is still outstanding.
         yield* store.putRow("counters", { id: "c", version: 1, value: { id: "c", n: 0 } });
 
-        expect(Json.parse(data.get(ROW_A) ?? "null")).toMatchObject({ value: { n: 2 } });
-        expect(data.get("legation/cookie")).toBe("k2");
-        expect(data.has(RECORD)).toBe(false);
+        expect(
+          Json.parse(Option.getOrUndefined(MutableHashMap.get(data, ROW_A)) ?? "null")
+        ).toMatchObject({ value: { n: 2 } });
+        expect(Option.getOrUndefined(MutableHashMap.get(data, "legation/cookie"))).toBe("k2");
+        expect(MutableHashMap.has(data, RECORD)).toBe(false);
       })
   );
 
@@ -444,13 +451,13 @@ describe("the atomic batch on the key-value store", () => {
           yield* store.parkUnpulled([mutation("c", 1)]);
           yield* store.beginRelease({ lastMutationIds: {}, cookie: "k1", patch: [put("a", 1)] });
           const before = contents(data);
-          failGets.add(RECORD);
+          MutableHashSet.add(failGets, RECORD);
 
           const attempt = yield* Effect.exit(call(store));
           expect(Exit.isFailure(attempt)).toBe(true);
           expect(contents(data)).toEqual(before);
           expect(state.batches).toHaveLength(0);
-          expect(data.has(RECORD)).toBe(true);
+          expect(MutableHashMap.has(data, RECORD)).toBe(true);
         })
     );
   });
@@ -486,7 +493,7 @@ describe("the atomic batch on the key-value store", () => {
       });
       expect(yield* recordPath.getCookie).toBe("k2");
       expect(yield* recordPath.getRow("counters", "a")).toMatchObject({ value: { n: 9 } });
-      expect(data.has(RECORD)).toBe(false);
+      expect(MutableHashMap.has(data, RECORD)).toBe(false);
     })
   );
 
@@ -509,7 +516,7 @@ describe("the atomic batch on the key-value store", () => {
       // One batch for the whole pull, and within it one operation per key, so no row is written twice.
       expect(state.batches).toHaveLength(1);
       const keys = state.batches.flat().map((op) => op.key);
-      expect(keys).toHaveLength(new Set(keys).size);
+      expect(keys).toHaveLength(Arr.dedupe(keys).length);
       expect(keys.filter((key) => key === rowKey)).toHaveLength(1);
       expect(keys).not.toContain(RECORD);
       expect(writes).not.toContain(RECORD);

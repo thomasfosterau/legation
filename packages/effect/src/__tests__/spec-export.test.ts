@@ -7,6 +7,7 @@
 import { describe, expect, it } from "@effect/vitest";
 import * as Arr from "effect/Array";
 import * as Order from "effect/Order";
+import * as R from "effect/Record";
 import * as Schema from "effect/Schema";
 import * as Collection from "../Collection.js";
 import * as Mutator from "../Mutator.js";
@@ -61,7 +62,7 @@ const decodeAsyncApi = Schema.decodeUnknownSync(
 describe("SpecExport.build", () => {
   it("specializes the protocol with per-name component schemas", () => {
     const spec = SpecExport.build(api);
-    const keys = Object.keys(spec.components);
+    const keys = R.keys(spec.components);
 
     // Each app type gets a named, sanitized component.
     expect(keys).toContain("Row_todos");
@@ -94,7 +95,7 @@ describe("SpecExport.build", () => {
   it("falls back to the generic envelope when nothing is supplied", () => {
     const spec = SpecExport.build({ info: { title: "Empty", version: "0.0.0" } });
     expect(spec.path).toBe("/sync");
-    expect(Object.keys(spec.components)).toContain("PushRequest");
+    expect(R.keys(spec.components)).toContain("PushRequest");
     expect(spec.catalog).toEqual({ collections: [], mutators: [], queries: [] });
   });
 });
@@ -110,7 +111,7 @@ describe("SpecExport.toOpenApi", () => {
 
   it("honours a custom path", () => {
     const doc = decodePaths(SpecExport.openApi({ ...api, path: "/api/v2/sync" }));
-    expect(Object.keys(doc.paths)).toEqual(["/api/v2/sync/push", "/api/v2/sync/pull"]);
+    expect(R.keys(doc.paths)).toEqual(["/api/v2/sync/push", "/api/v2/sync/pull"]);
   });
 });
 
@@ -118,7 +119,7 @@ describe("SpecExport.toAsyncApi", () => {
   it("emits push/pull/poke channels and operations", () => {
     const doc = decodeAsyncApi(SpecExport.asyncApi(api));
     expect(doc.asyncapi).toBe("3.0.0");
-    expect(Arr.sort(Object.keys(doc.channels), Order.String)).toEqual(["pokes", "pull", "push"]);
+    expect(Arr.sort(R.keys(doc.channels), Order.String)).toEqual(["pokes", "pull", "push"]);
     expect(doc.operations.receivePokes.action).toBe("receive");
     expect(doc.operations.push.action).toBe("send");
     expect(doc.components.messages["Poke"]).toBeDefined();

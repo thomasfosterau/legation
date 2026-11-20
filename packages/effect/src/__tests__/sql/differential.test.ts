@@ -30,8 +30,11 @@ import * as Arr from "effect/Array";
 import * as Console from "effect/Console";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
+import * as HashMap from "effect/HashMap";
+import * as HashSet from "effect/HashSet";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
+import * as R from "effect/Record";
 import { describe, expect, layer } from "@effect/vitest";
 import { type Engine, makePostgres, makeSqlite, type Verdict } from "./differential/engines.js";
 import * as Env from "../env.js";
@@ -42,7 +45,7 @@ const seed = FilterCorpus.resolveSeed(Env.corpusSeed);
 
 type Ids = ReadonlyArray<string>;
 type Rows = ReadonlyArray<FilterCorpus.CorpusRow>;
-type Verdicts = ReadonlyMap<string, Verdict>;
+type Verdicts = HashMap.HashMap<string, Verdict>;
 
 /** A subject evaluates a predicate over a row set to a sorted id list. */
 type Subject = (predicate: Predicate.Predicate, rows: Rows) => Effect.Effect<Ids>;
@@ -56,7 +59,7 @@ const sameIds = (left: Ids, right: Ids): boolean => Json.show(left) === Json.sho
 
 /** Render verdicts as `id=T` entries in id order, for comparison and reporting. */
 const renderVerdicts = (verdicts: Verdicts): Ids =>
-  [...verdicts.entries()]
+  [...verdicts]
     .toSorted(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))
     .map(([id, verdict]) => `${id}=${verdict}`);
 
@@ -82,7 +85,7 @@ const jsOrder: Orderer = (orderBy, rows) =>
   Effect.sync(() => idsOf(rows.toSorted(Subset.comparator(orderBy))));
 
 const jsJudge: Judge = (predicate, rows) =>
-  Effect.sync(() => new Map(rows.map((row) => [row.id, jsVerdict(predicate, row)])));
+  Effect.sync(() => HashMap.fromIterable(rows.map((row) => [row.id, jsVerdict(predicate, row)])));
 
 // ─── SQL subjects ────────────────────────────────────────────────────────────
 //
@@ -93,14 +96,14 @@ const jsJudge: Judge = (predicate, rows) =>
 // reloading the tables.
 
 const restrictTo = (rows: Rows) => {
-  const keep = new Set(idsOf(rows));
-  return (ids: Ids): Ids => ids.filter((id) => keep.has(id));
+  const keep = HashSet.fromIterable(idsOf(rows));
+  return (ids: Ids): Ids => ids.filter((id) => HashSet.has(keep, id));
 };
 
 const restrictVerdicts = (rows: Rows) => {
-  const keep = new Set(idsOf(rows));
+  const keep = HashSet.fromIterable(idsOf(rows));
   return (verdicts: Verdicts): Verdicts =>
-    new Map([...verdicts.entries()].filter(([id]) => keep.has(id)));
+    HashMap.filter(verdicts, (_, id) => HashSet.has(keep, id));
 };
 
 const sqlWhere =
@@ -340,7 +343,7 @@ layer(differentialLayer, { timeout: "120 seconds" })(
           `differential corpus seed ${seed}; coverage ${Json.show(full.coverage)}`
         );
         // `true` is deliberately rare; everything else must recur.
-        const thin = Object.entries(full.coverage).filter(
+        const thin = R.toEntries(full.coverage).filter(
           ([name, count]) => count < (name === "true" ? 1 : 10)
         );
         expect(thin).toEqual([]);

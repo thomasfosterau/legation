@@ -18,6 +18,7 @@ import * as Defined from "./Defined.js";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
+import * as MutableHashMap from "effect/MutableHashMap";
 import * as Option from "effect/Option";
 import * as Ref from "effect/Ref";
 import * as Scope from "effect/Scope";
@@ -98,26 +99,26 @@ const countedEngines = new WeakSet<ClientEngine>();
  */
 export const counted = (engine: ClientEngine): ClientEngine => {
   if (countedEngines.has(engine)) return engine;
-  const holds = new Map<string, number>();
+  const holds = MutableHashMap.empty<string, number>();
   const facade: ClientEngine = {
     ...engine,
     subscribe: (subset) =>
       Effect.suspend(() => {
         const key = Subset.hash(subset);
-        const count = holds.get(key) ?? 0;
-        holds.set(key, count + 1);
+        const count = Option.getOrElse(MutableHashMap.get(holds, key), () => 0);
+        MutableHashMap.set(holds, key, count + 1);
         return count === 0 ? engine.subscribe(subset) : Effect.void;
       }),
     unsubscribe: (subset) =>
       Effect.suspend(() => {
         const key = Subset.hash(subset);
-        const count = holds.get(key);
-        if (count === undefined) return engine.unsubscribe(subset);
-        if (count > 1) {
-          holds.set(key, count - 1);
+        const count = MutableHashMap.get(holds, key);
+        if (Option.isNone(count)) return engine.unsubscribe(subset);
+        if (count.value > 1) {
+          MutableHashMap.set(holds, key, count.value - 1);
           return Effect.void;
         }
-        holds.delete(key);
+        MutableHashMap.remove(holds, key);
         return engine.unsubscribe(subset);
       }),
   };
@@ -180,7 +181,7 @@ export const make = (
     const ttl = options?.ttl ?? Duration.minutes(5);
     const scope = yield* Effect.scope;
     const lock = yield* Semaphore.make(1);
-    const entries = new Map<string, Entry>();
+    const entries = MutableHashMap.empty<string, Entry>();
     const withLock = <A, E, R>(effect: Effect.Effect<A, E, R>) =>
       Semaphore.withPermit(lock, effect);
 
@@ -190,10 +191,10 @@ export const make = (
           Effect.andThen(
             withLock(
               Effect.gen(function* () {
-                const entry = entries.get(key);
-                if (entry !== undefined && entry.count === 0) {
-                  yield* entry.unsubscribe;
-                  entries.delete(key);
+                const entry = MutableHashMap.get(entries, key);
+                if (Option.isSome(entry) && entry.value.count === 0) {
+                  yield* entry.value.unsubscribe;
+                  MutableHashMap.remove(entries, key);
                 }
               })
             )
@@ -205,8 +206,9 @@ export const make = (
     const releaseKey = (key: string) =>
       withLock(
         Effect.gen(function* () {
-          const entry = entries.get(key);
-          if (entry === undefined || entry.count === 0) return;
+          const found = MutableHashMap.get(entries, key);
+          if (Option.isNone(found) || found.value.count === 0) return;
+          const entry = found.value;
           entry.count -= 1;
           if (entry.count === 0) entry.expiry = Option.some(yield* dropAfterTtl(key));
         })
@@ -231,8 +233,9 @@ export const make = (
     ): Effect.Effect<SubscriptionHandle, E> =>
       withLock(
         Effect.gen(function* () {
-          const existing = entries.get(key);
-          if (existing !== undefined) {
+          const found = MutableHashMap.get(entries, key);
+          if (Option.isSome(found)) {
+            const existing = found.value;
             if (Option.isSome(existing.expiry)) {
               yield* Fiber.interrupt(existing.expiry.value);
               existing.expiry = Option.none();
@@ -240,7 +243,7 @@ export const make = (
             existing.count += 1;
           } else {
             yield* subscribe;
-            entries.set(key, { count: 1, unsubscribe, expiry: Option.none() });
+            MutableHashMap.set(entries, key, { count: 1, unsubscribe, expiry: Option.none() });
           }
         })
       ).pipe(Effect.andThen(handleFor(key)));

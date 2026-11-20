@@ -12,6 +12,8 @@ import { describe, expect, it } from "@effect/vitest";
 import * as Arr from "effect/Array";
 import * as Effect from "effect/Effect";
 import * as Metric from "effect/Metric";
+import * as MutableHashMap from "effect/MutableHashMap";
+import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 import { KeyValueStore } from "effect/persistence";
 import * as Authorization from "../Authorization.js";
@@ -35,19 +37,19 @@ const allTodos = Subset.make({ collection: "todos" });
 
 /** A KeyValueStore that records every key it is asked to read. */
 const countingKv = () => {
-  const data = new Map<string, string>();
+  const data = MutableHashMap.empty<string, string>();
   const reads: Array<string> = [];
   const store = KeyValueStore.makeStringOnly({
     get: (key) =>
       Effect.sync(() => {
         reads.push(key);
-        return data.get(key);
+        return Option.getOrUndefined(MutableHashMap.get(data, key));
       }),
-    set: (key, value) => Effect.sync(() => void data.set(key, value)),
-    remove: (key) => Effect.sync(() => void data.delete(key)),
-    clear: Effect.sync(() => data.clear()),
-    size: Effect.sync(() => data.size),
-    keys: Effect.sync(() => [...data.keys()]),
+    set: (key, value) => Effect.sync(() => void MutableHashMap.set(data, key, value)),
+    remove: (key) => Effect.sync(() => void MutableHashMap.remove(data, key)),
+    clear: Effect.sync(() => MutableHashMap.clear(data)),
+    size: Effect.sync(() => MutableHashMap.size(data)),
+    keys: Effect.sync(() => [...MutableHashMap.keys(data)]),
   });
   /** How many reads of a journal body (`legation/journal/{client}/{id}`) were served. */
   const bodyReads = () => reads.filter((key) => key.startsWith("legation/journal/")).length;
@@ -173,8 +175,12 @@ describe("ClientStore.pendingCount", () => {
       );
       // A store written before the journal was split into per-entry bodies.
       yield* Effect.sync(() => {
-        kv.data.delete("legation/journalIndex");
-        kv.data.set("legation/journal", Json.stringify([entry(1), entry(2), entry(3)]));
+        MutableHashMap.remove(kv.data, "legation/journalIndex");
+        MutableHashMap.set(
+          kv.data,
+          "legation/journal",
+          Json.stringify([entry(1), entry(2), entry(3)])
+        );
       });
       expect(yield* store.pendingCount).toBe(3);
       expect((yield* store.pendingMutations).length).toBe(3);

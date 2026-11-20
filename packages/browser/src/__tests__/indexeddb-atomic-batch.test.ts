@@ -285,7 +285,7 @@ describe("IndexedDbClientStore's atomic batch", () => {
 
       expect(tally.readwrite).toBe(1);
       expect(tally.putKeys).toContain(rowKey("a"));
-      expect(tally.putKeys).toHaveLength(new Set(tally.putKeys).size);
+      expect(tally.putKeys).toHaveLength(Arr.dedupe(tally.putKeys).length);
       expect(tally.putKeys.filter((key) => key === rowKey("a"))).toHaveLength(1);
     })
   );

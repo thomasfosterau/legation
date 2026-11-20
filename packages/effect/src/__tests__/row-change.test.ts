@@ -24,7 +24,9 @@
 import * as P from "effect/Predicate";
 import * as Arr from "effect/Array";
 import * as Match from "effect/Match";
+import * as MutableHashMap from "effect/MutableHashMap";
 import * as Option from "effect/Option";
+import * as R from "effect/Record";
 import { describe, expect, it } from "vite-plus/test";
 import * as LiveView from "../LiveView.js";
 import * as Predicate from "../Predicate.js";
@@ -51,11 +53,11 @@ interface Item {
 
 const IDS = ["a", "b", "c", "d", "e", "f", "g", "h"] as const;
 
-const sortedEntries = (state: Map<string, unknown>) =>
-  [...state.entries()].toSorted(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0));
+const sortedEntries = (state: MutableHashMap.MutableHashMap<string, unknown>) =>
+  [...state].toSorted(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0));
 
 const pageEntries = (rows: ReadonlyArray<LiveView.Row>) =>
-  sortedEntries(new Map(rows.map((r) => [r.id, r.value])));
+  sortedEntries(MutableHashMap.fromIterable(rows.map((r) => [r.id, r.value])));
 
 const subsets = {
   predicateOnly: Subset.make({ collection: "items", where: Predicate.eq("open", true) }),
@@ -73,21 +75,21 @@ interface Mismatch {
   readonly page: ReadonlyArray<readonly [string, unknown]>;
 }
 
-type Truth = Map<string, Item>;
+type Truth = MutableHashMap.MutableHashMap<string, Item>;
 
 /** Rebuild: reset + fresh enters, as the engine does on ViewChange.Rebuild. */
 const applyRebuild = (
   subset: Subset.Subset,
   truth: Truth,
-  folded: Map<string, unknown>
+  folded: MutableHashMap.MutableHashMap<string, unknown>
 ): LiveView.LiveView => {
   const next = LiveView.make(
     subset,
-    [...truth.entries()].map(([id, value]) => ({ id, value }))
+    [...truth].map(([id, value]) => ({ id, value }))
   );
-  folded.clear();
+  MutableHashMap.clear(folded);
   Arr.forEach(LiveView.result(next), (row) => {
-    folded.set(row.id, row.value);
+    MutableHashMap.set(folded, row.id, row.value);
   });
   return next;
 };
@@ -96,7 +98,7 @@ const applyRebuild = (
 const applyMutation = (
   view: LiveView.LiveView,
   truth: Truth,
-  folded: Map<string, unknown>,
+  folded: MutableHashMap.MutableHashMap<string, unknown>,
   rand: () => number,
   id: string,
   isDelete: boolean
@@ -104,18 +106,18 @@ const applyMutation = (
   const before = LiveView.result(view);
   let next: LiveView.LiveView;
   if (isDelete) {
-    truth.delete(id);
+    MutableHashMap.remove(truth, id);
     next = LiveView.del(view, id);
   } else {
     const value: Item = { rank: Math.floor(rand() * 6), open: rand() < 0.6 };
-    truth.set(id, value);
+    MutableHashMap.set(truth, id, value);
     next = LiveView.put(view, { id, value });
   }
   const after = LiveView.result(next);
   Arr.forEach(RowChange.diff(before, after), (change) => {
     if (P.isTagged(change, "enter") || P.isTagged(change, "update"))
-      folded.set(change.row.id, change.row.value);
-    else if (P.isTagged(change, "exit")) folded.delete(change.id);
+      MutableHashMap.set(folded, change.row.id, change.row.value);
+    else if (P.isTagged(change, "exit")) MutableHashMap.remove(folded, change.id);
   });
   return next;
 };
@@ -123,16 +125,16 @@ const applyMutation = (
 /** A second observer's state: its own fold, seeded at `startedAtStep`. */
 interface LateObserver {
   readonly startedAtStep: number;
-  readonly folded: Map<string, unknown>;
+  readonly folded: MutableHashMap.MutableHashMap<string, unknown>;
 }
 
 /** Seed a late subscriber the way `includeInitial` does: fresh `enter`s for
  * the window as it stands right now, no `reset` marker (nothing to reset
  * from yet). */
 const seedLateObserver = (view: LiveView.LiveView, startedAtStep: number): LateObserver => {
-  const folded = new Map<string, unknown>();
+  const folded = MutableHashMap.empty<string, unknown>();
   Arr.forEach(RowChange.enters(LiveView.result(view)), (change) => {
-    if (P.isTagged(change, "enter")) folded.set(change.row.id, change.row.value);
+    if (P.isTagged(change, "enter")) MutableHashMap.set(folded, change.row.id, change.row.value);
   });
   return { startedAtStep, folded };
 };
@@ -146,13 +148,13 @@ const applyToLateObserver = (
     Match.value(change).pipe(
       Match.withReturnType<void>(),
       Match.tag("reset", () => {
-        observer.folded.clear();
+        MutableHashMap.clear(observer.folded);
       }),
       Match.tag("enter", "update", (entered) => {
-        observer.folded.set(entered.row.id, entered.row.value);
+        MutableHashMap.set(observer.folded, entered.row.id, entered.row.value);
       }),
       Match.tag("exit", (exited) => {
-        observer.folded.delete(exited.id);
+        MutableHashMap.remove(observer.folded, exited.id);
       }),
       Match.tag("move", () => {}),
       Match.exhaustive
@@ -179,7 +181,7 @@ const applyToLateObserver = (
 interface SessionState {
   view: LiveView.LiveView;
   readonly truth: Truth;
-  readonly folded: Map<string, unknown>;
+  readonly folded: MutableHashMap.MutableHashMap<string, unknown>;
   pendingSincePull: boolean;
 }
 
@@ -209,7 +211,7 @@ const stepSession = (
     return RowChange.reset(LiveView.result(state.view));
   }
   const id = pick(IDS);
-  const isDelete = action < 0.1 + 0.25 && state.truth.has(id);
+  const isDelete = action < 0.1 + 0.25 && MutableHashMap.has(state.truth, id);
   const before = LiveView.result(state.view);
   state.view = applyMutation(state.view, state.truth, state.folded, rand, id, isDelete);
   state.pendingSincePull = true;
@@ -247,8 +249,8 @@ const runSession = (subset: Subset.Subset, seed: number, steps: number): Mismatc
   // window over.
   const state: SessionState = {
     view: LiveView.make(subset, []),
-    truth: new Map(),
-    folded: new Map(),
+    truth: MutableHashMap.empty(),
+    folded: MutableHashMap.empty(),
     pendingSincePull: false,
   };
   let lateObserver: LateObserver | undefined;
@@ -273,7 +275,7 @@ const runSession = (subset: Subset.Subset, seed: number, steps: number): Mismatc
 };
 
 describe("RowChange — folding the feed reproduces LiveView.result", () => {
-  Arr.forEach(Object.entries(subsets), ([name, subset]) => {
+  Arr.forEach(R.toEntries(subsets), ([name, subset]) => {
     it(`matches LiveView.result at every step (${name})`, () => {
       Arr.forEach(Arr.range(1, 25), (seed) => {
         expect(runSession(subset, seed, 80)).toBeUndefined();

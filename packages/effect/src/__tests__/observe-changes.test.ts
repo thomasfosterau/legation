@@ -47,6 +47,8 @@ import * as Arr from "effect/Array";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Match from "effect/Match";
+import * as MutableHashMap from "effect/MutableHashMap";
+import * as Order from "effect/Order";
 import * as Ref from "effect/Ref";
 import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
@@ -150,17 +152,21 @@ const sleepReal = (millis: number) =>
  */
 const settle = sleepReal(300);
 
+/** The distinct values in a canonical (string) order, for comparing as a set. */
+const distinctIds = <A>(values: ReadonlyArray<A>) =>
+  Arr.sort(Arr.dedupe(values), Order.mapInput(Order.String, String));
+
 /** Fold a sequence of change batches into a plain `id -> value` map. */
 const foldBatches = (
   batches: ReadonlyArray<ReadonlyArray<RowChange.RowChange<ClientEngineModule.LocalRow>>>
-): Map<string, unknown> => {
-  const folded = new Map<string, unknown>();
+): MutableHashMap.MutableHashMap<string, unknown> => {
+  const folded = MutableHashMap.empty<string, unknown>();
   Arr.forEach(batches, (batch) => {
     Arr.forEach(batch, (change) => {
-      if (P.isTagged(change, "reset")) folded.clear();
+      if (P.isTagged(change, "reset")) MutableHashMap.clear(folded);
       else if (P.isTagged(change, "enter") || P.isTagged(change, "update")) {
-        folded.set(change.row.id, change.row.value);
-      } else if (P.isTagged(change, "exit")) folded.delete(change.id);
+        MutableHashMap.set(folded, change.row.id, change.row.value);
+      } else if (P.isTagged(change, "exit")) MutableHashMap.remove(folded, change.id);
     });
   });
   return folded;
@@ -290,8 +296,8 @@ describe("ClientEngine.observeChanges", () => {
         const seen = yield* Ref.get(batches);
         expect(seen).toHaveLength(1); // one batch: the initial enters, no gap/dup
         expect(
-          new Set((seen[0] ?? []).map((c) => (P.isTagged(c, "enter") ? c.row.id : undefined)))
-        ).toEqual(new Set(["1", "2"]));
+          distinctIds((seen[0] ?? []).map((c) => (P.isTagged(c, "enter") ? c.row.id : undefined)))
+        ).toEqual(["1", "2"]);
       }),
     10000
   );
@@ -353,12 +359,12 @@ describe("ClientEngine.observeChanges", () => {
 
         const seen = yield* Ref.get(batches);
         expect(seen[1]?.[0]).toEqual({ _tag: "reset" });
-        const entered = new Set(
+        const entered = distinctIds(
           stripPositions(defined(seen[1]))
             .slice(1)
             .map((c) => (P.isTagged(c, "enter") ? c.row.id : undefined))
         );
-        expect(entered).toEqual(new Set(["1", "2"])); // both the pulled row and the still-pending one
+        expect(entered).toEqual(["1", "2"]); // both the pulled row and the still-pending one
       }),
     10000
   );
@@ -455,7 +461,7 @@ describe("ClientEngine.observeChanges", () => {
         // A gap forces a reset; keep polling until the folded state matches
         // the engine's own query (more batches may still be draining).
         const foldedIds = Ref.get(batches).pipe(
-          Effect.map((seen) => [...foldBatches(seen).keys()].toSorted())
+          Effect.map((seen) => [...MutableHashMap.keys(foldBatches(seen))].toSorted())
         );
         const expectedIds = engine
           .query(todos)
@@ -572,19 +578,19 @@ const mulberry32 = (seed: number) => {
 
 const foldChangeBatches = (
   batches: ReadonlyArray<ReadonlyArray<RowChange.RowChange<ClientEngineModule.LocalRow>>>
-): Map<string, unknown> => {
-  const state = new Map<string, unknown>();
+): MutableHashMap.MutableHashMap<string, unknown> => {
+  const state = MutableHashMap.empty<string, unknown>();
   Arr.forEach(Arr.flatten(batches), (change) => {
     Match.value(change).pipe(
       Match.withReturnType<void>(),
       Match.tag("reset", () => {
-        state.clear();
+        MutableHashMap.clear(state);
       }),
       Match.tag("enter", "update", (entered) => {
-        state.set(entered.row.id, entered.row.value);
+        MutableHashMap.set(state, entered.row.id, entered.row.value);
       }),
       Match.tag("exit", (exited) => {
-        state.delete(exited.id);
+        MutableHashMap.remove(state, exited.id);
       }),
       Match.tag("move", () => {}),
       Match.exhaustive
@@ -593,8 +599,8 @@ const foldChangeBatches = (
   return state;
 };
 
-const sortedIdValue = (state: Map<string, unknown>) =>
-  [...state.entries()].toSorted(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0));
+const sortedIdValue = (state: MutableHashMap.MutableHashMap<string, unknown>) =>
+  [...state].toSorted(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0));
 
 describe("ClientEngine.observeChanges — randomized property through the real engine", () => {
   it.effect(
@@ -650,7 +656,9 @@ describe("ClientEngine.observeChanges — randomized property through the real e
                       // across seeds/steps rather than a dedicated branch.
 
                       const expected = sortedIdValue(
-                        new Map((yield* engine.query(todos)).map((r) => [r.id, r.value]))
+                        MutableHashMap.fromIterable(
+                          (yield* engine.query(todos)).map((r) => [r.id, r.value])
+                        )
                       );
                       const seen = yield* eventually(Ref.get(batches), (candidate) => {
                         const folded = sortedIdValue(foldChangeBatches(candidate));

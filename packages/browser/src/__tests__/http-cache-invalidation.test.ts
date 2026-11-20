@@ -12,6 +12,7 @@ import { describe, expect, it } from "@effect/vitest";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Metric from "effect/Metric";
+import * as MutableHashMap from "effect/MutableHashMap";
 import * as Option from "effect/Option";
 import * as Stream from "effect/Stream";
 import * as CacheApiHttpCache from "../CacheApiHttpCache.js";
@@ -19,18 +20,23 @@ import * as HttpCacheInvalidation from "../HttpCacheInvalidation.js";
 
 /** Minimal in-memory Cache API fake, keyed by request URL (as in the store test). */
 const makeFakeCache = (): CacheApiHttpCache.CacheLike & {
-  readonly entries: Map<string, Response>;
+  readonly entries: MutableHashMap.MutableHashMap<string, Response>;
 } => {
-  const entries = new Map<string, Response>();
+  const entries = MutableHashMap.empty<string, Response>();
   return {
     entries,
-    match: (request) => Promise.resolve(entries.get(request.url)?.clone()),
+    match: (request) =>
+      Promise.resolve(Option.getOrUndefined(MutableHashMap.get(entries, request.url))?.clone()),
     put: (request, response) => {
-      entries.set(request.url, response);
+      MutableHashMap.set(entries, request.url, response);
       return Promise.resolve();
     },
-    delete: (request) => Promise.resolve(entries.delete(request.url)),
-    keys: () => Promise.resolve([...entries.keys()].map((url) => new Request(url))),
+    delete: (request) => {
+      const had = MutableHashMap.has(entries, request.url);
+      MutableHashMap.remove(entries, request.url);
+      return Promise.resolve(had);
+    },
+    keys: () => Promise.resolve([...MutableHashMap.keys(entries)].map((url) => new Request(url))),
   };
 };
 

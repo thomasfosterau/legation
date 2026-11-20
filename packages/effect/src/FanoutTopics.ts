@@ -18,6 +18,7 @@
 
 import * as Arr from "effect/Array";
 import * as P from "effect/Predicate";
+import * as R from "effect/Record";
 import type { ChangeHint } from "./Backend.js";
 import { fieldValue } from "./internal/EncodedField.js";
 import type * as Node from "./Node.js";
@@ -47,7 +48,7 @@ export const derivableSets = (
   const map = new Map<string, ReadonlySet<string>>();
   Arr.forEach(nodes.nodes, ([type, node]) => {
     const fields = new Set<string>(node.hintKeys);
-    Arr.forEach(Object.values(node.edges), (edge) => {
+    Arr.forEach(R.values(node.edges), (edge) => {
       if (edge.kind === "one") fields.add(edge.via);
     });
     map.set(type, fields);

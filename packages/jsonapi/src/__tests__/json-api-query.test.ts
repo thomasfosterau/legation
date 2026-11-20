@@ -8,7 +8,9 @@ import { assert, describe, expect, it, layer } from "@effect/vitest";
 import * as Arr from "effect/Array";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
+import * as R from "effect/Record";
 import * as Layer from "effect/Layer";
+import * as MutableHashMap from "effect/MutableHashMap";
 import * as Match from "effect/Match";
 import * as Option from "effect/Option";
 import * as Random from "effect/Random";
@@ -77,7 +79,7 @@ const corpus = Node.make("corpus", {
     b: Schema.Boolean,
     t: Schema.String,
   },
-  filterable: Object.fromEntries(
+  filterable: R.fromEntries(
     FilterCorpus.corpusColumns.map((column) => [
       column.name,
       { operators: FilterPolicy.operators, kind: column.kind },
@@ -415,13 +417,13 @@ interface Stored {
 
 /** Server honouring the grammar's shorthand (`filter[f]=v`, `filter[f]=a,b`, `filter[f][eq|in]`), recording URLs. */
 const makeServer = (seed: ReadonlyArray<Stored>) => {
-  const store = new Map(seed.map((r) => [r.id, r]));
+  const store = MutableHashMap.fromIterable(seed.map((r) => [r.id, r] as const));
   const requests: Array<string> = [];
   const headers = { "Content-Type": "application/vnd.api+json" };
   const client = HttpClient.make((request, url) =>
     Effect.sync(() => {
       requests.push(url.pathname + url.search);
-      let rows = [...store.values()];
+      let rows = [...MutableHashMap.values(store)];
       Arr.forEach(url.searchParams, ([key, value]) => {
         const match = key.match(/^filter\[([^\]]+)\](?:\[(eq|in)\])?$/);
         if (match === null) return;
@@ -1082,7 +1084,7 @@ describe("JsonApiQuery.resourcesOf", () => {
       "variants",
     ]);
     expect(JsonApiQuery.resourcesOf(nodes)).toBe(resources);
-    expect(Object.keys(defined(resources.get("products")).relationships).toSorted()).toEqual([
+    expect(R.keys(defined(resources.get("products")).relationships).toSorted()).toEqual([
       "category",
       "reviews",
       "variants",

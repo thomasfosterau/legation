@@ -5,6 +5,7 @@
 import * as P from "effect/Predicate";
 import { describe, expect, it } from "@effect/vitest";
 import * as Arr from "effect/Array";
+import * as R from "effect/Record";
 import * as DateTime from "effect/DateTime";
 import * as Deferred from "effect/Deferred";
 import * as Duration from "effect/Duration";
@@ -700,7 +701,7 @@ describe("a pull's watermark and rows are one snapshot", () => {
         clientGroupId: "group-a",
         subscriptions: [countersSubset],
       });
-      const reported = Object.values(response.lastMutationIds).reduce((sum, upTo) => sum + upTo, 0);
+      const reported = R.values(response.lastMutationIds).reduce((sum, upTo) => sum + upTo, 0);
       const counted = response.patch.flatMap((op) =>
         P.isTagged(op, "Put") && op.collection === "counters" ? [countOf(op.value)] : []
       );
@@ -771,10 +772,7 @@ describe("a pull's watermark and rows are one snapshot", () => {
             subscriptions: [countersSubset],
           });
           expect(yield* Ref.get(landed)).toBe(true);
-          const reported = Object.values(response.lastMutationIds).reduce(
-            (sum, upTo) => sum + upTo,
-            0
-          );
+          const reported = R.values(response.lastMutationIds).reduce((sum, upTo) => sum + upTo, 0);
           const counted = response.patch.flatMap((op) =>
             P.isTagged(op, "Put") && op.collection === "counters" ? [countOf(op.value)] : []
           );

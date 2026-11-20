@@ -14,6 +14,8 @@
  */
 
 import type * as Cause from "effect/Cause";
+import * as MutableHashMap from "effect/MutableHashMap";
+import * as Option from "effect/Option";
 import type * as Stream from "effect/Stream";
 import { Atom, type AsyncResult } from "effect/reactivity";
 import type { LocalRow } from "./ClientEngine.js";
@@ -47,15 +49,15 @@ export interface LiveQueries<E> {
 
 /** Build the Atom factory for a source's live queries. */
 export const make = <E>(source: LiveQuerySource<E>): LiveQueries<E> => {
-  const cache = new Map<string, Atom.Atom<LiveQueryResult<E>>>();
+  const cache = MutableHashMap.empty<string, Atom.Atom<LiveQueryResult<E>>>();
   return {
     atom: (subset) => {
       const key = Subset.hash(subset);
-      const existing = cache.get(key);
-      if (existing !== undefined) return existing;
-      const created = Atom.make(source.observe(subset));
-      cache.set(key, created);
-      return created;
+      return Option.getOrElse(MutableHashMap.get(cache, key), () => {
+        const created = Atom.make(source.observe(subset));
+        MutableHashMap.set(cache, key, created);
+        return created;
+      });
     },
   };
 };

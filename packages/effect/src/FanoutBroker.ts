@@ -19,6 +19,8 @@ import * as Clock from "effect/Clock";
 import * as Context from "effect/Context";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
+import * as HashMap from "effect/HashMap";
+import * as Option from "effect/Option";
 import * as PubSub from "effect/PubSub";
 import * as Ref from "effect/Ref";
 import * as Scope from "effect/Scope";
@@ -67,17 +69,17 @@ const POKE_CAPACITY = 256;
 /** The in-process broker: leases in a Ref, one dropping hub per room. */
 export const makeInProcess: Effect.Effect<FanoutBroker, never, Scope.Scope> = Effect.gen(
   function* () {
-    const leases = yield* Ref.make(new Map<string, Lease>());
-    const hubs = yield* Ref.make(new Map<string, PubSub.PubSub<ReadonlyArray<Topic>>>());
+    const leases = yield* Ref.make(HashMap.empty<string, Lease>());
+    const hubs = yield* Ref.make(HashMap.empty<string, PubSub.PubSub<ReadonlyArray<Topic>>>());
     const scope = yield* Effect.scope;
 
     const hubFor = (roomId: string) =>
       Effect.gen(function* () {
-        const existing = (yield* Ref.get(hubs)).get(roomId);
-        if (existing !== undefined) return existing;
+        const existing = HashMap.get(yield* Ref.get(hubs), roomId);
+        if (Option.isSome(existing)) return existing.value;
         const hub = yield* PubSub.dropping<ReadonlyArray<Topic>>({ capacity: POKE_CAPACITY });
         yield* Scope.addFinalizer(scope, PubSub.shutdown(hub));
-        yield* Ref.update(hubs, (map) => new Map(map).set(roomId, hub));
+        yield* Ref.update(hubs, HashMap.set(roomId, hub));
         return hub;
       });
 
@@ -85,29 +87,27 @@ export const makeInProcess: Effect.Effect<FanoutBroker, never, Scope.Scope> = Ef
       register: (roomId, topics, ttl) =>
         Effect.gen(function* () {
           const now = yield* Clock.currentTimeMillis;
-          yield* Ref.update(leases, (map) =>
-            new Map(map).set(roomId, { topics, expiresAt: now + Duration.toMillis(ttl) })
+          yield* Ref.update(
+            leases,
+            HashMap.set(roomId, { topics, expiresAt: now + Duration.toMillis(ttl) })
           );
         }),
       publish: (topics) =>
         Effect.gen(function* () {
-          const wanted = new Set(topics);
+          const wanted = Arr.dedupe(topics);
           const now = yield* Clock.currentTimeMillis;
           // Lazy lease sweep: expired rooms drop out as publishes pass by.
-          const live = new Map<string, Lease>();
-          Arr.forEach(yield* Ref.get(leases), ([roomId, lease]) => {
-            if (lease.expiresAt > now) live.set(roomId, lease);
-          });
+          const live = HashMap.filter(yield* Ref.get(leases), (lease) => lease.expiresAt > now);
           yield* Ref.set(leases, live);
           const hubMap = yield* Ref.get(hubs);
           yield* Effect.forEach(
             live,
             ([roomId, lease]) =>
               Effect.gen(function* () {
-                const matched = [...wanted].filter((topic) => lease.topics.has(topic));
+                const matched = wanted.filter((topic) => lease.topics.has(topic));
                 if (Arr.isReadonlyArrayEmpty(matched)) return;
-                const hub = hubMap.get(roomId);
-                if (hub !== undefined) yield* PubSub.publish(hub, matched);
+                const hub = HashMap.get(hubMap, roomId);
+                if (Option.isSome(hub)) yield* PubSub.publish(hub.value, matched);
               }),
             { concurrency: 1, discard: true }
           );

@@ -81,6 +81,8 @@ import { Filter, Query as UrlQuery, Relationship, Resource } from "@thomasfoster
 import * as Arr from "effect/Array";
 import * as Effect from "effect/Effect";
 import * as Match from "effect/Match";
+import * as MutableHashMap from "effect/MutableHashMap";
+import * as MutableHashSet from "effect/MutableHashSet";
 import * as Option from "effect/Option";
 import * as P from "effect/Predicate";
 import * as R from "effect/Record";
@@ -455,20 +457,20 @@ interface QueryCodec {
 
 /** A value derived per node, memoised per registry then per node type. */
 const memoised = <A>(
-  store: WeakMap<Node.NodeRegistry, Map<string, A>>,
+  store: WeakMap<Node.NodeRegistry, MutableHashMap.MutableHashMap<string, A>>,
   nodes: Node.NodeRegistry,
   node: Node.AnyNode,
   build: () => A
 ): A => {
   let byType = store.get(nodes);
   if (byType === undefined) {
-    byType = new Map();
+    byType = MutableHashMap.empty();
     store.set(nodes, byType);
   }
-  const cached = byType.get(node.type);
-  if (cached !== undefined) return cached;
+  const cached = MutableHashMap.get(byType, node.type);
+  if (Option.isSome(cached)) return cached.value;
   const value = build();
-  byType.set(node.type, value);
+  MutableHashMap.set(byType, node.type, value);
   return value;
 };
 
@@ -476,7 +478,10 @@ const memoised = <A>(
 const includeOption = (node: Node.AnyNode) =>
   !R.isEmptyReadonlyRecord(node.edges) ? ({ depth: 1 } as const) : false;
 
-const queryCodecs = new WeakMap<Node.NodeRegistry, Map<string, QueryCodec>>();
+const queryCodecs = new WeakMap<
+  Node.NodeRegistry,
+  MutableHashMap.MutableHashMap<string, QueryCodec>
+>();
 
 /** Build (or fetch) the query codec of one node: `Query.schema` over its synthetic resource. */
 const codecOf = (nodes: Node.NodeRegistry, node: Node.AnyNode): QueryCodec =>
@@ -538,7 +543,10 @@ export interface SingleRowQuery {
 
 const singleRowCodecs = new WeakMap<
   Node.NodeRegistry,
-  Map<string, Schema.Codec<SingleRowQuery, Readonly<Record<string, unknown>>>>
+  MutableHashMap.MutableHashMap<
+    string,
+    Schema.Codec<SingleRowQuery, Readonly<Record<string, unknown>>>
+  >
 >();
 
 /**
@@ -671,7 +679,7 @@ const checkInclude = (
             invalid(
               node.type,
               "include",
-              `"${token}" is not an edge of "${node.type}" (edges: ${Object.keys(node.edges).join(", ")})`
+              `"${token}" is not an edge of "${node.type}" (edges: ${R.keys(node.edges).join(", ")})`
             )
           )
         : Option.none()
@@ -691,8 +699,8 @@ const keyOf = (segment: PathSegment): PropertyKey =>
   P.isObjectOrArray(segment) ? segment.key : segment;
 
 /** The types a read on the node can carry: its own and its edge targets'. */
-const carriedTypes = (node: Node.AnyNode): ReadonlySet<string> =>
-  new Set([node.type, ...Object.values(node.edges).map((edge) => edge.target)]);
+const carriedTypes = (node: Node.AnyNode): ReadonlyArray<string> =>
+  Arr.dedupe([node.type, ...R.values(node.edges).map((edge) => edge.target)]);
 
 /**
  * The rejection of a `fields[type]` projection the read cannot carry, or
@@ -702,13 +710,13 @@ const carriedTypes = (node: Node.AnyNode): ReadonlySet<string> =>
  */
 const projectionError = (node: Node.AnyNode, type: string): Option.Option<QueryError> => {
   const types = carriedTypes(node);
-  return types.has(type)
+  return types.includes(type)
     ? Option.none()
     : Option.some(
         invalid(
           node.type,
           `fields[${type}]`,
-          `"${type}" is not a type this read can carry (types: ${[...types].join(", ")})`
+          `"${type}" is not a type this read can carry (types: ${types.join(", ")})`
         )
       );
 };
@@ -718,7 +726,7 @@ const checkFields = (
   node: Node.AnyNode,
   record: Readonly<Record<string, string | ReadonlyArray<string>>>
 ): Effect.Effect<void, QueryError> =>
-  failFirst(Object.keys(record), (key) => {
+  failFirst(R.keys(record), (key) => {
     const match = /^fields\[(.*)\]$/.exec(key);
     return match === null ? Option.none() : projectionError(node, match[1] ?? "");
   });
@@ -792,7 +800,7 @@ const readOf = (
       include:
         decoded.include === undefined || Arr.isReadonlyArrayEmpty(decoded.include)
           ? undefined
-          : Object.fromEntries(decoded.include.map((edge) => [edge, true as const])),
+          : R.fromEntries(decoded.include.map((edge) => [edge, true as const])),
       order:
         decoded.sort === undefined || Arr.isReadonlyArrayEmpty(decoded.sort)
           ? undefined
@@ -1028,8 +1036,8 @@ const decodedOf = (
 
 /** A projection with each type's field list in code-point order (a set). */
 const projectionOf = (fields: Projection): Projection =>
-  Object.fromEntries(
-    Object.entries(fields).map(([type, names]) => [type, names.toSorted(Predicate.compareText)])
+  R.fromEntries(
+    R.toEntries(fields).map(([type, names]) => [type, names.toSorted(Predicate.compareText)])
   );
 
 /**
@@ -1056,7 +1064,7 @@ export const canonical = (
       query: read.collection,
     });
   }
-  Object.keys(fields ?? {}).forEach((type) => {
+  R.keys(fields ?? {}).forEach((type) => {
     const error = projectionError(node, type);
     if (Option.isSome(error)) throw error.value;
   });
@@ -1116,17 +1124,25 @@ const scalarSchema = (type: string): Schema.Top =>
   type === "string" ? Schema.String : type === "number" ? Schema.Number : Schema.Boolean;
 
 /** Collect the literal JS types each field of a tree is compared with (mutates `types`). */
-const collectLiteralTypes = (ast: Filter.Node, types: Map<string, Set<string>>): void => {
+const collectLiteralTypes = (
+  ast: Filter.Node,
+  types: MutableHashMap.MutableHashMap<string, MutableHashSet.MutableHashSet<string>>
+): void => {
   const add = (field: string, value: unknown) => {
-    const set = types.get(field) ?? new Set<string>();
-    set.add(Predicate.typeName(value));
-    types.set(field, set);
+    const set = Option.getOrElse(MutableHashMap.get(types, field), () =>
+      MutableHashSet.empty<string>()
+    );
+    MutableHashSet.add(set, Predicate.typeName(value));
+    MutableHashMap.set(types, field, set);
   };
   Match.value(ast).pipe(
     Match.withReturnType<void>(),
     Match.tag("Compare", (node) => add(node.field, node.value)),
     Match.tag("In", "NotIn", (node) => node.values.forEach((value) => add(node.field, value))),
-    Match.tag("IsNull", (node) => void (types.get(node.field) ?? types.set(node.field, new Set()))),
+    Match.tag("IsNull", (node) => {
+      if (!MutableHashMap.has(types, node.field))
+        MutableHashMap.set(types, node.field, MutableHashSet.empty());
+    }),
     Match.tag("And", "Or", (node) =>
       node.members.forEach((member) => collectLiteralTypes(member, types))
     ),
@@ -1136,11 +1152,11 @@ const collectLiteralTypes = (ast: Filter.Node, types: Map<string, Set<string>>):
 };
 
 /** The one JS type each field of a tree is compared with (`string` for a field only null-tested). */
-const literalTypesOf = (ast: Filter.Node): ReadonlyMap<string, string> => {
-  const types = new Map<string, Set<string>>();
+const literalTypesOf = (ast: Filter.Node): MutableHashMap.MutableHashMap<string, string> => {
+  const types = MutableHashMap.empty<string, MutableHashSet.MutableHashSet<string>>();
   collectLiteralTypes(ast, types);
-  const resolved = new Map<string, string>();
-  types.forEach((kinds, field) => {
+  const resolved = MutableHashMap.empty<string, string>();
+  MutableHashMap.forEach(types, (kinds, field) => {
     const [kind, ...rest] = kinds;
     if (Arr.isReadonlyArrayNonEmpty(rest)) {
       throw new QueryError({
@@ -1148,7 +1164,7 @@ const literalTypesOf = (ast: Filter.Node): ReadonlyMap<string, string> => {
         parameter: `filter[${field}]`,
       });
     }
-    resolved.set(field, kind ?? "string");
+    MutableHashMap.set(resolved, field, kind ?? "string");
   });
   return resolved;
 };
@@ -1156,7 +1172,7 @@ const literalTypesOf = (ast: Filter.Node): ReadonlyMap<string, string> => {
 /** The flat `filter[...]` codec of an untyped declaration. */
 type FlatFilterCodec = Schema.Codec<Filter.Node, Readonly<Record<string, string>>>;
 
-const flatFilterCodecs = new Map<string, FlatFilterCodec>();
+const flatFilterCodecs = MutableHashMap.empty<string, FlatFilterCodec>();
 
 /**
  * The codec for encoding a tree without a node graph: each field it names
@@ -1171,14 +1187,14 @@ const flatFilterCodecOf = (ast: Filter.Node): FlatFilterCodec => {
     .map(([field, type]) => `${field}:${type}`)
     .toSorted(Predicate.compareText)
     .join("\n");
-  const cached = flatFilterCodecs.get(signature);
-  if (cached !== undefined) return cached;
+  const cached = MutableHashMap.get(flatFilterCodecs, signature);
+  if (Option.isSome(cached)) return cached.value;
   const attributes = R.fromIterableWith(
     [...types].filter(([field]) => field !== RESOURCE_ID),
     ([field, type]): [string, Schema.Top] => [field, scalarSchema(type).pipe(Filter.able())]
   );
   // An `id` filter is the resource id's: JSON:API reserves the name for it.
-  const id = types.has(RESOURCE_ID)
+  const id = MutableHashMap.has(types, RESOURCE_ID)
     ? Option.some(Schema.String.pipe(Filter.able()))
     : Option.none<Schema.Codec<string, string>>();
   // SAFETY: the synthetic resource's attributes are `Filter.able()` scalars, so
@@ -1187,7 +1203,7 @@ const flatFilterCodecOf = (ast: Filter.Node): FlatFilterCodec => {
   const codec = UrlQuery.Filter(
     Resource.make("query", { ...withId(id), attributes })
   ) as FlatFilterCodec;
-  flatFilterCodecs.set(signature, codec);
+  MutableHashMap.set(flatFilterCodecs, signature, codec);
   return codec;
 };
 
@@ -1228,16 +1244,17 @@ export const buildQueryString = (options?: JsonApiRequestOptions): string => {
   if (options.include && Arr.isReadonlyArrayNonEmpty(options.include))
     pairs.push(["include", options.include.join(",")]);
   pairs.push(
-    ...Object.entries(options.fields ?? {}).map(([type, names]): UrlQuery.Pair => [
+    ...R.toEntries(options.fields ?? {}).map(([type, names]): UrlQuery.Pair => [
       `fields[${type}]`,
       names.join(","),
     ])
   );
-  if (options.filter !== undefined) pairs.push(...Object.entries(flatFilter(options.filter)));
+  if (options.filter !== undefined) pairs.push(...R.toEntries(flatFilter(options.filter)));
   if (options.sort && Arr.isReadonlyArrayNonEmpty(options.sort))
     pairs.push(["sort", encodeSort(options.sort)]);
+  const page: Readonly<Partial<Record<string, string | number>>> = options.page ?? {};
   pairs.push(
-    ...Object.entries(options.page ?? {}).flatMap(([key, value]): Array<UrlQuery.Pair> =>
+    ...R.toEntries(page).flatMap(([key, value]): Array<UrlQuery.Pair> =>
       value === undefined ? [] : [[`page[${key}]`, String(value)]]
     )
   );

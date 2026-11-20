@@ -32,9 +32,12 @@ import type { Predicate } from "@thomasfosterau/legation";
 import { FilterCorpus, type Subset } from "@thomasfosterau/legation/internal";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
+import * as HashMap from "effect/HashMap";
+import * as HashSet from "effect/HashSet";
 import { awaitPromise } from "../../await-promise.js";
 import * as Layer from "effect/Layer";
 import * as P from "effect/Predicate";
+import * as R from "effect/Record";
 import type * as Scope from "effect/Scope";
 import { SqlClient } from "effect/sql/SqlClient";
 import * as Sql from "../../../sql/Sql.js";
@@ -53,19 +56,19 @@ export interface Engine {
   /** The predicate's three-valued verdict for every loaded row, keyed by id. */
   readonly verdicts: (
     predicate: Predicate.Predicate
-  ) => Effect.Effect<ReadonlyMap<string, Verdict>>;
+  ) => Effect.Effect<HashMap.HashMap<string, Verdict>>;
 }
 
 const TABLE = "corpus";
 const columns = FilterCorpus.corpusColumns;
 
 /** The corpus columns' declared kinds, handed to the compiler (`kinds`). */
-export const corpusKinds: Sql.Kinds = Object.fromEntries(
+export const corpusKinds: Sql.Kinds = R.fromEntries(
   columns.map((column) => [column.name, column.kind])
 );
 
 /** Columns whose `ORDER BY` term takes the collation clause: `text` only (an instant is `timestamptz` on Postgres). */
-const collatedColumns = new Set(
+const collatedColumns = HashSet.fromIterable(
   columns.filter((column) => column.kind === "text").map((column) => column.name)
 );
 
@@ -128,7 +131,9 @@ const orderText = (orderBy: ReadonlyArray<Subset.OrderBy>, dialect: Sql.Dialect)
   const term = (field: string, direction: Subset.Direction): string => {
     const column = dialect.quote(field);
     const collation =
-      collatedColumns.has(field) || field === "id" ? ` COLLATE ${dialect.textCollation}` : "";
+      HashSet.has(collatedColumns, field) || field === "id"
+        ? ` COLLATE ${dialect.textCollation}`
+        : "";
     const nulls = direction === "asc" ? "NULLS LAST" : "NULLS FIRST";
     return `${column}${collation} ${direction.toUpperCase()} ${nulls}`;
   };
@@ -188,7 +193,11 @@ const makeEngine = (
     const select = `SELECT ${dialect.quote("id")}, (${text}) AS ${dialect.quote("verdict")} FROM ${dialect.quote(TABLE)}`;
     return runner
       .query<VerdictRow>(select, params)
-      .pipe(Effect.map((rows) => new Map(rows.map((row) => [row.id, decodeVerdict(row.verdict)]))));
+      .pipe(
+        Effect.map((rows) =>
+          HashMap.fromIterable(rows.map((row) => [row.id, decodeVerdict(row.verdict)]))
+        )
+      );
   },
 });
 

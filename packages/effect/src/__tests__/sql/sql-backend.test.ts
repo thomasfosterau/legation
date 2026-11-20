@@ -9,6 +9,7 @@ import * as Arr from "effect/Array";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
+import * as MutableHashMap from "effect/MutableHashMap";
 import * as Option from "effect/Option";
 import * as R from "effect/Record";
 import * as Ref from "effect/Ref";
@@ -57,11 +58,11 @@ const unmodelled = (fragment: Sql.SqlFragment): never => {
  * or any other `SELECT` (the table's seeded rows, its WHERE ignored).
  */
 const readSeeded = (
-  tables: ReadonlyMap<string, ReadonlyArray<SqlBackend.SqlRow>>,
+  tables: MutableHashMap.MutableHashMap<string, ReadonlyArray<SqlBackend.SqlRow>>,
   fragment: Sql.SqlFragment
 ): ReadonlyArray<SqlBackend.SqlRow> => {
   if (fragment.text.includes("pragma_table_info")) {
-    const rows = tables.get(String(fragment.params[0])) ?? [];
+    const rows = Option.getOrElse(MutableHashMap.get(tables, String(fragment.params[0])), () => []);
     return Arr.dedupe(rows.flatMap((row) => R.keys(row))).map((name) => ({ name }));
   }
   if (fragment.text.includes(`AS "subset"`)) {
@@ -69,7 +70,7 @@ const readSeeded = (
       const subset = Number(arm.match(/^SELECT (\d+) AS "subset"/)?.[1]);
       const projected = [...arm.matchAll(/"__legation_row"\."([^"]+)" AS "(c\d+)"/g)];
       const table = Option.getOrElse(tableOf(arm.replace(/^.*? FROM /, "FROM ")), () => "");
-      const rows = tables.get(table) ?? [];
+      const rows = Option.getOrElse(MutableHashMap.get(tables, table), () => []);
       return rows.map((row) =>
         R.fromEntries([
           ["subset", subset],
@@ -80,7 +81,7 @@ const readSeeded = (
   }
   return Option.match(tableOf(fragment.text), {
     onNone: () => [],
-    onSome: (table) => tables.get(table) ?? [],
+    onSome: (table) => Option.getOrElse(MutableHashMap.get(tables, table), () => []),
   });
 };
 
@@ -115,10 +116,10 @@ const decodeBump = Schema.decodeUnknownSync(
  */
 const makeMock = (options: { readonly transactional?: boolean } = {}): Mock => {
   const transactional = options.transactional ?? true;
-  const tables = new Map<string, ReadonlyArray<SqlBackend.SqlRow>>();
-  const ledger = new Map<string, number>(); // `${group}:${client}` → lastId
+  const tables = MutableHashMap.empty<string, ReadonlyArray<SqlBackend.SqlRow>>();
+  const ledger = MutableHashMap.empty<string, number>(); // `${group}:${client}` → lastId
   // `${group}:${client}` → the `rejections` column's JSON text, or null.
-  const rejections = new Map<string, string | null>();
+  const rejections = MutableHashMap.empty<string, string | null>();
   const queries: Array<Sql.SqlFragment> = [];
 
   // The claim and its release: `UPDATE "sync_mutations"` with params
@@ -127,8 +128,8 @@ const makeMock = (options: { readonly transactional?: boolean } = {}): Mock => {
   const casLedger = (fragment: Sql.SqlFragment): boolean => {
     const [next, group, client, expected] = decodeCas(fragment.params);
     const key = `${group}:${client}`;
-    if (ledger.get(key) !== expected) return false;
-    ledger.set(key, next);
+    if (Option.getOrUndefined(MutableHashMap.get(ledger, key)) !== expected) return false;
+    MutableHashMap.set(ledger, key, next);
     return true;
   };
 
@@ -137,7 +138,7 @@ const makeMock = (options: { readonly transactional?: boolean } = {}): Mock => {
     // `ON CONFLICT DO NOTHING` at 0.
     const [group, client] = decodeLedgerKey(fragment.params);
     const key = `${group}:${client}`;
-    if (!ledger.has(key)) ledger.set(key, 0);
+    if (!MutableHashMap.has(ledger, key)) MutableHashMap.set(ledger, key, 0);
   };
   const giveBackClaim = (fragment: Sql.SqlFragment): void => {
     // The release of a claim: a conditional UPDATE.
@@ -146,13 +147,20 @@ const makeMock = (options: { readonly transactional?: boolean } = {}): Mock => {
   const storeRejections = (fragment: Sql.SqlFragment): void => {
     // The rejection memory: `SET "rejections" = ?` for one client's row.
     const [json, group, client] = decodeRejectionsWrite(fragment.params);
-    rejections.set(`${group}:${client}`, json);
+    MutableHashMap.set(rejections, `${group}:${client}`, json);
   };
   const bumpMonotonic = (fragment: Sql.SqlFragment): void => {
     // The bump after the handler: the watermark only rises.
     const [group, client, id] = decodeBump(fragment.params);
     const key = `${group}:${client}`;
-    ledger.set(key, Math.max(ledger.get(key) ?? 0, id));
+    MutableHashMap.set(
+      ledger,
+      key,
+      Math.max(
+        Option.getOrElse(MutableHashMap.get(ledger, key), () => 0),
+        id
+      )
+    );
   };
   const rejectionWrite = /^UPDATE "sync_mutations" SET "rejections" = /;
   const ledgerWrites: ReadonlyArray<readonly [RegExp, (fragment: Sql.SqlFragment) => void]> =
@@ -178,12 +186,12 @@ const makeMock = (options: { readonly transactional?: boolean } = {}): Mock => {
           }
           if (/^SELECT .* FROM "sync_mutations" WHERE /.test(fragment.text)) {
             const group = String(fragment.params[0]);
-            return [...ledger.entries()]
+            return [...ledger]
               .filter(([key]) => key.startsWith(`${group}:`))
               .map(([key, last]) => ({
                 client_id: key.slice(String(group).length + 1),
                 last_mutation_id: last,
-                rejections: rejections.get(key) ?? null,
+                rejections: Option.getOrElse(MutableHashMap.get(rejections, key), () => null),
               }));
           }
           return unmodelled(fragment);
@@ -204,8 +212,9 @@ const makeMock = (options: { readonly transactional?: boolean } = {}): Mock => {
   return {
     executor,
     queries,
-    seed: (table, rows) => tables.set(table, rows),
-    ledgerOf: (group, client) => ledger.get(`${group}:${client}`) ?? 0,
+    seed: (table, rows) => MutableHashMap.set(tables, table, rows),
+    ledgerOf: (group, client) =>
+      Option.getOrElse(MutableHashMap.get(ledger, `${group}:${client}`), () => 0),
   };
 };
 

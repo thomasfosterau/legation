@@ -55,9 +55,9 @@ const conjunctKeys = (subset: Subset.Subset): ReadonlyArray<string> =>
 
 /** Whether `requested`'s conjunct set strictly contains `subscribed`'s. */
 const strictlyNarrower = (pair: Pair): boolean => {
-  const held = new Set(conjunctKeys(pair.subscribed));
+  const held = Arr.dedupe(conjunctKeys(pair.subscribed));
   const wanted = conjunctKeys(pair.requested);
-  return wanted.length > held.size && [...held].every((key) => wanted.includes(key));
+  return wanted.length > held.length && held.every((key) => wanted.includes(key));
 };
 
 /** The property: local evaluation over the held rows equals evaluation over all rows. */

@@ -71,6 +71,8 @@
 import * as Arr from "effect/Array";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
+import * as HashMap from "effect/HashMap";
+import * as MutableHashMap from "effect/MutableHashMap";
 import * as Option from "effect/Option";
 import * as Semaphore from "effect/Semaphore";
 import type * as Duration from "effect/Duration";
@@ -93,7 +95,7 @@ export interface PacedMutation {
  * One paced instance's memory of the last entry it journaled for each key.
  * `Map<key, mutationId>`; the ids are kept current by {@link compact}.
  */
-type Tracker = Map<string, number>;
+type Tracker = MutableHashMap.MutableHashMap<string, number>;
 
 /**
  * Every live {@link Tracker} for one engine. Weakly held, so an instance that
@@ -129,7 +131,7 @@ const compact = (engine: ClientEngine, previous: number): Effect.Effect<void, St
     Effect.gen(function* () {
       const { renumbered } = yield* engine.dropIfPending([previous]);
       if (Arr.isReadonlyArrayEmpty(renumbered)) return;
-      const moves = new Map(renumbered.map(({ from, to }) => [from, to] as const));
+      const moves = HashMap.fromIterable(renumbered.map(({ from, to }) => [from, to] as const));
       const all = trackersByEngine.get(engine);
       if (all === undefined) return;
       Arr.forEach(all, (ref) => {
@@ -139,8 +141,8 @@ const compact = (engine: ClientEngine, previous: number): Effect.Effect<void, St
           return;
         }
         Arr.forEach(tracker, ([key, id]) => {
-          const moved = moves.get(id);
-          if (moved !== undefined) tracker.set(key, moved);
+          const moved = HashMap.get(moves, id);
+          if (Option.isSome(moved)) MutableHashMap.set(tracker, key, moved.value);
         });
       });
     })
@@ -176,12 +178,12 @@ const flush = (
     const previous = yield* Effect.uninterruptible(
       Effect.gen(function* () {
         const handle = yield* engine.mutateWithAck(mutator, args);
-        const before = lastIdByKey.get(key);
-        lastIdByKey.set(key, handle.mutationId);
+        const before = MutableHashMap.get(lastIdByKey, key);
+        MutableHashMap.set(lastIdByKey, key, handle.mutationId);
         return before;
       })
     );
-    if (previous !== undefined) yield* compact(engine, previous);
+    if (Option.isSome(previous)) yield* compact(engine, previous.value);
   });
 
 /**
@@ -218,7 +220,7 @@ const flushBackground = (
 export const coalesce = (engine: ClientEngine, mutator: string): Effect.Effect<PacedMutation> =>
   Effect.gen(function* () {
     const lock = yield* Semaphore.make(1);
-    const lastIdByKey = new Map<string, number>();
+    const lastIdByKey = MutableHashMap.empty<string, number>();
     const call: PacedMutation["call"] = (key, args) =>
       Semaphore.withPermit(lock, flush(engine, mutator, lastIdByKey, key, args));
     return { call };
@@ -242,8 +244,8 @@ export const debounce = (
   Effect.gen(function* () {
     const scope = yield* Effect.scope;
     const lock = yield* Semaphore.make(1);
-    const lastIdByKey = new Map<string, number>();
-    const entries = new Map<string, Entry>();
+    const lastIdByKey = MutableHashMap.empty<string, number>();
+    const entries = MutableHashMap.empty<string, Entry>();
 
     const trailing = (key: string): Effect.Effect<void> =>
       Effect.sleep(duration).pipe(
@@ -251,13 +253,13 @@ export const debounce = (
           Semaphore.withPermit(
             lock,
             Effect.gen(function* () {
-              const entry = entries.get(key);
-              if (entry === undefined || !entry.dirty) {
-                entries.delete(key);
+              const entry = MutableHashMap.get(entries, key);
+              if (Option.isNone(entry) || !entry.value.dirty) {
+                MutableHashMap.remove(entries, key);
                 return;
               }
-              const args = entry.latestArgs;
-              entries.delete(key); // idle again: the next call is a fresh leading edge
+              const args = entry.value.latestArgs;
+              MutableHashMap.remove(entries, key); // idle again: the next call is a fresh leading edge
               yield* flushBackground(engine, mutator, lastIdByKey, key, args);
             })
           )
@@ -268,13 +270,15 @@ export const debounce = (
       Semaphore.withPermit(
         lock,
         Effect.gen(function* () {
-          let entry = entries.get(key);
-          if (entry === undefined) {
+          const found = MutableHashMap.get(entries, key);
+          let entry: Entry;
+          if (Option.isNone(found)) {
             // Leading edge: journal now so the overlay reflects it immediately.
             entry = { latestArgs: args, dirty: false, timer: Option.none() };
-            entries.set(key, entry);
+            MutableHashMap.set(entries, key, entry);
             yield* flush(engine, mutator, lastIdByKey, key, args);
           } else {
+            entry = found.value;
             if (Option.isSome(entry.timer)) yield* Fiber.interrupt(entry.timer.value);
             entry.latestArgs = args;
             entry.dirty = true;
@@ -301,8 +305,8 @@ export const throttle = (
   Effect.gen(function* () {
     const scope = yield* Effect.scope;
     const lock = yield* Semaphore.make(1);
-    const lastIdByKey = new Map<string, number>();
-    const entries = new Map<string, Entry>();
+    const lastIdByKey = MutableHashMap.empty<string, number>();
+    const entries = MutableHashMap.empty<string, Entry>();
 
     const tick = (key: string): Effect.Effect<void> =>
       Effect.sleep(duration).pipe(
@@ -310,10 +314,11 @@ export const throttle = (
           Semaphore.withPermit(
             lock,
             Effect.gen(function* () {
-              const entry = entries.get(key);
-              if (entry === undefined) return;
+              const found = MutableHashMap.get(entries, key);
+              if (Option.isNone(found)) return;
+              const entry = found.value;
               if (!entry.dirty) {
-                entries.delete(key); // idle: the next call is a fresh leading edge
+                MutableHashMap.remove(entries, key); // idle: the next call is a fresh leading edge
                 return;
               }
               entry.dirty = false;
@@ -329,18 +334,18 @@ export const throttle = (
       Semaphore.withPermit(
         lock,
         Effect.gen(function* () {
-          const entry = entries.get(key);
-          if (entry === undefined) {
+          const found = MutableHashMap.get(entries, key);
+          if (Option.isNone(found)) {
             // Leading edge: journal now and start this key's window.
             const created: Entry = { latestArgs: args, dirty: false, timer: Option.none() };
-            entries.set(key, created);
+            MutableHashMap.set(entries, key, created);
             yield* flush(engine, mutator, lastIdByKey, key, args);
             created.timer = Option.some(yield* Effect.forkIn(tick(key), scope));
             return;
           }
           // A window is already running for this key: buffer, don't reset it.
-          entry.latestArgs = args;
-          entry.dirty = true;
+          found.value.latestArgs = args;
+          found.value.dirty = true;
         })
       );
 

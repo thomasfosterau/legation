@@ -13,6 +13,8 @@ import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
 import * as Fiber from "effect/Fiber";
+import * as HashSet from "effect/HashSet";
+import * as MutableHashMap from "effect/MutableHashMap";
 import * as Option from "effect/Option";
 import * as References from "effect/References";
 import * as Schema from "effect/Schema";
@@ -76,10 +78,10 @@ const ids = (store: ClientStore) =>
 
 /** A KeyValueStore whose writes to keys containing `journal/` fail while `armed`. */
 const flakyJournalWrites = () => {
-  const data = new Map<string, string>();
+  const data = MutableHashMap.empty<string, string>();
   const state = { armed: false, failures: 0 };
   const kvs = KeyValueStore.makeStringOnly({
-    get: (key) => Effect.sync(() => data.get(key)),
+    get: (key) => Effect.sync(() => Option.getOrUndefined(MutableHashMap.get(data, key))),
     set: (key, value) =>
       state.armed && key.includes("journal/")
         ? Effect.sync(() => void state.failures++).pipe(
@@ -89,11 +91,11 @@ const flakyJournalWrites = () => {
               )
             )
           )
-        : Effect.sync(() => void data.set(key, value)),
-    remove: (key) => Effect.sync(() => void data.delete(key)),
-    clear: Effect.sync(() => data.clear()),
-    size: Effect.sync(() => data.size),
-    keys: Effect.sync(() => [...data.keys()]),
+        : Effect.sync(() => void MutableHashMap.set(data, key, value)),
+    remove: (key) => Effect.sync(() => void MutableHashMap.remove(data, key)),
+    clear: Effect.sync(() => MutableHashMap.clear(data)),
+    size: Effect.sync(() => MutableHashMap.size(data)),
+    keys: Effect.sync(() => [...MutableHashMap.keys(data)]),
   });
   return { kvs, state };
 };
@@ -235,20 +237,20 @@ describe("ClientStore.appendNext", () => {
   layer(KeyValueStore.layerMemory)((scoped) => {
     scoped.effect("a counter write that fails after the entry is journaled is healed", () =>
       Effect.gen(function* () {
-        const data = new Map<string, string>();
+        const data = MutableHashMap.empty<string, string>();
         const state = { failCounters: false };
         const kvs = KeyValueStore.makeStringOnly({
-          get: (key) => Effect.sync(() => data.get(key)),
+          get: (key) => Effect.sync(() => Option.getOrUndefined(MutableHashMap.get(data, key))),
           set: (key, value) =>
             state.failCounters && key.endsWith("counters")
               ? Effect.fail(
                   new KeyValueStore.KeyValueStoreError({ message: "injected", method: "set", key })
                 )
-              : Effect.sync(() => void data.set(key, value)),
-          remove: (key) => Effect.sync(() => void data.delete(key)),
-          clear: Effect.sync(() => data.clear()),
-          size: Effect.sync(() => data.size),
-          keys: Effect.sync(() => [...data.keys()]),
+              : Effect.sync(() => void MutableHashMap.set(data, key, value)),
+          remove: (key) => Effect.sync(() => void MutableHashMap.remove(data, key)),
+          clear: Effect.sync(() => MutableHashMap.clear(data)),
+          size: Effect.sync(() => MutableHashMap.size(data)),
+          keys: Effect.sync(() => [...MutableHashMap.keys(data)]),
         });
         const store = yield* ClientStoreModule.makeKeyValue().pipe(
           Effect.provideService(KeyValueStore.KeyValueStore, kvs)
@@ -289,12 +291,12 @@ interface CountersState {
  * the counter write).
  */
 const controlledCounters = () => {
-  const data = new Map<string, string>();
+  const data = MutableHashMap.empty<string, string>();
   const state: CountersState = { failCounters: false, park: Option.none() };
   const kvs = KeyValueStore.makeStringOnly({
-    get: (key) => Effect.sync(() => data.get(key)),
+    get: (key) => Effect.sync(() => Option.getOrUndefined(MutableHashMap.get(data, key))),
     set: (key, value) => {
-      const write = Effect.sync(() => void data.set(key, value));
+      const write = Effect.sync(() => void MutableHashMap.set(data, key, value));
       if (!key.endsWith("counters")) return write;
       if (state.failCounters) {
         return Effect.fail(
@@ -310,10 +312,10 @@ const controlledCounters = () => {
           ),
       });
     },
-    remove: (key) => Effect.sync(() => void data.delete(key)),
-    clear: Effect.sync(() => data.clear()),
-    size: Effect.sync(() => data.size),
-    keys: Effect.sync(() => [...data.keys()]),
+    remove: (key) => Effect.sync(() => void MutableHashMap.remove(data, key)),
+    clear: Effect.sync(() => MutableHashMap.clear(data)),
+    size: Effect.sync(() => MutableHashMap.size(data)),
+    keys: Effect.sync(() => [...MutableHashMap.keys(data)]),
   });
   return { kvs, state };
 };
@@ -588,8 +590,8 @@ describeWrapped("memory store: journal writers exclude one another", (it) => {
           store.acknowledge("c", 1),
           defined(store.commitPull)({ lastMutationIds: { other: 1 }, patch: [] })
         );
-        const pending = new Set((yield* store.pendingMutations).map(key));
-        if (pending.has("c:1") || pending.has("other:1")) resurrected++;
+        const pending = HashSet.fromIterable((yield* store.pendingMutations).map(key));
+        if (HashSet.has(pending, "c:1") || HashSet.has(pending, "other:1")) resurrected++;
       }
       expect(resurrected).toBe(0);
     }).pipe(Effect.provideService(References.MaxOpsBeforeYield, 5))
@@ -635,20 +637,20 @@ describeWrapped("memory store: journal writers exclude one another", (it) => {
       yield* memory.appendMutation(m(2));
       expect(yield* memory.nextMutationId("c")).toBe(3);
 
-      const data = new Map<string, string>();
+      const data = MutableHashMap.empty<string, string>();
       let failCounters = true;
       const kvs = KeyValueStore.makeStringOnly({
-        get: (k) => Effect.sync(() => data.get(k)),
+        get: (k) => Effect.sync(() => Option.getOrUndefined(MutableHashMap.get(data, k))),
         set: (k, v) =>
           failCounters && k.endsWith("counters")
             ? Effect.fail(
                 new KeyValueStore.KeyValueStoreError({ message: "inj", method: "set", key: k })
               )
-            : Effect.sync(() => void data.set(k, v)),
-        remove: (k) => Effect.sync(() => void data.delete(k)),
-        clear: Effect.sync(() => data.clear()),
-        size: Effect.sync(() => data.size),
-        keys: Effect.sync(() => [...data.keys()]),
+            : Effect.sync(() => void MutableHashMap.set(data, k, v)),
+        remove: (k) => Effect.sync(() => void MutableHashMap.remove(data, k)),
+        clear: Effect.sync(() => MutableHashMap.clear(data)),
+        size: Effect.sync(() => MutableHashMap.size(data)),
+        keys: Effect.sync(() => [...MutableHashMap.keys(data)]),
       });
       const kv = yield* ClientStoreModule.makeKeyValue().pipe(
         Effect.provideService(KeyValueStore.KeyValueStore, kvs)
