@@ -1002,9 +1002,12 @@ const sealed = (cause: StoreError): ClientStore => {
 const causeDetail = (error: unknown): string =>
   Arr.unfold({ current: error, depth: 0 }, ({ current, depth }) => {
     if (depth >= 8 || !P.isObjectOrArray(current)) return Option.none();
-    const link = current as { readonly message?: unknown; readonly cause?: unknown };
-    const message = P.isString(link.message) ? link.message : "";
-    return Option.some([message, { current: link.cause, depth: depth + 1 }] as const);
+    const message = P.hasProperty(current, "message") ? current.message : undefined;
+    const cause = P.hasProperty(current, "cause") ? current.cause : undefined;
+    return Option.some([
+      P.isString(message) ? message : "",
+      { current: cause, depth: depth + 1 },
+    ] as const);
   })
     .filter((message) => message !== "")
     .join(": ");

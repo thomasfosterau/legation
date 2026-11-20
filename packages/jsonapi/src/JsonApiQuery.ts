@@ -482,6 +482,9 @@ const queryCodecs = new WeakMap<Node.NodeRegistry, Map<string, QueryCodec>>();
 const codecOf = (nodes: Node.NodeRegistry, node: Node.AnyNode): QueryCodec =>
   memoised(queryCodecs, nodes, node, () => {
     const resource = resourceIn(resourcesOf(nodes), node.type);
+    // SAFETY: `Resource.Any` erases the resource's fields, so the codec's types
+    // are loose; with these options it decodes to `DecodedQuery`'s `include`,
+    // `fields`, `sort`, `page` and `filter`.
     const schema = UrlQuery.schema(resource, {
       include: includeOption(node),
       fields: true,
@@ -555,6 +558,8 @@ export const singleRowSchema = (
     singleRowCodecs,
     nodes,
     node,
+    // SAFETY: `Resource.Any` erases the resource's fields, so the codec's types
+    // are loose; with only `include` and `fields` it decodes to `SingleRowQuery`.
     () =>
       UrlQuery.schema(resourceIn(resourcesOf(nodes), node.type), {
         include: includeOption(node),
@@ -1107,7 +1112,7 @@ export const urlReads = (nodes: Node.NodeRegistry): Client.UrlReads => ({
 // ─── The exact encoder ───────────────────────────────────────────────────────
 
 /** The attribute schema of a field whose literals have the JS type. */
-const scalarSchema = (type: "string" | "number" | "boolean"): Schema.Top =>
+const scalarSchema = (type: string): Schema.Top =>
   type === "string" ? Schema.String : type === "number" ? Schema.Number : Schema.Boolean;
 
 /** Collect the literal JS types each field of a tree is compared with (mutates `types`). */
@@ -1170,15 +1175,15 @@ const flatFilterCodecOf = (ast: Filter.Node): FlatFilterCodec => {
   if (cached !== undefined) return cached;
   const attributes = R.fromIterableWith(
     [...types].filter(([field]) => field !== RESOURCE_ID),
-    ([field, type]): [string, Schema.Top] => [
-      field,
-      scalarSchema(type as "string" | "number" | "boolean").pipe(Filter.able()),
-    ]
+    ([field, type]): [string, Schema.Top] => [field, scalarSchema(type).pipe(Filter.able())]
   );
   // An `id` filter is the resource id's: JSON:API reserves the name for it.
   const id = types.has(RESOURCE_ID)
     ? Option.some(Schema.String.pipe(Filter.able()))
     : Option.none<Schema.Codec<string, string>>();
+  // SAFETY: the synthetic resource's attributes are `Filter.able()` scalars, so
+  // its filter codec decodes `filter[...]` strings to a `Filter.Node`; its
+  // erased field types only make that loose.
   const codec = UrlQuery.Filter(
     Resource.make("query", { ...withId(id), attributes })
   ) as FlatFilterCodec;

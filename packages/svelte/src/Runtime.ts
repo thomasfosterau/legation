@@ -260,5 +260,6 @@ export const setClientRuntime = (runtime: ClientRuntime): void => {
 
 /** Read the Client runtime put in context by {@link setClient} or {@link setClientRuntime}. */
 export const getClientRuntime = (): ClientRuntime =>
-  // Narrowing as in {@link getEngineRuntime}: `setClient` is the only writer.
+  // SAFETY: `setClient` is the only writer, and every runtime it provides is a
+  // `ClientRuntime` (its own, or `unavailableRuntime`).
   clientContext.get() as ClientRuntime;

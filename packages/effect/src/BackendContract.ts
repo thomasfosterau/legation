@@ -138,6 +138,15 @@ export const failAlways = Mutator.make("contract/fail", Schema.Struct({}));
 /** The reason `rejectAlways` gives for its permanent rejection. */
 const rejectReason = "contract/reject always rejects";
 
+/** The counter field the contract's counting mutators write, read off a stored row value. */
+const decodeCounter = Schema.decodeUnknownOption(
+  Schema.Struct({ n: Schema.optional(Schema.Finite) })
+);
+
+/** The `n` a stored row value carries, when it is a counter row. */
+const counterOf = (value: Option.Option<{ readonly n?: number | undefined }>) =>
+  Option.getOrUndefined(value)?.n;
+
 /**
  * Writes a row and then rejects permanently — probes that a `MutationRejected`
  * bumps the id *without* leaving effects (the staged write must roll back).
@@ -205,11 +214,9 @@ export const memoryHandlers: Record<string, MemoryBackend.BackendHandler> =
     ),
     MemoryBackend.handler(countUp, (args, writer) =>
       Effect.gen(function* () {
-        const current = (yield* writer.get(args.collection, args.id)) as
-          | { readonly n?: number }
-          | undefined;
+        const current = counterOf(decodeCounter(yield* writer.get(args.collection, args.id)));
         yield* park(args.gate);
-        yield* writer.put(args.collection, args.id, { n: (current?.n ?? 0) + 1 });
+        yield* writer.put(args.collection, args.id, { n: (current ?? 0) + 1 });
       })
     ),
   ]);
@@ -502,7 +509,7 @@ const rule2IdempotentSkip: Rule = ({
     // did not re-execute.
     yield* check(
       rule,
-      (b?.value as { n?: number } | undefined)?.n === 2,
+      counterOf(decodeCounter(b?.value)) === 2,
       `Replaying mutation 2 must not re-execute its effects (row "b" became ${Json.show(b?.value)})`
     );
   });
@@ -983,7 +990,7 @@ const rule11CrossGroupLostUpdate: Rule = (h) =>
       }
 
       const [stored] = yield* h.expectOk(rule, h.backend.getRows(h.context, h.rows, [row]));
-      const count = (stored?.value as { readonly n?: number } | undefined)?.n;
+      const count = counterOf(decodeCounter(stored?.value));
       return yield* h.check(
         rule,
         count === 2,
@@ -1039,7 +1046,7 @@ const rule12OwnWritesReachGetRows: Rule = (h) =>
     const [updated] = yield* expectOk(rule, backend.getRows(context, collection, [kept]));
     yield* check(
       rule,
-      (updated?.value as { readonly n?: number } | undefined)?.n === 2,
+      counterOf(decodeCounter(updated?.value)) === 2,
       `An update must show in getRows without a re-list: row "${kept}" reads ${Json.show(updated?.value)}`
     );
 

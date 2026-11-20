@@ -71,8 +71,9 @@ export interface PromiseFacade<R> {
  * ```
  */
 export const make = <R, ER>(layer: Layer.Layer<R, ER>): PromiseFacade<R> => {
-  // The error channel of the layer is surfaced when effects run, so the
-  // facade itself treats the runtime as infallible for ergonomic typing.
+  // SAFETY: only the type changes. A layer failure still rejects the promise of
+  // the run that builds it, so the facade treats the runtime as infallible for
+  // ergonomic typing.
   const runtime = ManagedRuntime.make(layer) as ManagedRuntime.ManagedRuntime<R, never>;
 
   const run = <A, E>(effect: Effect.Effect<A, E, R>): Promise<A> => runtime.runPromise(effect);

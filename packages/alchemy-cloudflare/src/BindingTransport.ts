@@ -37,6 +37,7 @@
  */
 
 import * as Effect from "effect/Effect";
+import * as P from "effect/Predicate";
 import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
 import {
@@ -117,12 +118,14 @@ export const make = (options: MakeOptions): Transport.ClientTransport => {
             })
           );
           if (!response.ok) {
-            const detail = (await response.json().catch(() => ({}))) as { error?: string };
+            const detail: unknown = await response.json().catch(() => ({}));
+            const error = P.isObject(detail) && P.isString(detail.error) ? detail.error : undefined;
             throw new TransportError({
-              message: detail.error ?? `binding ${route} answered ${response.status}`,
+              message: error ?? `binding ${route} answered ${response.status}`,
             });
           }
-          // Trusted JSON from this app's own Worker.
+          // SAFETY: trusted JSON from this app's own Worker, which answers `route`
+          // with the protocol body `A` that the caller names.
           return (await response.json()) as A;
         },
         catch: (cause) =>

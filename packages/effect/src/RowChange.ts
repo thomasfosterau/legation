@@ -55,13 +55,8 @@ interface Identified {
   readonly value: unknown;
 }
 
-/** A row carrying a stable position key (`LiveView.PositionedRow`'s shape). */
-interface Positioned extends Identified {
-  readonly position: string;
-}
-
 const positionOf = (row: Identified): string | undefined => {
-  const position = (row as Partial<Positioned>).position;
+  const position = P.hasProperty(row, "position") ? row.position : undefined;
   return P.isString(position) ? position : undefined;
 };
 

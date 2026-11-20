@@ -110,6 +110,8 @@ const groupByField = (
   field: string
 ): Map<Predicate.Literal, ReadonlyArray<LocalRow>> =>
   Arr.reduce(rows, new Map<Predicate.Literal, Array<LocalRow>>(), (map, row) => {
+    // SAFETY: a join key is the raw field literal (ADR-0028); a non-literal
+    // value keys a bucket no literal looks up.
     const key = Predicate.fieldValue(row.value, field) as Predicate.Literal;
     const bucket = map.get(key);
     if (bucket === undefined) map.set(key, [row]);
@@ -160,7 +162,11 @@ const pinIds = (
 ): void => {
   for (const row of baseRows) {
     const value = Predicate.fieldValue(row.value, localField);
-    if (value !== undefined && value !== null) ids.add(value as Predicate.Literal);
+    if (value !== undefined && value !== null) {
+      // SAFETY: a join key is the raw field literal (ADR-0028); the ids only feed
+      // an `In` over the related collection's field.
+      ids.add(value as Predicate.Literal);
+    }
   }
 };
 
@@ -214,6 +220,8 @@ export const fieldMappingStrategy = (
   resolveRow: (index, baseRow) => {
     const related: Record<string, RelatedValue> = {};
     for (const relationship of relationships) {
+      // SAFETY: a join key is the raw field literal (ADR-0028), looked up in the
+      // buckets `groupByField` keyed the same way.
       const key = Predicate.fieldValue(baseRow.value, relationship.localField) as Predicate.Literal;
       const bucket = index.get(relationship.collection)?.get(key);
       const first = bucket?.[0];
@@ -541,6 +549,8 @@ export const makeJoinEngine = (strategy: Strategy): JoinEngine => {
     rows: ReadonlyArray<LocalRow>
   ): ReadonlySet<Predicate.Literal> => {
     const changedKeys = new Set<Predicate.Literal>();
+    // SAFETY: a join key is the raw field literal (ADR-0028); a non-literal
+    // value keys a bucket no literal looks up.
     const keyOf = (row: LocalRow) =>
       Predicate.fieldValue(row.value, state.target.field) as Predicate.Literal;
     const putInto = (key: Predicate.Literal, row: LocalRow): void => {

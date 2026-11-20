@@ -157,6 +157,8 @@ const runRequest = <A>(
       return undefined;
     }
     const transaction = began.success;
+    // SAFETY: a transaction completes only after its one request succeeded, and
+    // that request's `success` listener (added below) has already set `result`.
     transaction.addEventListener("complete", () => finish(Effect.succeed(result as A)));
     transaction.addEventListener("error", () => fail(transaction.error));
     transaction.addEventListener("abort", () => fail(transaction.error));

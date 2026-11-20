@@ -139,6 +139,9 @@ export interface TypedSubsetBuilder<A> {
 
 // The constructors are field-agnostic at runtime (the typing lives in the
 // interface), so one shared implementation serves every row type.
+// SAFETY: only the types change: `TypedPredicate<unknown>` erases the row type,
+// and each value is passed on unchanged as the literal the typed interface
+// checked against the row field's type.
 const typedPredicate: TypedPredicate<unknown> = {
   eq: (field, value) => Predicate.eq(field, value as Predicate.Literal),
   ne: (field, value) => Predicate.ne(field, value as Predicate.Literal),

@@ -209,6 +209,10 @@ export const resolve = (options: ResolveOptions): FilterDeclaration => {
   );
 };
 
+/** The operators-only shorthand (`Array.isArray` does not narrow a `ReadonlyArray`). */
+const isOperatorList = (input: FilterableInput): input is ReadonlyArray<FilterOperator> =>
+  Array.isArray(input);
+
 /** One field's declaration with the operators-only shorthand expanded. */
 type DeclaredField = {
   readonly operators: ReadonlyArray<FilterOperator>;
@@ -217,9 +221,7 @@ type DeclaredField = {
 
 /** The declared form of one field, with the operators-only shorthand expanded. */
 const normaliseInput = (input: FilterableInput): DeclaredField =>
-  Array.isArray(input)
-    ? { operators: input as ReadonlyArray<FilterOperator> }
-    : (input as DeclaredField);
+  isOperatorList(input) ? { operators: input } : input;
 
 /** A declared field must be a field of the row. */
 const assertRowField = (
@@ -423,10 +425,7 @@ const checkNode = Match.fn(
     deny(collection, `"Exists" is not allowed in a client predicate`)
   ),
   Match.orElse((where, _, collection) =>
-    deny(
-      collection,
-      `predicate node "${(where as { readonly _tag: string })._tag}" is not allowed in a client predicate`
-    )
+    deny(collection, `predicate node "${where._tag}" is not allowed in a client predicate`)
   )
 );
 

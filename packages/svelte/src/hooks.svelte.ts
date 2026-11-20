@@ -147,6 +147,8 @@ const live = <A, E>(
       // synchronously — so seeded pages fully server-render, and unseeded
       // ones legitimately show `pending`.
       if (P.isUndefined(globalThis.document) && options?.initial !== undefined) {
+        // SAFETY: deliberately the plain value (see above): awaiting it yields
+        // the value itself, as awaiting the promise would.
         return options.initial as Promise<A>;
       }
       return optedOut ? NEVER_PROMISE : result.promise;

@@ -77,7 +77,7 @@ const isReadonlyArray = <A>(value: A | ReadonlyArray<A>): value is ReadonlyArray
 
 /** Map a resource (or bare identifier) to a collection row. */
 export const resourceToRow = (resource: ResourceObject | ResourceIdentifier): CollectionRow => {
-  const full = resource as ResourceObject;
+  const full: ResourceObject = resource;
   const relationships = R.filterMap(full.relationships ?? {}, ({ data }) =>
     data === undefined
       ? Result.failVoid
@@ -135,7 +135,7 @@ export const parseResponse = (
   Effect.gen(function* () {
     if (response.status < 200 || response.status >= 300) {
       const body = yield* response.json.pipe(Effect.orElseSucceed(() => undefined));
-      const candidate = P.isObjectOrArray(body) ? (body as JsonApiDocument).errors : undefined;
+      const candidate = P.isObject(body) ? body.errors : undefined;
       const errors = Array.isArray(candidate) ? candidate : [];
       return yield* new ApiError({ message: `HTTP ${response.status}`, errors });
     }

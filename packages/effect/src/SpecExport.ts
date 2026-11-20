@@ -131,6 +131,8 @@ const uniqueNamer = () => {
 // ─── Specialized schemas ───────────────────────────────────────────────────────
 
 const id = <S extends Schema.Top>(schema: S, identifier: string): S =>
+  // SAFETY: `annotate` returns the same schema with one more annotation; its
+  // type is `S`'s rebuild type, which TypeScript cannot relate to a generic `S`.
   schema.annotate({ identifier }) as S;
 
 /** The serializable failure carried on sync operations (RpcTransport's). */

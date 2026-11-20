@@ -19,4 +19,6 @@ import type { AnyNode } from "../Node.js";
  * in effect-jsonapi.
  */
 export const rowCodec = (node: AnyNode): Schema.Codec<unknown, unknown> =>
+  // SAFETY: only the erased type says the row's services are `unknown` (see
+  // above); the row codec itself is passed on unchanged.
   node.row as unknown as Schema.Codec<unknown, unknown>;

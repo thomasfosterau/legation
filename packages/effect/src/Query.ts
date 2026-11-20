@@ -251,10 +251,14 @@ const rootLimit = (read: Read): number | undefined =>
       ? undefined
       : read.offset + read.first;
 
+/** A `where` given as a predicate tree, not a field → literal record: it carries a `_tag`. */
+const isPredicateWhere = (where: NonNullable<Read["where"]>): where is Predicate.Predicate =>
+  "_tag" in where;
+
 /** Compile a `where` to the plan's predicate representation. */
 const compileWhere = (where: Read["where"]): Predicate.Predicate => {
   if (where === undefined) return Predicate.always;
-  if ("_tag" in where) return where as Predicate.Predicate;
+  if (isPredicateWhere(where)) return where;
   const terms = Object.entries(where).map(([field, value]) => Predicate.eq(field, value));
   const only = terms[0];
   return terms.length === 1 && only !== undefined ? only : Predicate.and(...terms);
@@ -337,7 +341,10 @@ const edgeOrder =
   (a, b) => {
     // The first term whose fields differ decides; equal on every term is a tie.
     const decided = Arr.findFirst(edgePlan.order, (term) => {
+      // SAFETY: only the type changes, so that `<` type-checks: the raw field
+      // literals (ADR-0028) are compared as JavaScript compares them.
       const left = Predicate.fieldValue(a, term.field) as string | number;
+      // SAFETY: as for `left`.
       const right = Predicate.fieldValue(b, term.field) as string | number;
       if (left === right) return Option.none();
       const ascending = left < right;

@@ -445,6 +445,8 @@ const writeOf = (operation: OperationInfo, args: unknown): Effect.Effect<Write, 
   Match.value(operation.operation).pipe(
     Match.withReturnType<Effect.Effect<Write, BackendError>>(),
     Match.when("create", () => {
+      // SAFETY: `operation` names a derived CRUD mutator, whose args schema
+      // (`Derive.CreateArgs` here, and likewise below) decoded `args`.
       const a = args as {
         id: string;
         attributes: WriteAttributes;
@@ -459,6 +461,7 @@ const writeOf = (operation: OperationInfo, args: unknown): Effect.Effect<Write, 
       });
     }),
     Match.when("update", () => {
+      // SAFETY: decoded by `Derive.UpdateArgs` (see `create`).
       const a = args as { id: string; attributes: WriteAttributes };
       return Effect.succeed({
         operation: "update",
@@ -468,6 +471,7 @@ const writeOf = (operation: OperationInfo, args: unknown): Effect.Effect<Write, 
       });
     }),
     Match.when("delete", () => {
+      // SAFETY: decoded by `Derive.DeleteArgs` (see `create`).
       const a = args as { id: string };
       return Effect.succeed({ operation: "delete", type: operation.type, id: a.id });
     }),
@@ -522,9 +526,12 @@ const rejectionsOf = (
   count: number,
   fallbackReason: string
 ): ReadonlyArray<{ readonly index: number; readonly reason: string }> => {
+  // SAFETY: only `source.pointer` is relied on, after a string check; `detail`
+  // and `title` are passed on as the server sent them, which JSON:API's error
+  // object types as strings.
   const errors =
-    P.isObjectOrArray(body) && Array.isArray((body as { errors?: unknown }).errors)
-      ? ((body as { errors: ReadonlyArray<unknown> }).errors as ReadonlyArray<{
+    P.isObject(body) && Array.isArray(body.errors)
+      ? (body.errors as ReadonlyArray<{
           readonly title?: string;
           readonly detail?: string;
           readonly source?: { readonly pointer?: string };
@@ -549,7 +556,7 @@ interface BatchEntry {
 
 /** The row an `atomic:results` entry carries, if it returned a resource. */
 const resultRow = (result: unknown): Option.Option<JsonApiRow> => {
-  const data = P.isObjectOrArray(result) ? (result as { data?: unknown }).data : undefined;
+  const data = P.isObject(result) ? result.data : undefined;
   return Option.map(Schema.decodeUnknownOption(ResourceObject)(data), (resource) =>
     toRow(resourceToRow(resource).value)
   );
@@ -1335,9 +1342,7 @@ export const make = (
         // A 204 (or an unparseable success body) still means every operation applied.
         const body = yield* response.json.pipe(Effect.orElseSucceed(() => undefined));
         if (status >= 200 && status < 300) {
-          const results = P.isObjectOrArray(body)
-            ? (body as { readonly "atomic:results"?: unknown })["atomic:results"]
-            : undefined;
+          const results = P.isObject(body) ? body["atomic:results"] : undefined;
           return { _tag: "applied", results: Array.isArray(results) ? results : [] } as const;
         }
         if (isPermanentStatus(status)) {

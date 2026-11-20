@@ -185,6 +185,9 @@ const decodeRejections = (
       Effect.try({
         try: () =>
           new Map(
+            // SAFETY: `Object.entries` takes any value, throwing only on
+            // `null` (which `Effect.try` maps to `notRejections`), and each
+            // reason goes through `String`, so no value is read as a string.
             Object.entries(parsed as Record<string, string>).map(
               ([id, reason]) => [Number(id), String(reason)] as const
             )
@@ -487,6 +490,8 @@ export const make = (config: SqlBackendConfig): Backend.Backend => {
   const idOf = (collection: string) => config.tables[collection]?.idColumn ?? "id";
   const versionFor = (collection: string, row: SqlRow): string | number => {
     const column = config.tables[collection]?.versionColumn;
+    // SAFETY: a declared `versionColumn` holds the row's version, which the
+    // config names as a text or numeric column.
     return column !== undefined ? (row[column] as string | number) : versionOf(row);
   };
   // Whether a decoded row is a live row, not a tombstone: no mapping or no
@@ -552,6 +557,8 @@ export const make = (config: SqlBackendConfig): Backend.Backend => {
             const decoded = decodeRow(node.collection, row);
             if (!isLive(node.collection, decoded)) return [];
             const value = decoded[node.foreignField];
+            // SAFETY: a field of a decoded row is used as a raw literal
+            // (ADR-0028); the values only feed an `In` over that field.
             return Predicate.isNullish(value) ? [] : [value as Predicate.Literal];
           })
         )

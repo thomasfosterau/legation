@@ -111,6 +111,9 @@ const Literal = Schema.Union([Schema.String, Schema.Number, Schema.Boolean, Sche
  * can never send one, and the server binds every one before a subset is
  * stored or sent.
  */
+// SAFETY: the members are `Predicate`'s (less `InSet`); they differ only in
+// that `Schema.optional` types an optional key as `?: T | undefined`, where the
+// type, under `exactOptionalPropertyTypes`, says `?: T`.
 export const PredicateSchema: Schema.Codec<Predicate> = Schema.Union([
   Schema.Struct({ _tag: Schema.tag("True") }),
   Schema.Struct({
@@ -346,7 +349,8 @@ const membership = (
   values: ReadonlyArray<Literal>,
   onMatch: boolean
 ): Option.Option<boolean> => {
-  if (values.includes(left as Literal)) return definite(onMatch);
+  const listed: ReadonlyArray<unknown> = values;
+  if (listed.includes(left)) return definite(onMatch);
   if (values.includes(null)) return UNKNOWN;
   if (!values.some((value) => compareLiterals(left, value) !== undefined)) return UNKNOWN;
   return definite(!onMatch);
@@ -511,7 +515,11 @@ export const existsValues = (node: ExistsNode, rows: Iterable<unknown>): Readonl
   for (const row of rows) {
     if (!test(node.where, row)) continue;
     const value = fieldValue(row, node.foreignField);
-    if (!isNullish(value)) values.add(value as Literal);
+    if (!isNullish(value)) {
+      // SAFETY: a field of an encoded row is compared as a raw literal (ADR-0028);
+      // these values are only matched against another row's field values.
+      values.add(value as Literal);
+    }
   }
   return [...values];
 };

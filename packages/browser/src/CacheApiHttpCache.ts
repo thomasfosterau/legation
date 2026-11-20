@@ -116,9 +116,10 @@ export const open = (
   name: string,
   cacheStorage?: CacheStorageLike
 ): Effect.Effect<HttpCache.ResponseCacheStore, StoreError> =>
-  tryCache(`Failed to open cache "${name}"`, () =>
-    (cacheStorage ?? (globalThis.caches as CacheStorageLike)).open(name)
-  ).pipe(Effect.map(make));
+  tryCache(`Failed to open cache "${name}"`, () => {
+    const storage: CacheStorageLike = cacheStorage ?? globalThis.caches;
+    return storage.open(name);
+  }).pipe(Effect.map(make));
 
 // ─── Fetch handler ───────────────────────────────────────────────────────────
 
