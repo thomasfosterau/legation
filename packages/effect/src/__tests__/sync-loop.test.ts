@@ -78,7 +78,7 @@ interface Counters {
 // empty journal before reaching the transport), and count each one once it
 // has completed, so a count the tests wait on means the leg's effects
 // (a drained journal, rows in the store) are already visible.
-const count = (counter: Ref.Ref<number> | undefined) =>
+const count = (counter?: Ref.Ref<number>) =>
   counter ? Ref.update(counter, (n) => n + 1) : Effect.void;
 
 const makeClient = (

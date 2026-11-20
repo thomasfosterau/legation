@@ -322,7 +322,7 @@ interface Harness {
   readonly put: (mutationId: number, collection: string, id: string, value: unknown) => Mutation;
   readonly reject: (mutationId: number, collection: string, id: string) => Mutation;
   /** The backend's own peer wait for rule 11, when it supplies one. */
-  readonly awaitPeer: PeerSettle | undefined;
+  readonly awaitPeer: Option.Option<PeerSettle>;
 }
 
 /**
@@ -400,12 +400,12 @@ const harnessExpectRegisteredFailure: Harness["expectRegisteredFailure"] = (
 
 const makeHarness = (
   backend: Backend,
-  options: VerifyOptions | undefined,
+  options: VerifyOptions,
   start: number,
   peerStart: number
 ): Harness => {
-  const rows = options?.collection ?? "__contract";
-  const context: SyncContext = { clientGroupId: options?.clientGroupId ?? "__contract-group" };
+  const rows = options.collection ?? "__contract";
+  const context: SyncContext = { clientGroupId: options.clientGroupId ?? "__contract-group" };
   const clientId = CONTRACT_CLIENT;
 
   const mutation: Harness["mutation"] = (mutationId, mutator, args) => ({
@@ -437,7 +437,7 @@ const makeHarness = (
       mutation(mutationId, putRow.name, { collection, id, value }),
     reject: (mutationId, collection, id) =>
       mutation(mutationId, rejectAlways.name, { collection, id }),
-    awaitPeer: options?.awaitPeer,
+    awaitPeer: Option.fromUndefinedOr(options.awaitPeer),
   };
 };
 
@@ -970,7 +970,7 @@ const rule11CrossGroupLostUpdate: Rule = (h) =>
         )
       );
       const peerSettled = Deferred.isDone(peerDone);
-      yield* (h.awaitPeer ?? settleByTurns)(peerSettled);
+      yield* Option.getOrElse(h.awaitPeer, () => settleByTurns)(peerSettled);
       yield* Deferred.succeed(parked.release, undefined);
       const firstExit = yield* Effect.exit(Fiber.join(first));
       const peerExit = yield* Effect.exit(Fiber.join(second));
@@ -1292,7 +1292,12 @@ export const verifyBackendContract = (
           })
         );
       }
-      const harness = makeHarness(backend, options, expected, options?.restoredPeerLedger ?? 0);
+      const harness = makeHarness(
+        backend,
+        options ?? {},
+        expected,
+        options?.restoredPeerLedger ?? 0
+      );
       return Effect.forEach(rules, (rule) => rule(harness), { concurrency: 1, discard: true });
     })
   );

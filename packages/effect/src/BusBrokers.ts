@@ -64,12 +64,12 @@ type XRevRangeReply = ReadonlyArray<StreamEntry>;
 const PAYLOAD_FIELD = "p";
 
 /** Pull the payload value out of an entry's flattened field/value pairs. */
-const payloadOf = (fields: ReadonlyArray<string>): string | undefined => {
+const payloadOf = (fields: ReadonlyArray<string>): Option.Option<string> => {
   const at = Arr.findFirstIndex(
     fields,
     (field, i) => i % 2 === 0 && i + 1 < fields.length && String(field) === PAYLOAD_FIELD
   );
-  return Option.match(at, { onNone: () => undefined, onSome: (i) => String(fields[i + 1]) });
+  return Option.map(at, (i) => String(fields[i + 1]));
 };
 
 /**
@@ -194,13 +194,12 @@ export const makeRedisBroker = (
         // other start gets one bounded attempt here, so a publish made right after
         // `subscribe` returns is not missed while Redis answers in time. If the
         // attempt fails or times out, the reader's first step resolves it.
-        let cursor: string | undefined = from === "0" ? "0" : undefined;
-        if (cursor === undefined) {
-          const first = yield* lastId.pipe(
+        let cursor: Option.Option<string> = from === "0" ? Option.some("0") : Option.none();
+        if (Option.isNone(cursor)) {
+          cursor = yield* lastId.pipe(
             Effect.timeoutOption(START_LOOKUP_BOUND),
             Effect.orElseSucceed(() => Option.none<string>())
           );
-          if (Option.isSome(first)) cursor = first.value;
         }
         // Per-subscription outage state: consecutive failed steps. The first failure
         // of an outage logs a warning, each further retry logs at debug, and the
@@ -229,17 +228,18 @@ export const makeRedisBroker = (
             return log.pipe(Effect.andThen(Effect.sleep(Duration.millis(delay))));
           });
         const readOnce = Effect.gen(function* () {
-          if (cursor === undefined) {
-            cursor = yield* lastId.pipe(
-              Effect.timeoutOrElse({
-                duration: START_LOOKUP_BOUND,
-                orElse: () => Effect.fail(new StartLookupTimeout()),
-              }),
-              Effect.tap(() => answered)
-            );
-          }
+          const position = Option.isSome(cursor)
+            ? cursor.value
+            : yield* lastId.pipe(
+                Effect.timeoutOrElse({
+                  duration: START_LOOKUP_BOUND,
+                  orElse: () => Effect.fail(new StartLookupTimeout()),
+                }),
+                Effect.tap(() => answered)
+              );
+          cursor = Option.some(position);
           const reply = yield* boundRead(
-            redis.send<XReadReply>("XREAD", "BLOCK", blockMs, "STREAMS", stream, cursor)
+            redis.send<XReadReply>("XREAD", "BLOCK", blockMs, "STREAMS", stream, position)
           ).pipe(Effect.tap(() => answered));
           if (reply === null) return;
           yield* Effect.forEach(
@@ -249,9 +249,9 @@ export const makeRedisBroker = (
                 entries,
                 ([id, fields]) =>
                   Effect.gen(function* () {
-                    cursor = id;
+                    cursor = Option.some(id);
                     const payload = payloadOf(fields);
-                    if (payload !== undefined) yield* Queue.offer(queue, payload);
+                    if (Option.isSome(payload)) yield* Queue.offer(queue, payload.value);
                   }),
                 { concurrency: 1, discard: true }
               ),

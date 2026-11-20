@@ -244,12 +244,10 @@ export const edgeSelects = (compiled: Plan): ReadonlyArray<Related.EdgeSelect> =
  * out of what it fetched. `offset` alone (no `first`) compiles to no
  * limit: the read wants every row past `offset`.
  */
-const rootLimit = (read: Read): number | undefined =>
-  read.offset === undefined
-    ? read.first
-    : read.first === undefined
-      ? undefined
-      : read.offset + read.first;
+const rootLimit = (read: Read): Option.Option<number> =>
+  Option.map(Option.fromUndefinedOr(read.first), (first) =>
+    read.offset === undefined ? first : read.offset + first
+  );
 
 /** A `where` given as a predicate tree, not a field → literal record: it carries a `_tag`. */
 const isPredicateWhere = (where: NonNullable<Read["where"]>): where is Predicate.Predicate =>
@@ -287,7 +285,7 @@ export interface Plan {
  * declared order) plus the read's per-edge window.
  */
 export const plan = (nodes: Node.NodeRegistry, read: Read): Plan => {
-  const limit = rootLimit(read);
+  const limit = Option.getOrUndefined(rootLimit(read));
   const root = Subset.make({
     collection: read.collection,
     where: compileWhere(read.where),

@@ -46,6 +46,7 @@ import { Transport } from "@thomasfosterau/legation";
 import type { Protocol } from "@thomasfosterau/legation/internal";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
+import * as Option from "effect/Option";
 import * as P from "effect/Predicate";
 import * as Queue from "effect/Queue";
 import * as Schedule from "effect/Schedule";
@@ -66,32 +67,35 @@ export interface BrowserConnectivityOptions {
   readonly pollInterval?: Duration.Input | undefined;
 }
 
-/** The global `navigator` when it reports `onLine`, else undefined (SSR, or a runtime without it). */
-const globalNavigator = (): Navigator | undefined =>
+/** The global `navigator` when it reports `onLine`, else `None` (SSR, or a runtime without it). */
+const globalNavigator = (): Option.Option<Navigator> =>
   P.isObjectOrArray(globalThis.navigator) && P.isBoolean(globalThis.navigator.onLine)
-    ? globalThis.navigator
-    : undefined;
+    ? Option.some(globalThis.navigator)
+    : Option.none();
 
 /** Current `navigator.onLine` on the global scope, treating a missing navigator as online. */
-const navigatorOnline = (): boolean => globalNavigator()?.onLine ?? true;
+const navigatorOnline = (): boolean =>
+  Option.match(globalNavigator(), { onNone: () => true, onSome: (navigator) => navigator.onLine });
 
 /**
  * Register a DOM event listener on `target` for the scope's lifetime. No-op
- * when `target` is undefined (e.g. server-side rendering).
+ * when there is no target (e.g. server-side rendering).
  */
 const onEvent = (
-  target: EventTarget | undefined,
+  target: Option.Option<EventTarget>,
   type: string,
   handler: () => void
 ): Effect.Effect<void, never, Scope.Scope> =>
-  target === undefined
-    ? Effect.void
-    : Effect.acquireRelease(
+  Option.match(target, {
+    onNone: () => Effect.void,
+    onSome: (present) =>
+      Effect.acquireRelease(
         Effect.sync(() => {
-          target.addEventListener(type, handler);
+          present.addEventListener(type, handler);
         }),
-        () => Effect.sync(() => target.removeEventListener(type, handler))
-      ).pipe(Effect.asVoid);
+        () => Effect.sync(() => present.removeEventListener(type, handler))
+      ).pipe(Effect.asVoid),
+  });
 
 /** The pessimistic combination of two status signals. */
 const worst = (
@@ -116,9 +120,10 @@ export const withBrowserConnectivity = (
   options: BrowserConnectivityOptions = {}
 ): Effect.Effect<Transport.ClientTransport, never, Scope.Scope> =>
   Effect.gen(function* () {
-    const win: EventTarget | undefined = globalThis.window;
-    const doc: (EventTarget & { readonly visibilityState?: string }) | undefined =
-      globalThis.document;
+    // Absent outside a window context (a service worker, SSR), whatever the DOM typings say.
+    const win: Option.Option<EventTarget> = Option.fromUndefinedOr(globalThis.window);
+    const doc: Option.Option<EventTarget & { readonly visibilityState?: string }> =
+      Option.fromUndefinedOr(globalThis.document);
 
     // Read once, at construction: the initial status and the probe's baseline
     // are the same reading.
@@ -136,10 +141,10 @@ export const withBrowserConnectivity = (
       )
     );
 
-    if (win !== undefined) {
+    if (Option.isSome(win)) {
       yield* onEvent(win, "online", () => Queue.offerUnsafe(statusEvents, "connected"));
       yield* onEvent(win, "offline", () => Queue.offerUnsafe(statusEvents, "disconnected"));
-    } else if (globalNavigator() !== undefined) {
+    } else if (Option.isSome(globalNavigator())) {
       // No window, so no online/offline events: probe the navigator for a flip.
       // The last reading is compared, not the status ref, so a flip is emitted
       // once and an unchanged reading emits nothing.
@@ -158,7 +163,7 @@ export const withBrowserConnectivity = (
       );
     }
     yield* onEvent(doc, "visibilitychange", () => {
-      if (doc?.visibilityState === "visible") {
+      if (Option.exists(doc, (document) => document.visibilityState === "visible")) {
         Queue.offerUnsafe(focusPokes, { reason: "visibilitychange" });
       }
     });
@@ -177,12 +182,12 @@ export const withBrowserConnectivity = (
         transport.statusChanges
       ).pipe(
         Stream.mapAccum(
-          (): Transport.ConnectionStatus | undefined => undefined,
+          (): Option.Option<Transport.ConnectionStatus> => Option.none(),
           (previousNavigator, [navigatorStatus, transportStatus]) => {
             const reconnect =
-              previousNavigator === "disconnected" && navigatorStatus === "connected";
+              Option.contains(previousNavigator, "disconnected") && navigatorStatus === "connected";
             const emitted = reconnect ? "connected" : worst(navigatorStatus, transportStatus);
-            return [navigatorStatus, [emitted]] as const;
+            return [Option.some(navigatorStatus), [emitted]] as const;
           }
         ),
         Stream.changesWith((a, b) => a === b)

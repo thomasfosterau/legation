@@ -7,6 +7,7 @@
  */
 
 import * as Arr from "effect/Array";
+import * as Option from "effect/Option";
 
 /**
  * The lowest mutation id a push carries, per client: the push's floors.
@@ -37,15 +38,16 @@ export const forgetBelow = (
   clients: ReadonlyMap<string, ReadonlyMap<number, string>>,
   floors: ReadonlyMap<string, number>
 ): ReadonlyMap<string, ReadonlyMap<number, string>> => {
-  let kept: Map<string, ReadonlyMap<number, string>> | undefined;
+  let kept = Option.none<Map<string, ReadonlyMap<number, string>>>();
   Arr.forEach(floors, ([clientId, floor]) => {
     const ids = clients.get(clientId);
     if (ids === undefined) return;
     const remaining = new Map([...ids].filter(([mutationId]) => mutationId >= floor));
     if (remaining.size === ids.size) return;
-    kept ??= new Map(clients);
-    if (remaining.size === 0) kept.delete(clientId);
-    else kept.set(clientId, remaining);
+    const copy = Option.getOrElse(kept, () => new Map(clients));
+    kept = Option.some(copy);
+    if (remaining.size === 0) copy.delete(clientId);
+    else copy.set(clientId, remaining);
   });
-  return kept ?? clients;
+  return Option.getOrElse(kept, () => clients);
 };

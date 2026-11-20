@@ -814,7 +814,7 @@ describe("MemoryBackend serialisable isolation across client groups", () => {
     Effect.gen(function* () {
       // Group x reads `hot`, then group y commits to `hot` while x is still
       // running, so every run of x is stale at its commit.
-      let backend: Backend | undefined;
+      let backend = Option.none<Backend>();
       const xRuns = yield* Ref.make(0);
       const yCommits = yield* Ref.make(0);
       const built = yield* MemoryBackend.make({
@@ -826,14 +826,14 @@ describe("MemoryBackend serialisable isolation across client groups", () => {
             }
             yield* Ref.update(xRuns, (n) => n + 1);
             const y = yield* Ref.updateAndGet(yCommits, (n) => n + 1);
-            if (backend === undefined) return yield* Effect.die("backend not built");
-            yield* backend.applyMutations({ clientGroupId: "group-y" }, [
+            if (Option.isNone(backend)) return yield* Effect.die("backend not built");
+            yield* backend.value.applyMutations({ clientGroupId: "group-y" }, [
               hotMutation(`y-client-${y}`),
             ]);
             return yield* writer.put(rows, "out", { run: y });
           }),
       });
-      backend = built;
+      backend = Option.some(built);
 
       // Flipped so the failure is the success value; a success would die here.
       const error = yield* Effect.flip(

@@ -42,6 +42,7 @@ import type * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
 import * as Layer from "effect/Layer";
+import * as Option from "effect/Option";
 import * as Ref from "effect/Ref";
 import * as Scope from "effect/Scope";
 import * as Stream from "effect/Stream";
@@ -250,17 +251,17 @@ const switchingView = (
       pinEdges: (registry, collectionName, subset, edges) =>
         Effect.gen(function* () {
           const scope = yield* Effect.scope;
-          const held = yield* Ref.make<Scope.Closeable | undefined>(undefined);
+          const held = yield* Ref.make(Option.none<Scope.Closeable>());
           yield* Effect.forkIn(
             Stream.runForEach(SubscriptionRef.changes(viewRef), (view) =>
               Effect.gen(function* () {
-                const previous = yield* Ref.getAndSet(held, undefined);
-                if (previous !== undefined) yield* Scope.close(previous, Exit.void);
+                const previous = yield* Ref.getAndSet(held, Option.none());
+                if (Option.isSome(previous)) yield* Scope.close(previous.value, Exit.void);
                 const child = yield* Scope.fork(scope);
                 yield* view
                   .pinEdges(registry, collectionName, subset, edges)
                   .pipe(Scope.provide(child));
-                yield* Ref.set(held, child);
+                yield* Ref.set(held, Option.some(child));
               })
             ).pipe(Effect.ignore),
             scope

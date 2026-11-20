@@ -10,6 +10,7 @@ import { vi } from "vite-plus/test";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
+import * as Option from "effect/Option";
 import * as Ref from "effect/Ref";
 import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
@@ -242,25 +243,27 @@ interface Parked {
 interface ParkingStore {
   readonly store: ClientStoreModule.ClientStore;
   readonly calls: Ref.Ref<number>;
-  readonly gate: Ref.Ref<Parked | undefined>;
+  readonly gate: Ref.Ref<Option.Option<Parked>>;
 }
 
 const parkingStore = Effect.fn("parkingStore")(function* () {
   const memory = yield* ClientStoreModule.makeMemory;
   const calls = yield* Ref.make(0);
-  const gate = yield* Ref.make<Parked | undefined>(undefined);
+  const gate = yield* Ref.make(Option.none<Parked>());
   const store = ClientStore.of({
     ...memory,
     listRows: (collection) =>
       Effect.gen(function* () {
         const call = yield* Ref.updateAndGet(calls, (n) => n + 1);
         const rows = yield* memory.listRows(collection);
-        const parked = yield* Ref.modify(gate, (g) =>
-          g?.at === call ? ([g, undefined] as const) : ([undefined, g] as const)
+        const parked = yield* Ref.modify(
+          gate,
+          (g): readonly [Option.Option<Parked>, Option.Option<Parked>] =>
+            Option.exists(g, (armed) => armed.at === call) ? [g, Option.none()] : [Option.none(), g]
         );
-        if (parked !== undefined) {
-          yield* Deferred.succeed(parked.reached, undefined);
-          yield* Deferred.await(parked.release);
+        if (Option.isSome(parked)) {
+          yield* Deferred.succeed(parked.value.reached, undefined);
+          yield* Deferred.await(parked.value.release);
         }
         return rows;
       }),
@@ -274,7 +277,7 @@ const armPark = (parking: ParkingStore) =>
     const reached = yield* Deferred.make<void>();
     const release = yield* Deferred.make<void>();
     const callsBefore = yield* Ref.get(parking.calls);
-    yield* Ref.set(parking.gate, { at: callsBefore + 1, reached, release });
+    yield* Ref.set(parking.gate, Option.some({ at: callsBefore + 1, reached, release }));
     return { callsBefore, reached, release };
   });
 

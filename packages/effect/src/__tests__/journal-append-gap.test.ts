@@ -13,6 +13,7 @@ import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
 import * as Fiber from "effect/Fiber";
+import * as Option from "effect/Option";
 import * as References from "effect/References";
 import * as Schema from "effect/Schema";
 import { KeyValueStore } from "effect/persistence";
@@ -279,7 +280,7 @@ describe("ClientStore.appendNext", () => {
 
 interface CountersState {
   failCounters: boolean;
-  park: { reached: Deferred.Deferred<void>; gate: Deferred.Deferred<void> } | undefined;
+  park: Option.Option<{ reached: Deferred.Deferred<void>; gate: Deferred.Deferred<void> }>;
 }
 
 /**
@@ -289,7 +290,7 @@ interface CountersState {
  */
 const controlledCounters = () => {
   const data = new Map<string, string>();
-  const state: CountersState = { failCounters: false, park: undefined };
+  const state: CountersState = { failCounters: false, park: Option.none() };
   const kvs = KeyValueStore.makeStringOnly({
     get: (key) => Effect.sync(() => data.get(key)),
     set: (key, value) => {
@@ -300,13 +301,14 @@ const controlledCounters = () => {
           new KeyValueStore.KeyValueStoreError({ message: "injected", method: "set", key })
         );
       }
-      const park = state.park;
-      return park === undefined
-        ? write
-        : Deferred.succeed(park.reached, undefined).pipe(
+      return Option.match(state.park, {
+        onNone: () => write,
+        onSome: (park) =>
+          Deferred.succeed(park.reached, undefined).pipe(
             Effect.andThen(Deferred.await(park.gate)),
             Effect.andThen(write)
-          );
+          ),
+      });
     },
     remove: (key) => Effect.sync(() => void data.delete(key)),
     clear: Effect.sync(() => data.clear()),
@@ -351,7 +353,7 @@ describe("an id that has left the journal is never reissued", () => {
         const { engine, applied } = yield* harness(store);
         const reached = yield* Deferred.make<void>();
         const gate = yield* Deferred.make<void>();
-        state.park = { reached, gate };
+        state.park = Option.some({ reached, gate });
         const fiber = yield* Effect.forkChild(engine.mutate("todo/set", { id: "a" }));
         yield* Deferred.await(reached);
         // The append is uninterruptible: the interrupt is only delivered once
@@ -361,7 +363,7 @@ describe("an id that has left the journal is never reissued", () => {
         yield* Effect.replicateEffect(Effect.yieldNow, 10, { discard: true });
         yield* Deferred.succeed(gate, undefined);
         yield* Fiber.join(interrupting);
-        state.park = undefined;
+        state.park = Option.none();
         yield* engine.push;
         yield* engine.mutate("todo/set", { id: "b" });
         expect(yield* ids(store)).toEqual([2]);

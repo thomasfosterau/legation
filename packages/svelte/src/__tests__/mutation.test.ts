@@ -6,6 +6,7 @@
  */
 import { afterEach, describe, expect, it } from "vite-plus/test";
 import { mount, unmount } from "svelte";
+import * as Option from "effect/Option";
 import type { ClientEngine } from "@thomasfosterau/legation/internal";
 import MutateHarness from "./fixtures/MutateHarness.svelte";
 import QueryHarness from "./fixtures/QueryHarness.svelte";
@@ -21,14 +22,17 @@ afterEach(() => {
 describe("mutate hooks", () => {
   it("useMutation applies the optimistic write; the ack settles after a push", async () => {
     const runtime = makeClientRuntime();
-    let outcome: ClientEngine.MutationOutcome | undefined;
+    let outcome = Option.none<ClientEngine.MutationOutcome>();
     const list = mount(QueryHarness, {
       target: document.body,
       props: { runtime, read: allTodos, groupBy: "authorId" },
     });
     const buttons = mount(MutateHarness, {
       target: document.body,
-      props: { runtime, onOutcome: (value: ClientEngine.MutationOutcome) => (outcome = value) },
+      props: {
+        runtime,
+        onOutcome: (value: ClientEngine.MutationOutcome) => (outcome = Option.some(value)),
+      },
     });
 
     buttonByLabel("add").click();
@@ -37,11 +41,11 @@ describe("mutate hooks", () => {
     buttonByLabel("ack").click();
     // The optimistic write lands (and the ack is registered) before the push.
     await until(() => text().includes("awaited"));
-    expect(outcome).toBeUndefined();
+    expect(Option.isNone(outcome)).toBe(true);
 
     await run(runtime, (engine) => engine.push);
-    await until(() => outcome !== undefined);
-    expect(outcome).toEqual({ _tag: "applied" });
+    await until(() => Option.isSome(outcome));
+    expect(Option.getOrUndefined(outcome)).toEqual({ _tag: "applied" });
 
     await unmount(buttons);
     await unmount(list);
@@ -50,22 +54,25 @@ describe("mutate hooks", () => {
 
   it("a permanent rejection settles the ack and drops the optimistic row on rebase", async () => {
     const runtime = makeClientRuntime();
-    let outcome: ClientEngine.MutationOutcome | undefined;
+    let outcome = Option.none<ClientEngine.MutationOutcome>();
     const list = mount(QueryHarness, {
       target: document.body,
       props: { runtime, read: allTodos, groupBy: "authorId" },
     });
     const buttons = mount(MutateHarness, {
       target: document.body,
-      props: { runtime, onOutcome: (value: ClientEngine.MutationOutcome) => (outcome = value) },
+      props: {
+        runtime,
+        onOutcome: (value: ClientEngine.MutationOutcome) => (outcome = Option.some(value)),
+      },
     });
 
     buttonByLabel("reject").click();
     await until(() => text().includes("doomed"));
 
     await run(runtime, (engine) => engine.push);
-    await until(() => outcome !== undefined);
-    expect(outcome).toEqual({ _tag: "rejected", reason: "not allowed" });
+    await until(() => Option.isSome(outcome));
+    expect(Option.getOrUndefined(outcome)).toEqual({ _tag: "rejected", reason: "not allowed" });
 
     // The rebase that observes the bumped mutation id drops the overlay row.
     await run(runtime, (engine) => engine.pull);

@@ -32,7 +32,7 @@ export interface ClientRuntimeOptions extends Omit<Client.MakeOptions, "store" |
 
 const hydrated = (
   store: Layer.Layer<ClientStore.ClientStore>,
-  snapshot: Hydration.Snapshot | undefined
+  snapshot?: Hydration.Snapshot
 ): Layer.Layer<ClientStore.ClientStore> =>
   snapshot === undefined
     ? store

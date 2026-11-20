@@ -9,6 +9,7 @@ import * as Arr from "effect/Array";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
+import * as Option from "effect/Option";
 import * as R from "effect/Record";
 import * as Ref from "effect/Ref";
 import * as Schema from "effect/Schema";
@@ -37,7 +38,8 @@ interface Mock {
   readonly ledgerOf: (clientGroupId: string, clientId: string) => number;
 }
 
-const tableOf = (text: string): string | undefined => text.match(/FROM "([^"]+)"/)?.[1];
+const tableOf = (text: string): Option.Option<string> =>
+  Option.fromUndefinedOr(text.match(/FROM "([^"]+)"/)?.[1]);
 const isLedger = (text: string): boolean => text.includes(`"sync_mutations"`);
 // The bump after a handler on an executor without transactions: an upsert to
 // the larger of the stored and the new id (SqlBackend's `dialect.greatest`).
@@ -66,7 +68,8 @@ const readSeeded = (
     return fragment.text.split(" UNION ALL ").flatMap((arm) => {
       const subset = Number(arm.match(/^SELECT (\d+) AS "subset"/)?.[1]);
       const projected = [...arm.matchAll(/"__legation_row"\."([^"]+)" AS "(c\d+)"/g)];
-      const rows = tables.get(tableOf(arm.replace(/^.*? FROM /, "FROM ")) ?? "") ?? [];
+      const table = Option.getOrElse(tableOf(arm.replace(/^.*? FROM /, "FROM ")), () => "");
+      const rows = tables.get(table) ?? [];
       return rows.map((row) =>
         R.fromEntries([
           ["subset", subset],
@@ -75,8 +78,10 @@ const readSeeded = (
       );
     });
   }
-  const table = tableOf(fragment.text);
-  return table !== undefined ? (tables.get(table) ?? []) : [];
+  return Option.match(tableOf(fragment.text), {
+    onNone: () => [],
+    onSome: (table) => tables.get(table) ?? [],
+  });
 };
 
 // The params of each ledger statement the fake executor answers, by position.

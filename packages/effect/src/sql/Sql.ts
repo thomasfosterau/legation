@@ -67,6 +67,7 @@
 import type { Predicate } from "../index.js";
 import * as Arr from "effect/Array";
 import * as Match from "effect/Match";
+import * as Option from "effect/Option";
 import * as P from "effect/Predicate";
 
 /** A SQL fragment plus its ordered bind parameters. */
@@ -198,9 +199,13 @@ class Params {
 interface Compilation {
   readonly dialect: Dialect;
   readonly params: Params;
-  readonly kinds: Kinds | undefined;
-  readonly foreignKinds: Readonly<Record<string, Kinds>> | undefined;
+  readonly kinds: Option.Option<Kinds>;
+  readonly foreignKinds: Option.Option<Readonly<Record<string, Kinds>>>;
 }
+
+/** The declared kind of `field` in this compilation, when it has one. */
+const kindOf = (compilation: Compilation, field: string): Option.Option<Predicate.LiteralKind> =>
+  Option.flatMapNullishOr(compilation.kinds, (kinds) => kinds[field]);
 
 /** The JS type check a literal of each kind passes. */
 const hasJsTypeOf: Record<Predicate.LiteralKind, (value: Predicate.Literal) => boolean> = {
@@ -212,13 +217,14 @@ const hasJsTypeOf: Record<Predicate.LiteralKind, (value: Predicate.Literal) => b
 };
 
 /** Whether a literal can bind as the declared kind: `null` always, else by JS type. */
-const conforms = (kind: Predicate.LiteralKind | undefined, value: Predicate.Literal): boolean =>
-  value === null || kind === undefined || hasJsTypeOf[kind](value);
+const conforms = (kind: Option.Option<Predicate.LiteralKind>, value: Predicate.Literal): boolean =>
+  value === null ||
+  Option.match(kind, { onNone: () => true, onSome: (declared) => hasJsTypeOf[declared](value) });
 
 /** The column operand: quoted, with the collation clause when declared `text`. */
 const operand = (compilation: Compilation, field: string): string => {
   const column = compilation.dialect.quote(field);
-  return compilation.kinds?.[field] === "text"
+  return Option.contains(kindOf(compilation, field), "text")
     ? `${column} COLLATE ${compilation.dialect.textCollation}`
     : column;
 };
@@ -229,8 +235,8 @@ const operand = (compilation: Compilation, field: string): string => {
  * `NULL` (unknown, rule (d)).
  */
 const bindLiteral = (compilation: Compilation, field: string, value: Predicate.Literal): string => {
-  const { params, dialect, kinds } = compilation;
-  if (!conforms(kinds?.[field], value)) return params.bind(null);
+  const { params, dialect } = compilation;
+  if (!conforms(kindOf(compilation, field), value)) return params.bind(null);
   return params.bind(P.isBoolean(value) ? dialect.boolean(value) : value);
 };
 
@@ -246,7 +252,7 @@ const bindableList = (
   field: string,
   values: ReadonlyArray<Predicate.Literal>
 ): ReadonlyArray<Predicate.Literal> => {
-  const kind = compilation.kinds?.[field];
+  const kind = kindOf(compilation, field);
   const kept = values.filter((value) => conforms(kind, value));
   return Arr.isReadonlyArrayEmpty(kept) ? [null] : kept;
 };
@@ -271,7 +277,10 @@ const compileList = (node: ListNode, compilation: Compilation): string => {
 const compileExists = (node: ExistsNode, compilation: Compilation): string => {
   // The inner `where` names the foreign collection's fields: its kinds come
   // from `foreignKinds`, never from the outer collection's `kinds`.
-  const kinds = compilation.foreignKinds?.[node.collection];
+  const kinds = Option.flatMapNullishOr(
+    compilation.foreignKinds,
+    (foreign) => foreign[node.collection]
+  );
   const inner = compileNode(node.where, { ...compilation, kinds });
   const { quote } = compilation.dialect;
   return `${quote(node.localField)} IN (SELECT ${quote(node.foreignField)} FROM ${quote(node.collection)} WHERE ${inner})`;
@@ -325,8 +334,8 @@ export const compileWhere = (
   const text = compileNode(predicate, {
     dialect,
     params,
-    kinds: options.kinds,
-    foreignKinds: options.foreignKinds,
+    kinds: Option.fromUndefinedOr(options.kinds),
+    foreignKinds: Option.fromUndefinedOr(options.foreignKinds),
   });
   return { text, params: params.values };
 };

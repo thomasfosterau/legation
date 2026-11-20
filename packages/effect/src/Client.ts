@@ -476,14 +476,14 @@ interface Interest extends Coverage.Subscription {
 /** What a subscribe or unsubscribe resolved its input to. */
 interface Target {
   readonly registration: Coverage.Registration;
-  readonly url: string | undefined;
+  readonly url: Option.Option<string>;
 }
 
 type Kind = "observer" | "explicit";
 
 /** One more unit of `kind` on a count that tracks `tracked`. */
-const oneMore = (count: number | undefined, kind: Kind, tracked: Kind): number =>
-  (count ?? 0) + (kind === tracked ? 1 : 0);
+const oneMore = (count: number, kind: Kind, tracked: Kind): number =>
+  count + (kind === tracked ? 1 : 0);
 
 /** One unit of `kind` fewer on a count that tracks `tracked`, never below zero. */
 const oneFewer = (count: number, kind: Kind, tracked: Kind): number =>
@@ -649,23 +649,23 @@ export const fromView = <Graph extends Node.NodeRegistry>(
   const acquire = (
     registration: Coverage.Registration,
     kind: Kind,
-    url?: string
+    url: Option.Option<string> = Option.none()
   ): Effect.Effect<void> => Semaphore.withPermit(lock, acquireUnlocked(registration, kind, url));
 
   const acquireUnlocked = (
     registration: Coverage.Registration,
     kind: Kind,
-    url: string | undefined
+    url: Option.Option<string>
   ): Effect.Effect<void> =>
     Ref.modify(ledger, (map) => {
       const key = keyOf(registration);
       const current = map.get(key);
-      const known = url ?? current?.url;
+      const known = Option.getOrElse(url, () => current?.url);
       const next = new Map(map).set(key, {
         root: registration.root,
         edges: registration.edges,
-        observers: oneMore(current?.observers, kind, "observer"),
-        pins: oneMore(current?.pins, kind, "explicit"),
+        observers: oneMore(current?.observers ?? 0, kind, "observer"),
+        pins: oneMore(current?.pins ?? 0, kind, "explicit"),
         ...Defined.fields({ url: known }),
       });
       return [current === undefined ? key : undefined, next] as const;
@@ -751,7 +751,10 @@ export const fromView = <Graph extends Node.NodeRegistry>(
       : Effect.gen(function* () {
           const read = yield* urls.parse(url);
           const plan = yield* Query.tryPlan(nodes, read);
-          return { registration: Coverage.ofPlan(plan), url: yield* urls.canonical(read) };
+          return {
+            registration: Coverage.ofPlan(plan),
+            url: Option.some(yield* urls.canonical(read)),
+          };
         });
 
   // A read given by value keeps its URL identity when it has one; a read
@@ -760,9 +763,7 @@ export const fromView = <Graph extends Node.NodeRegistry>(
     Effect.gen(function* () {
       const plan = yield* Query.tryPlan(nodes, read);
       const url =
-        urls === undefined
-          ? undefined
-          : Option.getOrUndefined(yield* Effect.option(urls.canonical(read)));
+        urls === undefined ? Option.none<string>() : yield* Effect.option(urls.canonical(read));
       return { registration: Coverage.ofPlan(plan), url };
     });
 

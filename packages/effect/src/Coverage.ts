@@ -261,8 +261,14 @@ const sameOrder = (
   );
 
 /** An unlimited subscription holds every row after its cursor; a limited one a prefix. */
-const limitPrefix = (subscribed: number | undefined, requested: number | undefined): boolean =>
-  subscribed === undefined || (requested !== undefined && requested <= subscribed);
+const limitPrefix = (
+  subscribed: Option.Option<number>,
+  requested: Option.Option<number>
+): boolean =>
+  Option.match(subscribed, {
+    onNone: () => true,
+    onSome: (bound) => Option.exists(requested, (limit) => limit <= bound),
+  });
 
 /**
  * Rule 2: an unwindowed subscription covers any window; a windowed one
@@ -273,7 +279,7 @@ export const coversWindow = (subscribed: Subset.Subset, requested: Subset.Subset
   !isWindowed(subscribed) ||
   (requested.cursor === subscribed.cursor &&
     sameOrder(subscribed.orderBy, requested.orderBy) &&
-    limitPrefix(subscribed.limit, requested.limit));
+    limitPrefix(Option.fromUndefinedOr(subscribed.limit), Option.fromUndefinedOr(requested.limit)));
 
 /** Rule 3 as it depends on rule 2, over a request canonicalised once. */
 const coversKeys = (subscribed: Subset.Subset, requested: RequestedKeys): boolean =>
@@ -299,7 +305,8 @@ export const covers = (subscribed: Subset.Subset, requested: Subset.Subset): boo
 
 /** One requested edge select against one held select: same edge, window a prefix. */
 const coversEdge = (subscribed: Related.EdgeSelect, requested: Related.EdgeSelect): boolean =>
-  subscribed.name === requested.name && limitPrefix(subscribed.first, requested.first);
+  subscribed.name === requested.name &&
+  limitPrefix(Option.fromUndefinedOr(subscribed.first), Option.fromUndefinedOr(requested.first));
 
 /**
  * Rule 4: every requested edge is among the subscription's edge selects,
@@ -392,12 +399,14 @@ export const windowKey = (window: Subset.Subset): string =>
 /** The field and the values an unwindowed window pins: `field IN (...)` or `field = value`. */
 const pinnedOf = (
   where: Predicate.Predicate
-): { readonly field: string; readonly values: ReadonlyArray<string> } | undefined => {
-  if (P.isTagged(where, "In")) return { field: where.field, values: where.values.map(literalKey) };
-  if (P.isTagged(where, "Compare") && where.op === "eq") {
-    return { field: where.field, values: [literalKey(where.value)] };
+): Option.Option<{ readonly field: string; readonly values: ReadonlyArray<string> }> => {
+  if (P.isTagged(where, "In")) {
+    return Option.some({ field: where.field, values: where.values.map(literalKey) });
   }
-  return undefined;
+  if (P.isTagged(where, "Compare") && where.op === "eq") {
+    return Option.some({ field: where.field, values: [literalKey(where.value)] });
+  }
+  return Option.none();
 };
 
 /** Whether a window is held and pulled exactly (its identity), with no covering: the root's check. */
@@ -424,15 +433,16 @@ const windowPulled = (held: ReadonlyArray<PulledWindow>, window: Subset.Subset):
     return true;
   }
   if (isWindowed(window)) return false;
-  const wanted = pinnedOf(window.where);
-  if (wanted === undefined) return false;
+  const pinnedWanted = pinnedOf(window.where);
+  if (Option.isNone(pinnedWanted)) return false;
+  const wanted = pinnedWanted.value;
   const have = new Set<string>();
   Arr.forEach(held, (entry) => {
     if (!entry.pulled || isWindowed(entry.subset)) return;
     if (entry.subset.collection !== window.collection) return;
-    const pinned = pinnedOf(entry.subset.where);
-    if (pinned === undefined || pinned.field !== wanted.field) return;
-    Arr.forEach(pinned.values, (value) => {
+    const pinnedEntry = pinnedOf(entry.subset.where);
+    if (Option.isNone(pinnedEntry) || pinnedEntry.value.field !== wanted.field) return;
+    Arr.forEach(pinnedEntry.value.values, (value) => {
       have.add(value);
     });
   });

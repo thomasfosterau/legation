@@ -15,6 +15,7 @@ import { describe, expect, it } from "@effect/vitest";
 import * as Context from "effect/Context";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
+import * as Option from "effect/Option";
 import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
 import * as Ref from "effect/Ref";
@@ -23,7 +24,6 @@ import { SqliteClient } from "@effect/sql-sqlite-node";
 import { SqlClient } from "effect/sql/SqlClient";
 import { Backend, BackendError, MutationRejected, Mutator } from "@thomasfosterau/legation";
 import * as SqlBackend from "../../sql/SqlBackend.js";
-import { defined } from "../defined.js";
 
 const CLIENT_GROUP = "g";
 const CLIENT = "c1";
@@ -325,7 +325,7 @@ describe("SqlBackend ledger on SQLite", () => {
         // Mutation 2's handler, mid-run, lets an overlapping call apply a copy of
         // 2 and then 3 on the same connection. The outer call's bump of 2 then
         // lands after 3's, and the watermark must stay at 3 (MAX on SQLite).
-        let backend: Backend.Backend | undefined;
+        let backend = Option.none<Backend.Backend>();
         const nested = yield* Ref.make(false);
         const outer = yield* Effect.sync(() =>
           backendWith(
@@ -335,7 +335,8 @@ describe("SqlBackend ledger on SQLite", () => {
                 const args = asArgs(raw);
                 return Effect.gen(function* () {
                   if (args.id === "2" && !(yield* Ref.getAndSet(nested, true))) {
-                    yield* defined(backend).applyMutations(context, [mutation(2), mutation(3)]);
+                    if (Option.isNone(backend)) return yield* Effect.die("backend not built");
+                    yield* backend.value.applyMutations(context, [mutation(2), mutation(3)]);
                   }
                   return yield* applyWrite(tx, args);
                 });
@@ -344,7 +345,7 @@ describe("SqlBackend ledger on SQLite", () => {
             false
           )
         );
-        backend = outer;
+        backend = Option.some(outer);
 
         const result = yield* outer.applyMutations(context, [mutation(1), mutation(2)]);
         expect(result.lastMutationIds).toEqual({ [CLIENT]: 3 });

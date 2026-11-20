@@ -153,7 +153,7 @@ const listenOn = (
   });
 
 /** Await a held `waitUntil` promise, as its outcome or its rejection. */
-const settle = (promise: Promise<unknown> | undefined) =>
+const settle = (promise?: Promise<unknown>) =>
   awaitPromise(() =>
     (promise ?? Promise.reject(new TestFailure({ message: "nothing was held" }))).then(
       (value) => ({ ok: true as const, value }),

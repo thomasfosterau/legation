@@ -101,13 +101,13 @@ const planCompaction = <T extends Numbered>(
   clientId: string,
   mutationIds: ReadonlyArray<number>,
   sentUpTo: number
-): CompactionPlan<T> | undefined => {
+): Option.Option<CompactionPlan<T>> => {
   const wanted = new Set(mutationIds);
   const mine = journal.filter((m) => m.clientId === clientId);
   const dropped = mine
     .filter((m) => m.mutationId > sentUpTo && wanted.has(m.mutationId))
     .map((m) => m.mutationId);
-  if (Arr.isReadonlyArrayEmpty(dropped)) return undefined;
+  if (Arr.isReadonlyArrayEmpty(dropped)) return Option.none();
   const droppedSet = new Set(dropped);
   const frozen = mine.filter((m) => m.mutationId <= sentUpTo);
   const anchor = Arr.isReadonlyArrayNonEmpty(frozen)
@@ -130,7 +130,7 @@ const planCompaction = <T extends Numbered>(
     renumbered.push({ from: m.mutationId, to: next });
     after.push({ ...m, mutationId: next });
   }
-  return { result: { dropped, renumbered }, journal: after, counter: next };
+  return Option.some({ result: { dropped, renumbered }, journal: after, counter: next });
 };
 
 /**
@@ -480,8 +480,10 @@ const coveredBy = (
   lastMutationIds: Readonly<Record<string, number>>,
   entry: { readonly clientId: string; readonly mutationId: number }
 ): boolean => {
-  const upTo: number | undefined = lastMutationIds[entry.clientId];
-  return upTo !== undefined && entry.mutationId <= upTo;
+  return Option.exists(
+    Option.fromUndefinedOr(lastMutationIds[entry.clientId]),
+    (upTo) => entry.mutationId <= upTo
+  );
 };
 
 /** The highest of `floor` and the mutation ids `entries` hold for `clientId`. */
@@ -551,14 +553,14 @@ export const makeMemory: Effect.Effect<ClientStore> = Effect.gen(function* () {
   const journal = yield* Ref.make<ReadonlyArray<Mutation>>([]);
   const counters = yield* Ref.make(new Map<string, number>());
   const sentUpTo = yield* Ref.make(new Map<string, number>());
-  const cookie = yield* Ref.make<string | undefined>(undefined);
-  const identity = yield* Ref.make<Identity.Fingerprint | undefined>(undefined);
+  const cookie = yield* Ref.make(Option.none<string>());
+  const identity = yield* Ref.make(Option.none<Identity.Fingerprint>());
   const quarantine = yield* Ref.make(new Map<Identity.Fingerprint, ReadonlyArray<Mutation>>());
   // The acknowledged-but-unpulled tail, oldest first.
   const tail = yield* Ref.make<ReadonlyArray<Mutation>>([]);
   // The release in progress, if any. A memory store does not outlive the process, so the
   // record only serves a roll-forward in this process.
-  const outstanding = yield* Ref.make<PullRelease | undefined>(undefined);
+  const outstanding = yield* Ref.make(Option.none<PullRelease>());
   // The journal, the quarantine and the counters are separate Refs, and several
   // operations read one and then write it back. Every operation that WRITES
   // any of the three therefore holds this permit for its whole body:
@@ -614,15 +616,16 @@ export const makeMemory: Effect.Effect<ClientStore> = Effect.gen(function* () {
   // parked entry is dropped, so the entry is neither replayed twice nor pushed again. Runs under
   // the lock, and is a no-op on the journal when the tail holds no parked copy.
   const finishInner = Effect.fnUntraced(function* () {
-    const pending = yield* Ref.get(outstanding);
-    if (pending !== undefined) {
+    const outstandingRelease = yield* Ref.get(outstanding);
+    if (Option.isSome(outstandingRelease)) {
+      const pending = outstandingRelease.value;
       yield* Ref.update(rows, (map) => applyOpsTo(map, pending.patch));
-      if (pending.cookie !== undefined) yield* Ref.set(cookie, pending.cookie);
+      if (pending.cookie !== undefined) yield* Ref.set(cookie, Option.some(pending.cookie));
       const covered = (m: Mutation) => coveredBy(pending.lastMutationIds, m);
       yield* raiseCountersTo((yield* Ref.get(journal)).filter(covered));
       yield* Ref.update(journal, (entries) => entries.filter((m) => !covered(m)));
       yield* Ref.update(tail, (held) => held.filter((m) => !covered(m)));
-      yield* Ref.set(outstanding, undefined);
+      yield* Ref.set(outstanding, Option.none());
     }
     const parked = new Set((yield* Ref.get(tail)).map(entryKey));
     if (parked.size === 0) return;
@@ -639,7 +642,7 @@ export const makeMemory: Effect.Effect<ClientStore> = Effect.gen(function* () {
   // writes them together. Nothing is recorded, so the memory store cannot be left mid-release. The
   // writes run uninterruptible, so an interrupt cannot land between them.
   const finishOutstanding = Effect.fnUntraced(function* () {
-    if ((yield* Ref.get(outstanding)) !== undefined) yield* finishInner();
+    if (Option.isSome(yield* Ref.get(outstanding))) yield* finishInner();
   });
 
   const commitPull = (release: PullRelease) =>
@@ -658,7 +661,7 @@ export const makeMemory: Effect.Effect<ClientStore> = Effect.gen(function* () {
             (m) => !coveredBy(release.lastMutationIds, m)
           );
           yield* Ref.set(rows, nextRows);
-          if (release.cookie !== undefined) yield* Ref.set(cookie, release.cookie);
+          if (release.cookie !== undefined) yield* Ref.set(cookie, Option.some(release.cookie));
           yield* Ref.set(counters, nextCounters);
           yield* Ref.set(journal, nextJournal);
           yield* Ref.set(tail, nextTail);
@@ -791,15 +794,18 @@ export const makeMemory: Effect.Effect<ClientStore> = Effect.gen(function* () {
             // append cannot slip between the read and the write.
             const plan = yield* Ref.modify(journal, (entries) => {
               const planned = planCompaction(entries, clientId, mutationIds, watermark);
-              return planned === undefined ? [undefined, entries] : [planned, planned.journal];
+              return [
+                planned,
+                Option.match(planned, { onNone: () => entries, onSome: (p) => p.journal }),
+              ] as const;
             });
-            if (plan === undefined) return NO_COMPACTION;
+            if (Option.isNone(plan)) return NO_COMPACTION;
             // A yield point between the two writes: harmless here, and what lets
             // a test (and a real preemption) interrupt exactly in the window the
             // uninterruptible wrapper exists to close.
             yield* Effect.yieldNow;
-            yield* Ref.update(counters, (m) => new Map(m).set(clientId, plan.counter));
-            return plan.result;
+            yield* Ref.update(counters, (m) => new Map(m).set(clientId, plan.value.counter));
+            return plan.value.result;
           })
         )
       ),
@@ -845,19 +851,21 @@ export const makeMemory: Effect.Effect<ClientStore> = Effect.gen(function* () {
     beginRelease: (release) =>
       locked(
         Ref.get(outstanding).pipe(
-          Effect.flatMap((pending) => (pending === undefined ? Effect.void : finishInner())),
-          Effect.andThen(Ref.set(outstanding, release))
+          Effect.flatMap((pending) => (Option.isNone(pending) ? Effect.void : finishInner())),
+          Effect.andThen(Ref.set(outstanding, Option.some(release)))
         )
       ),
     releaseUnpulled: (lastMutationIds) =>
       locked(
         Ref.update(tail, (held) => held.filter((m) => !coveredBy(lastMutationIds, m))).pipe(
-          Effect.andThen(Ref.set(outstanding, undefined))
+          Effect.andThen(Ref.set(outstanding, Option.none()))
         )
       ),
     finishRelease: locked(finishInner()),
     // Drops the release record with the tail, as the key-value store removes its record.
-    clearUnpulled: locked(Ref.set(tail, []).pipe(Effect.andThen(Ref.set(outstanding, undefined)))),
+    clearUnpulled: locked(
+      Ref.set(tail, []).pipe(Effect.andThen(Ref.set(outstanding, Option.none())))
+    ),
 
     // One read under the lock: every writer of the snapshot's state below takes the same lock, so the four reads see one state.
     snapshot: locked(
@@ -868,7 +876,7 @@ export const makeMemory: Effect.Effect<ClientStore> = Effect.gen(function* () {
         );
         return {
           rows: flat,
-          cookie: yield* Ref.get(cookie),
+          cookie: Option.getOrUndefined(yield* Ref.get(cookie)),
           journal: yield* Ref.get(journal),
           unpulled: yield* Ref.get(tail),
           counters: R.fromEntries(yield* Ref.get(counters)),
@@ -876,13 +884,13 @@ export const makeMemory: Effect.Effect<ClientStore> = Effect.gen(function* () {
       })
     ),
 
-    getCookie: Ref.get(cookie),
+    getCookie: Ref.get(cookie).pipe(Effect.map(Option.getOrUndefined)),
     // Locked so every writer of the snapshot's state takes the lock and the snapshot rule holds without case analysis.
-    setCookie: (value) => locked(Ref.set(cookie, value)),
-    clearCookie: locked(Ref.set(cookie, undefined)),
+    setCookie: (value) => locked(Ref.set(cookie, Option.some(value))),
+    clearCookie: locked(Ref.set(cookie, Option.none())),
 
-    getIdentity: Ref.get(identity),
-    setIdentity: (fingerprint) => Ref.set(identity, fingerprint),
+    getIdentity: Ref.get(identity).pipe(Effect.map(Option.getOrUndefined)),
+    setIdentity: (fingerprint) => Ref.set(identity, Option.some(fingerprint)),
 
     quarantinePending: (fingerprint) =>
       locked(
@@ -1210,12 +1218,14 @@ const highestIds = (ids: ReadonlyArray<JournalIndexEntry>) => {
 const raisedCounters = (
   counters: Readonly<Record<string, number>>,
   highest: Readonly<Record<string, number>>
-): Record<string, number> | undefined => {
+): Option.Option<Record<string, number>> => {
   const rising = Arr.filter(
     R.toEntries(highest),
     ([clientId, id]) => (counters[clientId] ?? 0) < id
   );
-  return Arr.isReadonlyArrayEmpty(rising) ? undefined : { ...counters, ...R.fromEntries(rising) };
+  return Arr.isReadonlyArrayEmpty(rising)
+    ? Option.none()
+    : Option.some({ ...counters, ...R.fromEntries(rising) });
 };
 
 /** A batch of row ops grouped by collection: `null` marks a deletion. */
@@ -1387,7 +1397,7 @@ export const makeKeyValue = (
     // Set when an outstanding release could not be finished in this process. Every member checks it:
     //the writers inside the permit, so a call queued behind the failing finish is refused
     // rather than run over the outstanding record; the readers before they read.
-    const sealedBy = yield* Ref.make<StoreError | undefined>(undefined);
+    const sealedBy = yield* Ref.make(Option.none<StoreError>());
     // Set whenever a release record or a parked journal copy may exist. While it is clear the
     // in-process finish has nothing to do, so a row write reads neither. Set before a write
     // that may land despite reporting failure; cleared only by a finish that completes.
@@ -1395,7 +1405,7 @@ export const makeKeyValue = (
     const unsealed = <A, E>(effect: Effect.Effect<A, E>): Effect.Effect<A, E | StoreError> =>
       Effect.gen(function* () {
         const cause = yield* Ref.get(sealedBy);
-        if (cause !== undefined) return yield* sealedByRelease(cause);
+        if (Option.isSome(cause)) return yield* sealedByRelease(cause.value);
         return yield* effect;
       });
     const locked = <A, E>(effect: Effect.Effect<A, E>) =>
@@ -1449,7 +1459,7 @@ export const makeKeyValue = (
         if (R.isEmptyReadonlyRecord(highest)) return;
         const counters = (yield* readDecoded("counters", CountersFromJson)) ?? {};
         const raised = raisedCounters(counters, highest);
-        if (raised !== undefined) yield* writeJson("counters", raised);
+        if (Option.isSome(raised)) yield* writeJson("counters", raised.value);
       });
 
     // ─── Compaction (unlocked inner forms) ───────────────────────────
@@ -1910,19 +1920,19 @@ export const makeKeyValue = (
       yield* trimParkedCopies();
     });
     const tailFailure = yield* locked(settleTailInner()).pipe(
-      Effect.as<StoreError | undefined>(undefined),
-      Effect.catchTag("StoreError", (error) => Effect.succeed<StoreError | undefined>(error))
+      Effect.as(Option.none<StoreError>()),
+      Effect.catchTag("StoreError", (error) => Effect.succeedSome(error))
     );
-    if (tailFailure !== undefined) return sealed(tailFailure);
+    if (Option.isSome(tailFailure)) return sealed(tailFailure.value);
     yield* Ref.set(finishPending, false);
     // The finish of a record already read: the roll-forward, then the parked copies. Any failure seals
     // the store, since the writes may be part-way.
-    const finishRead = (release: PullRelease | undefined): Effect.Effect<void, StoreError> =>
+    const finishRead = (release: Option.Option<PullRelease>): Effect.Effect<void, StoreError> =>
       Effect.gen(function* () {
         yield* Effect.gen(function* () {
-          if (release !== undefined) yield* rollForward(release);
+          if (Option.isSome(release)) yield* rollForward(release.value);
           yield* trimParkedCopies();
-        }).pipe(Effect.tapError((error) => Ref.set(sealedBy, error)));
+        }).pipe(Effect.tapError((error) => Ref.set(sealedBy, Option.some(error))));
         yield* Ref.set(finishPending, false);
       });
     // The in-process finish, run by every row write and clear, and by `finishRelease`. It is a no-op
@@ -1932,7 +1942,9 @@ export const makeKeyValue = (
     // and no later write may run over it. The open then finishes it from the same record.
     const finishOrSeal = Effect.fnUntraced(function* () {
       if (!(yield* Ref.get(finishPending))) return;
-      yield* finishRead(yield* readDecoded(RELEASE_KEY, ReleaseIntentFromJson));
+      yield* finishRead(
+        Option.fromUndefinedOr(yield* readDecoded(RELEASE_KEY, ReleaseIntentFromJson))
+      );
     });
 
     // Local store-version buster: a mismatch clears confirmed rows + the
@@ -2001,10 +2013,10 @@ export const makeKeyValue = (
     // is sealed instead (see {@link sealed}) — nothing served, nothing pushed,
     // nothing destroyed, and the next open retries.
     const boundaryFailure = yield* openIdentity().pipe(
-      Effect.as<StoreError | undefined>(undefined),
-      Effect.catchTag("StoreError", (error) => Effect.succeed<StoreError | undefined>(error))
+      Effect.as(Option.none<StoreError>()),
+      Effect.catchTag("StoreError", (error) => Effect.succeedSome(error))
     );
-    if (boundaryFailure !== undefined) return sealed(boundaryFailure);
+    if (Option.isSome(boundaryFailure)) return sealed(boundaryFailure.value);
 
     // ─── Atomic batches (unlocked staged forms) ──────────────────────
     //
@@ -2063,7 +2075,7 @@ export const makeKeyValue = (
         if (R.isEmptyReadonlyRecord(highest)) return;
         const counters = (yield* b.read("counters", CountersFromJson)) ?? {};
         const raised = raisedCounters(counters, highest);
-        if (raised !== undefined) b.putJson("counters", raised);
+        if (Option.isSome(raised)) b.putJson("counters", raised.value);
       });
 
     // `trimJournal`, staged: the same index rewrite, bodies removed before it, and the ids reserved.
@@ -2371,8 +2383,9 @@ export const makeKeyValue = (
               if (index === undefined) return NO_COMPACTION;
               const watermark = (yield* sentMarks)[clientId] ?? 0;
               // Plan over the index alone; read only the bodies that move.
-              const plan = planCompaction(index, clientId, mutationIds, watermark);
-              if (plan === undefined) return NO_COMPACTION;
+              const planned = planCompaction(index, clientId, mutationIds, watermark);
+              if (Option.isNone(planned)) return NO_COMPACTION;
+              const plan = planned.value;
               const moved = yield* Effect.forEach(
                 plan.result.renumbered,
                 ({ from, to }): Effect.Effect<Mutation, StoreError> =>
@@ -2469,7 +2482,7 @@ export const makeKeyValue = (
             yield* settleCompaction;
             const counters = (yield* readDecoded("counters", CountersFromJson)) ?? {};
             const raised = raisedCounters(counters, raise);
-            if (raised !== undefined) yield* writeJson("counters", raised);
+            if (Option.isSome(raised)) yield* writeJson("counters", raised.value);
           })
         ),
 
@@ -2483,7 +2496,7 @@ export const makeKeyValue = (
           Ref.set(finishPending, true).pipe(
             Effect.andThen(readDecoded(RELEASE_KEY, ReleaseIntentFromJson)),
             Effect.flatMap((pending) =>
-              pending === undefined ? Effect.void : finishRead(pending)
+              pending === undefined ? Effect.void : finishRead(Option.some(pending))
             ),
             // The finish clears the flag, and the record written below must set it again.
             Effect.andThen(Ref.set(finishPending, true)),

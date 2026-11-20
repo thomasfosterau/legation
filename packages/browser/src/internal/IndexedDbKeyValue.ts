@@ -337,7 +337,7 @@ const commitOps = (
  * the module note above). Keys are the full keys the store holds.
  */
 export const keyValueLayer = (
-  database: string | undefined
+  database?: string
 ): Layer.Layer<KeyValueStore.KeyValueStore, never, IndexedDb.IndexedDb> =>
   Layer.effect(KeyValueStore.KeyValueStore)(
     Effect.gen(function* () {
@@ -379,7 +379,7 @@ const readEntries = (
  * no knowledge of the prefix.
  */
 export const atomicKeyValueLayer = (
-  database: string | undefined
+  database?: string
 ): Layer.Layer<AtomicKeyValue.AtomicKeyValue, never, IndexedDb.IndexedDb> =>
   Layer.effect(AtomicKeyValue.AtomicKeyValue)(
     Effect.gen(function* () {

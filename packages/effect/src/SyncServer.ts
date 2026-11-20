@@ -401,10 +401,10 @@ const someValueMatches = (
 const someDeleteHeld = (
   hint: ChangeHint,
   putIds: ReadonlySet<string>,
-  groupCvr: Cvr.Cvr | undefined
+  groupCvr: Option.Option<Cvr.Cvr>
 ): boolean => {
-  const held = groupCvr?.rows.get(hint.collection);
-  return held !== undefined && hint.ids.some((id) => !putIds.has(id) && held.has(id));
+  const held = Option.flatMapNullishOr(groupCvr, (cvr) => cvr.rows.get(hint.collection));
+  return Option.exists(held, (ids) => hint.ids.some((id) => !putIds.has(id) && ids.has(id)));
 };
 
 /**
@@ -416,7 +416,7 @@ const someDeleteHeld = (
 const hintAffects = (
   hint: ChangeHint,
   subsets: ReadonlyArray<Subset>,
-  groupCvr: Cvr.Cvr | undefined
+  groupCvr: Option.Option<Cvr.Cvr>
 ): boolean => {
   if (subsets.some((s) => Predicate.hasExists(s.where))) return true;
   if (hint.values === undefined) return true;
@@ -431,7 +431,7 @@ const hintAffects = (
 const predicateMatch = (
   hints: ReadonlyArray<ChangeHint>,
   subsets: ReadonlyArray<Subset>,
-  groupCvr: Cvr.Cvr | undefined
+  groupCvr: Option.Option<Cvr.Cvr>
 ): boolean =>
   hints.some((hint) => {
     const onCollection = subsets.filter((s) => s.collection === hint.collection);
@@ -492,9 +492,7 @@ export const makeWithIntrospectionWith = (
     const cookieNamespace = options?.cookieNamespace ?? "";
     // Reject an unsupported schema version up front, before any mutation is
     // applied or patch computed, so the journal is never poisoned.
-    const checkVersion = (
-      version: string | undefined
-    ): Effect.Effect<void, VersionNotSupportedError> =>
+    const checkVersion = (version?: string): Effect.Effect<void, VersionNotSupportedError> =>
       acceptSchemaVersion(version)
         ? Effect.void
         : Effect.fail(
@@ -694,7 +692,13 @@ export const makeWithIntrospectionWith = (
                       return;
                     }
                     if (!collectionMatch(touched, subsets)) return;
-                    if (predicateMatch(hints, subsets, cvrs.get(clientGroupId))) {
+                    if (
+                      predicateMatch(
+                        hints,
+                        subsets,
+                        Option.fromUndefinedOr(cvrs.get(clientGroupId))
+                      )
+                    ) {
                       yield* pokeHub.publish(clientGroupId, { reason: undefined });
                       yield* Metric.update(Telemetry.pokesTotal, 1);
                     } else {
@@ -827,13 +831,13 @@ export const makeWithIntrospectionWith = (
     // computed under another scope, so no patch is computed against it, and a
     // narrowed scope can never leave a row behind on the client.
     const resolvePrevious = (
-      cookie: string | undefined,
+      cookie: Option.Option<string>,
       epoch: string
-    ): Effect.Effect<Cvr.Cvr | undefined, StoreError> => {
-      if (cookie === undefined) return Effect.undefined;
-      if (cookieNamespaceOf(cookie) !== cookieNamespace) return Effect.undefined;
-      if (cookieEpochOf(cookie) !== epoch) return Effect.undefined;
-      return cvrStore.get(cookie);
+    ): Effect.Effect<Option.Option<Cvr.Cvr>, StoreError> => {
+      if (Option.isNone(cookie)) return Effect.succeedNone;
+      if (cookieNamespaceOf(cookie.value) !== cookieNamespace) return Effect.succeedNone;
+      if (cookieEpochOf(cookie.value) !== epoch) return Effect.succeedNone;
+      return cvrStore.get(cookie.value).pipe(Effect.map(Option.fromUndefinedOr));
     };
 
     // How many passes a pull makes over its view before it stops retrying a
@@ -849,18 +853,21 @@ export const makeWithIntrospectionWith = (
       backend: Backend,
       context: SyncContext,
       authorized: ReadonlyArray<Subset>,
-      cookie: string | undefined,
+      cookie: Option.Option<string>,
       epoch: string
     ) =>
       Effect.gen(function* () {
         const before = yield* backend.lastMutationIds(context);
         const { view: next, totals } = yield* evaluateView(backend, context, authorized);
         const previous = yield* resolvePrevious(cookie, epoch);
-        const isReset = cookie !== undefined && previous === undefined;
+        const isReset = Option.isSome(cookie) && Option.isNone(previous);
         const patch = yield* assemblePatch(
           backend,
           context,
-          Cvr.diff(previous ?? Cvr.empty, next),
+          Cvr.diff(
+            Option.getOrElse(previous, () => Cvr.empty),
+            next
+          ),
           isReset
         );
         const after = yield* backend.lastMutationIds(context);
@@ -896,7 +903,7 @@ export const makeWithIntrospectionWith = (
       backend: Backend,
       context: SyncContext,
       authorized: ReadonlyArray<Subset>,
-      cookie: string | undefined,
+      cookie: Option.Option<string>,
       epoch: string
     ) =>
       Effect.gen(function* () {
@@ -960,7 +967,7 @@ export const makeWithIntrospectionWith = (
               backend,
               context,
               authorized,
-              checked.cookie,
+              Option.fromUndefinedOr(checked.cookie),
               epoch
             );
 

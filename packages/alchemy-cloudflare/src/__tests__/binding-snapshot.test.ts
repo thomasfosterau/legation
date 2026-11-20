@@ -104,10 +104,11 @@ const makeNamespace = (
   });
 
 /** The session cookie the API Worker resolves a room from. */
-const sessionOf = (cookie: string | undefined): string | undefined => {
-  const match = cookie === undefined ? null : /(?:^|;\s*)session=([^;]+)/.exec(cookie);
-  return match?.[1];
-};
+const sessionOf = (cookie?: string): Option.Option<string> =>
+  Option.flatMapNullishOr(
+    Option.fromUndefinedOr(cookie),
+    (header) => /(?:^|;\s*)session=([^;]+)/.exec(header)?.[1]
+  );
 
 const json = (body: unknown): Response =>
   new Response(encodeJson(body), { headers: { "content-type": "application/json" } });
@@ -198,7 +199,8 @@ const makeApi = Effect.fn("makeApi")(function* (): Effect.fn.Return<Api, never, 
 
   const route = routeSync({
     rooms,
-    roomIdOf: (request) => Effect.succeedSome(sessionOf(request.headers.cookie) ?? "anonymous"),
+    roomIdOf: (request) =>
+      Effect.succeedSome(Option.getOrElse(sessionOf(request.headers.cookie), () => "anonymous")),
   });
 
   return {
@@ -228,7 +230,7 @@ const SESSION = "session=alice";
 const GROUP = "group-browser";
 
 /** The document request the front Worker is rendering. */
-const inbound = (cookie: string | undefined): Request =>
+const inbound = (cookie?: string): Request =>
   new Request("https://shop.example.com/products", {
     headers: cookie === undefined ? {} : { cookie },
   });

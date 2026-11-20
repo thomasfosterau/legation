@@ -23,6 +23,7 @@ import * as Defined from "./Defined.js";
 import * as Arr from "effect/Array";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
+import * as Option from "effect/Option";
 import * as P from "effect/Predicate";
 import * as Queue from "effect/Queue";
 import * as Ref from "effect/Ref";
@@ -146,13 +147,13 @@ const sameJoin = (a: ReadonlyArray<RelatedRow>, b: ReadonlyArray<RelatedRow>): b
 /** The per-parent window a selected relationship pins, when it does. */
 const windowOf = (
   relationship: Collection.Relationship & { readonly first?: number }
-): Target["window"] | undefined =>
+): Option.Option<NonNullable<Target["window"]>> =>
   relationship.kind === "paginated" &&
   relationship.first !== undefined &&
   relationship.order !== undefined &&
   Arr.isReadonlyArrayNonEmpty(relationship.order)
-    ? { orderBy: relationship.order, limit: relationship.first }
-    : undefined;
+    ? Option.some({ orderBy: relationship.order, limit: relationship.first })
+    : Option.none();
 
 /** Collect the non-null `localField` values a relationship pins. */
 const pinIds = (
@@ -192,7 +193,11 @@ export const fieldMappingStrategy = (
   targets: (baseRows) => {
     const entries = new Map<
       string,
-      { field: string; ids: Set<Predicate.Literal>; window: Target["window"] | undefined }
+      {
+        field: string;
+        ids: Set<Predicate.Literal>;
+        window: Option.Option<NonNullable<Target["window"]>>;
+      }
     >();
     for (const relationship of relationships) {
       const existing = entries.get(relationship.collection);
@@ -203,7 +208,7 @@ export const fieldMappingStrategy = (
       };
       // A second relationship pinning the same collection: fall back to the
       // unwindowed superset (sound, merely over-syncs).
-      if (existing !== undefined) entry.window = undefined;
+      if (existing !== undefined) entry.window = Option.none();
       pinIds(entry.ids, baseRows, relationship.localField);
       entries.set(relationship.collection, entry);
     }
@@ -212,7 +217,7 @@ export const fieldMappingStrategy = (
       map.set(collection, {
         field: entry.field,
         ids: entry.ids,
-        ...Defined.fields({ window: entry.window }),
+        ...Defined.fields({ window: Option.getOrUndefined(entry.window) }),
       });
     }
     return map;

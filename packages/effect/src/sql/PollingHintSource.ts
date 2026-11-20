@@ -27,6 +27,7 @@
  */
 
 import * as Effect from "effect/Effect";
+import * as Option from "effect/Option";
 import * as Ref from "effect/Ref";
 import * as Schedule from "effect/Schedule";
 import type * as Duration from "effect/Duration";
@@ -78,12 +79,14 @@ const signatureOf = (rows: ReadonlyArray<SqlBackend.SqlRow>): string => {
 export const make = (config: PollingHintSourceConfig): HintSource.HintSource => {
   const collections = config.collections ?? Object.keys(config.tables);
 
-  // Current detector signature for a collection, or undefined when it has no
+  // Current detector signature for a collection, or `None` when it has no
   // table mapping (nothing to poll).
-  const signatureFor = (collection: string): Effect.Effect<string | undefined, BackendError> => {
+  const signatureFor = (collection: string): Effect.Effect<Option.Option<string>, BackendError> => {
     const mapping = config.tables[collection];
-    if (mapping === undefined) return Effect.undefined;
-    return config.executor.query(detectorQuery(mapping)).pipe(Effect.map(signatureOf));
+    if (mapping === undefined) return Effect.succeedNone;
+    return config.executor
+      .query(detectorQuery(mapping))
+      .pipe(Effect.map((rows) => Option.some(signatureOf(rows))));
   };
 
   // One poll: read every collection's detector, publish a value-less hint for
@@ -102,8 +105,9 @@ export const make = (config: PollingHintSourceConfig): HintSource.HintSource => 
         collections,
         (collection) =>
           Effect.gen(function* () {
-            const signature = yield* signatureFor(collection);
-            if (signature === undefined) return;
+            const current = yield* signatureFor(collection);
+            if (Option.isNone(current)) return;
+            const signature = current.value;
             if (previous.has(collection) && previous.get(collection) !== signature) {
               changed.push({ collection, ids: [] });
             }

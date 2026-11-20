@@ -22,6 +22,7 @@ import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Match from "effect/Match";
 import * as Metric from "effect/Metric";
+import * as Option from "effect/Option";
 import * as P from "effect/Predicate";
 import * as R from "effect/Record";
 import * as PubSub from "effect/PubSub";
@@ -359,9 +360,12 @@ type OverlayBase =
   | { readonly _tag: "Warm"; readonly view: Map<string, Map<RowId, LocalRow>> }
   | { readonly _tag: "Cold"; readonly journalBefore: ReadonlyArray<Mutation> };
 
-/** A rebuild scoped to `collections`, or the global {@link REBUILD} when undefined. */
-const rebuildFor = (collections: ReadonlySet<string> | undefined): ViewChange =>
-  collections === undefined ? REBUILD : { _tag: "Rebuild", collections };
+/** A rebuild scoped to `collections`, or the global {@link REBUILD} when none. */
+const rebuildFor = (collections: Option.Option<ReadonlySet<string>>): ViewChange =>
+  Option.match(collections, {
+    onNone: () => REBUILD,
+    onSome: (scoped): ViewChange => ({ _tag: "Rebuild", collections: scoped }),
+  });
 
 /**
  * Most acknowledged-but-unpulled mutations the engine keeps in the overlay.
@@ -380,8 +384,10 @@ const isCoveredBy = (
   lastMutationIds: Readonly<Record<string, number>>,
   mutation: Mutation
 ): boolean => {
-  const upTo: number | undefined = lastMutationIds[mutation.clientId];
-  return upTo !== undefined && mutation.mutationId <= upTo;
+  return Option.exists(
+    Option.fromUndefinedOr(lastMutationIds[mutation.clientId]),
+    (upTo) => mutation.mutationId <= upTo
+  );
 };
 
 // A windowed subset (limit/cursor) can't fold an aggregate incrementally
@@ -1245,16 +1251,16 @@ export const make = (
     // Derived, not stored, so it survives a reload with no extra durable
     // state; and left exactly as configured when no identity is stamped, so
     // an app that does not use the boundary sees no change at all.
-    const clientIdFor = (identity: Identity.Fingerprint | undefined): string =>
-      identity === undefined
-        ? options.clientId
-        : `${options.clientId}#${Identity.keySegment(identity)}`;
+    const clientIdFor = (identity: Option.Option<Identity.Fingerprint>): string =>
+      Option.match(identity, {
+        onNone: () => options.clientId,
+        onSome: (stamped) => `${options.clientId}#${Identity.keySegment(stamped)}`,
+      });
     const clientIdRef = yield* Ref.make(
       clientIdFor(
         yield* store.getIdentity.pipe(
-          Effect.catchTag("StoreError", () =>
-            Effect.succeed<Identity.Fingerprint | undefined>(undefined)
-          )
+          Effect.map(Option.fromUndefinedOr),
+          Effect.catchTag("StoreError", () => Effect.succeed(Option.none<Identity.Fingerprint>()))
         )
       )
     );
@@ -1394,31 +1400,27 @@ export const make = (
         )
       );
     // Project the four mutation variants back to the `MutationEvent` shape.
-    const toMutationEvent: (event: EngineEvent) => MutationEvent | undefined =
+    const toMutationEvent: (event: EngineEvent) => Option.Option<MutationEvent> =
       Match.type<EngineEvent>().pipe(
-        Match.withReturnType<MutationEvent | undefined>(),
-        Match.tag("MutationJournaled", (e) => ({
-          clientId: e.clientId,
-          mutationId: e.mutationId,
-          phase: "journaled",
-        })),
-        Match.tag("MutationAcknowledged", (e) => ({
-          clientId: e.clientId,
-          mutationId: e.mutationId,
-          phase: "acknowledged",
-        })),
-        Match.tag("MutationRejected", (e) => ({
-          clientId: e.clientId,
-          mutationId: e.mutationId,
-          phase: "rejected",
-          reason: e.reason,
-        })),
-        Match.tag("MutationDropped", (e) => ({
-          clientId: e.clientId,
-          mutationId: e.mutationId,
-          phase: "dropped",
-        })),
-        Match.orElse(() => undefined)
+        Match.withReturnType<Option.Option<MutationEvent>>(),
+        Match.tag("MutationJournaled", (e) =>
+          Option.some({ clientId: e.clientId, mutationId: e.mutationId, phase: "journaled" })
+        ),
+        Match.tag("MutationAcknowledged", (e) =>
+          Option.some({ clientId: e.clientId, mutationId: e.mutationId, phase: "acknowledged" })
+        ),
+        Match.tag("MutationRejected", (e) =>
+          Option.some({
+            clientId: e.clientId,
+            mutationId: e.mutationId,
+            phase: "rejected",
+            reason: e.reason,
+          })
+        ),
+        Match.tag("MutationDropped", (e) =>
+          Option.some({ clientId: e.clientId, mutationId: e.mutationId, phase: "dropped" })
+        ),
+        Match.orElse(() => Option.none())
       );
     // Sample the journal-depth gauge from the current pending count. Called on
     // every append (a new pending mutation), acknowledge (a trim) and paced
@@ -1451,7 +1453,7 @@ export const make = (
     // (append/trim/pull), so one change costs one replay. The semaphore makes
     // the fill single-flight: concurrent observers waiting on the same change
     // recompute once, not once each.
-    const overlayCache = yield* Ref.make<Map<string, Map<RowId, LocalRow>> | undefined>(undefined);
+    const overlayCache = yield* Ref.make(Option.none<Map<string, Map<RowId, LocalRow>>>());
     const overlayLock = yield* Semaphore.make(1);
     // Invalidation must serialize with the tracked-write path below:
     // that path holds the permit for its whole read-modify-write of the
@@ -1462,7 +1464,10 @@ export const make = (
     // the other. Callers inside a block that already holds the permit (the
     // tracked-write path's own failure fallback) must use `Ref.set` directly
     // to avoid deadlocking on the non-reentrant semaphore.
-    const invalidateOverlay = Semaphore.withPermit(overlayLock, Ref.set(overlayCache, undefined));
+    const invalidateOverlay = Semaphore.withPermit(
+      overlayLock,
+      Ref.set(overlayCache, Option.none())
+    );
 
     // The acknowledged-but-unpulled tail (ADR-0008). A push trims the
     // entries the backend applied from the journal, so they are never sent
@@ -1505,7 +1510,7 @@ export const make = (
       if (yield* Ref.get(unpulledStale)) {
         yield* Ref.set(unpulled, yield* store.unpulled);
         yield* Ref.set(unpulledStale, false);
-        yield* Ref.set(overlayCache, undefined);
+        yield* Ref.set(overlayCache, Option.none());
       }
       return yield* Ref.get(unpulled);
     });
@@ -1742,7 +1747,7 @@ export const make = (
           if (Arr.isReadonlyArrayEmpty(pending)) return ensureIndexBuilt(collection);
           return collectionsTouchedByMutations(pending).pipe(
             Effect.flatMap((touched) =>
-              touched !== undefined && !touched.has(collection)
+              Option.exists(touched, (scoped) => !scoped.has(collection))
                 ? ensureIndexBuilt(collection)
                 : Effect.undefined
             )
@@ -1825,8 +1830,14 @@ export const make = (
     > = Semaphore.withPermit(
       overlayLock,
       Ref.get(overlayCache).pipe(
-        Effect.filterOrElse(P.isNotUndefined, () =>
-          timedRebase(computeOverlay()).pipe(Effect.tap((view) => Ref.set(overlayCache, view)))
+        Effect.flatMap(
+          Option.match({
+            onSome: Effect.succeed,
+            onNone: () =>
+              timedRebase(computeOverlay()).pipe(
+                Effect.tap((view) => Ref.set(overlayCache, Option.some(view)))
+              ),
+          })
         )
       )
     );
@@ -1839,10 +1850,10 @@ export const make = (
     const collectionsTouchedBy = (
       mutator: string,
       decodedArgs: unknown
-    ): Effect.Effect<ReadonlySet<string> | undefined> =>
+    ): Effect.Effect<Option.Option<ReadonlySet<string>>> =>
       Effect.gen(function* () {
         const handler = options.mutators.handlers.get(mutator);
-        if (handler === undefined) return undefined;
+        if (handler === undefined) return Option.none();
         const touched = new Set<string>();
         const record = (collection: string) =>
           Effect.sync(() => {
@@ -1854,28 +1865,28 @@ export const make = (
           get: () => Effect.undefined,
         };
         yield* handler(decodedArgs, writer);
-        return touched;
-      }).pipe(Effect.catchTag(["MutatorError", "StoreError"], () => Effect.undefined));
+        return Option.some<ReadonlySet<string>>(touched);
+      }).pipe(Effect.catchTag(["MutatorError", "StoreError"], () => Effect.succeedNone));
 
     // The union of collections a batch of journaled mutations touches (their
     // args are encoded, so decode before tracking). Any unknown/undecodable
     // mutation collapses to undefined → a global rebuild.
     const collectionsTouchedByMutations = (
       mutations: ReadonlyArray<Mutation>
-    ): Effect.Effect<ReadonlySet<string> | undefined> =>
+    ): Effect.Effect<Option.Option<ReadonlySet<string>>> =>
       Effect.gen(function* () {
         const union = new Set<string>();
         for (const mutation of mutations) {
           const definition = options.mutators.mutators.get(mutation.mutator);
-          if (definition === undefined) return undefined;
+          if (definition === undefined) return Option.none();
           const decoded = yield* Schema.decodeUnknownEffect(definition.args)(mutation.args).pipe(
             Effect.catchTag("SchemaError", () => Effect.undefined)
           );
           const touched = yield* collectionsTouchedBy(mutation.mutator, decoded);
-          if (touched === undefined) return undefined;
-          for (const collection of touched) union.add(collection);
+          if (Option.isNone(touched)) return Option.none();
+          for (const collection of touched.value) union.add(collection);
         }
-        return union;
+        return Option.some<ReadonlySet<string>>(union);
       });
 
     // Run a mutator's local handler directly onto `view` (mutating its
@@ -1929,7 +1940,7 @@ export const make = (
       Effect.gen(function* () {
         const handler = options.mutators.handlers.get(mutator);
         if (handler === undefined) {
-          yield* Ref.set(overlayCache, undefined);
+          yield* Ref.set(overlayCache, Option.none());
           return REBUILD;
         }
         let view: Map<string, Map<RowId, LocalRow>>;
@@ -1947,7 +1958,7 @@ export const make = (
             )
           );
           if (Exit.isFailure(filled)) {
-            yield* Ref.set(overlayCache, undefined);
+            yield* Ref.set(overlayCache, Option.none());
             return REBUILD;
           }
           view = filled.value;
@@ -1955,11 +1966,11 @@ export const make = (
         const ops: Array<PatchOp | OverlayOp> = [];
         const ran = yield* Effect.exit(handler(decodedArgs, trackedWriter(view, ops)));
         if (Exit.isFailure(ran)) {
-          yield* Ref.set(overlayCache, undefined);
+          yield* Ref.set(overlayCache, Option.none());
           const touched = yield* collectionsTouchedBy(mutator, decodedArgs);
           return rebuildFor(touched);
         }
-        yield* Ref.set(overlayCache, view);
+        yield* Ref.set(overlayCache, Option.some(view));
         return { _tag: "Patch", ops };
       });
 
@@ -2131,7 +2142,7 @@ export const make = (
         yield* settleOwnApplied(lastMutationIds);
         yield* store.releaseUnpulled(lastMutationIds);
         yield* Ref.update(unpulled, (tail) => tail.filter((m) => !isCoveredBy(lastMutationIds, m)));
-        yield* Ref.set(overlayCache, undefined);
+        yield* Ref.set(overlayCache, Option.none());
         yield* sampleJournalDepth; // the trim changed journal depth
       });
 
@@ -2140,7 +2151,7 @@ export const make = (
     // dropped. The store then finishes the release it may have recorded. It seals itself only when that
     // finish fails after reading the record. Holds `overlayLock`.
     const settleFailedTail: Effect.Effect<void> = Ref.set(unpulledStale, true).pipe(
-      Effect.andThen(Ref.set(overlayCache, undefined)),
+      Effect.andThen(Ref.set(overlayCache, Option.none())),
       Effect.andThen(store.finishRelease.pipe(Effect.ignore))
     );
 
@@ -2191,7 +2202,7 @@ export const make = (
           // tail leaves only through a pull, and a push never takes it past the bound, so the
           // copy is never over it.
           yield* Ref.set(unpulled, [...held, ...applied]);
-          yield* Ref.set(overlayCache, undefined);
+          yield* Ref.set(overlayCache, Option.none());
           return covered.filter(isRejected);
         })
       );
@@ -2281,7 +2292,7 @@ export const make = (
               );
               // Inside the lock `invalidateOverlay` would deadlock on it; the
               // cache is only ever cleared by setting it empty.
-              yield* Ref.set(overlayCache, undefined);
+              yield* Ref.set(overlayCache, Option.none());
               yield* sampleJournalDepth;
               yield* publishChange(REBUILD);
               return compaction;
@@ -2340,7 +2351,7 @@ export const make = (
           // `clientIdFor`). Journal entries already written keep the client
           // id they were authored under, and push under it — each ledger
           // stays contiguous on its own.
-          yield* Ref.set(clientIdRef, clientIdFor(next));
+          yield* Ref.set(clientIdRef, clientIdFor(Option.fromUndefinedOr(next)));
         }
         // Every branch, `Unchanged` included: re-signing in is what makes an
         // identity's own quarantined entries pushable again, and running it
@@ -2573,7 +2584,7 @@ export const make = (
       // overlay are dropped whatever the outcome: a failed roll-forward must not leave a view that
       // still shows what the store no longer holds.
       Ref.set(unpulledStale, true).pipe(
-        Effect.andThen(Ref.set(overlayCache, undefined)),
+        Effect.andThen(Ref.set(overlayCache, Option.none())),
         Effect.andThen(store.finishRelease),
         Effect.andThen(settleOwnApplied(lastMutationIds)),
         Effect.andThen(publishChange(REBUILD)),
@@ -2639,7 +2650,7 @@ export const make = (
                 yield* Ref.update(unpulled, (tail) =>
                   tail.filter((m) => !isCoveredBy(response.lastMutationIds, m))
                 );
-                yield* Ref.set(overlayCache, undefined);
+                yield* Ref.set(overlayCache, Option.none());
                 yield* sampleJournalDepth;
               }).pipe(Effect.onError(() => rollForwardPullLocked(response.lastMutationIds)));
               return before;
@@ -2676,9 +2687,10 @@ export const make = (
         } else {
           const mutationCollections = yield* collectionsTouchedByMutations(journalBefore);
           change = rebuildFor(
-            mutationCollections === undefined
-              ? undefined
-              : new Set([...touched.collections, ...mutationCollections])
+            Option.map(
+              mutationCollections,
+              (scoped) => new Set([...touched.collections, ...scoped])
+            )
           );
         }
         // Atomic reveal: one change event after patch + ack (rebase is
@@ -2818,7 +2830,7 @@ export const make = (
           }))
         );
         yield* invalidateOverlay;
-        yield* publishChange(rebuildFor(touched));
+        yield* publishChange(rebuildFor(Option.some(touched)));
       });
 
     // A direct store write (`Hydration.hydrate`) appends journal entries the map does not track;
@@ -3499,10 +3511,9 @@ export const make = (
           // cache is cold. The lock held here keeps the cache as found
           // until `applyMutationToOverlayLocked` writes it.
           const cachedBefore = yield* Ref.get(overlayCache);
-          const base: OverlayBase =
-            cachedBefore === undefined
-              ? { _tag: "Cold", journalBefore: yield* overlayJournalLocked() }
-              : { _tag: "Warm", view: cachedBefore };
+          const base: OverlayBase = Option.isNone(cachedBefore)
+            ? { _tag: "Cold", journalBefore: yield* overlayJournalLocked() }
+            : { _tag: "Warm", view: cachedBefore.value };
           const clientId = yield* currentClientId;
           const journaledAt = yield* Clock.currentTimeMillis;
           // Allocate the id and append as one store step: a refused or
@@ -3579,10 +3590,9 @@ export const make = (
           overlayLock,
           Effect.gen(function* () {
             const cachedBefore = yield* Ref.get(overlayCache);
-            const base: OverlayBase =
-              cachedBefore === undefined
-                ? { _tag: "Cold", journalBefore: yield* overlayJournalLocked() }
-                : { _tag: "Warm", view: cachedBefore };
+            const base: OverlayBase = Option.isNone(cachedBefore)
+              ? { _tag: "Cold", journalBefore: yield* overlayJournalLocked() }
+              : { _tag: "Warm", view: cachedBefore.value };
             yield* Ref.update(formsInFlight, (forms) => [...forms, entry]);
             return yield* applyMutationToOverlayLocked(mutator, args.decoded, base);
           })
@@ -3606,7 +3616,7 @@ export const make = (
                   yield* store.parkUnpulled([entry]);
                   yield* Ref.set(unpulled, [...held, entry]);
                 }
-              }).pipe(Effect.ensuring(Ref.set(overlayCache, undefined)))
+              }).pipe(Effect.ensuring(Ref.set(overlayCache, Option.none())))
             ).pipe(
               Effect.ensuring(
                 releaseChunk(reserved).pipe(
@@ -3630,14 +3640,14 @@ export const make = (
     const resolveNamedSubset = (entry: {
       readonly name: string;
       readonly argsEncoded: unknown;
-    }): Effect.Effect<Subset.Subset | undefined> =>
+    }): Effect.Effect<Option.Option<Subset.Subset>> =>
       queryDefOf(entry.name).pipe(
         Effect.flatMap(({ definition, local }) =>
           Schema.decodeUnknownEffect(definition.args)(entry.argsEncoded).pipe(
-            Effect.map((decoded) => local(decoded))
+            Effect.map((decoded) => Option.some(local(decoded)))
           )
         ),
-        Effect.catchTag(["QueryError", "SchemaError"], () => Effect.undefined)
+        Effect.catchTag(["QueryError", "SchemaError"], () => Effect.succeedNone)
       );
 
     // Read-only snapshot of every active subset: raw subscriptions plus each
@@ -3649,7 +3659,7 @@ export const make = (
       const raw = yield* Ref.get(subscriptions);
       const named = yield* Ref.get(namedSubs);
       const resolved = yield* Effect.forEach(named, resolveNamedSubset, { concurrency: 1 });
-      return [...raw, ...Arr.filter(resolved, P.isNotUndefined)];
+      return [...raw, ...Arr.getSomes(resolved)];
     });
 
     const transportRead = transport.read;
@@ -3736,7 +3746,8 @@ export const make = (
       // mutation stream, now a filtered projection of the one hub.
       mutationEvents: Stream.fromPubSub(engineEventsHub).pipe(
         Stream.map(toMutationEvent),
-        Stream.filter((event): event is MutationEvent => event !== undefined)
+        Stream.filter(Option.isSome),
+        Stream.map((event) => event.value)
       ),
       // The keyed mutation-state map: current value now, then every change.
       mutationStates: SubscriptionRef.changes(mutationStates),

@@ -198,19 +198,19 @@ const undeclaredEdge = (
   registry: Collection.CollectionRegistry,
   collection: string,
   edges: ReadonlyArray<Related.EdgeSelect>
-): Related.EdgeSelect | undefined => {
+): Option.Option<Related.EdgeSelect> => {
   const declared = Collection.relationshipsOf(registry, collection);
-  return edges.find((edge) => !declared.has(edge.name));
+  return Arr.findFirst(edges, (edge) => !declared.has(edge.name));
 };
 
 /** The subscription an entry reports: its registration, with the URL while a party holds it by URL. */
-const subscriptionOf = (entry: Active): Coverage.Subscription | undefined =>
+const subscriptionOf = (entry: Active): Option.Option<Coverage.Subscription> =>
   entry.registered === undefined
-    ? undefined
-    : {
+    ? Option.none()
+    : Option.some({
         ...entry.registered.registration,
         ...Defined.fields({ url: entry.urlMirrors.size > 0 ? entry.registered.url : undefined }),
-      };
+      });
 
 /** A set with one member fewer. */
 const without = (set: ReadonlySet<string>, member: string): ReadonlySet<string> => {
@@ -298,9 +298,9 @@ export const run = (options: EngineHostOptions): Effect.Effect<Host, never, Scop
     // The pulled summaries last sent to mirrors, so `PulledRegistrations` goes
     // out only when they change and a registration's loop restarts only when its
     // own summary does.
-    const announced = yield* Ref.make<
-      ReadonlyArray<{ readonly key: string; readonly pulled: Coverage.Pulled }> | undefined
-    >(undefined);
+    const announced = yield* Ref.make(
+      Option.none<ReadonlyArray<{ readonly key: string; readonly pulled: Coverage.Pulled }>>()
+    );
 
     // Bring a registration's mirrors up to the replica as it stands:
     // stop its broadcast loop, post its current rows, and start the loop again
@@ -328,12 +328,13 @@ export const run = (options: EngineHostOptions): Effect.Effect<Host, never, Scop
         const entries = yield* Ref.get(active);
         const registrations = (yield* marks.registrations).filter(({ key }) => entries.has(key));
         const previous = yield* Ref.get(announced);
-        if (Eq.equals(registrations, previous)) return;
+        if (Option.exists(previous, (sent) => Eq.equals(registrations, sent))) return;
+        const sent = Option.getOrElse(previous, () => []);
         yield* Effect.forEach(
           registrations,
           ({ key, pulled }) => {
             const entry = entries.get(key);
-            const before = previous?.find((announcement) => announcement.key === key);
+            const before = sent.find((announcement) => announcement.key === key);
             return entry !== undefined &&
               !Eq.equals(before?.pulled, pulled) &&
               pulled.windows.some((window) => window.pulled)
@@ -342,7 +343,7 @@ export const run = (options: EngineHostOptions): Effect.Effect<Host, never, Scop
           },
           { concurrency: 1, discard: true }
         );
-        yield* Ref.set(announced, registrations);
+        yield* Ref.set(announced, Option.some(registrations));
         yield* channel.post({ _tag: "PulledRegistrations", registrations }).pipe(Effect.ignore);
       })
     );
@@ -570,9 +571,9 @@ export const run = (options: EngineHostOptions): Effect.Effect<Host, never, Scop
           // undeclared edge must be refused here: nothing registers, nothing
           // is credited for it.
           const undeclared = undeclaredEdge(registry, collection, edges);
-          if (undeclared !== undefined) {
+          if (Option.isSome(undeclared)) {
             return yield* new QueryError({
-              message: `EngineHost: SubscribeRelated on "${collection}" names an edge the registry does not declare: "${undeclared.name}"`,
+              message: `EngineHost: SubscribeRelated on "${collection}" names an edge the registry does not declare: "${undeclared.value.name}"`,
               query: collection,
             });
           }
@@ -1061,9 +1062,9 @@ export const run = (options: EngineHostOptions): Effect.Effect<Host, never, Scop
           const summaries = new Map(pulled.map((entry) => [entry.key, entry.pulled]));
           return [...entries].flatMap(([key, entry]) => {
             const subscription = subscriptionOf(entry);
-            return subscription === undefined
+            return Option.isNone(subscription)
               ? []
-              : [{ ...subscription, pulled: summaries.get(key) ?? Coverage.NOT_PULLED }];
+              : [{ ...subscription.value, pulled: summaries.get(key) ?? Coverage.NOT_PULLED }];
           });
         })
       ),

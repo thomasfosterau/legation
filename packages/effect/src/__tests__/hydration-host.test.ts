@@ -226,7 +226,7 @@ describe("Hydration.hydrateUnpulled", () => {
 /** A host serving `engine` (with its store, when given one) and a mirror of it. */
 const serve = (
   engine: ClientEngine.ClientEngine,
-  store: ClientStore.ClientStore | undefined,
+  store?: ClientStore.ClientStore,
   hydrationWindow?: Duration.Input
 ) =>
   Effect.gen(function* () {

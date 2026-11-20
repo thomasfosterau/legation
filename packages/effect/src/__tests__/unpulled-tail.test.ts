@@ -14,6 +14,7 @@ import * as Exit from "effect/Exit";
 import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
 import * as Logger from "effect/Logger";
+import * as Option from "effect/Option";
 import * as Ref from "effect/Ref";
 import * as References from "effect/References";
 import * as Schedule from "effect/Schedule";
@@ -305,15 +306,18 @@ const spyKeyValue = (key: string) =>
 // Reads of other keys pass through, and nothing fails until armed.
 const failRecordRead = (base: KeyValueStore.KeyValueStore) =>
   Effect.gen(function* () {
-    // `undefined` is disarmed; otherwise the reads that still pass before the next one fails.
-    const passes = yield* Ref.make<number | undefined>(undefined);
+    // `None` is disarmed; otherwise the reads that still pass before the next one fails.
+    const passes = yield* Ref.make(Option.none<number>());
     const kv: KeyValueStore.KeyValueStore = {
       ...base,
       get: (key: string) =>
         key !== "legation/releaseIntent"
           ? base.get(key)
-          : Ref.modify(passes, (n): readonly [boolean, number | undefined] =>
-              n === undefined ? [false, undefined] : n === 0 ? [true, undefined] : [false, n - 1]
+          : Ref.modify(passes, (armed): readonly [boolean, Option.Option<number>] =>
+              Option.match(armed, {
+                onNone: () => [false, Option.none()],
+                onSome: (n) => (n === 0 ? [true, Option.none()] : [false, Option.some(n - 1)]),
+              })
             ).pipe(
               Effect.flatMap((fail) =>
                 fail
@@ -328,7 +332,7 @@ const failRecordRead = (base: KeyValueStore.KeyValueStore) =>
               )
             ),
     } satisfies KeyValueStore.KeyValueStore;
-    return { kv, arm: (n: number) => Ref.set(passes, n) };
+    return { kv, arm: (n: number) => Ref.set(passes, Option.some(n)) };
   });
 
 // The same contract over both implementations: the memory store and the
@@ -1976,13 +1980,15 @@ const probedTransport = (inner: ClientTransport) =>
     const pulls = yield* Ref.make(0);
     const failed = yield* Ref.make(0);
     const failing = yield* Ref.make(false);
-    const gate = yield* Ref.make<Deferred.Deferred<void> | undefined>(undefined);
+    const gate = yield* Ref.make(Option.none<Deferred.Deferred<void>>());
     const transport: ClientTransport = {
       ...inner,
       pull: (request) =>
         Ref.update(pulls, (n) => n + 1).pipe(
           Effect.andThen(Ref.get(gate)),
-          Effect.flatMap((held) => (held === undefined ? Effect.void : Deferred.await(held))),
+          Effect.flatMap((held) =>
+            Option.isNone(held) ? Effect.void : Deferred.await(held.value)
+          ),
           Effect.andThen(Ref.get(failing)),
           Effect.flatMap((down) =>
             down
@@ -2103,7 +2109,7 @@ describeWrapped("a push that takes the tail to half the bound pulls ahead of it"
 
           // The first pull the burst starts is held at the gate; every push below must still complete.
           const release = yield* Deferred.make<void>();
-          yield* Ref.set(probe.gate, release);
+          yield* Ref.set(probe.gate, Option.some(release));
           const burst = 40;
           yield* Effect.forEach(
             Arr.range(0, burst - 1),

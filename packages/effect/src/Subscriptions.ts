@@ -18,6 +18,7 @@ import * as Defined from "./Defined.js";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
+import * as Option from "effect/Option";
 import * as Ref from "effect/Ref";
 import * as Scope from "effect/Scope";
 import * as Semaphore from "effect/Semaphore";
@@ -127,7 +128,7 @@ export const counted = (engine: ClientEngine): ClientEngine => {
 interface Entry {
   count: number;
   readonly unsubscribe: Effect.Effect<void>;
-  expiry: Fiber.Fiber<void> | undefined;
+  expiry: Option.Option<Fiber.Fiber<void>>;
 }
 
 /** Options for {@link make}. */
@@ -207,7 +208,7 @@ export const make = (
           const entry = entries.get(key);
           if (entry === undefined || entry.count === 0) return;
           entry.count -= 1;
-          if (entry.count === 0) entry.expiry = yield* dropAfterTtl(key);
+          if (entry.count === 0) entry.expiry = Option.some(yield* dropAfterTtl(key));
         })
       );
 
@@ -232,14 +233,14 @@ export const make = (
         Effect.gen(function* () {
           const existing = entries.get(key);
           if (existing !== undefined) {
-            if (existing.expiry !== undefined) {
-              yield* Fiber.interrupt(existing.expiry);
-              existing.expiry = undefined;
+            if (Option.isSome(existing.expiry)) {
+              yield* Fiber.interrupt(existing.expiry.value);
+              existing.expiry = Option.none();
             }
             existing.count += 1;
           } else {
             yield* subscribe;
-            entries.set(key, { count: 1, unsubscribe, expiry: undefined });
+            entries.set(key, { count: 1, unsubscribe, expiry: Option.none() });
           }
         })
       ).pipe(Effect.andThen(handleFor(key)));
