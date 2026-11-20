@@ -16,7 +16,7 @@
   },
   "type": "module",
   "scripts": {
-    "prepare": "vp config && effect-tsgo patch --typescript --oxlint",
+    "prepare": "vp config && effect-tsgo patch --typescript --oxlint --tsrs",
     "changeset": "changeset",
     "version": "changeset version"
   },
