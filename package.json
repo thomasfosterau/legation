@@ -18,8 +18,7 @@
   "scripts": {
     "prepare": "vp config && effect-tsgo patch --typescript --oxlint",
     "changeset": "changeset",
-    "version": "changeset version",
-    "release": "node scripts/publish.mjs"
+    "version": "changeset version"
   },
   "devDependencies": {
     "@alchemy.run/cloudflare": "catalog:",
@@ -52,5 +51,5 @@
       "version": "lts"
     }
   },
-  "packageManager": "pnpm@11.28.6"
+  "packageManager": "pnpm@12.21.0"
 }

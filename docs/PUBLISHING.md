@@ -6,14 +6,16 @@ Releases use [Changesets](https://github.com/changesets/changesets) and npm [tru
 
 1. Add a changeset with your change (`pnpm changeset`; see [CONTRIBUTING.md](CONTRIBUTING.md#changesets)).
 2. On merge to `trunk`, the [Release](../.github/workflows/release.yml) workflow opens or updates the **"chore: version packages"** PR, which applies the bumps and changelogs.
-3. Merging it and approving the `release` environment builds every package and runs [`scripts/publish.mjs`](../scripts/publish.mjs): each public package whose version isn't on npm yet is packed with `pnpm pack` (which rewrites `workspace:` and `catalog:` specifiers), checked by [`scripts/pack.mjs`](../scripts/pack.mjs) (the same checks as `vp run pack:check`), and that tarball is published with `npm publish`. Re-runs skip what is already published. The Changesets action then tags the releases.
+3. Merging it and approving the `release` environment runs `vp run release` on that commit: the build, then `vp run pack:check` (each package packed with `pnpm pack`, which rewrites `workspace:` and `catalog:` specifiers, and its tarball checked), then `vp pm publish -r --access public --no-git-checks -- --ignore-scripts`. pnpm publishes every public package whose version isn't on npm yet, in dependency order, under OIDC, attaching provenance by itself; re-runs skip what is already published. Last, `changeset git-tag` tags each version not yet tagged and reports those tags to the Changesets action, which pushes them and creates the GitHub releases. A failed publish stops before tagging.
 
-`vp run release:dry-run` packs and checks every unpublished package without publishing.
+The checked tarballs are packed from the same commit as the published ones, not the same files: `pnpm publish` packs again. Both packs come from one checkout, build and lockfile in one job.
+
+`vp run release:dry-run` builds, checks and lists what `vp pm publish` would publish, without publishing or tagging.
 
 ## One-time setup
 
 1. **Settings → Actions → General**: allow GitHub Actions to create pull requests.
-2. **Bootstrap each package**: a trusted publisher can only be attached to an existing package, so publish its first version by hand from a clean `trunk` as `thomasfosterau`: `vp install --frozen-lockfile`, `vp run release:dry-run`, then `vp run build && pnpm run release`; push the tags it reports. Never `npm publish` from a package directory.
+2. **Bootstrap each package**: a trusted publisher can only be attached to an existing package, so publish its first version by hand from a clean `trunk` as `thomasfosterau`: `vp install --frozen-lockfile`, `vp run release:dry-run`, then `vp run release`; push the tags it creates (`git push origin --tags`). Never publish from a package directory by hand.
 3. **Trusted publisher** on npmjs.com for each package: GitHub Actions, repository `thomasfosterau/legation`, workflow `release.yml`, environment `release`.
 4. **Protect the `release` environment** (required reviewer, `trunk` only) and `trunk` (PRs and passing CI required).
 
