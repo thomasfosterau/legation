@@ -392,7 +392,7 @@ describe("ReplicaDocuments over the replica", () => {
       expect(error._tag).toBe("Fail");
       assert(error._tag === "Fail");
       expect(error.error).toBeInstanceOf(QueryError);
-      expect((error.error as QueryError).parameter).toBe("filter[name]");
+      expect(error.error.parameter).toBe("filter[name]");
     })
   );
 

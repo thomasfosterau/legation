@@ -498,12 +498,9 @@ describeWrapped("memory store: journal writers exclude one another", (it) => {
       for (let round = 0; round < rounds; round++) {
         const store = yield* ClientStoreModule.makeMemory;
         yield* store.appendMutation(m(1, "x"));
-        yield* store.quarantinePending("A" as Identity.Fingerprint);
+        yield* store.quarantinePending("A");
         yield* store.appendMutation(m(1));
-        yield* race(
-          store.acknowledge("c", 1),
-          store.releaseQuarantine("A" as Identity.Fingerprint)
-        );
+        yield* race(store.acknowledge("c", 1), store.releaseQuarantine("A"));
         if (!(yield* store.pendingMutations).map(key).includes("x:1")) lost++;
       }
       expect(lost).toBe(0);
@@ -530,13 +527,10 @@ describeWrapped("memory store: journal writers exclude one another", (it) => {
       for (let round = 0; round < rounds; round++) {
         const store = yield* ClientStoreModule.makeMemory;
         yield* store.appendMutation(m(1));
-        yield* race(
-          store.quarantinePending("A" as Identity.Fingerprint),
-          store.appendMutation(m(2))
-        );
+        yield* race(store.quarantinePending("A"), store.appendMutation(m(2)));
         // The new entry is either still pending or was quarantined with the
         // rest; it must exist in one of the two.
-        const held = (yield* store.quarantinedMutations("A" as Identity.Fingerprint)).map(key);
+        const held = (yield* store.quarantinedMutations("A")).map(key);
         const pending = (yield* store.pendingMutations).map(key);
         if (![...held, ...pending].includes("c:2")) lost++;
       }

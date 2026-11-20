@@ -255,9 +255,7 @@ const rootLimit = (read: Read): number | undefined =>
 const compileWhere = (where: Read["where"]): Predicate.Predicate => {
   if (where === undefined) return Predicate.always;
   if ("_tag" in where) return where as Predicate.Predicate;
-  const terms = Object.entries(where).map(([field, value]) =>
-    Predicate.eq(field, value as Predicate.Literal)
-  );
+  const terms = Object.entries(where).map(([field, value]) => Predicate.eq(field, value));
   const only = terms[0];
   return terms.length === 1 && only !== undefined ? only : Predicate.and(...terms);
 };

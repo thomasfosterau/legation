@@ -81,7 +81,7 @@ const declared = (resource: Resource.Any, name: string): string =>
 const descriptorsOf = (
   resource: Resource.Any
 ): ReadonlyArray<readonly [string, Relationship.Descriptor]> =>
-  Object.entries(resource.relationships) as ReadonlyArray<[string, Relationship.Descriptor]>;
+  Object.entries(resource.relationships);
 
 /** One declared relationship checked against the node's edge of that name: same name, same arity, same target. */
 const checkDeclaration = (

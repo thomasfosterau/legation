@@ -340,7 +340,7 @@ const makeWorld = (policy: Authorization.AuthPolicy = fullPolicy, seam: Identity
       Layer.provide(groups.pipe(Layer.provide(Middleware.layer))),
       Layer.provide(Middleware.layer),
       Layer.provide(HttpServer.layerServices)
-    ) as Layer.Layer<never, never, HttpRouter.HttpRouter>;
+    );
     const { handler } = yield* Effect.acquireRelease(
       Effect.sync(() => HttpRouter.toWebHandler(app, { disableLogger: true })),
       ({ dispose }) => awaitPromise(dispose).pipe(Effect.orDie)

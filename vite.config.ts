@@ -187,6 +187,7 @@ export default defineConfig({
       "effecttsgo/prefer-typed-schema-decoder": "error",
       "effecttsgo/unnecessary-effect-gen": "error",
       "typescript/no-unnecessary-type-arguments": "error",
+      "typescript/no-unnecessary-type-assertion": "error",
     },
     overrides: [
       // ---- Genuine can't-applies ------------------------------------------

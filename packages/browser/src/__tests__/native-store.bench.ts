@@ -125,7 +125,7 @@ const utf8 = (s: string) => encoder.encode(s);
  * fake-indexeddb's `instanceof ArrayBuffer` key check; copying through
  * `Uint8Array` lands the bytes in the realm fake-indexeddb sees.
  */
-const keyBytes = (s: string): ArrayBuffer => new Uint8Array(utf8(s)).buffer as ArrayBuffer;
+const keyBytes = (s: string): ArrayBuffer => new Uint8Array(utf8(s)).buffer;
 const kb = (bytes: number) => Math.round(bytes / 102.4) / 10;
 const ms = (t: number) => Math.round(t * 100) / 100;
 const gc = () => (globalThis as { gc?: () => void }).gc?.();

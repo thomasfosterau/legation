@@ -75,7 +75,6 @@ const attributes = {
 };
 const Row = Resource.make(COLLECTION, { attributes });
 const EvalRow = Resource.make(EVAL_COLLECTION, { attributes });
-type Attributes = (typeof Row.Type)["attributes"];
 type AnyResource = typeof Row.Type | typeof EvalRow.Type;
 
 class NotFound extends ApiError.make<NotFound>()("NotFound", {
@@ -168,12 +167,12 @@ const tableOf = (store: Store, type: string): Map<string, Stored> => {
 const contractResource = (row: Stored): typeof Row.Type => ({
   type: COLLECTION,
   id: Row.Id.make(row.id),
-  attributes: row.attributes as Attributes,
+  attributes: row.attributes,
 });
 const evalResource = (row: Stored): typeof EvalRow.Type => ({
   type: EVAL_COLLECTION,
   id: EvalRow.Id.make(row.id),
-  attributes: row.attributes as Attributes,
+  attributes: row.attributes,
 });
 const resourceOf = (row: Stored): AnyResource =>
   row.type === COLLECTION ? contractResource(row) : evalResource(row);
@@ -259,7 +258,7 @@ const applyAdd = (
   const row: Stored = {
     type: operation.data.type,
     id,
-    attributes: operation.data.attributes as Record<string, unknown>,
+    attributes: operation.data.attributes,
   };
   if (row.attributes.poison === true)
     return Effect.fail(rejection(index, "poison rows are refused"));
@@ -393,7 +392,7 @@ const makeInProcessClient = (store: Store, probe: ServerProbe = noProbe) =>
       ),
       Layer.provide(middleware),
       Layer.provide(HttpServer.layerServices)
-    ) as Layer.Layer<never, never, HttpRouter.HttpRouter>;
+    );
     const { handler } = yield* Effect.acquireRelease(
       Effect.sync(() => HttpRouter.toWebHandler(app, { disableLogger: true })),
       ({ dispose }) => awaitPromise(dispose).pipe(Effect.orDie)

@@ -30,7 +30,7 @@ import * as InvalidationBus from "../InvalidationBus.js";
 import * as MemoryBackend from "../MemoryBackend.js";
 import * as Mutator from "../Mutator.js";
 import * as Predicate from "../Predicate.js";
-import type { PullRequest, PullResponse, PushResponse } from "../Protocol.js";
+import type { PullRequest, PullResponse } from "../Protocol.js";
 import * as Query from "../Query.js";
 import * as Subset from "../Subset.js";
 import * as SyncRoom from "../SyncRoom.js";
@@ -152,7 +152,7 @@ describe("canonical arg keys", () => {
 
       const pulls: Array<PullRequest> = [];
       const recordingTransport: ClientTransport = {
-        push: () => Effect.succeed({ lastMutationIds: {} } as PushResponse),
+        push: () => Effect.succeed({ lastMutationIds: {} }),
         pull: (request) =>
           Effect.sync(() => {
             pulls.push(request);

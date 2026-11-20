@@ -727,7 +727,7 @@ describe("a committed compaction is never lost to a failure or an interrupt", ()
     const fault = {
       failAfterIntent: false,
       failing: false,
-      afterIntent: Effect.void as Effect.Effect<void>,
+      afterIntent: Effect.void,
     };
     const broken = (method: string, key: string) =>
       Effect.fail(new KeyValueStore.KeyValueStoreError({ message: "injected", method, key }));

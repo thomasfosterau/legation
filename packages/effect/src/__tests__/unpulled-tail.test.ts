@@ -776,7 +776,7 @@ describe("the tail in an engine", () => {
         yield* engine.push;
         expect(yield* tailOf(store)).toHaveLength(1);
 
-        yield* engine.reset("sha256:another-subject" as Identity.Fingerprint);
+        yield* engine.reset("sha256:another-subject");
         expect(yield* store.unpulled).toEqual([]);
         const restarted = yield* makeCounterEngine(server, store);
         yield* restarted.subscribe(countersSubset);
@@ -957,7 +957,7 @@ describe("the tail's crash windows and interleavings", () => {
           const engine = yield* makeCounterEngine(server, source);
           yield* engine.subscribe(countersSubset);
           yield* engine.mutate("counter/inc", { id: "c" });
-          const entry = (yield* source.pendingMutations)[0] as Mutation;
+          const entry = (yield* source.pendingMutations)[0];
 
           // The acknowledgement lands between dehydrate's journal read and its tail read.
           const acked = yield* Ref.make(false);
@@ -1807,9 +1807,7 @@ describe("the engine's release failure paths", () => {
         yield* engine.subscribe(countersSubset);
 
         yield* Ref.set(holdNext, true);
-        const resetting = yield* Effect.forkChild(
-          engine.reset("sha256:alice" as Identity.Fingerprint)
-        );
+        const resetting = yield* Effect.forkChild(engine.reset("sha256:alice"));
         yield* Deferred.await(reached);
 
         // A read started while the reset clears the rows must wait, and then see them cleared.

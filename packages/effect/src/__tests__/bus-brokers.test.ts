@@ -678,7 +678,7 @@ describe("makeRedisBroker (Redis Streams)", () => {
   it.effect("a hung XADD is dropped at its timeout, so the publish returns", () =>
     Effect.gen(function* () {
       const redis = yield* Redis.make({
-        send: (() => Effect.never) as Redis.Redis["Service"]["send"],
+        send: () => Effect.never,
         subscribe: () =>
           Effect.die(new TestFailure({ message: "the Streams broker never subscribes" })),
         connect: Effect.die(

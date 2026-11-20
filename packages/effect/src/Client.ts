@@ -1004,9 +1004,9 @@ export const fromView = <Graph extends Node.NodeRegistry>(
     // which is this Client's own `nodes`: the trust the engine's typed reads
     // place in rows that passed the row schema on write (ADR-0014). The read
     // itself is checked against the same graph at the call (`Query.Validate`).
-    query: queryOnce as QueryOf<Graph>,
+    query: queryOnce,
     // SAFETY: as `query`: the same plan over the same graph, streamed.
-    observe: observe as ObserveOf<Graph>,
+    observe,
     answer: answerOnce,
     observeAnswers,
     subscribe: (input) =>

@@ -526,7 +526,7 @@ export const rowsFor = <Graph extends Node.NodeRegistry, const R extends Query.R
       .filter((row) => row.collection === read.collection)
       .map((row) => ({ id: row.id, value: row.value, related: {} })),
     Query.plan(nodes, read).root
-  ) as ReadonlyArray<SeedRow<Client.ResolvedRow<R, Graph>["value"]>>;
+  );
 
 /** Options for {@link snapshot}. */
 export interface SnapshotOptions {

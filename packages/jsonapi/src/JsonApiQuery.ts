@@ -192,7 +192,7 @@ const literalList = (
   const [head, ...tail] = values;
   return head === undefined || head === null || tail.includes(null)
     ? Option.none()
-    : Option.some([head, ...(tail as Array<Predicate.Literal>)]);
+    : Option.some([head, ...tail]);
 };
 
 /**
@@ -479,15 +479,13 @@ const codecOf = (nodes: Node.NodeRegistry, node: Node.AnyNode): QueryCodec =>
     const schema = UrlQuery.schema(resource, {
       include: includeOption(node),
       fields: true,
-      sort: node.sortable as ReadonlyArray<Resource.AttributeKeys<Resource.Any>>,
+      sort: node.sortable,
       page: PageWindow,
       filter: true,
     }) as QueryCodec["schema"];
     return {
       schema,
-      canonical: UrlQuery.canonical(schema as UrlQuery.FlatQuerySchema) as (
-        decoded: DecodedQuery
-      ) => string,
+      canonical: UrlQuery.canonical(schema),
     };
   });
 
