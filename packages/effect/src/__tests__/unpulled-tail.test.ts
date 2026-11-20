@@ -39,13 +39,9 @@ import * as Telemetry from "../Telemetry.js";
 import { ClientTransport, makeInMemory } from "../Transport.js";
 import { defined } from "./defined.js";
 import * as Json from "../internal/Json.js";
+import { countOf, idOf, optionalCountOf } from "./shapes.js";
 
 const decodeSnapshot = Schema.decodeSync(Hydration.SnapshotFromJson);
-
-interface Counter {
-  readonly id: string;
-  readonly n: number;
-}
 
 // A non-idempotent counter: a double application shows as an extra count.
 const incrementCounter = <E>(
@@ -56,19 +52,19 @@ const incrementCounter = <E>(
   id: string
 ): Effect.Effect<void, E> =>
   Effect.gen(function* () {
-    const current = (yield* writer.get("counters", id)) as Counter | undefined;
-    yield* writer.put("counters", id, { id, n: (current?.n ?? 0) + 1 });
+    const current = optionalCountOf(yield* writer.get("counters", id));
+    yield* writer.put("counters", id, { id, n: (current ?? 0) + 1 });
   });
 
 const counterMutators = Mutator.registry([
   {
     mutator: Mutator.make("counter/inc", Schema.Unknown),
-    local: (args, writer) => incrementCounter(writer, (args as { readonly id: string }).id),
+    local: (args: { readonly id: string }, writer) => incrementCounter(writer, args.id),
   },
 ]);
 
 const backendHandlers = {
-  "counter/inc": (args, writer) => incrementCounter(writer, (args as { readonly id: string }).id),
+  "counter/inc": (args, writer) => incrementCounter(writer, idOf(args)),
 } satisfies Record<string, MemoryBackend.BackendHandler>;
 
 const authPolicy = Authorization.policy({ counters: Authorization.allowAll });
@@ -128,9 +124,7 @@ const makeCounterEngine = (
 const counterValue = (engine: ClientEngineModule.ClientEngine) =>
   engine
     .query(countersSubset)
-    .pipe(
-      Effect.map((rows) => (rows.find((row) => row.id === "c")?.value as Counter | undefined)?.n)
-    );
+    .pipe(Effect.map((rows) => optionalCountOf(rows.find((row) => row.id === "c")?.value)));
 
 /** The tail's entries as `client#id`, in tail order. */
 const tailOf = (store: ClientStore) =>
@@ -247,7 +241,7 @@ const gatedKeyValue = (
 
 // The row `id`'s counter value, or `undefined` when the store holds no such row.
 const rowCount = (store: ClientStore, id: string) =>
-  store.getRow("counters", id).pipe(Effect.map((row) => (row?.value as Counter | undefined)?.n));
+  store.getRow("counters", id).pipe(Effect.map((row) => optionalCountOf(row?.value)));
 
 const putCounter = (store: ClientStore, id: string, n: number) =>
   store.putRow("counters", { id, version: 1, value: { id, n } });
@@ -533,8 +527,8 @@ describe("ClientStore's unpulled tail", () => {
   layer(KeyValueStore.layerMemory)((scoped) => {
     scoped.effect("key-value: an identity reset at open clears the tail with the rows", () =>
       Effect.gen(function* () {
-        const alice = "sha256:alice" as Identity.Fingerprint;
-        const bob = "sha256:bob" as Identity.Fingerprint;
+        const alice: Identity.Fingerprint = "sha256:alice";
+        const bob: Identity.Fingerprint = "sha256:bob";
         const first = yield* ClientStoreModule.makeKeyValue({ identity: alice });
         yield* first.parkUnpulled([mutation("c1", 1)]);
 
@@ -2400,7 +2394,7 @@ describeWrapped("a memory snapshot is one pull's state", (it) => {
             Effect.gen(function* () {
               const state = yield* defined(store.snapshot);
               const row = state.rows.find((entry) => entry.row.id === "a")?.row;
-              const n = row === undefined ? undefined : (row.value as { readonly n: number }).n;
+              const n = row === undefined ? undefined : countOf(row.value);
               seen.add(n);
               if (state.cookie !== (n === undefined ? undefined : `c${n}`)) torn++;
             }),

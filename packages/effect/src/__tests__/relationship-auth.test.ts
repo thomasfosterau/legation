@@ -6,6 +6,7 @@
  */
 import { describe, expect, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
+import * as P from "effect/Predicate";
 import * as Schema from "effect/Schema";
 import * as Authorization from "../Authorization.js";
 import { Backend } from "../Backend.js";
@@ -20,6 +21,7 @@ import * as Predicate from "../Predicate.js";
 import * as Subset from "../Subset.js";
 import * as SyncServer from "../SyncServer.js";
 import { ClientTransport, makeInMemory, type ServerHandler } from "../Transport.js";
+import { idOf } from "./shapes.js";
 
 interface Issue {
   readonly id: string;
@@ -28,10 +30,10 @@ interface Issue {
 
 const setIssue = Mutator.make("issue/set", Schema.Unknown);
 const mutators = Mutator.registry([
-  { mutator: setIssue, local: (args, writer) => writer.put("issues", (args as Issue).id, args) },
+  { mutator: setIssue, local: (args: Issue, writer) => writer.put("issues", args.id, args) },
 ]);
 const handlers = {
-  "issue/set": (args, writer) => Effect.asVoid(writer.put("issues", (args as Issue).id, args)),
+  "issue/set": (args, writer) => Effect.asVoid(writer.put("issues", idOf(args), args)),
 } satisfies Record<string, MemoryBackend.BackendHandler>;
 
 interface Lookup<A> {
@@ -49,7 +51,7 @@ const users: Lookup<string> = { "group-alice": "alice", "group-bob": "bob" };
 // Relationship-scoped auth: visible issues are those whose projectId is one the
 // requesting user is a member of.
 const issuesAuth: Authorization.AuthFilter = (context) => {
-  const projects = memberships[context.identity as string] ?? [];
+  const projects = P.isString(context.identity) ? (memberships[context.identity] ?? []) : [];
   return Effect.succeed(Predicate.isIn("projectId", projects));
 };
 

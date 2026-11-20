@@ -82,12 +82,16 @@ const withoutTransactions = (sql: SqlClient): SqlBackend.SqlExecutor => ({
   transaction: (effect) => effect,
 });
 
+const decodeRowArgs = Schema.decodeUnknownSync(
+  Schema.Struct({ id: Schema.String, n: Schema.Finite })
+);
+
 /** Parks after its write, announcing `parked` and waiting for `release`. */
 const parkingHandler =
   (parked: Deferred.Deferred<void>, release: Deferred.Deferred<void>): SqlBackend.SqlHandler =>
   (raw, tx) =>
     Effect.gen(function* () {
-      const args = raw as { id: string; n: number };
+      const args = decodeRowArgs(raw);
       yield* tx.run({ text: `INSERT INTO rows (id, n) VALUES (?, ?)`, params: [args.id, args.n] });
       yield* Deferred.succeed(parked, undefined);
       yield* Deferred.await(release);

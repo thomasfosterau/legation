@@ -60,7 +60,7 @@ const harness = (store: ClientStore) =>
       mutators: Mutator.registry([
         {
           mutator: todoSet,
-          local: (args, writer) => writer.put("todos", (args as { id: string }).id, args),
+          local: (args: { id: string }, writer) => writer.put("todos", args.id, args),
         },
       ]),
     }).pipe(

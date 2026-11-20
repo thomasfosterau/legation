@@ -33,6 +33,7 @@ import * as Subset from "../Subset.js";
 import * as SyncServer from "../SyncServer.js";
 import { ClientTransport, makeInMemory } from "../Transport.js";
 import { defined } from "./defined.js";
+import { idOf } from "./shapes.js";
 
 const context: SyncContext = { clientGroupId: "memory-atomicity-group" };
 const clientId = "memory-atomicity-client";
@@ -46,12 +47,7 @@ const mutation = (mutationId: number, mutator: string, args: unknown): Mutation 
   createdAt: 0,
 });
 
-interface Args {
-  readonly id: string;
-  readonly n: number;
-}
-
-const argsOf = (raw: unknown): Args => raw as Args;
+const argsOf = Schema.decodeUnknownSync(Schema.Struct({ id: Schema.String, n: Schema.Finite }));
 
 /** Plain sets, plus the failure and parking shapes each test needs. */
 const handlersFor = (hooks: {
@@ -207,7 +203,17 @@ describe("MemoryBackend atomicity", () => {
 });
 
 /** Names of the parked copies a concurrency test drives. */
-type GateName = "a" | "b" | "first" | "stale" | "fresh" | "next";
+const GateName = Schema.Literals(["a", "b", "first", "stale", "fresh", "next"]);
+type GateName = typeof GateName.Type;
+
+const decodeGated = Schema.decodeUnknownSync(
+  Schema.Struct({ id: Schema.String, n: Schema.Finite, gate: GateName })
+);
+
+/** The shared counter row, absent before its first count. */
+const decodeTally = Schema.decodeUnknownSync(
+  Schema.UndefinedOr(Schema.Struct({ count: Schema.Finite }))
+);
 
 /**
  * A copy parks at `release` after it has entered its handler, so the test
@@ -246,16 +252,12 @@ const makeGates = Effect.all(
 const gatedHandlers = (gates: Record<GateName, Gate>) =>
   ({
     "test/gated": (raw, writer) => {
-      const { id, n, gate } = raw as {
-        readonly id: string;
-        readonly n: number;
-        readonly gate: GateName;
-      };
+      const { id, n, gate } = decodeGated(raw);
       const hook = gates[gate];
       return Effect.gen(function* () {
         yield* Deferred.succeed(hook.entered, undefined);
         yield* Deferred.await(hook.release);
-        const current = (yield* writer.get(rows, "counter")) as { count: number } | undefined;
+        const current = decodeTally(yield* writer.get(rows, "counter"));
         yield* writer.put(rows, "counter", { count: (current?.count ?? 0) + 1 });
         yield* writer.put(rows, id, { n });
       });
@@ -477,7 +479,7 @@ const raceContext: SyncContext = { clientGroupId: "group-a" };
 const raceMutators = Mutator.registry([
   {
     mutator: Mutator.make("todo/race", Schema.Unknown),
-    local: (args, writer) => writer.put("todos", (args as { readonly id: string }).id, args),
+    local: (args: { readonly id: string }, writer) => writer.put("todos", args.id, args),
   },
 ]);
 
@@ -496,7 +498,7 @@ const raceHandlers = (
         if (copy > 1) return yield* new MutationRejected({ reason: "forbidden" });
         yield* Deferred.succeed(parked.entered, undefined);
         yield* Deferred.await(parked.release);
-        return yield* writer.put("todos", (args as { readonly id: string }).id, args);
+        return yield* writer.put("todos", idOf(args), args);
       }),
   }) satisfies Record<string, MemoryBackend.BackendHandler>;
 
@@ -688,7 +690,7 @@ const withLateRejection = (
 const setMutators = Mutator.registry([
   {
     mutator: Mutator.make("todo/set", Schema.Unknown),
-    local: (args, writer) => writer.put("todos", (args as { readonly id: string }).id, args),
+    local: (args: { readonly id: string }, writer) => writer.put("todos", args.id, args),
   },
 ]);
 
@@ -702,8 +704,7 @@ describe("ClientEngine settled outcomes are not re-settled", () => {
   it.effect("a rejection reported after the entry was acknowledged is ignored", () =>
     Effect.gen(function* () {
       const backend = yield* MemoryBackend.make({
-        "todo/set": (args, writer) =>
-          writer.put("todos", (args as { readonly id: string }).id, args),
+        "todo/set": (args, writer) => writer.put("todos", idOf(args), args),
       });
       const handler = yield* serverFor(backend);
       const store = yield* ClientStoreModule.makeMemory;
@@ -779,7 +780,7 @@ describe("MemoryBackend serialisable isolation across client groups", () => {
         "test/count": (_raw, writer, callContext) =>
           Effect.gen(function* () {
             yield* Ref.update(runs, (n) => n + 1);
-            const current = (yield* writer.get(rows, "counter")) as { count: number } | undefined;
+            const current = decodeTally(yield* writer.get(rows, "counter"));
             const count = current?.count ?? 0;
             if (callContext.clientGroupId === "group-x" && !(yield* Ref.getAndSet(parked, true))) {
               yield* Deferred.succeed(seen, count);
@@ -862,7 +863,7 @@ describe("MemoryBackend serialisable isolation across client groups", () => {
         "test/count": (_raw, writer) =>
           Effect.gen(function* () {
             yield* Ref.update(runs, (n) => n + 1);
-            const current = (yield* writer.get(rows, "counter")) as { count: number } | undefined;
+            const current = decodeTally(yield* writer.get(rows, "counter"));
             yield* writer.put(rows, "counter", { count: (current?.count ?? 0) + 1 });
           }),
       });

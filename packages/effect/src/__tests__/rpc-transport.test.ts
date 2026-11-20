@@ -25,6 +25,7 @@ import * as Subset from "../Subset.js";
 import * as SyncRoom from "../SyncRoom.js";
 import * as Transport from "../Transport.js";
 import { ClientTransport } from "../Transport.js";
+import { titleOf } from "./shapes.js";
 
 const Todo = Schema.Struct({
   id: Schema.String,
@@ -36,7 +37,7 @@ type Todo = typeof Todo.Type;
 const todoSet = Mutator.make("todo/set", Todo);
 
 const mutators = Mutator.registry([
-  { mutator: todoSet, local: (args, writer) => writer.put("todos", (args as Todo).id, args) },
+  { mutator: todoSet, local: (args: Todo, writer) => writer.put("todos", args.id, args) },
 ]);
 
 /** One sync room behind the RPC handlers, fresh per provided layer. */
@@ -85,7 +86,7 @@ describe("RpcTransport", () => {
 
         expect(yield* store.pendingMutations).toEqual([]);
         const confirmed = yield* store.listRows("todos");
-        expect(confirmed.map((row) => (row.value as Todo).title)).toEqual(["over rpc"]);
+        expect(confirmed.map((row) => titleOf(row.value))).toEqual(["over rpc"]);
       })
     );
   });
@@ -108,7 +109,7 @@ describe("RpcTransport", () => {
         expect((yield* Fiber.join(firstPoke))._tag).toBe("Some");
         yield* b.engine.pull;
         const seen = yield* b.engine.query(allTodos);
-        expect(seen.map((row) => (row.value as Todo).title)).toEqual(["poke me"]);
+        expect(seen.map((row) => titleOf(row.value))).toEqual(["poke me"]);
       })
     );
   });

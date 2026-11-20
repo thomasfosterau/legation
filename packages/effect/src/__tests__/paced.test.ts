@@ -44,6 +44,7 @@ import {
   type ServerHandler,
 } from "../Transport.js";
 import { defined } from "./defined.js";
+import { idOf, titleOf } from "./shapes.js";
 
 interface Todo {
   readonly id: string;
@@ -54,12 +55,12 @@ interface Todo {
 const mutators = Mutator.registry([
   {
     mutator: Mutator.make("todo/set", Schema.Unknown),
-    local: (args, writer) => writer.put("todos", (args as Todo).id, args),
+    local: (args: Todo, writer) => writer.put("todos", args.id, args),
   },
 ]);
 
 const backendHandlers = {
-  "todo/set": (args, writer) => Effect.asVoid(writer.put("todos", (args as Todo).id, args)),
+  "todo/set": (args, writer) => Effect.asVoid(writer.put("todos", idOf(args), args)),
 } satisfies Record<string, MemoryBackend.BackendHandler>;
 
 const makeServer = Effect.fn("makeServer")(function* (): Effect.fn.Return<
@@ -135,8 +136,8 @@ const makeLoggingServer = Effect.fn("makeLoggingServer")(function* () {
   const applied: Array<string> = [];
   const backend = yield* MemoryBackend.make({
     "todo/set": (args, writer) =>
-      Effect.sync(() => void applied.push((args as Todo).title)).pipe(
-        Effect.andThen(writer.put("todos", (args as Todo).id, args)),
+      Effect.sync(() => void applied.push(titleOf(args))).pipe(
+        Effect.andThen(writer.put("todos", idOf(args), args)),
         Effect.asVoid
       ),
   });
@@ -154,8 +155,7 @@ const makeLoggingServer = Effect.fn("makeLoggingServer")(function* () {
   return { handler, applied, backend };
 });
 
-const titlesOf = (mutations: ReadonlyArray<Mutation>) =>
-  mutations.map((m) => (m.args as Todo).title);
+const titlesOf = (mutations: ReadonlyArray<Mutation>) => mutations.map((m) => titleOf(m.args));
 
 /** Fail after the server has applied the push: the response is lost in transit. */
 const lossyAfterApply = (base: CT, mode: Ref.Ref<"ok" | "response-lost" | "request-lost">): CT => ({
@@ -203,10 +203,10 @@ describe("Paced", () => {
       // Ten calls for t1 collapse to its newest entry; t2 is untouched by that
       // compaction — two keys, two surviving entries.
       expect(pending).toHaveLength(2);
-      const t1 = defined(pending.find((m) => (m.args as Todo).id === "t1"));
-      const t2 = defined(pending.find((m) => (m.args as Todo).id === "t2"));
-      expect((t1.args as Todo).title).toBe("v9");
-      expect((t2.args as Todo).title).toBe("other");
+      const t1 = defined(pending.find((m) => idOf(m.args) === "t1"));
+      const t2 = defined(pending.find((m) => idOf(m.args) === "t2"));
+      expect(titleOf(t1.args)).toBe("v9");
+      expect(titleOf(t2.args)).toBe("other");
       // Every call journaled (fully durable): eleven appends, nine of them
       // (t1's v0..v8) compacted away afterwards — and the survivors renumbered
       // so the ids the backend sees are gap-free.
@@ -233,14 +233,14 @@ describe("Paced", () => {
         const during = yield* store.pendingMutations;
         expect(during).toHaveLength(1);
         expect(defined(during[0]).mutationId).toBe(1);
-        expect((defined(during[0]).args as Todo).title).toBe("keystroke-0");
+        expect(titleOf(defined(during[0]).args)).toBe("keystroke-0");
 
         // The window closes: the trailing flush supersedes the leading entry
         // with the latest args.
         yield* TestClock.adjust(Duration.millis(200));
         const after = yield* store.pendingMutations;
         expect(after).toHaveLength(1);
-        expect((defined(after[0]).args as Todo).title).toBe("keystroke-49");
+        expect(titleOf(defined(after[0]).args)).toBe("keystroke-49");
         // Exactly two `mutateWithAck` calls happened for 50 keystrokes — i.e.
         // exactly two journal writes / overlay invalidations, not fifty:
         // "bounded overlay replays". The survivor was renumbered back to 1 so
@@ -285,7 +285,7 @@ describe("Paced", () => {
       yield* TestClock.adjust(Duration.millis(100));
       let pending = yield* store.pendingMutations;
       expect(pending).toHaveLength(1);
-      expect((defined(pending[0]).args as Todo).title).toBe("v2");
+      expect(titleOf(defined(pending[0]).args)).toBe("v2");
       expect(counter.appends).toBe(2);
       expect(defined(pending[0]).mutationId).toBe(1); // renumbered
 
@@ -294,7 +294,7 @@ describe("Paced", () => {
       yield* TestClock.adjust(Duration.millis(100));
       pending = yield* store.pendingMutations;
       expect(pending).toHaveLength(1);
-      expect((defined(pending[0]).args as Todo).title).toBe("v3");
+      expect(titleOf(defined(pending[0]).args)).toBe("v3");
       expect(counter.appends).toBe(3);
       expect(defined(pending[0]).mutationId).toBe(1);
 
@@ -352,7 +352,7 @@ describe("Paced", () => {
       yield* paced.call("t1", todo("t1", "third"));
       const final = yield* store.pendingMutations;
       expect(final).toHaveLength(1);
-      expect((defined(final[0]).args as Todo).title).toBe("third");
+      expect(titleOf(defined(final[0]).args)).toBe("third");
     }).pipe(Effect.scoped)
   );
 

@@ -30,6 +30,7 @@ import * as SyncServer from "../SyncServer.js";
 import { ClientTransport, makeInMemory, type ServerHandler } from "../Transport.js";
 import { defined } from "./defined.js";
 import { TestFailure } from "./test-failure.js";
+import { countOf, idOf, optionalCountOf, titleOf as titleOfValue } from "./shapes.js";
 
 interface Todo {
   readonly id: string;
@@ -42,29 +43,21 @@ interface Todo {
 const setTodo = Mutator.registry([
   {
     mutator: Mutator.make("todo/set", Schema.Unknown),
-    local: (args, writer) => {
-      const todo = args as Todo;
-      return writer.put("todos", todo.id, todo);
-    },
+    local: (todo: Todo, writer) => writer.put("todos", todo.id, todo),
   },
   {
     mutator: Mutator.make("todo/remove", Schema.Unknown),
-    local: (args, writer) => writer.del("todos", (args as { id: string }).id),
+    local: (args: { id: string }, writer) => writer.del("todos", args.id),
   },
   {
     // Applies optimistically; the backend always refuses it.
     mutator: Mutator.make("todo/reject", Schema.Unknown),
-    local: (args, writer) => writer.put("todos", (args as Todo).id, args),
+    local: (args: Todo, writer) => writer.put("todos", args.id, args),
   },
 ]);
 
 // A non-idempotent counter: every application adds one, so a double application
 // shows as an extra count. The put-by-id mutators above cannot show it.
-interface Counter {
-  readonly id: string;
-  readonly n: number;
-}
-
 const incrementCounter = <E>(
   writer: {
     readonly get: (collection: string, id: string) => Effect.Effect<unknown, E>;
@@ -73,24 +66,21 @@ const incrementCounter = <E>(
   id: string
 ): Effect.Effect<void, E> =>
   Effect.gen(function* () {
-    const current = (yield* writer.get("counters", id)) as Counter | undefined;
-    yield* writer.put("counters", id, { id, n: (current?.n ?? 0) + 1 });
+    const current = optionalCountOf(yield* writer.get("counters", id));
+    yield* writer.put("counters", id, { id, n: (current ?? 0) + 1 });
   });
 
 const counterMutators = Mutator.registry([
   {
     mutator: Mutator.make("counter/inc", Schema.Unknown),
-    local: (args, writer) => incrementCounter(writer, (args as { readonly id: string }).id),
+    local: (args: { readonly id: string }, writer) => incrementCounter(writer, args.id),
   },
 ]);
 
 const backendHandlers = {
-  "counter/inc": (args, writer) => incrementCounter(writer, (args as { readonly id: string }).id),
-  "todo/set": (args, writer) => {
-    const todo = args as Todo;
-    return Effect.asVoid(writer.put("todos", todo.id, todo));
-  },
-  "todo/remove": (args, writer) => Effect.asVoid(writer.del("todos", (args as { id: string }).id)),
+  "counter/inc": (args, writer) => incrementCounter(writer, idOf(args)),
+  "todo/set": (args, writer) => Effect.asVoid(writer.put("todos", idOf(args), args)),
+  "todo/remove": (args, writer) => Effect.asVoid(writer.del("todos", idOf(args))),
   "todo/reject": () => Effect.fail(new MutationRejected({ reason: "refused by the backend" })),
 } satisfies Record<string, MemoryBackend.BackendHandler>;
 
@@ -174,7 +164,7 @@ describe("ClientEngine ↔ SyncServer end to end", () => {
 
       yield* b.engine.pull;
       const seen = yield* b.engine.query(allTodos);
-      expect(seen.map((row) => (row.value as Todo).title)).toEqual(["shared"]);
+      expect(seen.map((row) => titleOfValue(row.value))).toEqual(["shared"]);
     })
   );
 
@@ -228,6 +218,8 @@ describe("ClientEngine ↔ SyncServer end to end", () => {
   );
 });
 
+const decodeDue = Schema.decodeUnknownSync(Schema.Struct({ due: Schema.Unknown }));
+
 describe("mutator args validation", () => {
   const TodoArgs = Schema.Struct({
     id: Schema.String,
@@ -237,8 +229,7 @@ describe("mutator args validation", () => {
   const typedMutators = Mutator.registry([
     {
       mutator: Mutator.make("todo/schedule", TodoArgs),
-      local: (args, writer) => {
-        const todo = args as typeof TodoArgs.Type;
+      local: (todo: typeof TodoArgs.Type, writer) => {
         return writer.put("todos", todo.id, { id: todo.id, dueYear: todo.due.getFullYear() });
       },
     },
@@ -285,9 +276,7 @@ describe("mutator args validation", () => {
 
       // The journal holds the wire/persistence form (Date encoded to string).
       const pending = yield* store.pendingMutations;
-      expect(pending.map((m) => (m.args as { due: unknown }).due)).toEqual([
-        "2026-06-12T00:00:00.000Z",
-      ]);
+      expect(pending.map((m) => decodeDue(m.args).due)).toEqual(["2026-06-12T00:00:00.000Z"]);
 
       // Replay decoded the args back to a Date for the handler.
       const view = yield* engine.query(allTodos);
@@ -323,7 +312,10 @@ const eventually = <A>(read: Effect.Effect<A>, until: (value: A) => boolean) => 
 const titleOf = (
   rows: ReadonlyArray<{ readonly id: string; readonly value: unknown }>,
   id: string
-) => (rows.find((row) => row.id === id)?.value as Todo | undefined)?.title;
+) => {
+  const value = rows.find((row) => row.id === id)?.value;
+  return value === undefined ? undefined : titleOfValue(value);
+};
 
 describe("a push acknowledgement keeps the overlay until a pull reports it", () => {
   it.live("an observer never sees an acknowledged mutation revert before its pull", () =>
@@ -446,9 +438,7 @@ const countersSubset = Subset.make({ collection: "counters" });
 const counterValue = (engine: ClientEngineModule.ClientEngine) =>
   engine
     .query(countersSubset)
-    .pipe(
-      Effect.map((rows) => (rows.find((row) => row.id === "c")?.value as Counter | undefined)?.n)
-    );
+    .pipe(Effect.map((rows) => optionalCountOf(rows.find((row) => row.id === "c")?.value)));
 
 // A server over `backend`, wired like `makeServer`.
 const serverOver = (backend: Backend) =>
@@ -712,7 +702,7 @@ describe("a pull's watermark and rows are one snapshot", () => {
       });
       const reported = Object.values(response.lastMutationIds).reduce((sum, upTo) => sum + upTo, 0);
       const counted = response.patch.flatMap((op) =>
-        P.isTagged(op, "Put") && op.collection === "counters" ? [(op.value as Counter).n] : []
+        P.isTagged(op, "Put") && op.collection === "counters" ? [countOf(op.value)] : []
       );
       // The rows may trail the watermark (a transient revert until the next pull),
       // but never carry a push it does not report: that would double-apply.
@@ -786,7 +776,7 @@ describe("a pull's watermark and rows are one snapshot", () => {
             0
           );
           const counted = response.patch.flatMap((op) =>
-            P.isTagged(op, "Put") && op.collection === "counters" ? [(op.value as Counter).n] : []
+            P.isTagged(op, "Put") && op.collection === "counters" ? [countOf(op.value)] : []
           );
           expect(counted).toEqual([reported]);
         })

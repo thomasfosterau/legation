@@ -69,6 +69,7 @@ import { ClientTransport, makeInMemory, type ServerHandler } from "../Transport.
 import { defined } from "./defined.js";
 import { TestFailure } from "./test-failure.js";
 import * as Json from "../internal/Json.js";
+import { idOf } from "./shapes.js";
 
 interface Todo {
   readonly id: string;
@@ -83,22 +84,22 @@ interface User {
 const mutators = Mutator.registry([
   {
     mutator: Mutator.make("todo/set", Schema.Unknown),
-    local: (args, writer) => writer.put("todos", (args as Todo).id, args),
+    local: (args: Todo, writer) => writer.put("todos", args.id, args),
   },
   {
     mutator: Mutator.make("todo/remove", Schema.Unknown),
-    local: (args, writer) => writer.del("todos", (args as { id: string }).id),
+    local: (args: { id: string }, writer) => writer.del("todos", args.id),
   },
   {
     mutator: Mutator.make("user/set", Schema.Unknown),
-    local: (args, writer) => writer.put("users", (args as User).id, args),
+    local: (args: User, writer) => writer.put("users", args.id, args),
   },
 ]);
 
 const handlers = {
-  "todo/set": (args, writer) => Effect.asVoid(writer.put("todos", (args as Todo).id, args)),
-  "todo/remove": (args, writer) => Effect.asVoid(writer.del("todos", (args as { id: string }).id)),
-  "user/set": (args, writer) => Effect.asVoid(writer.put("users", (args as User).id, args)),
+  "todo/set": (args, writer) => Effect.asVoid(writer.put("todos", idOf(args), args)),
+  "todo/remove": (args, writer) => Effect.asVoid(writer.del("todos", idOf(args))),
+  "user/set": (args, writer) => Effect.asVoid(writer.put("users", idOf(args), args)),
 } satisfies Record<string, MemoryBackend.BackendHandler>;
 
 const makeServer = Effect.fn("makeServer")(function* () {

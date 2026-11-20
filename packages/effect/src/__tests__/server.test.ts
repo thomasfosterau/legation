@@ -33,6 +33,9 @@ import {
 import { InvalidationBus } from "../internal.js";
 import { defined } from "./defined.js";
 import { TestFailure } from "./test-failure.js";
+import { idOf, stringField } from "./shapes.js";
+
+const nameOf = stringField("name");
 
 const Product = Node.make("products", {
   attributes: { name: Schema.String },
@@ -44,7 +47,7 @@ const productSet = Mutator.make("product/set", Schema.Unknown);
 const mutations = Mutator.registry([
   {
     mutator: productSet,
-    local: (args, writer) => writer.put("products", (args as { id: string }).id, args),
+    local: (args: { id: string }, writer) => writer.put("products", args.id, args),
   },
 ]);
 
@@ -76,7 +79,7 @@ describe("Server", () => {
         const backend = yield* MemoryBackend.make(
           MemoryBackend.validatedHandlers([
             MemoryBackend.handler(productSet, (args, writer) =>
-              writer.put("products", (args as { id: string }).id, args)
+              writer.put("products", idOf(args), args)
             ),
           ])
         );
@@ -160,7 +163,7 @@ describe("Server", () => {
         const rows = yield* advanceUntil(Ref.get(latest), (current) => current.length === 2);
         expect(
           Arr.sort(
-            rows.map((row) => (row.value as { name: string }).name),
+            rows.map((row) => nameOf(row.value)),
             Order.String
           )
         ).toEqual(["Dropped by cron", "Seed"]);
@@ -177,7 +180,7 @@ describe("Server", () => {
         const backend = yield* MemoryBackend.make(
           MemoryBackend.validatedHandlers([
             MemoryBackend.handler(productSet, (args, writer) =>
-              writer.put("products", (args as { id: string }).id, args)
+              writer.put("products", idOf(args), args)
             ),
           ])
         );
@@ -275,7 +278,7 @@ describe("Server", () => {
         // bus (no broadcast call anywhere), and the poke's pull brings the
         // row in.
         const rows = yield* advanceUntil(Ref.get(latest), (current) => current.length === 1);
-        expect((defined(rows[0]).value as { name: string }).name).toBe("Pushed");
+        expect(nameOf(defined(rows[0]).value)).toBe("Pushed");
         // The connect pull and the one the push's poke caused: no other pull
         // could have brought the row in.
         expect(yield* Ref.get(reader.pulls)).toBe(2);

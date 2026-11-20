@@ -21,6 +21,7 @@ import * as Predicate from "../Predicate.js";
 import * as Subset from "../Subset.js";
 import * as SyncServer from "../SyncServer.js";
 import { ClientTransport, makeInMemory, type ServerHandler } from "../Transport.js";
+import { idOf } from "./shapes.js";
 
 interface Todo {
   readonly id: string;
@@ -37,11 +38,7 @@ const todos: ReadonlyArray<Todo> = [
 ];
 
 const handlers = {
-  "todo/set": (args, writer) => {
-    // SAFETY: every `todo/set` this file applies carries a `Todo`.
-    const todo = args as Todo;
-    return Effect.asVoid(writer.put("todos", todo.id, todo));
-  },
+  "todo/set": (args, writer) => Effect.asVoid(writer.put("todos", idOf(args), args)),
 } satisfies Record<string, MemoryBackend.BackendHandler>;
 
 const byRank = [{ field: "rank", direction: "asc" as const }];

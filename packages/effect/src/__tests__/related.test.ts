@@ -36,6 +36,7 @@ import { ClientTransport, makeInMemory, type ServerHandler } from "../Transport.
 import { defined } from "./defined.js";
 import { TestFailure } from "./test-failure.js";
 import * as Json from "../internal/Json.js";
+import { idOf } from "./shapes.js";
 
 interface Issue {
   readonly id: string;
@@ -105,7 +106,7 @@ const registry = Collection.registry([issuesCollection, commentsCollection, peop
 const setRow =
   (collection: string) =>
   (args: unknown, writer: { put: (c: string, id: string, v: unknown) => any }) =>
-    writer.put(collection, (args as { id: string }).id, args);
+    writer.put(collection, idOf(args), args);
 
 const mutators = Mutator.registry([
   { mutator: Mutator.make("issue/set", Schema.Unknown), local: setRow("issues") },
@@ -114,10 +115,9 @@ const mutators = Mutator.registry([
 ]);
 
 const backendHandlers = {
-  "issue/set": (args, writer) => Effect.asVoid(writer.put("issues", (args as Issue).id, args)),
-  "comment/set": (args, writer) =>
-    Effect.asVoid(writer.put("comments", (args as CommentRow).id, args)),
-  "person/set": (args, writer) => Effect.asVoid(writer.put("people", (args as Person).id, args)),
+  "issue/set": (args, writer) => Effect.asVoid(writer.put("issues", idOf(args), args)),
+  "comment/set": (args, writer) => Effect.asVoid(writer.put("comments", idOf(args), args)),
+  "person/set": (args, writer) => Effect.asVoid(writer.put("people", idOf(args), args)),
 } satisfies Record<string, MemoryBackend.BackendHandler>;
 
 const authPolicy = Authorization.policy({
@@ -178,8 +178,12 @@ const syncAll = (engine: ClientEngineModule.ClientEngine) =>
     yield* engine.pull;
   });
 
+const decodeComments = Schema.decodeUnknownSync(Schema.Array(Comment));
+const decodeAuthor = Schema.decodeUnknownSync(Person);
+const decodeOptionalAuthor = Schema.decodeUnknownSync(Schema.NullOr(Person));
+
 const commentBodies = (row: Related.RelatedRow): ReadonlyArray<string> =>
-  (row.related.comments as ReadonlyArray<CommentRow>).map((c) => c.body);
+  decodeComments(row.related.comments).map((c) => c.body);
 
 /**
  * Waits on an observer's recorded emissions (not on wall-clock time) until
@@ -249,7 +253,7 @@ describe("Related.query / observe", () => {
 
       const rows = yield* Related.query(engine, registry, "issues", issues, ["author", "comments"]);
       const i1 = defined(rows.find((r) => r.id === "i1"));
-      expect((i1.related.author as Person).name).toBe("Ada");
+      expect(decodeAuthor(i1.related.author).name).toBe("Ada");
       expect(commentBodies(i1)).toEqual(["first", "second"]);
       // The comment-less issue resolves to an empty list, not undefined.
       expect(commentBodies(defined(rows.find((r) => r.id === "i2")))).toEqual([]);
@@ -351,7 +355,7 @@ describe("Related.query / observe", () => {
               (rows) =>
                 Effect.gen(function* () {
                   const names = rows
-                    .map((row) => (row.related.author as Person | null)?.name ?? "nobody")
+                    .map((row) => decodeOptionalAuthor(row.related.author)?.name ?? "nobody")
                     .join(",");
                   const priors = yield* SubscriptionRef.getAndUpdate(seen, (acc) => [
                     ...acc,
@@ -402,7 +406,7 @@ describe("Related.related", () => {
       ]).pipe(Effect.provideService(Scope.Scope, scope));
       const head = yield* Stream.runHead(stream);
       const i1 = defined((Option.isSome(head) ? head.value : []).find((r) => r.id === "i1"));
-      expect((i1.related.author as Person).name).toBe("Ada");
+      expect(decodeAuthor(i1.related.author).name).toBe("Ada");
       expect(commentBodies(i1)).toEqual(["first", "second"]);
 
       // A narrowed `issueId IN (...)` subset of comments and an `id IN (...)`
@@ -526,7 +530,9 @@ const foreignRowsOf = (truth: GroundTruth): ReadonlyMap<string, ReadonlyArray<Lo
     ["tags", [...truth.tags.values()]],
   ]);
 
-type ForeignCollection = "people" | "comments" | "tags";
+const ForeignCollection = Schema.Literals(["people", "comments", "tags"]);
+type ForeignCollection = typeof ForeignCollection.Type;
+const decodeForeign = Schema.decodeUnknownSync(ForeignCollection);
 
 type Op =
   | { readonly _tag: "putIssue"; readonly id: string; readonly authorId: string | null }
@@ -606,7 +612,7 @@ const applyOp = (truth: GroundTruth, op: Op): void =>
 
 const idsOf = (values: ReadonlyArray<unknown>) =>
   Arr.sort(
-    values.map((v) => (v as { id: string }).id),
+    values.map((v) => idOf(v)),
     Order.String
   );
 
@@ -646,7 +652,7 @@ describe("Related delta-maintenance", () => {
 
     const primeAdded = (collections: ReadonlyArray<string>) => {
       Arr.forEach(collections, (collection) => {
-        const rows = [...truth[collection as ForeignCollection].values()];
+        const rows = [...truth[decodeForeign(collection)].values()];
         const { result } = engine.applyForeign(collection, rows);
         if (result !== undefined) lastResult = result;
       });

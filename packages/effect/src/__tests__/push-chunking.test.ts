@@ -27,6 +27,7 @@ import * as Mutator from "../Mutator.js";
 import * as Subset from "../Subset.js";
 import * as SyncServer from "../SyncServer.js";
 import { ClientTransport, makeInMemory } from "../Transport.js";
+import { idOf, optionalCountOf } from "./shapes.js";
 
 // The ids from `from` to `to`, comma-separated, as a log line shows them.
 const range = (from: number, to: number): string =>
@@ -41,19 +42,19 @@ const counterWrite = <E>(
   id: string
 ): Effect.Effect<void, E> =>
   Effect.gen(function* () {
-    const current = (yield* writer.get("counters", id)) as { readonly n: number } | undefined;
-    yield* writer.put("counters", id, { id, n: (current?.n ?? 0) + 1 });
+    const current = optionalCountOf(yield* writer.get("counters", id));
+    yield* writer.put("counters", id, { id, n: (current ?? 0) + 1 });
   });
 
 const counterMutators = Mutator.registry([
   {
     mutator: Mutator.make("counter/inc", Schema.Unknown),
-    local: (args, writer) => counterWrite(writer, (args as { readonly id: string }).id),
+    local: (args: { readonly id: string }, writer) => counterWrite(writer, args.id),
   },
 ]);
 
 const backendHandlers = {
-  "counter/inc": (args, writer) => counterWrite(writer, (args as { readonly id: string }).id),
+  "counter/inc": (args, writer) => counterWrite(writer, idOf(args)),
 } satisfies Record<string, MemoryBackend.BackendHandler>;
 
 const authPolicy = Authorization.policy({ counters: Authorization.allowAll });
@@ -134,11 +135,7 @@ const engineOver = (
 const counterValue = (engine: ClientEngineModule.ClientEngine) =>
   engine
     .query(countersSubset)
-    .pipe(
-      Effect.map(
-        (rows) => (rows.find((row) => row.id === "c")?.value as { n: number } | undefined)?.n
-      )
-    );
+    .pipe(Effect.map((rows) => optionalCountOf(rows.find((row) => row.id === "c")?.value)));
 
 const journalIds = (store: ClientStore) =>
   store.pendingMutations.pipe(Effect.map((ms) => ms.map((m) => m.mutationId)));

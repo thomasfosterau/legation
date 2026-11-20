@@ -4,6 +4,7 @@
  */
 import { describe, expect, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
+import * as Schema from "effect/Schema";
 import { type Backend, evaluateAll, evaluateCountedAll, totalsOf } from "../Backend.js";
 import * as BackendContract from "../BackendContract.js";
 import { BackendError } from "../Errors.js";
@@ -16,6 +17,11 @@ const withoutHandler = (name: string) =>
   Object.fromEntries(
     Object.entries(BackendContract.memoryHandlers).filter(([key]) => key !== name)
   );
+
+/** A contract counter row's value, absent before its first count. */
+const decodeCounter = Schema.decodeUnknownSync(
+  Schema.UndefinedOr(Schema.Struct({ n: Schema.optional(Schema.Finite) }))
+);
 
 describe("verifyBackendContract", () => {
   it.effect("MemoryBackend satisfies the contract", () =>
@@ -147,11 +153,7 @@ describe("verifyBackendContract", () => {
       // overwritten: a lost update across client groups (rule 11).
       const snapshots = new Map<string, number>();
       const staleCount: MemoryBackend.BackendHandler = (raw, writer, context) => {
-        const args = raw as {
-          readonly collection: string;
-          readonly id: string;
-          readonly gate: string;
-        };
+        const args = Schema.decodeUnknownSync(BackendContract.countUp.args)(raw);
         return Effect.gen(function* () {
           const seen = snapshots.get(context.clientGroupId) ?? 0;
           yield* BackendContract.park(args.gate);
@@ -167,10 +169,7 @@ describe("verifyBackendContract", () => {
         applyMutations: (context, mutations) =>
           Effect.gen(function* () {
             const [row] = yield* inner.getRows(context, "__contract", ["race"]);
-            snapshots.set(
-              context.clientGroupId,
-              Number((row?.value as { readonly n?: number } | undefined)?.n ?? 0)
-            );
+            snapshots.set(context.clientGroupId, decodeCounter(row?.value)?.n ?? 0);
             return yield* inner.applyMutations(context, mutations);
           }),
       };

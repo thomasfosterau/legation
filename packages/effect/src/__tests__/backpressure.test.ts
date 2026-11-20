@@ -37,17 +37,17 @@ import * as PokeHub from "../PokeHub.js";
 import { ClientTransport, makeInMemory, type ServerHandler } from "../Transport.js";
 import { defined } from "./defined.js";
 import { TestFailure } from "./test-failure.js";
+import { idOf } from "./shapes.js";
 
 const mutators = Mutator.registry([
   {
     mutator: Mutator.make("todo/set", Schema.Unknown),
-    local: (args, writer) => writer.put("todos", (args as { id: string }).id, args),
+    local: (args: { id: string }, writer) => writer.put("todos", args.id, args),
   },
 ]);
 
 const handlers = {
-  "todo/set": (args, writer) =>
-    Effect.asVoid(writer.put("todos", (args as { id: string }).id, args)),
+  "todo/set": (args, writer) => Effect.asVoid(writer.put("todos", idOf(args), args)),
 } satisfies Record<string, MemoryBackend.BackendHandler>;
 
 const makeServer = Effect.fn("makeServer")(function* () {
@@ -174,10 +174,7 @@ describe("backpressure — engine change hub", () => {
         Stream.runForEach(engine.observe(todos), (rows) =>
           Effect.gen(function* () {
             const n = yield* Ref.updateAndGet(seen, (x) => x + 1);
-            yield* Ref.update(pages, (a) => [
-              ...a,
-              rows.map((r) => (r.value as { id: string }).id),
-            ]);
+            yield* Ref.update(pages, (a) => [...a, rows.map((r) => idOf(r.value))]);
             // Block after the first LIVE change (n === 2) so the subscription is
             // established, then stall while the storm overruns the bound.
             if (n === 2) yield* Deferred.await(release);
@@ -213,7 +210,7 @@ describe("backpressure — engine change hub", () => {
       // The resumed view equals a fresh query — no dropped Patch was lost.
       expect(Arr.sort(last, Order.String)).toEqual(
         Arr.sort(
-          expected.map((r) => (r.value as { id: string }).id),
+          expected.map((r) => idOf(r.value)),
           Order.String
         )
       );

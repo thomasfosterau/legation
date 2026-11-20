@@ -20,17 +20,17 @@ import * as Subset from "../Subset.js";
 import * as SyncServer from "../SyncServer.js";
 import * as Telemetry from "../Telemetry.js";
 import { ClientTransport, makeInMemory } from "../Transport.js";
+import { idOf } from "./shapes.js";
 
 const mutators = Mutator.registry([
   {
     mutator: Mutator.make("todo/set", Schema.Unknown),
-    local: (args, writer) => writer.put("todos", (args as { id: string }).id, args),
+    local: (args: { id: string }, writer) => writer.put("todos", args.id, args),
   },
 ]);
 
 const handlers = {
-  "todo/set": (args, writer) =>
-    Effect.asVoid(writer.put("todos", (args as { id: string }).id, args)),
+  "todo/set": (args, writer) => Effect.asVoid(writer.put("todos", idOf(args), args)),
 } satisfies Record<string, MemoryBackend.BackendHandler>;
 
 const makeServer = Effect.fn("makeServer")(function* () {

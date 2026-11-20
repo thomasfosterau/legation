@@ -45,6 +45,9 @@ import {
 } from "../internal.js";
 import { defined } from "./defined.js";
 import { TestFailure } from "./test-failure.js";
+import { idOf, idsOf, stringField } from "./shapes.js";
+
+const nameOf = stringField("name");
 
 const Product = Node.make("products", {
   attributes: { name: Schema.String, categoryId: Schema.String },
@@ -61,11 +64,11 @@ const reviewSet = Mutator.make("review/set", Schema.Unknown);
 const mutations = Mutator.registry([
   {
     mutator: productSet,
-    local: (args, writer) => writer.put("products", (args as { id: string }).id, args),
+    local: (args: { id: string }, writer) => writer.put("products", args.id, args),
   },
   {
     mutator: reviewSet,
-    local: (args, writer) => writer.put("reviews", (args as { id: string }).id, args),
+    local: (args: { id: string }, writer) => writer.put("reviews", args.id, args),
   },
 ]);
 
@@ -90,12 +93,8 @@ const eventually = <A>(read: Effect.Effect<A>, until: (value: A) => boolean) => 
 const makeHandler = Effect.fn("makeHandler")(function* () {
   const backend = yield* MemoryBackend.make(
     MemoryBackend.validatedHandlers([
-      MemoryBackend.handler(productSet, (args, writer) =>
-        writer.put("products", (args as { id: string }).id, args)
-      ),
-      MemoryBackend.handler(reviewSet, (args, writer) =>
-        writer.put("reviews", (args as { id: string }).id, args)
-      ),
+      MemoryBackend.handler(productSet, (args, writer) => writer.put("products", idOf(args), args)),
+      MemoryBackend.handler(reviewSet, (args, writer) => writer.put("reviews", idOf(args), args)),
     ])
   );
   return yield* SyncServer.make.pipe(
@@ -206,8 +205,7 @@ describe("Client over an owned engine", () => {
         yield* Effect.forkScoped(
           Stream.runForEach(
             client.observe({ collection: "products", include: { reviews: { first: 2 } } }),
-            (rows) =>
-              Ref.set(latest, (rows[0]?.related.reviews ?? []) as ReadonlyArray<{ id: string }>)
+            (rows) => Ref.set(latest, rows[0]?.related.reviews ?? [])
           ).pipe(Effect.ignore)
         );
         const reviews = yield* eventually(Ref.get(latest), (rows) => rows.length === 2);
@@ -757,7 +755,7 @@ describe("Client.make defaults (zero wiring)", () => {
         yield* client.mutate("product/set", { id: "p-1", name: "Desk" });
         const rows = yield* client.query({ collection: "products" });
         expect(rows).toHaveLength(1);
-        expect((defined(rows[0]).value as { name: string }).name).toBe("Desk");
+        expect(nameOf(defined(rows[0]).value)).toBe("Desk");
 
         // Live reads work too — entirely against the local replica.
         const latest = yield* Ref.make<ReadonlyArray<Client.ResolvedRow>>([]);
@@ -880,10 +878,9 @@ describe("Client.connect over a hosted engine", () => {
         const rows = yield* eventually(
           Ref.get(latest),
           (current) =>
-            current.length === 1 &&
-            ((defined(current[0]).related.reviews ?? []) as ReadonlyArray<unknown>).length === 1
+            current.length === 1 && idsOf(defined(current[0]).related.reviews ?? []).length === 1
         );
-        expect((defined(rows[0]).value as { name: string }).name).toBe("Desk");
+        expect(nameOf(defined(rows[0]).value)).toBe("Desk");
       })
     )
   );
@@ -994,14 +991,7 @@ describe("Client.query judges and answers from one snapshot", () => {
           // One read of the root for the whole answer: the verdict and the answer share it.
           expect(yield* Ref.get(rootReads)).toBe(1);
           // The answer is the snapshot the verdict judged: p-1 and p-2, each with its reviews.
-          expect(
-            rows.map((row) => [
-              row.id,
-              ((row.related.reviews ?? []) as ReadonlyArray<{ id: string }>).map(
-                (review) => review.id
-              ),
-            ])
-          ).toEqual([
+          expect(rows.map((row) => [row.id, idsOf(row.related.reviews ?? [])])).toEqual([
             ["p-1", ["r-1"]],
             ["p-2", ["r-2"]],
           ]);

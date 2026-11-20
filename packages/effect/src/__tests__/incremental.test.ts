@@ -22,11 +22,12 @@ import * as Mutator from "../Mutator.js";
 import * as Subset from "../Subset.js";
 import * as SyncServer from "../SyncServer.js";
 import { ClientTransport, makeInMemory, type ServerHandler } from "../Transport.js";
+import { idOf } from "./shapes.js";
 
 const put =
   (collection: string): MemoryBackend.BackendHandler =>
   (args, writer) =>
-    Effect.asVoid(writer.put(collection, (args as { id: string }).id, args));
+    Effect.asVoid(writer.put(collection, idOf(args), args));
 
 const handlers = {
   "todo/set": put("todos"),
@@ -35,11 +36,11 @@ const handlers = {
 const mutators = Mutator.registry([
   {
     mutator: Mutator.make("todo/set", Schema.Unknown),
-    local: (a, w) => w.put("todos", (a as { id: string }).id, a),
+    local: (a: { id: string }, w) => w.put("todos", a.id, a),
   },
   {
     mutator: Mutator.make("user/set", Schema.Unknown),
-    local: (a, w) => w.put("users", (a as { id: string }).id, a),
+    local: (a: { id: string }, w) => w.put("users", a.id, a),
   },
 ]);
 

@@ -11,12 +11,11 @@ import * as MemoryBackend from "../MemoryBackend.js";
 import * as Predicate from "../Predicate.js";
 import * as Subset from "../Subset.js";
 import type { Mutation } from "../Protocol.js";
+import { idOf } from "./shapes.js";
 
 const handlers = {
-  "issue/set": (args, writer) =>
-    Effect.asVoid(writer.put("issues", (args as { id: string }).id, args)),
-  "membership/set": (args, writer) =>
-    Effect.asVoid(writer.put("memberships", (args as { id: string }).id, args)),
+  "issue/set": (args, writer) => Effect.asVoid(writer.put("issues", idOf(args), args)),
+  "membership/set": (args, writer) => Effect.asVoid(writer.put("memberships", idOf(args), args)),
 } satisfies Record<string, MemoryBackend.BackendHandler>;
 
 const mutation = (mutationId: number, mutator: string, args: unknown): Mutation => ({

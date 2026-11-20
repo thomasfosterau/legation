@@ -25,6 +25,7 @@ import { ClientTransport, makeInMemory } from "../Transport.js";
 import type { Mutation } from "../Protocol.js";
 import { defined } from "./defined.js";
 import * as Json from "../internal/Json.js";
+import { countOf, titleOf } from "./shapes.js";
 
 const mutation = (mutationId: number): Mutation => ({
   clientId: "c1",
@@ -206,7 +207,7 @@ describe("ClientStore.makeKeyValue", () => {
                 "todo/set",
                 Schema.Struct({ id: Schema.String, title: Schema.String })
               ),
-              local: (args, writer) => writer.put("todos", (args as { id: string }).id, args),
+              local: (args: { id: string }, writer) => writer.put("todos", args.id, args),
             },
           ]),
         }).pipe(
@@ -222,7 +223,7 @@ describe("ClientStore.makeKeyValue", () => {
 
         expect(yield* store.pendingMutations).toEqual([]);
         const confirmed = yield* store.listRows("todos");
-        expect(confirmed.map((row) => (row.value as { title: string }).title)).toEqual(["durable"]);
+        expect(confirmed.map((row) => titleOf(row.value))).toEqual(["durable"]);
       })
     );
   });
@@ -320,7 +321,7 @@ const expectWhole = (store: ClientStoreModule.ClientStore, label: string) =>
   Effect.gen(function* () {
     const pending = yield* store.pendingMutations;
     const ids = idsOf(pending);
-    const ns = pending.map((m) => (m.args as { n: number }).n);
+    const ns = pending.map((m) => countOf(m.args));
     const isOld = ids.join() === "1,2,3,4,5" && ns.join() === "1,2,3,4,5";
     const isNew = ids.join() === "1,2,3" && ns.join() === "1,3,5";
     expect(isOld || isNew, `${label}: ${ids.join()} / ${ns.join()}`).toBe(true);
@@ -332,12 +333,13 @@ const expectWhole = (store: ClientStoreModule.ClientStore, label: string) =>
     return isNew;
   });
 
+const decodeJournalIndex = Schema.decodeUnknownSync(
+  Schema.Array(Schema.Struct({ clientId: Schema.String, mutationId: Schema.Finite }))
+);
+
 /** The journal index on disk, and how many of its entries still have a body. */
 const onDisk = (kv: Faulty) => {
-  const index = Json.parse(kv.data.get("legation/journalIndex") ?? "[]") as Array<{
-    clientId: string;
-    mutationId: number;
-  }>;
+  const index = decodeJournalIndex(Json.parse(kv.data.get("legation/journalIndex") ?? "[]"));
   const withBody = index.filter((e) =>
     kv.data.has(`legation/journal/${e.clientId}/${e.mutationId}`)
   ).length;

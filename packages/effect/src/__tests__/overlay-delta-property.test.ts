@@ -37,58 +37,54 @@ import * as Subset from "../Subset.js";
 import * as SyncServer from "../SyncServer.js";
 import { ClientTransport, makeInMemory, type ServerHandler } from "../Transport.js";
 import { defined } from "./defined.js";
+import { idOf } from "./shapes.js";
 
-interface PutArgs {
-  readonly id: string;
-  readonly value: number;
-}
+const PutArgs = Schema.Struct({ id: Schema.String, value: Schema.Finite });
+type PutArgs = typeof PutArgs.Type;
 interface IdArgs {
   readonly id: string;
 }
 
-const asPut = (args: unknown) => args as PutArgs;
-const asId = (args: unknown) => args as IdArgs;
+const asPut = Schema.decodeUnknownSync(PutArgs);
+/** A row's current value: the number a put or bump wrote, absent before the first. */
+const asStored = Schema.decodeUnknownSync(Schema.UndefinedOr(Schema.Finite));
 
 const mutators = Mutator.registry([
   {
     mutator: Mutator.make("todo/put", Schema.Unknown),
-    local: (args, writer) => writer.put("todos", asPut(args).id, asPut(args).value),
+    local: (args: PutArgs, writer) => writer.put("todos", args.id, args.value),
   },
   {
     mutator: Mutator.make("todo/del", Schema.Unknown),
-    local: (args, writer) => writer.del("todos", asId(args).id),
+    local: (args: IdArgs, writer) => writer.del("todos", args.id),
   },
   {
     // Read-modify-write: exercises `writer.get` through the tracked-write path.
     mutator: Mutator.make("todo/bump", Schema.Unknown),
-    local: (args, writer) =>
+    local: (args: IdArgs, writer) =>
       writer
-        .get("todos", asId(args).id)
+        .get("todos", args.id)
         .pipe(
-          Effect.flatMap((current) =>
-            writer.put("todos", asId(args).id, ((current as number | undefined) ?? 0) + 1)
-          )
+          Effect.flatMap((current) => writer.put("todos", args.id, (asStored(current) ?? 0) + 1))
         ),
   },
   {
     // Applies optimistically like `todo/put`, but the backend always
     // permanently rejects it — exercises the reject/drop-the-overlay path.
     mutator: Mutator.make("todo/reject", Schema.Unknown),
-    local: (args, writer) => writer.put("todos", asPut(args).id, asPut(args).value),
+    local: (args: PutArgs, writer) => writer.put("todos", args.id, args.value),
   },
 ]);
 
 const backendHandlers = {
   "todo/put": (args, writer) =>
     Effect.asVoid(writer.put("todos", asPut(args).id, asPut(args).value)),
-  "todo/del": (args, writer) => Effect.asVoid(writer.del("todos", asId(args).id)),
+  "todo/del": (args, writer) => Effect.asVoid(writer.del("todos", idOf(args))),
   "todo/bump": (args, writer) =>
     writer
-      .get("todos", asId(args).id)
+      .get("todos", idOf(args))
       .pipe(
-        Effect.flatMap((current) =>
-          writer.put("todos", asId(args).id, ((current as number | undefined) ?? 0) + 1)
-        )
+        Effect.flatMap((current) => writer.put("todos", idOf(args), (asStored(current) ?? 0) + 1))
       ),
   "todo/reject": () => Effect.fail(new MutationRejected({ reason: "property test rejection" })),
 } satisfies Record<string, MemoryBackend.BackendHandler>;

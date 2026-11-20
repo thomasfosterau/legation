@@ -27,6 +27,7 @@ import * as Sql from "../../sql/Sql.js";
 import * as SqlBackend from "../../sql/SqlBackend.js";
 import { defined } from "../defined.js";
 import { TestFailure } from "../test-failure.js";
+import { idOf } from "../shapes.js";
 
 interface Mock {
   readonly executor: SqlBackend.SqlExecutor;
@@ -78,6 +79,18 @@ const readSeeded = (
   return table !== undefined ? (tables.get(table) ?? []) : [];
 };
 
+// The params of each ledger statement the fake executor answers, by position.
+const decodeCas = Schema.decodeUnknownSync(
+  Schema.Tuple([Schema.Finite, Schema.String, Schema.String, Schema.Finite])
+);
+const decodeLedgerKey = Schema.decodeUnknownSync(Schema.Tuple([Schema.String, Schema.String]));
+const decodeRejectionsWrite = Schema.decodeUnknownSync(
+  Schema.Tuple([Schema.NullOr(Schema.String), Schema.String, Schema.String])
+);
+const decodeBump = Schema.decodeUnknownSync(
+  Schema.Tuple([Schema.String, Schema.String, Schema.Finite])
+);
+
 /**
  * An executor that returns ledger rows for `sync_mutations` and seeded rows for
  * any other table (ignoring its WHERE — the backend re-applies the predicate
@@ -107,7 +120,7 @@ const makeMock = (options: { readonly transactional?: boolean } = {}): Mock => {
   // `[next, group, client, expected]`, moving the row only when it reads
   // `expected`, as the database's conditional UPDATE does.
   const casLedger = (fragment: Sql.SqlFragment): boolean => {
-    const [next, group, client, expected] = fragment.params as [number, string, string, number];
+    const [next, group, client, expected] = decodeCas(fragment.params);
     const key = `${group}:${client}`;
     if (ledger.get(key) !== expected) return false;
     ledger.set(key, next);
@@ -117,7 +130,7 @@ const makeMock = (options: { readonly transactional?: boolean } = {}): Mock => {
   // The ledger writes each ordering issues, matched by statement text.
   const insertIfAbsent = (fragment: Sql.SqlFragment): void => {
     // `ON CONFLICT DO NOTHING` at 0.
-    const [group, client] = fragment.params as [string, string];
+    const [group, client] = decodeLedgerKey(fragment.params);
     const key = `${group}:${client}`;
     if (!ledger.has(key)) ledger.set(key, 0);
   };
@@ -127,12 +140,12 @@ const makeMock = (options: { readonly transactional?: boolean } = {}): Mock => {
   };
   const storeRejections = (fragment: Sql.SqlFragment): void => {
     // The rejection memory: `SET "rejections" = ?` for one client's row.
-    const [json, group, client] = fragment.params as [string | null, string, string];
+    const [json, group, client] = decodeRejectionsWrite(fragment.params);
     rejections.set(`${group}:${client}`, json);
   };
   const bumpMonotonic = (fragment: Sql.SqlFragment): void => {
     // The bump after the handler: the watermark only rises.
-    const [group, client, id] = fragment.params as [string, string, number];
+    const [group, client, id] = decodeBump(fragment.params);
     const key = `${group}:${client}`;
     ledger.set(key, Math.max(ledger.get(key) ?? 0, id));
   };
@@ -543,7 +556,7 @@ describe("TableMapping.fromCollection", () => {
     const todosCollection = Collection.make({
       name: "todos",
       schema: Schema.Unknown,
-      id: (value) => (value as { id: string }).id,
+      id: (value) => idOf(value),
       filterable: { done: { kind: "boolean", operators: ["eq"] } },
     });
     const mapping = SqlBackend.fromCollection(todosCollection, {
@@ -767,7 +780,7 @@ const makeParkable = (mock: Mock) =>
               yield* Deferred.succeed(written, undefined);
               yield* Deferred.await(release);
             }
-            return [] as ReadonlyArray<Backend.ChangeHint>;
+            return Arr.empty<Backend.ChangeHint>();
           }),
       },
     });
@@ -1017,7 +1030,7 @@ describe("SqlBackend rejection memory over the mock ledger", () => {
       handlers: {
         "todo/set": () => Effect.succeed([]),
         "todo/reject": (raw) =>
-          Effect.fail(new MutationRejected({ reason: `forbidden ${(raw as { id: string }).id}` })),
+          Effect.fail(new MutationRejected({ reason: `forbidden ${idOf(raw)}` })),
       },
     });
 
@@ -1084,9 +1097,7 @@ describe("SqlBackend rejection memory over the mock ledger", () => {
           "todo/set": () => Effect.succeed([]),
           "todo/reject": (raw) =>
             rejecting
-              ? Effect.fail(
-                  new MutationRejected({ reason: `forbidden ${(raw as { id: string }).id}` })
-                )
+              ? Effect.fail(new MutationRejected({ reason: `forbidden ${idOf(raw)}` }))
               : Effect.succeed<ReadonlyArray<Backend.ChangeHint>>([]),
         },
       });

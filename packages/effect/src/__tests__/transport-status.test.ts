@@ -16,6 +16,7 @@ import { TransportError, VersionNotSupportedError } from "../Errors.js";
 import type {
   PullRequest,
   PullResponse,
+  PushRequest,
   PushResponse,
   ReadRequest,
   ReadResponse,
@@ -30,6 +31,7 @@ const pullRequest: PullRequest = {
   clientGroupId: "g",
   subscriptions: [],
 };
+const pushRequest: PushRequest = { clientGroupId: "g", mutations: [] };
 const readRequest: ReadRequest = { clientGroupId: "g", subsets: [] };
 const readResponse = (from: string): ReadResponse => ({
   rows: [{ collection: "todos", id: from, version: 1, value: {} }],
@@ -96,7 +98,7 @@ describe("Transport.withInferredStatus", () => {
         expect(yield* wrapped.status).toBe("disconnected");
 
         yield* Ref.set(fake.failing, false);
-        yield* wrapped.push({} as never);
+        yield* wrapped.push(pushRequest);
         expect(yield* wrapped.status).toBe("connected");
       })
     )

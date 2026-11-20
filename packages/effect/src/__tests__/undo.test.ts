@@ -36,6 +36,7 @@ import {
   type ServerHandler,
 } from "../Transport.js";
 import { defined } from "./defined.js";
+import { idOf, titleOf } from "./shapes.js";
 
 interface Todo {
   readonly id: string;
@@ -46,23 +47,17 @@ interface Todo {
 const setTodo = Mutator.registry([
   {
     mutator: Mutator.make("todo/set", Schema.Unknown),
-    local: (args, writer) => {
-      const todo = args as Todo;
-      return writer.put("todos", todo.id, todo);
-    },
+    local: (todo: Todo, writer) => writer.put("todos", todo.id, todo),
   },
   {
     mutator: Mutator.make("todo/remove", Schema.Unknown),
-    local: (args, writer) => writer.del("todos", (args as { id: string }).id),
+    local: (args: { id: string }, writer) => writer.del("todos", args.id),
   },
 ]);
 
 const backendHandlers = {
-  "todo/set": (args, writer) => {
-    const todo = args as Todo;
-    return Effect.asVoid(writer.put("todos", todo.id, todo));
-  },
-  "todo/remove": (args, writer) => Effect.asVoid(writer.del("todos", (args as { id: string }).id)),
+  "todo/set": (args, writer) => Effect.asVoid(writer.put("todos", idOf(args), args)),
+  "todo/remove": (args, writer) => Effect.asVoid(writer.del("todos", idOf(args))),
 } satisfies Record<string, MemoryBackend.BackendHandler>;
 
 const authPolicy = Authorization.policy({ todos: Authorization.allowAll });
@@ -102,7 +97,7 @@ const makeManaged = (transport: CT, name: string) =>
 const allTodos = Subset.make({ collection: "todos" });
 
 const titles = (rows: ReadonlyArray<{ readonly value: unknown }>): ReadonlyArray<string> =>
-  rows.map((row) => (row.value as Todo).title);
+  rows.map((row) => titleOf(row.value));
 
 /** The node graph a `Client.make`-built Client reads against. */
 const nodes = Node.registry([
@@ -182,7 +177,7 @@ describe("Undo", () => {
       // Capture the pre-delete value from the local view, then delete with an
       // undo that re-creates exactly that captured row.
       const row = defined((yield* engine.query(allTodos)).find((r) => r.id === "1"));
-      const captured = row.value as Todo;
+      const captured = row.value;
       yield* manager.run({
         execute: { mutator: "todo/remove", args: { id: "1" } },
         undo: { mutator: "todo/set", args: captured },

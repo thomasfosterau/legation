@@ -96,12 +96,9 @@ const makeExecutor = (sql: SqlClient, transactional: boolean): SqlBackend.SqlExe
   };
 };
 
-interface Args {
-  readonly id: string;
-  readonly title: string;
-}
-
 const TodoArgs = Schema.Struct({ id: Schema.String, title: Schema.String });
+type Args = typeof TodoArgs.Type;
+const asArgs = Schema.decodeUnknownSync(TodoArgs);
 const mutatorNames = ["todo/set", "todo/park", "todo/observe", "todo/reject"] as const;
 const mutators = new Map<string, Mutator.AnyMutator>(
   mutatorNames.map((name) => [name, Mutator.make(name, TodoArgs)])
@@ -170,7 +167,7 @@ describe("SqlBackend ledger on SQLite", () => {
           const backend = backendWith(sql, {
             // Writes, then parks inside the transaction until released.
             "todo/park": (raw, tx) =>
-              applyWrite(tx, raw as Args).pipe(
+              applyWrite(tx, asArgs(raw)).pipe(
                 Effect.tap(() => Deferred.succeed(written, undefined)),
                 Effect.tap(() => Deferred.await(release))
               ),
@@ -203,7 +200,7 @@ describe("SqlBackend ledger on SQLite", () => {
         const ran = yield* Ref.make(0);
         const backend = backendWith(sql, {
           "todo/set": (raw, tx) =>
-            Ref.update(ran, (n) => n + 1).pipe(Effect.andThen(applyWrite(tx, raw as Args))),
+            Ref.update(ran, (n) => n + 1).pipe(Effect.andThen(applyWrite(tx, asArgs(raw)))),
         });
         yield* backend.applyMutations(context, [mutation(1), mutation(2)]);
         expect(yield* ledgerOf(sql)).toBe(2);
@@ -233,7 +230,7 @@ describe("SqlBackend ledger on SQLite", () => {
               })
               .pipe(
                 Effect.flatMap((rows) => Ref.set(observed, Number(rows[0]?.last_mutation_id ?? 0))),
-                Effect.andThen(applyWrite(tx, raw as Args))
+                Effect.andThen(applyWrite(tx, asArgs(raw)))
               ),
         });
         yield* backend.applyMutations(context, [mutation(1, "todo/observe")]);
@@ -249,7 +246,7 @@ describe("SqlBackend ledger on SQLite", () => {
         const backend = backendWith(sql, {
           // Writes, then fails transiently while `failing` is set.
           "todo/set": (raw, tx) =>
-            applyWrite(tx, raw as Args).pipe(
+            applyWrite(tx, asArgs(raw)).pipe(
               Effect.tap(() =>
                 Ref.get(failing).pipe(
                   Effect.flatMap((fail) =>
@@ -279,9 +276,9 @@ describe("SqlBackend ledger on SQLite", () => {
     withDatabase((sql) =>
       Effect.gen(function* () {
         const backend = backendWith(sql, {
-          "todo/set": (raw, tx) => applyWrite(tx, raw as Args),
+          "todo/set": (raw, tx) => applyWrite(tx, asArgs(raw)),
           "todo/reject": (raw, tx) =>
-            applyWrite(tx, raw as Args).pipe(
+            applyWrite(tx, asArgs(raw)).pipe(
               Effect.andThen(Effect.fail(new MutationRejected({ reason: "forbidden" })))
             ),
         });
@@ -305,7 +302,7 @@ describe("SqlBackend ledger on SQLite", () => {
         Effect.gen(function* () {
           const backend = backendWith(
             sql,
-            { "todo/set": (raw, tx) => applyWrite(tx, raw as Args) },
+            { "todo/set": (raw, tx) => applyWrite(tx, asArgs(raw)) },
             false
           );
           const first = yield* backend.applyMutations(context, [mutation(1)]);
@@ -335,7 +332,7 @@ describe("SqlBackend ledger on SQLite", () => {
             sql,
             {
               "todo/set": (raw, tx) => {
-                const args = raw as Args;
+                const args = asArgs(raw);
                 return Effect.gen(function* () {
                   if (args.id === "2" && !(yield* Ref.getAndSet(nested, true))) {
                     yield* defined(backend).applyMutations(context, [mutation(2), mutation(3)]);
@@ -372,7 +369,7 @@ describe("SqlBackend ledger on SQLite", () => {
                   Effect.flatMap((fail) =>
                     fail
                       ? Effect.fail(new BackendError({ message: "transient" }))
-                      : applyWrite(tx, raw as Args)
+                      : applyWrite(tx, asArgs(raw))
                   )
                 ),
             },
@@ -395,7 +392,7 @@ describe("SqlBackend ledger on SQLite", () => {
   it.effect("a gap is a BackendError and leaves the ledger unchanged", () =>
     withDatabase((sql) =>
       Effect.gen(function* () {
-        const backend = backendWith(sql, { "todo/set": (raw, tx) => applyWrite(tx, raw as Args) });
+        const backend = backendWith(sql, { "todo/set": (raw, tx) => applyWrite(tx, asArgs(raw)) });
         const error = yield* backend.applyMutations(context, [mutation(2)]).pipe(Effect.flip);
         expect(error).toBeInstanceOf(BackendError);
         expect(yield* ledgerOf(sql)).toBe(0);
@@ -410,9 +407,9 @@ describe("SqlBackend ledger on SQLite", () => {
  * names its mutation, so a test can tell which rejection a response reports.
  */
 const rejectingHandlers = {
-  "todo/set": (raw, tx) => applyWrite(tx, raw as Args),
+  "todo/set": (raw, tx) => applyWrite(tx, asArgs(raw)),
   "todo/reject": (raw, tx) => {
-    const args = raw as Args;
+    const args = asArgs(raw);
     return applyWrite(tx, args).pipe(
       Effect.andThen(Effect.fail(new MutationRejected({ reason: `forbidden ${args.id}` })))
     );

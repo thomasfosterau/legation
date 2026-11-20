@@ -32,6 +32,7 @@ import * as Subset from "../Subset.js";
 import * as SyncServer from "../SyncServer.js";
 import { ClientTransport, makeInMemory, type ServerHandler } from "../Transport.js";
 import { TestFailure } from "./test-failure.js";
+import { idOf, titleOf } from "./shapes.js";
 
 interface Todo {
   readonly id: string;
@@ -42,18 +43,12 @@ interface Todo {
 const setTodo = Mutator.registry([
   {
     mutator: Mutator.make("todo/set", Schema.Unknown),
-    local: (args, writer) => {
-      const todo = args as Todo;
-      return writer.put("todos", todo.id, todo);
-    },
+    local: (todo: Todo, writer) => writer.put("todos", todo.id, todo),
   },
 ]);
 
 const backendHandlers = {
-  "todo/set": (args, writer) => {
-    const todo = args as Todo;
-    return Effect.asVoid(writer.put("todos", todo.id, todo));
-  },
+  "todo/set": (args, writer) => Effect.asVoid(writer.put("todos", idOf(args), args)),
 } satisfies Record<string, MemoryBackend.BackendHandler>;
 
 const authPolicy = Authorization.policy({ todos: Authorization.allowAll });
@@ -308,7 +303,7 @@ describe("sync-loop scheduling", () => {
       yield* a.engine.push;
 
       const titles = Effect.map(b.engine.query(allTodos), (rows) =>
-        rows.map((row) => (row.value as Todo).title)
+        rows.map((row) => titleOf(row.value))
       );
       yield* advanceUntil(
         Effect.map(titles, (seen) => Arr.isReadonlyArrayNonEmpty(seen)),

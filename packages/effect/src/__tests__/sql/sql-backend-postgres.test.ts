@@ -100,12 +100,9 @@ const withDatabase = <A, E>(
  */
 const executorOver = PgExecutor.make;
 
-interface Args {
-  readonly id: string;
-  readonly title: string;
-}
-
 const TodoArgs = Schema.Struct({ id: Schema.String, title: Schema.String });
+type Args = typeof TodoArgs.Type;
+const asArgs = Schema.decodeUnknownSync(TodoArgs);
 const setTodo = Mutator.make("todo/set", TodoArgs);
 const parkTodo = Mutator.make("todo/park", TodoArgs);
 
@@ -266,10 +263,10 @@ describePostgres("SqlBackend on PostgreSQL: overlapping calls", () => {
               [parkTodo.name, parkTodo],
             ]),
             handlers: {
-              "todo/set": (raw, tx) => applyWrite(tx, raw as Args),
+              "todo/set": (raw, tx) => applyWrite(tx, asArgs(raw)),
               "todo/park": (raw, tx) =>
                 Effect.gen(function* () {
-                  const hints = yield* applyWrite(tx, raw as Args);
+                  const hints = yield* applyWrite(tx, asArgs(raw));
                   if (!(yield* Ref.getAndSet(parked, true))) {
                     // This handler runs on the first call's transaction connection.
                     const rows = yield* tx.query({
@@ -371,7 +368,7 @@ describePostgres("SqlBackend on PostgreSQL: transactional: false bump", () => {
             executor: { ...executorOver(sql), transactional: false },
             tables: { todos: { table: "todos" } },
             mutators: new Map<string, Mutator.AnyMutator>([[setTodo.name, setTodo]]),
-            handlers: { "todo/set": (raw, tx) => applyWrite(tx, raw as Args) },
+            handlers: { "todo/set": (raw, tx) => applyWrite(tx, asArgs(raw)) },
             dialect: Sql.postgres,
           });
 
@@ -441,7 +438,9 @@ describePostgres("SqlBackend on PostgreSQL: serialisable isolation across client
             handlers: {
               "counter/increment": (raw, tx, callContext) =>
                 Effect.gen(function* () {
-                  const { id } = raw as Schema.Schema.Type<typeof incrementArgs>;
+                  const { id } = yield* Schema.decodeUnknownEffect(incrementArgs)(raw).pipe(
+                    Effect.orDie
+                  );
                   const rows = yield* tx.query({
                     text: `SELECT title FROM todos WHERE id = $1`,
                     params: ["counter"],
@@ -515,7 +514,7 @@ describePostgres("SqlBackend on PostgreSQL: a nested transaction", () => {
             executor: executorOver(sql),
             tables: { todos: { table: "todos" } },
             mutators: new Map<string, Mutator.AnyMutator>([[setTodo.name, setTodo]]),
-            handlers: { "todo/set": (raw, tx) => applyWrite(tx, raw as Args) },
+            handlers: { "todo/set": (raw, tx) => applyWrite(tx, asArgs(raw)) },
             dialect: Sql.postgres,
           });
 
@@ -583,10 +582,10 @@ describePostgres("SqlBackend on PostgreSQL: rejection memory", () => {
               [parkTodo.name, parkTodo],
             ]),
             handlers: {
-              "todo/set": (raw, tx) => applyWrite(tx, raw as Args),
+              "todo/set": (raw, tx) => applyWrite(tx, asArgs(raw)),
               "todo/park": (raw, tx) =>
                 Effect.gen(function* () {
-                  const args = raw as Args;
+                  const args = asArgs(raw);
                   const run = yield* Ref.updateAndGet(runs, (n) => n + 1);
                   yield* applyWrite(tx, args);
                   if (run === 1) {
@@ -668,10 +667,10 @@ describePostgres("SqlBackend on PostgreSQL: rejection memory", () => {
               [parkTodo.name, parkTodo],
             ]),
             handlers: {
-              "todo/set": (raw, tx) => applyWrite(tx, raw as Args),
+              "todo/set": (raw, tx) => applyWrite(tx, asArgs(raw)),
               "todo/park": (raw, tx) =>
-                Effect.fail(new MutationRejected({ reason: `forbidden ${(raw as Args).id}` })).pipe(
-                  Effect.tap(() => applyWrite(tx, raw as Args))
+                Effect.fail(new MutationRejected({ reason: `forbidden ${asArgs(raw).id}` })).pipe(
+                  Effect.tap(() => applyWrite(tx, asArgs(raw)))
                 ),
             },
             dialect: Sql.postgres,
@@ -706,7 +705,7 @@ describePostgres("SqlBackend on PostgreSQL: rejection memory", () => {
               executor: executorOver(sql),
               tables: { todos: { table: "todos" } },
               mutators: new Map<string, Mutator.AnyMutator>([[setTodo.name, setTodo]]),
-              handlers: { "todo/set": (raw, tx) => applyWrite(tx, raw as Args) },
+              handlers: { "todo/set": (raw, tx) => applyWrite(tx, asArgs(raw)) },
               dialect: Sql.postgres,
             });
             const error = yield* backend

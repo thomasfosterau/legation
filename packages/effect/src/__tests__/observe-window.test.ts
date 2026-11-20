@@ -33,6 +33,7 @@ import * as SyncServer from "../SyncServer.js";
 import { ClientTransport, makeInMemory, type ServerHandler } from "../Transport.js";
 import { defined } from "./defined.js";
 import { TestFailure } from "./test-failure.js";
+import { idOf } from "./shapes.js";
 
 interface Item {
   readonly id: string;
@@ -42,12 +43,12 @@ interface Item {
 const mutators = Mutator.registry([
   {
     mutator: Mutator.make("item/set", Schema.Unknown),
-    local: (args, writer) => writer.put("items", (args as Item).id, args),
+    local: (args: Item, writer) => writer.put("items", args.id, args),
   },
 ]);
 
 const handlers = {
-  "item/set": (args, writer) => Effect.asVoid(writer.put("items", (args as Item).id, args)),
+  "item/set": (args, writer) => Effect.asVoid(writer.put("items", idOf(args), args)),
 } satisfies Record<string, MemoryBackend.BackendHandler>;
 
 const makeServer = Effect.fn("makeServer")(function* () {

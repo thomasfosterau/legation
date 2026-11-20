@@ -38,6 +38,7 @@ import * as SyncServer from "../SyncServer.js";
 import { ClientTransport, makeInMemory, type ServerHandler } from "../Transport.js";
 import { defined } from "./defined.js";
 import { TestFailure } from "./test-failure.js";
+import { idOf, titleOf } from "./shapes.js";
 
 type Row<A> = Derive.Row<A>;
 const page = <A>(rows: ReadonlyArray<Row<A>>): ReadonlyArray<{ id: string; value: A }> =>
@@ -164,10 +165,10 @@ interface Todo {
 const TodoArgs = Schema.Struct({ id: Schema.String, title: Schema.String });
 const todoSet = Mutator.make("todo/set", TodoArgs);
 const mutators = Mutator.registry([
-  { mutator: todoSet, local: (args, writer) => writer.put("todos", (args as Todo).id, args) },
+  { mutator: todoSet, local: (args: Todo, writer) => writer.put("todos", args.id, args) },
 ]);
 const handlers = {
-  "todo/set": (args, writer) => Effect.asVoid(writer.put("todos", (args as Todo).id, args)),
+  "todo/set": (args, writer) => Effect.asVoid(writer.put("todos", idOf(args), args)),
 } satisfies Record<string, MemoryBackend.BackendHandler>;
 
 const makeServer = Effect.fn("makeServer")(function* (): Effect.fn.Return<
@@ -248,7 +249,7 @@ describe("Derive — observable via the standard atom surface", () => {
       yield* engine.subscribe(allTodos);
 
       const pipeline = Derive.filter(engine.observe(allTodos), (v) =>
-        (v as Todo).title.startsWith("keep")
+        titleOf(v).startsWith("keep")
       );
       const atom = Derive.atom(pipeline);
       const registry = AtomRegistry.make();
@@ -279,7 +280,7 @@ describe("Derive — observable via the standard atom surface", () => {
       yield* engine.mutate("todo/set", { id: "1", title: "keep-me" });
       yield* engine.mutate("todo/set", { id: "2", title: "drop-me" });
       const rows = yield* await1((current) => current.length === 1);
-      expect(rows.map((row) => (row.value as Todo).title)).toEqual(["keep-me"]);
+      expect(rows.map((row) => titleOf(row.value))).toEqual(["keep-me"]);
     })
   );
 });
@@ -292,9 +293,7 @@ describe("Derive — observed leaf consumes observeChanges, not page-diff", () =
       const view = ClientView.fromEngine(engine);
 
       const pipeline = yield* Derive.observed(subs, view, allTodos).pipe(
-        Effect.map((upstream) =>
-          Derive.filter(upstream, (v) => (v as Todo).title.startsWith("keep"))
-        )
+        Effect.map((upstream) => Derive.filter(upstream, (v) => titleOf(v).startsWith("keep")))
       );
       const atom = Derive.atom(pipeline);
       const registry = AtomRegistry.make();
@@ -326,7 +325,7 @@ describe("Derive — observed leaf consumes observeChanges, not page-diff", () =
       yield* engine.mutate("todo/set", { id: "1", title: "keep-me" });
       yield* engine.mutate("todo/set", { id: "2", title: "drop-me" });
       const afterEnter = yield* await1((current) => current.length === 1);
-      expect(afterEnter.map((row) => (row.value as Todo).title)).toEqual(["keep-me"]);
+      expect(afterEnter.map((row) => titleOf(row.value))).toEqual(["keep-me"]);
 
       // An update that crosses the filter boundary the other way: "keep-me"
       // no longer matches, so the pipeline drops back to empty.
@@ -337,7 +336,7 @@ describe("Derive — observed leaf consumes observeChanges, not page-diff", () =
       // operator state survives past the boundary crossing).
       yield* engine.mutate("todo/set", { id: "3", title: "keep-again" });
       const afterSecondEnter = yield* await1((current) => current.length === 1);
-      expect(afterSecondEnter.map((row) => (row.value as Todo).title)).toEqual(["keep-again"]);
+      expect(afterSecondEnter.map((row) => titleOf(row.value))).toEqual(["keep-again"]);
     }).pipe(Effect.scoped)
   );
 });

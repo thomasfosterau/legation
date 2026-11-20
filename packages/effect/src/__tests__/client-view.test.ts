@@ -21,6 +21,7 @@ import * as Subset from "../Subset.js";
 import * as SyncRoom from "../SyncRoom.js";
 import { layerInMemory } from "../Transport.js";
 import { TestFailure } from "./test-failure.js";
+import { idOf } from "./shapes.js";
 
 interface Todo {
   readonly id: string;
@@ -30,16 +31,16 @@ interface Todo {
 const mutators = Mutator.registry([
   {
     mutator: Mutator.make("todo/set", Schema.Unknown),
-    local: (args, writer) => writer.put("todos", (args as Todo).id, args),
+    local: (args: Todo, writer) => writer.put("todos", args.id, args),
   },
   {
     mutator: Mutator.make("todo/reject", Schema.Unknown),
-    local: (args, writer) => writer.put("todos", (args as Todo).id, args),
+    local: (args: Todo, writer) => writer.put("todos", args.id, args),
   },
 ]);
 
 const handlers = {
-  "todo/set": (args, writer) => Effect.asVoid(writer.put("todos", (args as Todo).id, args)),
+  "todo/set": (args, writer) => Effect.asVoid(writer.put("todos", idOf(args), args)),
   "todo/reject": () => Effect.fail(new MutationRejected({ reason: "not allowed" })),
 } satisfies Record<string, MemoryBackend.BackendHandler>;
 

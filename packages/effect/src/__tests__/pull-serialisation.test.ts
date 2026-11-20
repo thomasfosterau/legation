@@ -30,6 +30,7 @@ import * as Subset from "../Subset.js";
 import { ClientTransport } from "../Transport.js";
 import { defined } from "./defined.js";
 import { TestFailure } from "./test-failure.js";
+import { titleOf } from "./shapes.js";
 
 /** Pulls the fake transport will serve; a test that issues more than this fails loudly. */
 const PULLS = 3;
@@ -167,7 +168,7 @@ const snapshot = (client: Client) =>
   Effect.gen(function* () {
     const cookie = yield* client.store.getCookie;
     const rows = yield* client.engine.query(allTodos);
-    return { cookie, titles: rows.map((row) => (row.value as { readonly title: string }).title) };
+    return { cookie, titles: rows.map((row) => titleOf(row.value)) };
   });
 
 describe("pull serialisation", () => {

@@ -25,6 +25,7 @@ import type { PullResponse } from "../Protocol.js";
 import * as Subset from "../Subset.js";
 import { ClientTransport, makeInMemory, type ServerHandler } from "../Transport.js";
 import { defined } from "./defined.js";
+import { booleanField } from "./shapes.js";
 
 // ─── CollectionIndex (pure module) ───────────────────────────────────────────
 
@@ -191,10 +192,13 @@ interface Item {
   readonly done: boolean;
 }
 
+const doneOf = booleanField("done");
+const decodePriority = Schema.decodeUnknownSync(Schema.Struct({ priority: Schema.Finite }));
+
 const setItem = Mutator.registry([
   {
     mutator: Mutator.make("item/set", Schema.Unknown),
-    local: (args, writer) => writer.put("items", (args as Item).id, args),
+    local: (args: Item, writer) => writer.put("items", args.id, args),
   },
 ]);
 
@@ -206,11 +210,11 @@ interface User {
 const setItemAndUser = Mutator.registry([
   {
     mutator: Mutator.make("item/set", Schema.Unknown),
-    local: (args, writer) => writer.put("items", (args as Item).id, args),
+    local: (args: Item, writer) => writer.put("items", args.id, args),
   },
   {
     mutator: Mutator.make("user/set", Schema.Unknown),
-    local: (args, writer) => writer.put("users", (args as User).id, args),
+    local: (args: User, writer) => writer.put("users", args.id, args),
   },
 ]);
 
@@ -358,7 +362,7 @@ describe("ClientEngine + CollectionIndex", () => {
         yield* seedEngine(engine, items(50));
         const done = Predicate.eq("done", true);
         const first = yield* engine.query(Subset.make({ collection: "items", where: done }));
-        expect(first.every((r) => (r.value as Item).done)).toBe(true);
+        expect(first.every((r) => doneOf(r.value))).toBe(true);
 
         // Widen the collection after the field was auto-indexed; the index must
         // rebuild to cover the new rows, not serve a stale snapshot.
@@ -710,7 +714,7 @@ describe("ClientEngine + CollectionIndex", () => {
       expect((yield* at(3)).map((r) => r.id)).toEqual(["i1"]);
       // The unindexed view agrees: the row it holds is the stored one.
       const all = yield* engine.query(Subset.make({ collection: "items" }));
-      expect(all.map((r) => (r.value as Item).priority)).toEqual([3]);
+      expect(all.map((r) => decodePriority(r.value).priority)).toEqual([3]);
     })
   );
 

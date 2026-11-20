@@ -32,6 +32,7 @@ import { ClientTransport, makeInMemory } from "../Transport.js";
 import { defined } from "./defined.js";
 import { TestFailure } from "./test-failure.js";
 import * as Json from "../internal/Json.js";
+import { idOf, optionalCountOf } from "./shapes.js";
 
 // ─── Harness ─────────────────────────────────────────────────────────────────
 
@@ -647,11 +648,6 @@ describe("the atomic batch on the key-value store", () => {
 
 // ─── Engine harness (as unpulled-tail.test.ts) ───────────────────────────────
 
-interface Counter {
-  readonly id: string;
-  readonly n: number;
-}
-
 const incrementCounter = <E>(
   writer: {
     readonly get: (collection: string, id: string) => Effect.Effect<unknown, E>;
@@ -660,19 +656,19 @@ const incrementCounter = <E>(
   id: string
 ): Effect.Effect<void, E> =>
   Effect.gen(function* () {
-    const current = (yield* writer.get("counters", id)) as Counter | undefined;
-    yield* writer.put("counters", id, { id, n: (current?.n ?? 0) + 1 });
+    const current = optionalCountOf(yield* writer.get("counters", id));
+    yield* writer.put("counters", id, { id, n: (current ?? 0) + 1 });
   });
 
 const counterMutators = Mutator.registry([
   {
     mutator: Mutator.make("counter/inc", Schema.Unknown),
-    local: (args, writer) => incrementCounter(writer, (args as { readonly id: string }).id),
+    local: (args: { readonly id: string }, writer) => incrementCounter(writer, args.id),
   },
 ]);
 
 const backendHandlers = {
-  "counter/inc": (args, writer) => incrementCounter(writer, (args as { readonly id: string }).id),
+  "counter/inc": (args, writer) => incrementCounter(writer, idOf(args)),
 } satisfies Record<string, MemoryBackend.BackendHandler>;
 
 const authPolicy = Authorization.policy({ counters: Authorization.allowAll });
@@ -711,9 +707,7 @@ const makeCounterEngine = (
 const counterValue = (engine: ClientEngineModule.ClientEngine) =>
   engine
     .query(countersSubset)
-    .pipe(
-      Effect.map((rows) => (rows.find((row) => row.id === "c")?.value as Counter | undefined)?.n)
-    );
+    .pipe(Effect.map((rows) => optionalCountOf(rows.find((row) => row.id === "c")?.value)));
 
 const tailOf = (store: ClientStore) =>
   store.unpulled.pipe(Effect.map((entries) => entries.map((m) => `${m.clientId}#${m.mutationId}`)));

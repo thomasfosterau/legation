@@ -37,6 +37,7 @@ import * as SyncServer from "../SyncServer.js";
 import { ClientTransport, makeInMemory, type ServerHandler } from "../Transport.js";
 import { defined } from "./defined.js";
 import * as Json from "../internal/Json.js";
+import { idOf } from "./shapes.js";
 
 interface Todo {
   readonly id: string;
@@ -47,19 +48,19 @@ interface Todo {
 const mutators = Mutator.registry([
   {
     mutator: Mutator.make("todo/set", Schema.Unknown),
-    local: (args, writer) => writer.put("todos", (args as Todo).id, args),
+    local: (args: Todo, writer) => writer.put("todos", args.id, args),
   },
   {
     mutator: Mutator.make("todo/forbidden", Schema.Unknown),
-    local: (args, writer) => writer.put("todos", (args as Todo).id, args),
+    local: (args: Todo, writer) => writer.put("todos", args.id, args),
   },
 ]);
 
 const backendHandlers = {
-  "todo/set": (args, writer) => Effect.asVoid(writer.put("todos", (args as Todo).id, args)),
+  "todo/set": (args, writer) => Effect.asVoid(writer.put("todos", idOf(args), args)),
   "todo/forbidden": (args, writer) =>
     writer
-      .put("todos", (args as Todo).id, args)
+      .put("todos", idOf(args), args)
       .pipe(Effect.andThen(Effect.fail(new MutationRejected({ reason: "permission revoked" })))),
 } satisfies Record<string, MemoryBackend.BackendHandler>;
 

@@ -37,6 +37,7 @@ import * as Subset from "../Subset.js";
 import * as SyncRoom from "../SyncRoom.js";
 import * as SyncServer from "../SyncServer.js";
 import { ClientTransport, layerInMemory, makeInMemory, type ServerHandler } from "../Transport.js";
+import { idOf } from "./shapes.js";
 
 interface Todo {
   readonly id: string;
@@ -54,11 +55,11 @@ const todos = Collection.make({ name: "todos", schema: Todo, id: (r) => r.id });
 const mutators = Mutator.registry([
   {
     mutator: Mutator.make("todo/set", Schema.Unknown),
-    local: (args, writer) => writer.put("todos", (args as Todo).id, args),
+    local: (args: Todo, writer) => writer.put("todos", args.id, args),
   },
 ]);
 const backendHandlers = {
-  "todo/set": (args, writer) => Effect.asVoid(writer.put("todos", (args as Todo).id, args)),
+  "todo/set": (args, writer) => Effect.asVoid(writer.put("todos", idOf(args), args)),
 } satisfies Record<string, MemoryBackend.BackendHandler>;
 
 const makeServer = Effect.fn("makeServer")(function* (): Effect.fn.Return<

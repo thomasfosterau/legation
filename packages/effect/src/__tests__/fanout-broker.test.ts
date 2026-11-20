@@ -48,6 +48,9 @@ import { Backend } from "../index.js";
 import * as Predicate from "../Predicate.js";
 import { defined } from "./defined.js";
 import { TestFailure } from "./test-failure.js";
+import { idOf, stringField } from "./shapes.js";
+
+const bodyOf = stringField("body");
 
 const Product = Node.make("products", {
   attributes: { name: Schema.String },
@@ -232,7 +235,7 @@ const reviewSet = Mutation.make("review/set", Schema.Unknown);
 const mutations = Mutation.registry([
   {
     mutator: reviewSet,
-    local: (args, writer) => writer.put("reviews", (args as { id: string }).id, args),
+    local: (args: { id: string }, writer) => writer.put("reviews", args.id, args),
   },
 ]);
 
@@ -283,7 +286,7 @@ const recordPushes = (handler: Transport.ServerHandler) =>
             Effect.tap(() =>
               Ref.update(pushes, (all) => [
                 ...all,
-                request.mutations.map((mutation) => (mutation.args as { id: string }).id),
+                request.mutations.map((mutation) => idOf(mutation.args)),
               ])
             )
           ),
@@ -315,7 +318,7 @@ describe("two rooms over one broker", () => {
         const backend = yield* MemoryBackend.make(
           MemoryBackend.validatedHandlers([
             MemoryBackend.handler(reviewSet, (args, writer) =>
-              writer.put("reviews", (args as { id: string }).id, args)
+              writer.put("reviews", idOf(args), args)
             ),
           ])
         );
@@ -373,7 +376,7 @@ describe("two rooms over one broker", () => {
         });
         yield* advanceUntil(Ref.get(roomB.pushes), (pushes) => Arr.isReadonlyArrayNonEmpty(pushes));
         const rows = yield* advanceUntil(Ref.get(latest), (current) => current.length === 1);
-        expect((defined(rows[0]).value as { body: string }).body).toBe("cross-room");
+        expect(bodyOf(defined(rows[0]).value)).toBe("cross-room");
         expect(yield* Ref.get(roomAPokes)).toEqual([["reviews/productId=p-1"]]);
 
         // A write to ANOTHER parent must not poke room A (routing precision):

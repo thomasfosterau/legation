@@ -30,6 +30,7 @@ import * as Subset from "../Subset.js";
 import * as SyncServer from "../SyncServer.js";
 import * as Telemetry from "../Telemetry.js";
 import type { ServerHandler } from "../Transport.js";
+import { idOf } from "./shapes.js";
 
 interface Todo {
   readonly id: string;
@@ -38,8 +39,8 @@ interface Todo {
 }
 
 const handlers = {
-  "todo/set": (args, writer) => Effect.asVoid(writer.put("todos", (args as Todo).id, args)),
-  "todo/remove": (args, writer) => writer.del("todos", (args as { id: string }).id),
+  "todo/set": (args, writer) => Effect.asVoid(writer.put("todos", idOf(args), args)),
+  "todo/remove": (args, writer) => writer.del("todos", idOf(args)),
 } satisfies Record<string, MemoryBackend.BackendHandler>;
 
 const authPolicy = Authorization.policy({ todos: Authorization.allowAll });
