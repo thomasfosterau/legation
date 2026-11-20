@@ -30,6 +30,7 @@ import type { Mutation, PatchOp } from "../Protocol.js";
 import * as Predicate from "../Predicate.js";
 import * as Subset from "../Subset.js";
 import { layerInMemory, ServerHandler } from "../Transport.js";
+import { awaitPromise } from "./await-promise.js";
 
 const ROWS = 50_000;
 
@@ -212,7 +213,7 @@ describe(`point-predicate query over ${ROWS} rows`, () => {
       const unindexedEngine = yield* buildEngine(false);
       const indexedEngine = yield* buildEngine(true);
       const run = Effect.runPromiseWith(yield* Effect.context());
-      yield* Effect.tryPromise(() =>
+      yield* awaitPromise(() =>
         bench.compare(
           bench("unindexed (full scan)", async () => {
             await run(unindexedEngine.query(pointPredicate));

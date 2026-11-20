@@ -14,6 +14,7 @@ import * as Effect from "effect/Effect";
 import { KeyValueStore } from "effect/persistence";
 import * as ClientStoreModule from "../ClientStore.js";
 import type { PatchOp } from "../Protocol.js";
+import { awaitPromise } from "./await-promise.js";
 
 /** An in-memory KVS that counts `set` calls per key. */
 const countingStore = () => {
@@ -97,7 +98,7 @@ describe("per-row store I/O scaling", () => {
         )
       );
       const runSync = Effect.runSyncWith(yield* Effect.context());
-      yield* Effect.tryPromise(() =>
+      yield* awaitPromise(() =>
         bench("20-op patch over a 10k-row collection (value I/O ∝ patch size)", () => {
           const { store } = countingStore();
           runSync(

@@ -18,10 +18,10 @@ import * as Context from "effect/Context";
 import * as Deferred from "effect/Deferred";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
-import * as Exit from "effect/Exit";
 import * as Layer from "effect/Layer";
 import * as Match from "effect/Match";
 import * as Metric from "effect/Metric";
+import * as P from "effect/Predicate";
 import * as PubSub from "effect/PubSub";
 import * as Ref from "effect/Ref";
 import * as Schedule from "effect/Schedule";
@@ -1719,10 +1719,8 @@ export const make = (
     > = Semaphore.withPermit(
       overlayLock,
       Ref.get(overlayCache).pipe(
-        Effect.flatMap((cached) =>
-          cached !== undefined
-            ? Effect.succeed(cached)
-            : timedRebase(computeOverlay).pipe(Effect.tap((view) => Ref.set(overlayCache, view)))
+        Effect.filterOrElse(P.isNotUndefined, () =>
+          timedRebase(computeOverlay).pipe(Effect.tap((view) => Ref.set(overlayCache, view)))
         )
       )
     );
@@ -2071,9 +2069,7 @@ export const make = (
             // The park and the trim are one atomic batch: a failure leaves neither written.
             yield* store
               .commitAcknowledgement(applied, response.lastMutationIds)
-              .pipe(
-                Effect.onExit((exit) => (Exit.isSuccess(exit) ? Effect.void : settleFailedTail))
-              );
+              .pipe(Effect.onError(() => settleFailedTail));
           } else {
             yield* store.parkUnpulled(applied);
             // A trim that fails part-way leaves a parked entry in the journal as well. The store settles
@@ -2082,9 +2078,7 @@ export const make = (
               for (const [clientId, upTo] of Object.entries(response.lastMutationIds)) {
                 yield* store.acknowledge(clientId, upTo);
               }
-            }).pipe(
-              Effect.onExit((exit) => (Exit.isSuccess(exit) ? Effect.void : settleFailedTail))
-            );
+            }).pipe(Effect.onError(() => settleFailedTail));
           }
           // The store now holds the full tail, and the copy takes it. Nothing is released here: the
           // tail leaves only through a pull, and a push never takes it past the bound, so the
@@ -2550,13 +2544,7 @@ export const make = (
                 );
                 yield* Ref.set(overlayCache, undefined);
                 yield* sampleJournalDepth;
-              }).pipe(
-                Effect.onExit((exit) =>
-                  Exit.isSuccess(exit)
-                    ? Effect.void
-                    : rollForwardPullLocked(response.lastMutationIds)
-                )
-              );
+              }).pipe(Effect.onError(() => rollForwardPullLocked(response.lastMutationIds)));
               return before;
             }
             // A failure in this scope is rolled forward here, from the same record, as the open does.
@@ -2578,11 +2566,7 @@ export const make = (
               // two leaves the next open to write it again, not an old cookie over new rows.
               yield* store.setCookie(response.cookie);
               yield* acknowledgeLocked(response.lastMutationIds);
-            }).pipe(
-              Effect.onExit((exit) =>
-                Exit.isSuccess(exit) ? Effect.void : rollForwardPullLocked(response.lastMutationIds)
-              )
-            );
+            }).pipe(Effect.onError(() => rollForwardPullLocked(response.lastMutationIds)));
             return before;
           })
         );

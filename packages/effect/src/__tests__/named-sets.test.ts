@@ -231,10 +231,9 @@ describe("session-resolved read scopes", () => {
       yield* write(put("follows", { id: "f1", follower: "alice", followee: "bob" }));
       const pullUntilChanged = (attempt: number): Effect.Effect<PullResponse, unknown> =>
         pull("group-alice", first.cookie).pipe(
-          Effect.flatMap((response) =>
-            Arr.isReadonlyArrayNonEmpty(response.patch) || attempt >= 100
-              ? Effect.succeed(response)
-              : Effect.yieldNow.pipe(Effect.andThen(pullUntilChanged(attempt + 1)))
+          Effect.filterOrElse(
+            (response) => Arr.isReadonlyArrayNonEmpty(response.patch) || attempt >= 100,
+            () => Effect.yieldNow.pipe(Effect.andThen(pullUntilChanged(attempt + 1)))
           )
         );
       const second = yield* pullUntilChanged(1);

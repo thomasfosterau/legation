@@ -19,6 +19,7 @@ import { ClientStore } from "../ClientStore.js";
 import * as Mutator from "../Mutator.js";
 import * as Subset from "../Subset.js";
 import { type ClientTransport, layerInMemory, ServerHandler } from "../Transport.js";
+import { awaitPromise } from "./await-promise.js";
 
 const ROWS = 10_000;
 const MUTATIONS = 30;
@@ -88,7 +89,7 @@ layer(transportLayer, { excludeTestServices: true })("write-path IVM", (it) => {
   it.effect(`${MUTATIONS} mutates over ${ROWS} rows with ${OBSERVERS} observers`, ({ bench }) =>
     Effect.gen(function* () {
       const run = Effect.runPromiseWith(yield* Effect.context<ClientTransport>());
-      yield* Effect.tryPromise(() =>
+      yield* awaitPromise(() =>
         bench(`${MUTATIONS} mutates over ${ROWS} rows with ${OBSERVERS} observers`, async () => {
           await run(scenario.pipe(Effect.scoped));
         }).run({ time: 1000 })

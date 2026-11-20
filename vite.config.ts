@@ -177,6 +177,10 @@ export default defineConfig({
       "effect/avoid-process-env": "error",
       "effecttsgo/run-effect-inside-effect": "error",
       "typescript/no-unnecessary-type-parameters": "error",
+      "effecttsgo/redundant-or-die": "error",
+      "effecttsgo/flat-map-conditional-to-filter-or-fail": "error",
+      "effecttsgo/on-exit-failure-to-on-error": "error",
+      "effecttsgo/effect-try-without-catch": "error",
     },
     overrides: [
       // ---- Genuine can't-applies ------------------------------------------
