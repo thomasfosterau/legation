@@ -140,10 +140,10 @@ export default defineConfig({
       // ---- Type-aware rules (oxlint-tsgolint) -------------------------------
       // Effect 4 marks much of its HTTP surface `@stability unstable`.
       "effecttsgo/unstable-api-usage": "off",
-      // `unknown` in an error channel: the engine host's bridge effects and
-      // the façade's write paths carry a caught failure as `unknown` (the
-      // boundary `effect/no-unknown-parameters` names), as do test helpers
-      // that fail with whatever a backend raised. 54 sites (21 in src).
+      // `unknown` in an error channel: left only where a public option takes
+      // an app-supplied effect whose failure is opaque and caught (PushPoke's
+      // `send` / `targetsFor`, the façade's `decodeWrite` body and `pull`).
+      // 4 sites, all in src.
       "effecttsgo/any-unknown-in-error-context": "warn",
       // `String(value)` on an untyped row value (a foreign key, a SQL
       // detector's COUNT/MAX column, the comparator's last-resort text form)
@@ -188,6 +188,7 @@ export default defineConfig({
       "effecttsgo/unnecessary-effect-gen": "error",
       "typescript/no-unnecessary-type-arguments": "error",
       "typescript/no-unnecessary-type-assertion": "error",
+      "typescript/consistent-return": "error",
     },
     overrides: [
       // ---- Genuine can't-applies ------------------------------------------

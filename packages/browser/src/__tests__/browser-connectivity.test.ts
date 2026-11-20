@@ -98,10 +98,10 @@ const setVisible = () =>
 const advanceUntil = <E>(condition: Effect.Effect<boolean, E>, maxSteps = 200) =>
   Effect.gen(function* () {
     for (let attempt = 0; attempt < maxSteps; attempt++) {
-      if (yield* condition) return;
+      if (yield* condition) return undefined;
       yield* TestClock.adjust(Duration.millis(1));
     }
-    if (yield* condition) return;
+    if (yield* condition) return undefined;
     return yield* Effect.die(
       new TestFailure({ message: `advanceUntil: condition never held in ${maxSteps} steps` })
     );

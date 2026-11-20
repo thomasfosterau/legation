@@ -495,7 +495,7 @@ const raceHandlers = (
       if (copy > 1) return yield* new MutationRejected({ reason: "forbidden" });
       yield* Deferred.succeed(parked.entered, undefined);
       yield* Deferred.await(parked.release);
-      yield* writer.put("todos", (args as { readonly id: string }).id, args);
+      return yield* writer.put("todos", (args as { readonly id: string }).id, args);
     }),
 });
 
@@ -806,8 +806,7 @@ describe("MemoryBackend serialisable isolation across client groups", () => {
           Effect.gen(function* () {
             yield* writer.get(rows, "hot");
             if (callContext.clientGroupId !== "group-x") {
-              yield* writer.put(rows, "hot", { by: callContext.clientGroupId });
-              return;
+              return yield* writer.put(rows, "hot", { by: callContext.clientGroupId });
             }
             yield* Ref.update(xRuns, (n) => n + 1);
             const y = yield* Ref.updateAndGet(yCommits, (n) => n + 1);
@@ -815,7 +814,7 @@ describe("MemoryBackend serialisable isolation across client groups", () => {
             yield* backend.applyMutations({ clientGroupId: "group-y" }, [
               hotMutation(`y-client-${y}`),
             ]);
-            yield* writer.put(rows, "out", { run: y });
+            return yield* writer.put(rows, "out", { run: y });
           }),
       });
       backend = built;

@@ -110,10 +110,10 @@ const stepTo = (millis: number) =>
 const settle = (condition: Effect.Effect<boolean>, maxTurns = 100) =>
   Effect.gen(function* () {
     for (let turn = 0; turn < maxTurns; turn++) {
-      if (yield* condition) return;
+      if (yield* condition) return undefined;
       yield* Effect.yieldNow;
     }
-    if (yield* condition) return;
+    if (yield* condition) return undefined;
     return yield* Effect.die(
       new TestFailure({ message: `settle: condition never held in ${maxTurns} turns` })
     );

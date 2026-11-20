@@ -456,7 +456,7 @@ describe("form-action Mutations", () => {
         // Shown from the tail, then from the confirmed rows: applied once.
         expect(yield* query).toEqual([{ id: "t2", n: 1 }]);
 
-        yield* awaitPromise(() => runtime.dispose());
+        return yield* awaitPromise(() => runtime.dispose());
       })
     )
   );
@@ -502,7 +502,7 @@ describe("form-action Mutations", () => {
           "tally is locked",
         ]);
         expect(yield* query).toEqual([]);
-        yield* awaitPromise(() => runtime.dispose());
+        return yield* awaitPromise(() => runtime.dispose());
       })
     )
   );

@@ -1494,6 +1494,7 @@ export const make = (
           );
           yield* handler(args, writer);
         }
+        return undefined;
       });
 
     // Secondary field-value indexes over confirmed rows.
@@ -2417,7 +2418,7 @@ export const make = (
         yield* Metric.update(Telemetry.mutationsPushedTotal, sent);
         yield* Metric.update(Telemetry.pushesTotal, 1);
         yield* Metric.update(Telemetry.pushMutations, sent);
-        yield* emitEngineEvent({ _tag: "PushCompleted", mutations: sent });
+        return yield* emitEngineEvent({ _tag: "PushCompleted", mutations: sent });
       });
 
     // The claim is held for the whole round trip (through the ack sweep) and

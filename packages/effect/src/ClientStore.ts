@@ -732,7 +732,7 @@ export const makeMemory: Effect.Effect<ClientStore> = Effect.gen(function* () {
           if ((yield* Ref.get(tail)).some((held) => entryKey(held) === entryKey(mutation))) {
             return yield* alreadyParked(mutation);
           }
-          yield* Ref.update(journal, (entries) => entries.concat(mutation));
+          return yield* Ref.update(journal, (entries) => entries.concat(mutation));
         })
       ),
     // Uninterruptible and under the store lock: the counter and the journal
@@ -2208,7 +2208,7 @@ export const makeKeyValue = (
               });
             }
             yield* writeJson(journalBodyKey(mutation.clientId, mutation.mutationId), mutation);
-            yield* writeJson("journalIndex", [
+            return yield* writeJson("journalIndex", [
               ...index,
               { clientId: mutation.clientId, mutationId: mutation.mutationId },
             ]);

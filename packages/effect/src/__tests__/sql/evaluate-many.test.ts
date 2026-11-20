@@ -15,6 +15,7 @@ import { SqliteClient } from "@effect/sql-sqlite-node";
 import { BackendError, Mutator, Predicate } from "@thomasfosterau/legation";
 import { Subset } from "@thomasfosterau/legation/internal";
 import * as SqlBackend from "../../sql/SqlBackend.js";
+import { defined } from "../defined.js";
 
 const context = { clientGroupId: "g" };
 
@@ -42,12 +43,12 @@ const countedExecutor = (sql: SqlClient, statements: Ref.Ref<number>): SqlBacken
   transaction: (effect) => effect,
 });
 
-const withBackend = <A>(
+const withBackend = <A, E>(
   use: (
     backend: ReturnType<typeof SqlBackend.make>,
     statements: Ref.Ref<number>,
     sql: SqlClient
-  ) => Effect.Effect<A, unknown>
+  ) => Effect.Effect<A, E>
 ) =>
   Effect.scoped(
     Effect.gen(function* () {
@@ -123,8 +124,7 @@ describe("SqlBackend.evaluateMany on SQLite", () => {
   it.effect("gives the entries, versions included, that one evaluate per subset gives", () =>
     withBackend((backend) =>
       Effect.gen(function* () {
-        const evaluateMany = backend.evaluateMany;
-        if (evaluateMany === undefined) return expect.unreachable("evaluateMany is defined");
+        const evaluateMany = defined(backend.evaluateMany);
         const single = yield* Effect.forEach(
           subsets,
           (subset) => backend.evaluate(context, subset),
@@ -140,8 +140,7 @@ describe("SqlBackend.evaluateMany on SQLite", () => {
   it.effect("makes no statement for no subsets, or only unmapped ones", () =>
     withBackend((backend, statements) =>
       Effect.gen(function* () {
-        const evaluateMany = backend.evaluateMany;
-        if (evaluateMany === undefined) return expect.unreachable("evaluateMany is defined");
+        const evaluateMany = defined(backend.evaluateMany);
         expect(yield* evaluateMany(context, [])).toEqual([]);
         expect(yield* evaluateMany(context, [Subset.make({ collection: "unmapped" })])).toEqual([
           [],
@@ -154,8 +153,7 @@ describe("SqlBackend.evaluateMany on SQLite", () => {
   it.effect("carries each value as the driver reads it, past what JSON holds exactly", () =>
     withBackend((backend, statements, sql) =>
       Effect.gen(function* () {
-        const evaluateMany = backend.evaluateMany;
-        if (evaluateMany === undefined) return expect.unreachable("evaluateMany is defined");
+        const evaluateMany = defined(backend.evaluateMany);
         // An integer past 2^53 and a double JSON at 15 digits would round:
         // SQLite's arms carry the columns themselves, so neither is touched.
         yield* sql.unsafe(`UPDATE todos SET rank = 9007199254740993 WHERE id = 't2'`).unprepared;

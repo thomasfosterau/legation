@@ -134,8 +134,8 @@ const linkageOf = (
 };
 
 /** The body's `data` member as an object, or the refusal for a body that has none. */
-const dataOf = (
-  body: Effect.Effect<string, unknown>
+const dataOf = <E>(
+  body: Effect.Effect<string, E>
 ): Effect.Effect<Record<string, unknown>, Refusal> =>
   Effect.gen(function* () {
     const text = yield* body.pipe(

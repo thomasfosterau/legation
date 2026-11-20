@@ -11,6 +11,7 @@
 
 import type * as cf from "@cloudflare/workers-types";
 import * as Workers from "@alchemy.run/cloudflare/Workers";
+import type { HttpEffect } from "alchemy/Http";
 import { RuntimeContext } from "alchemy/RuntimeContext";
 import * as Arr from "effect/Array";
 import * as Effect from "effect/Effect";
@@ -191,11 +192,7 @@ export const makeNamespace = <Surface extends object>(
 };
 
 /** A Durable Object's HTTP handler, as the bridge runs it. */
-type Handler = Effect.Effect<
-  HttpServerResponse.HttpServerResponse,
-  unknown,
-  HttpServerRequest.HttpServerRequest | Scope.Scope | Workers.DurableObjectState | RuntimeContext
->;
+type Handler = HttpEffect<Workers.DurableObjectState | RuntimeContext>;
 
 /** Run a Durable Object `fetch` handler on a web request and answer a web response. */
 export const fetchOf =

@@ -144,17 +144,17 @@ const runRequest = <A>(
           })
         )
       );
-      return;
+      return undefined;
     }
     const db = connection.db;
     if (!db.objectStoreNames.contains(ENTRIES_STORE)) {
       finish(Effect.fail(missingEntriesStore(db, failure.method, failure.key)));
-      return;
+      return undefined;
     }
     const began = Result.try(() => db.transaction(ENTRIES_STORE, mode));
     if (Result.isFailure(began)) {
       fail(began.failure);
-      return;
+      return undefined;
     }
     const transaction = began.success;
     transaction.addEventListener("complete", () => finish(Effect.succeed(result as A)));
@@ -285,7 +285,7 @@ const commitOps = (
       );
     if (connection.upgraded) {
       finish(Effect.fail(new StoreError({ message: UPGRADED_MESSAGE })));
-      return;
+      return undefined;
     }
     const db = connection.db;
     if (!db.objectStoreNames.contains(ENTRIES_STORE)) {
@@ -296,12 +296,12 @@ const commitOps = (
           })
         )
       );
-      return;
+      return undefined;
     }
     const began = Result.try(() => db.transaction(ENTRIES_STORE, "readwrite"));
     if (Result.isFailure(began)) {
       fail(began.failure);
-      return;
+      return undefined;
     }
     const transaction = began.success;
     const abort = () => abortQuietly(transaction);

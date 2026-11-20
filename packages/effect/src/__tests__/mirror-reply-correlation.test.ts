@@ -91,9 +91,9 @@ const makeHost = Effect.fn("makeHost")(function* () {
 });
 
 /** A scripted host: answers each `Mutate` the mirrors post with `answer`. */
-const scriptedHost = (
+const scriptedHost = <E>(
   host: MirrorChannel.MirrorChannel,
-  answer: (message: MutateMessage) => Effect.Effect<void, unknown>
+  answer: (message: MutateMessage) => Effect.Effect<void, E>
 ) =>
   Effect.gen(function* () {
     const inbox = yield* host.subscribe;

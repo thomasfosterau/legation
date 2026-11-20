@@ -119,6 +119,7 @@ describe("FanoutBus broker timeouts", () => {
               const attempt = yield* Ref.updateAndGet(registrations, (count) => count + 1);
               // The registration at make succeeds; every heartbeat after it hangs.
               if (attempt > 1) return yield* Effect.never;
+              return undefined;
             }),
           publish: () => Effect.void,
           pokes: () => Effect.die(new TestFailure({ message: "unused" })),

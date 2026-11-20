@@ -15,6 +15,7 @@ import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
 import * as Ref from "effect/Ref";
+import type * as Scope from "effect/Scope";
 import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
 import * as Authorization from "../Authorization.js";
@@ -60,7 +61,7 @@ const backendHandlers: Record<string, MemoryBackend.BackendHandler> = {
   "todo/set": (args, writer) => Effect.asVoid(writer.put("todos", (args as Todo).id, args)),
 };
 
-const makeServer: Effect.Effect<ServerHandler, never, any> = Effect.gen(function* () {
+const makeServer: Effect.Effect<ServerHandler, never, Scope.Scope> = Effect.gen(function* () {
   const backend = yield* MemoryBackend.make(backendHandlers);
   return yield* SyncServer.make.pipe(
     Effect.provideService(Backend, backend),

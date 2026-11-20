@@ -741,7 +741,7 @@ describe("ClientEngine + CollectionIndex", () => {
             if (stored.id === "i2" && (yield* Ref.get(armed))) {
               return yield* new StoreError({ message: "write refused" });
             }
-            yield* memory.putRow(collection, stored);
+            return yield* memory.putRow(collection, stored);
           }),
       });
       const engine = yield* priorityEngine(store);

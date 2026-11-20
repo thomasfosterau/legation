@@ -982,7 +982,7 @@ const rule11CrossGroupLostUpdate: Rule = (h) =>
 
       const [stored] = yield* h.expectOk(rule, h.backend.getRows(h.context, h.rows, [row]));
       const count = (stored?.value as { readonly n?: number } | undefined)?.n;
-      yield* h.check(
+      return yield* h.check(
         rule,
         count === 2,
         `Two increments of "${row}" from two client groups must leave it at 2, got ${count}: a committed write was lost to the other group's concurrent commit`

@@ -69,9 +69,9 @@ const DDL_WITHOUT_REJECTIONS: ReadonlyArray<string> = [
 ];
 
 /** Run `use` on a pooled client against a freshly reset schema (default: `DDL`). */
-const withDatabase = <A>(
+const withDatabase = <A, E>(
   url: string,
-  use: (sql: SqlClient) => Effect.Effect<A, unknown>,
+  use: (sql: SqlClient) => Effect.Effect<A, E>,
   schema: ReadonlyArray<string> = DDL
 ): Effect.Effect<A> =>
   Effect.scoped(

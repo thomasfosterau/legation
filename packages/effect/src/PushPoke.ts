@@ -159,7 +159,7 @@ export const sink = <Target>(
         const now = yield* Clock.currentTimeMillis;
         const decision = yield* decide(key, now);
         if (decision === "send") return yield* push(target, key, now);
-        if (decision !== "trail") return;
+        if (decision !== "trail") return undefined;
         const state = stateOf(yield* Ref.get(states), key);
         const wait = Math.max(0, state.lastSent + window - now);
         yield* Effect.forkIn(
@@ -169,6 +169,7 @@ export const sink = <Target>(
           ),
           scope
         );
+        return undefined;
       });
 
     return {

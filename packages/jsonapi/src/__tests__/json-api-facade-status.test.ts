@@ -77,7 +77,7 @@ const serverHandlers = R.fromEntries(
             if (decoded.attributes.title === "reject") {
               return yield* new MutationRejected({ reason: "title refused" });
             }
-            yield* Effect.orDie(entry.local(args, writer));
+            return yield* Effect.orDie(entry.local(args, writer));
           }),
       ] as const
   )

@@ -176,8 +176,8 @@ const makeMock = (options: { readonly transactional?: boolean } = {}): Mock => {
       Effect.sync(() => {
         if (!isLedger(fragment.text)) return;
         const statement = ledgerWrites.find(([pattern]) => pattern.test(fragment.text));
-        if (statement === undefined) return unmodelled(fragment);
-        statement[1](fragment);
+        if (statement === undefined) unmodelled(fragment);
+        else statement[1](fragment);
       }),
     transaction: (effect) => effect,
     transactional,
