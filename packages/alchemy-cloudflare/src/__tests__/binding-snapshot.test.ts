@@ -46,7 +46,7 @@ import {
   ClientEngine,
   Cvr,
   InvalidationBus,
-  type Protocol,
+  Protocol,
   Subset,
   SyncServer,
 } from "@thomasfosterau/legation/internal";
@@ -56,6 +56,8 @@ import type * as Room from "../Room.js";
 import { routeOf, routes } from "../RoomProtocol.js";
 import { routeSync } from "../Worker.js";
 import { defined } from "./defined.js";
+
+const decodeIdentified = Schema.decodeUnknownSync(Schema.Struct({ id: Schema.String }));
 
 const JsonText = Schema.fromJsonString(Schema.Unknown);
 const encodeJson = Schema.encodeSync(JsonText);
@@ -72,13 +74,13 @@ const productSet = Mutation.make("product/set", Schema.Unknown);
 const mutations = Mutation.registry([
   {
     mutator: productSet,
-    local: (args, writer) => writer.put("products", (args as { id: string }).id, args),
+    local: (args, writer) => writer.put("products", decodeIdentified(args).id, args),
   },
 ]);
 
 const backendHandlers = {
   "product/set": (args, writer) =>
-    Effect.asVoid(writer.put("products", (args as { id: string }).id, args)),
+    Effect.asVoid(writer.put("products", decodeIdentified(args).id, args)),
 } satisfies Record<string, MemoryBackend.BackendHandler>;
 
 // ─── The API Worker ──────────────────────────────────────────────────────────
@@ -170,9 +172,27 @@ const makeApi = Effect.fn("makeApi")(function* (): Effect.fn.Return<Api, never, 
           })
         )
       );
-    if (path === routes.push) return answer(handler.handlePush(body as Protocol.PushRequest));
-    if (path === routes.pull) return answer(handler.handlePull(body as Protocol.PullRequest));
-    if (path === routes.read) return answer(handler.handleRead(body as Protocol.ReadRequest));
+    if (path === routes.push)
+      return answer(
+        Protocol.decodePushRequest(body).pipe(
+          Effect.orDie,
+          Effect.flatMap((decoded) => handler.handlePush(decoded))
+        )
+      );
+    if (path === routes.pull)
+      return answer(
+        Protocol.decodePullRequest(body).pipe(
+          Effect.orDie,
+          Effect.flatMap((decoded) => handler.handlePull(decoded))
+        )
+      );
+    if (path === routes.read)
+      return answer(
+        Protocol.decodeReadRequest(body).pipe(
+          Effect.orDie,
+          Effect.flatMap((decoded) => handler.handleRead(decoded))
+        )
+      );
     return new Response("not found", { status: 404 });
   });
 

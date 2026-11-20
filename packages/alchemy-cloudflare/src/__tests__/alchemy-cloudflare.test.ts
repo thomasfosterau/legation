@@ -54,6 +54,7 @@ import {
   Cvr,
   Defined,
   HintSource,
+  Protocol,
   Subset,
 } from "@thomasfosterau/legation/internal";
 import type { SqlBackend } from "@thomasfosterau/legation/sql";
@@ -82,6 +83,8 @@ import {
   runtimeContext,
 } from "./harness.js";
 import { TestFailure } from "./test-failure.js";
+
+const decodeIdentified = Schema.decodeUnknownSync(Schema.Struct({ id: Schema.String }));
 
 const JsonText = Schema.fromJsonString(Schema.Unknown);
 const encodeJson = Schema.encodeSync(JsonText);
@@ -405,7 +408,7 @@ const reviewSet = Mutation.make("review/set", Schema.Unknown);
 const mutations = Mutation.registry([
   {
     mutator: reviewSet,
-    local: (args, writer) => writer.put("reviews", (args as { id: string }).id, args),
+    local: (args, writer) => writer.put("reviews", decodeIdentified(args).id, args),
   },
 ]);
 
@@ -455,27 +458,31 @@ const memoByName = <A>(build: (name: string) => Effect.Effect<A>) => {
 };
 
 /** A ClientTransport calling a room instance's fetch directly. */
-const roomTransport = (send: (request: Request) => Effect.Effect<Response>) => {
-  const post = (route: string) => (body: unknown) =>
-    send(
-      new Request(`https://room${route}`, {
-        method: "POST",
-        body: encodeJson(body),
-        headers: { "content-type": "application/json" },
-      })
-    ).pipe(
-      Effect.flatMap((response) => awaitPromise(() => response.json())),
-      Effect.map((json) => json as never),
-      Effect.orDie
-    );
+const roomTransport = (
+  send: (request: Request) => Effect.Effect<Response>
+): Transport.ClientTransport => {
+  const post =
+    <A>(route: string, schema: Schema.Codec<A>) =>
+    (body: unknown) =>
+      send(
+        new Request(`https://room${route}`, {
+          method: "POST",
+          body: encodeJson(body),
+          headers: { "content-type": "application/json" },
+        })
+      ).pipe(
+        Effect.flatMap((response) => awaitPromise(() => response.json())),
+        Effect.flatMap(Schema.decodeUnknownEffect(schema)),
+        Effect.orDie
+      );
   return {
-    push: post(routes.push),
-    pull: post(routes.pull),
-    read: post(routes.read),
+    push: post(routes.push, Protocol.PushResponse),
+    pull: post(routes.pull, Protocol.PullResponse),
+    read: post(routes.read, Protocol.ReadResponse),
     pokes: Stream.empty,
     status: Effect.succeed("connected" as const),
     statusChanges: Stream.succeed("connected" as const),
-  } as Transport.ClientTransport;
+  };
 };
 
 const publishPolicy = Effect.succeed(
@@ -489,7 +496,7 @@ const backendOf = () =>
   MemoryBackend.make(
     MemoryBackend.validatedHandlers([
       MemoryBackend.handler(reviewSet, (args, writer) =>
-        writer.put("reviews", (args as { id: string }).id, args)
+        writer.put("reviews", decodeIdentified(args).id, args)
       ),
     ])
   );

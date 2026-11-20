@@ -40,6 +40,18 @@ import type * as FacadeWrites from "../FacadeWrites.js";
 import * as JsonApiFacade from "../JsonApiFacade.js";
 import * as JsonApiQuery from "../JsonApiQuery.js";
 
+const decodeErrorDocument = Schema.decodeUnknownSync(
+  Schema.Struct({
+    errors: Schema.Array(
+      Schema.Struct({
+        status: Schema.String,
+        code: Schema.String,
+        source: Schema.optionalKey(Schema.Struct({ pointer: Schema.optionalKey(Schema.String) })),
+      })
+    ),
+  })
+);
+
 // ─── The graph, its api and the replica ──────────────────────────────────────
 
 const categories = Node.make("categories", {
@@ -191,12 +203,7 @@ const expectErrors = (
     expect(response.headers.get("cache-control")).toBe("no-store");
     expect(response.headers.get(JsonApiFacade.servedAtHeader)).not.toBeNull();
     const document = yield* body(response);
-    // SAFETY: a JSON:API error document's `errors` is an array of error objects.
-    const errors = document.errors as ReadonlyArray<{
-      status: string;
-      code: string;
-      source?: { pointer: string };
-    }>;
+    const { errors } = decodeErrorDocument(document);
     expect(
       Arr.map(errors, (error) =>
         error.source === undefined

@@ -128,8 +128,8 @@ const utf8 = (s: string) => encoder.encode(s);
 const keyBytes = (s: string): ArrayBuffer => new Uint8Array(utf8(s)).buffer;
 const kb = (bytes: number) => Math.round(bytes / 102.4) / 10;
 const ms = (t: number) => Math.round(t * 100) / 100;
-const gc = () => (globalThis as { gc?: () => void }).gc?.();
-const gcExposed = P.isFunction((globalThis as { gc?: unknown }).gc);
+const gc = () => globalThis.gc?.();
+const gcExposed = P.isFunction(globalThis.gc);
 const heap = () => process.memoryUsage().heapUsed;
 const timed = async <A>(f: () => Promise<A> | A): Promise<[A, number]> => {
   const t0 = performance.now();
@@ -238,7 +238,13 @@ const sectionA = async () => {
   gc();
   const h1 = heap();
   const raw = [...counting.data.entries()].filter(([k]) => k.startsWith("legation/row/"));
-  const [parsed, parseMs] = await timed(() => raw.map(([, v]) => JSON.parse(v) as unknown));
+  const [parsed, parseMs] = await timed(() =>
+    raw.map(
+      ([, v]) =>
+        // SAFETY: widening `JSON.parse`'s `any` to `unknown` only drops type information.
+        JSON.parse(v) as unknown
+    )
+  );
 
   const coldLoad = [
     {
@@ -317,7 +323,7 @@ const sectionA = async () => {
 
 // ─── B. CollectionIndex: rebuild and indexed evaluate vs full scan ───────────
 
-const storedRows = rows.map((row) => ({ id: row.id, value: row as unknown }));
+const storedRows = rows.map((row) => ({ id: row.id, value: row }));
 const rowsById = new Map(storedRows.map((r) => [r.id, r]));
 const index = CollectionIndex.empty(["qty", "name", "note"]);
 
@@ -377,7 +383,7 @@ const sectionB = async () => {
   table.push(...evaluated);
   // Sort cost in memory, the fallback when orderBy is not one indexed field.
   const [, sortMs] = await timed(() =>
-    storedRows.toSorted((a, b) => compareCodePoints((a.value as Item).name, (b.value as Item).name))
+    storedRows.toSorted((a, b) => compareCodePoints(a.value.name, b.value.name))
   );
   table.push({ what: `in-memory sort by name, code-point order (${ROWS})`, ms: ms(sortMs) });
   void shadow;
@@ -512,7 +518,9 @@ const walk = (
     r.addEventListener("success", () => {
       const cursor = r.result;
       if (cursor === null) return resolve();
-      visit(cursor.value as NativeRecord);
+      // `value` is `any` in the DOM typings; this file writes only `toRecord`s
+      // to the store `walk` reads, and decoding here would skew the timings.
+      visit(cursor.value);
       cursor.continue();
     });
     r.addEventListener("error", () => reject(r.error));
@@ -529,7 +537,7 @@ const openNative = (factory: IDBFactory): Promise<IDBDatabase> => {
     db.createObjectStore("journal", { keyPath: ["clientId", "mutationId"] });
     db.createObjectStore("meta", { keyPath: "key" });
   });
-  return request(r as IDBRequest<IDBDatabase>);
+  return request(r);
 };
 
 const sectionD = async () => {

@@ -48,6 +48,9 @@ import * as BroadcastMirrorChannel from "../BroadcastMirrorChannel.js";
 import { defined } from "./defined.js";
 import { TestFailure } from "./test-failure.js";
 
+const decodeIdentified = Schema.decodeUnknownSync(Schema.Struct({ id: Schema.String }));
+const decodeTitled = Schema.decodeUnknownSync(Schema.Struct({ title: Schema.String }));
+
 const JsonText = Schema.fromJsonString(Schema.Unknown);
 const encodeJson = Schema.encodeSync(JsonText);
 
@@ -57,8 +60,6 @@ const TodoArgs = Schema.Struct({
   isDone: Schema.Boolean,
   authorId: Schema.optional(Schema.String),
 });
-type Todo = typeof TodoArgs.Type;
-
 // The node graph the URL-keyed tests compile against: a todo's
 // `author` edge is what a `SubscribeUrl` with `include=author` must pin.
 const nodes = Node.registry([
@@ -71,7 +72,10 @@ const nodes = Node.registry([
 
 const todoSet = Mutator.make("todo/set", TodoArgs);
 const mutators = Mutator.registry([
-  { mutator: todoSet, local: (args, writer) => writer.put("todos", (args as Todo).id, args) },
+  {
+    mutator: todoSet,
+    local: (args, writer) => writer.put("todos", decodeIdentified(args).id, args),
+  },
 ]);
 
 const allTodos = Subset.make({ collection: "todos" });
@@ -175,7 +179,7 @@ describe("EngineHost ↔ Mirror (loopback)", () => {
       yield* mirror.mutate("todo/set", { id: "1", title: "from the tab", isDone: false });
 
       const rows = yield* eventually(mirror.query(allTodos), (current) => current.length === 1);
-      expect(rows.map((row) => (row.value as Todo).title)).toEqual(["from the tab"]);
+      expect(rows.map((row) => decodeTitled(row.value).title)).toEqual(["from the tab"]);
 
       // The journal lives in the host, not the tab.
       expect(yield* store.pendingMutations).toHaveLength(1);
@@ -186,7 +190,7 @@ describe("EngineHost ↔ Mirror (loopback)", () => {
         mirror.query(allTodos),
         (current) => current.length === 1
       );
-      expect(confirmed.map((row) => (row.value as Todo).title)).toEqual(["from the tab"]);
+      expect(confirmed.map((row) => decodeTitled(row.value).title)).toEqual(["from the tab"]);
     })
   );
 
@@ -206,7 +210,7 @@ describe("EngineHost ↔ Mirror (loopback)", () => {
       const second = yield* Mirror.make({ channel: mirrorChannel, mutators });
       yield* second.subscribe(allTodos);
       const rows = yield* eventually(second.query(allTodos), (current) => current.length === 1);
-      expect(rows.map((row) => (row.value as Todo).title)).toEqual(["before"]);
+      expect(rows.map((row) => decodeTitled(row.value).title)).toEqual(["before"]);
     })
   );
 
@@ -372,7 +376,7 @@ describe("EngineHost ↔ Mirror (BroadcastChannel)", () => {
       yield* mirror.subscribe(allTodos);
       yield* mirror.mutate("todo/set", { id: "1", title: "broadcast", isDone: false });
       const rows = yield* eventually(mirror.query(allTodos), (current) => current.length === 1);
-      expect(rows.map((row) => (row.value as Todo).title)).toEqual(["broadcast"]);
+      expect(rows.map((row) => decodeTitled(row.value).title)).toEqual(["broadcast"]);
     })
   );
 });

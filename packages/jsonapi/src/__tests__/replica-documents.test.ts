@@ -112,13 +112,18 @@ const view: ClientView.Reader = {
   observe: (subset) => Stream.fromEffect(view.query(subset)),
 };
 
+const decodeSeedPut = Schema.decodeUnknownSync(
+  Schema.Struct({ collection: Schema.String, value: Schema.Unknown })
+);
+const decodeIdentified = Schema.decodeUnknownSync(Schema.Struct({ id: Schema.String }));
+
 /** The same rows in a `MemoryBackend`, behind the derived REST handlers. */
 const makeRest = (prefix?: string) =>
   Effect.gen(function* () {
     const backend = yield* MemoryBackend.make({
       "seed/put": (args, writer) => {
-        const { collection, value } = args as { collection: string; value: { id: string } };
-        return writer.put(collection, value.id, value);
+        const { collection, value } = decodeSeedPut(args);
+        return writer.put(collection, decodeIdentified(value).id, value);
       },
     });
     const puts = Object.entries(seed).flatMap(([collection, rows]) =>
@@ -236,7 +241,7 @@ describe("ReplicaDocuments over the replica", () => {
         // empty for a variant without offers, never omitted.
         const included = yield* docs.fromUrl(view, "/products/p-1?include=variants");
         const product = { data: { type: "products", id: "p-1" } };
-        expect((included as ReplicaDocuments.Document & { included: any }).included).toEqual([
+        expect(included).toHaveProperty("included", [
           {
             type: "variants",
             id: "v-1",
@@ -276,8 +281,7 @@ describe("ReplicaDocuments over the replica", () => {
         expect(bytes(local)).toBe(bytes(served));
         // The paginated `reviews` edge is a `many` relationship of the synthetic
         // resource: links, and its rows' linkage in the edge's order.
-        const desk = (local as ReplicaDocuments.Document & { data: any }).data[1];
-        expect(desk.relationships.reviews).toEqual({
+        expect(local).toHaveProperty(["data", 1, "relationships", "reviews"], {
           links: {
             self: "/api/products/p-1/relationships/reviews",
             related: "/api/products/p-1/reviews",
@@ -409,7 +413,7 @@ describe("ReplicaDocuments over the replica", () => {
     expect(() =>
       ReplicaDocuments.make({
         nodes,
-        resources: new Map([["secrets", Secret as Resource.Any]]),
+        resources: new Map<string, Resource.Any>([["secrets", Secret]]),
       })
     ).toThrow(/no node "secrets"/);
     const Mislinked = Resource.make("categories", {
@@ -419,7 +423,7 @@ describe("ReplicaDocuments over the replica", () => {
     expect(() =>
       ReplicaDocuments.make({
         nodes,
-        resources: new Map([["categories", Mislinked as Resource.Any]]),
+        resources: new Map<string, Resource.Any>([["categories", Mislinked]]),
       })
     ).toThrow(/"owner".*not an edge/);
   });

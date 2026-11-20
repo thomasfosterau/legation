@@ -19,6 +19,7 @@ import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
 import * as Match from "effect/Match";
 import * as Option from "effect/Option";
+import * as P from "effect/Predicate";
 import * as Ref from "effect/Ref";
 import * as Schema from "effect/Schema";
 import * as Semaphore from "effect/Semaphore";
@@ -127,9 +128,9 @@ const ClientIdRequest = Schema.Struct({
 
 /** One operation, as the default request document would decode it, without the add's client id. */
 const decodeOperation = (raw: unknown): Effect.Effect<BatchOperation> => {
-  const operation = raw as { readonly op?: unknown; readonly data?: Record<string, Schema.Json> };
-  const { id: _clientId, ...data } = operation.data ?? {};
-  const withoutId = operation.op === "add" ? { ...operation, data } : operation;
+  const { id: _clientId, ...data } =
+    P.hasProperty(raw, "data") && P.isObject(raw.data) ? raw.data : {};
+  const withoutId = P.hasProperty(raw, "op") && raw.op === "add" ? { ...raw, data } : raw;
   return Schema.decodeUnknownEffect(Atomic.Operations([Row, EvalRow]))(withoutId).pipe(
     Effect.orDie
   );
@@ -343,6 +344,15 @@ const applyOperation = (
     Match.exhaustive
   );
 
+/** The client ids a request document's operations carry, where they carry one. */
+const RequestClientIds = Schema.Struct({
+  "atomic:operations": Schema.Array(
+    Schema.Struct({
+      data: Schema.optionalKey(Schema.Struct({ id: Schema.optionalKey(Schema.String) })),
+    })
+  ),
+});
+
 /**
  * `lock` serialises whole batches: a batch copies the store, runs, and commits
  * over it, so two overlapping batches would lose the first one's writes. One
@@ -353,9 +363,10 @@ const operationsLive = (store: Store, lock: Semaphore.Semaphore, probe: ServerPr
     handlers.handle("operations", ({ payload, request }) =>
       Effect.gen(function* () {
         // The request body is cached, so it can be re-read after decoding.
-        const raw = (yield* request.json.pipe(Effect.orDie)) as {
-          readonly "atomic:operations": ReadonlyArray<{ readonly data?: { readonly id?: string } }>;
-        };
+        const raw = yield* request.json.pipe(
+          Effect.flatMap(Schema.decodeUnknownEffect(RequestClientIds)),
+          Effect.orDie
+        );
         const staged: Store = new Map([...store].map(([type, rows]) => [type, new Map(rows)]));
         const entries: Array<Entry> = [];
         yield* Effect.forEach(
@@ -427,6 +438,11 @@ const mutators = new Map<string, Mutator.AnyMutator>(
   ].map((mutator) => [mutator.name, mutator])
 );
 
+const decodePutRow = Schema.decodeUnknownSync(BackendContract.putRow.args);
+const decodeRowRef = Schema.decodeUnknownSync(BackendContract.delRow.args);
+const decodeCountUp = Schema.decodeUnknownSync(BackendContract.countUp.args);
+const decodeAttributes = Schema.decodeUnknownSync(Schema.Record(Schema.String, Schema.Json));
+
 /**
  * Each contract mutator as one JSON:API write. `put` is an upsert, so it is an
  * `add` with the client-generated id (the server above replaces on conflict);
@@ -436,19 +452,19 @@ const writes = new Map<string, (args: unknown) => JsonApiBackend.Write>([
   [
     BackendContract.putRow.name,
     (args) => {
-      const a = args as { collection: string; id: string; value: unknown };
+      const a = decodePutRow(args);
       return {
         operation: "create",
         type: a.collection,
         id: a.id,
-        attributes: a.value as Record<string, Schema.Json>,
+        attributes: decodeAttributes(a.value),
       };
     },
   ],
   [
     BackendContract.delRow.name,
     (args) => {
-      const a = args as { collection: string; id: string };
+      const a = decodeRowRef(args);
       return { operation: "delete", type: a.collection, id: a.id };
     },
   ],
@@ -459,14 +475,14 @@ const writes = new Map<string, (args: unknown) => JsonApiBackend.Write>([
   [
     BackendContract.rejectAlways.name,
     (args) => {
-      const a = args as { collection: string; id: string };
+      const a = decodeRowRef(args);
       return { operation: "create", type: a.collection, id: a.id, attributes: { poison: true } };
     },
   ],
   [
     BackendContract.countUp.name,
     (args) => {
-      const a = args as { collection: string; id: string; gate: string };
+      const a = decodeCountUp(args);
       // An update the server turns into the increment (see applyUpdate).
       return {
         operation: "update",
@@ -479,7 +495,7 @@ const writes = new Map<string, (args: unknown) => JsonApiBackend.Write>([
   [
     BackendContract.writeThenFail.name,
     (args) => {
-      const a = args as { collection: string; id: string };
+      const a = decodeRowRef(args);
       // The server stages the row before it falls over (see applyAdd), so the
       // staged write must be discarded with the batch.
       return {

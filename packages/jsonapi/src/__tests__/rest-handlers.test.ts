@@ -215,11 +215,9 @@ const api = HttpApi.make("shop")
 
 // ─── The world: a seeded backend, the derived handlers, an in-process server ──
 
-interface Seed {
-  readonly collection: string;
-  readonly id: string;
-  readonly value: unknown;
-}
+const Seed = Schema.Struct({ collection: Schema.String, id: Schema.String, value: Schema.Unknown });
+type Seed = typeof Seed.Type;
+const decodeSeed = Schema.decodeUnknownSync(Seed);
 
 const seeds: ReadonlyArray<Seed> = [
   { collection: "categories", id: "c-audio", value: { id: "c-audio", name: "Audio" } },
@@ -286,7 +284,7 @@ const makeWorld = (policy: Authorization.AuthPolicy = fullPolicy, seam: Identity
   Effect.gen(function* () {
     const memory = yield* MemoryBackend.make({
       "seed/put": (args, writer) => {
-        const seed = args as Seed;
+        const seed = decodeSeed(args);
         return writer.put(seed.collection, seed.id, seed.value);
       },
     });

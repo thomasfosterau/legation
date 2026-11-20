@@ -28,6 +28,8 @@ import {
 import { ClientEngine, ClientView, Subset, SyncRoom } from "@thomasfosterau/legation/internal";
 import { TestFailure } from "./test-failure.js";
 
+const decodeIdentified = Schema.decodeUnknownSync(Schema.Struct({ id: Schema.String }));
+
 export interface Todo {
   readonly id: string;
   readonly title: string;
@@ -61,23 +63,23 @@ export const collections: Collection.CollectionRegistry = nodes.collections;
 export const mutators = Mutator.registry([
   {
     mutator: Mutator.make("todo/set", Schema.Unknown),
-    local: (args, writer) => writer.put("todos", (args as Todo).id, args),
+    local: (args, writer) => writer.put("todos", decodeIdentified(args).id, args),
   },
   {
     mutator: Mutator.make("user/set", Schema.Unknown),
-    local: (args, writer) => writer.put("users", (args as User).id, args),
+    local: (args, writer) => writer.put("users", decodeIdentified(args).id, args),
   },
   {
     // Optimistically applied, permanently rejected by the backend — the
     // overlay row must disappear on the rebase that observes the rejection.
     mutator: Mutator.make("todo/reject", Schema.Unknown),
-    local: (args, writer) => writer.put("todos", (args as Todo).id, args),
+    local: (args, writer) => writer.put("todos", decodeIdentified(args).id, args),
   },
 ]);
 
 const handlers = {
-  "todo/set": (args, writer) => Effect.asVoid(writer.put("todos", (args as Todo).id, args)),
-  "user/set": (args, writer) => Effect.asVoid(writer.put("users", (args as User).id, args)),
+  "todo/set": (args, writer) => Effect.asVoid(writer.put("todos", decodeIdentified(args).id, args)),
+  "user/set": (args, writer) => Effect.asVoid(writer.put("users", decodeIdentified(args).id, args)),
   "todo/reject": () => Effect.fail(new MutationRejected({ reason: "not allowed" })),
 } satisfies Record<string, MemoryBackend.BackendHandler>;
 

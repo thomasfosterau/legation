@@ -41,27 +41,17 @@ import { vi } from "vite-plus/test";
 import * as BrowserConnectivity from "../BrowserConnectivity.js";
 import { TestFailure } from "./test-failure.js";
 
-interface Todo {
-  readonly id: string;
-  readonly title: string;
-  readonly done: boolean;
-}
+const decodeIdentified = Schema.decodeUnknownSync(Schema.Struct({ id: Schema.String }));
 
 const setTodo = Mutator.registry([
   {
     mutator: Mutator.make("todo/set", Schema.Unknown),
-    local: (args, writer) => {
-      const todo = args as Todo;
-      return writer.put("todos", todo.id, todo);
-    },
+    local: (args, writer) => writer.put("todos", decodeIdentified(args).id, args),
   },
 ]);
 
 const backendHandlers = {
-  "todo/set": (args, writer) => {
-    const todo = args as Todo;
-    return Effect.asVoid(writer.put("todos", todo.id, todo));
-  },
+  "todo/set": (args, writer) => Effect.asVoid(writer.put("todos", decodeIdentified(args).id, args)),
 } satisfies Record<string, MemoryBackend.BackendHandler>;
 
 const authPolicy = Authorization.policy({ todos: Authorization.allowAll });

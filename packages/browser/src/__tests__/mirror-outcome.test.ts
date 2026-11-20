@@ -28,28 +28,24 @@ import * as Fiber from "effect/Fiber";
 import * as Schema from "effect/Schema";
 import { TestFailure } from "./test-failure.js";
 
-interface Todo {
-  readonly id: string;
-  readonly title: string;
-  readonly done: boolean;
-}
+const decodeIdentified = Schema.decodeUnknownSync(Schema.Struct({ id: Schema.String }));
 
 const mutators = Mutator.registry([
   {
     mutator: Mutator.make("todo/set", Schema.Unknown),
-    local: (args, writer) => writer.put("todos", (args as Todo).id, args),
+    local: (args, writer) => writer.put("todos", decodeIdentified(args).id, args),
   },
   {
     mutator: Mutator.make("todo/forbidden", Schema.Unknown),
-    local: (args, writer) => writer.put("todos", (args as Todo).id, args),
+    local: (args, writer) => writer.put("todos", decodeIdentified(args).id, args),
   },
 ]);
 
 const backendHandlers = {
-  "todo/set": (args, writer) => Effect.asVoid(writer.put("todos", (args as Todo).id, args)),
+  "todo/set": (args, writer) => Effect.asVoid(writer.put("todos", decodeIdentified(args).id, args)),
   "todo/forbidden": (args, writer) =>
     writer
-      .put("todos", (args as Todo).id, args)
+      .put("todos", decodeIdentified(args).id, args)
       .pipe(Effect.andThen(Effect.fail(new MutationRejected({ reason: "permission revoked" })))),
 } satisfies Record<string, MemoryBackend.BackendHandler>;
 

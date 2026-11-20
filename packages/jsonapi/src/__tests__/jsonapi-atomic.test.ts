@@ -19,6 +19,7 @@ import * as HttpApi from "effect/http-api/HttpApi";
 import * as HttpApiEndpoint from "effect/http-api/HttpApiEndpoint";
 import * as HttpApiGroup from "effect/http-api/HttpApiGroup";
 import * as HttpClient from "effect/http/HttpClient";
+import type * as HttpClientRequest from "effect/http/HttpClientRequest";
 import * as HttpClientResponse from "effect/http/HttpClientResponse";
 import { Atomic } from "@thomasfosterau/effect-jsonapi";
 import type { Backend } from "@thomasfosterau/legation";
@@ -28,6 +29,11 @@ import * as JsonApiBackend from "../JsonApiBackend.js";
 import * as JsonApiSync from "../JsonApiSync.js";
 import { defined } from "./defined.js";
 import { withLayer } from "./with-layer.js";
+
+const decodeTitled = Schema.decodeUnknownSync(Schema.Struct({ title: Schema.String }));
+const decodeMaybeTitled = Schema.decodeUnknownSync(
+  Schema.Struct({ title: Schema.optional(Schema.String) })
+);
 
 const JsonText = Schema.fromJsonString(Schema.Unknown);
 const encodeJson = Schema.encodeSync(JsonText);
@@ -67,12 +73,10 @@ const jsonHeaders = { "Content-Type": "application/vnd.api+json" };
 const respond = (status: number, document: unknown, headers = atomicHeaders) =>
   new Response(encodeJson(document), { status, headers });
 const empty = (status: number) => new Response(null, { status });
-const readBody = (request: { readonly body: unknown }): any => {
-  const b = request.body as { _tag?: string; body?: Uint8Array };
-  return b?._tag === "Uint8Array" && b.body
-    ? decodeJson(new TextDecoder().decode(b.body))
+const readBody = (request: HttpClientRequest.HttpClientRequest): any =>
+  request.body._tag === "Uint8Array"
+    ? decodeJson(new TextDecoder().decode(request.body.body))
     : undefined;
-};
 
 /** A row a server holds: its attributes and, optionally, its relationships as a document has them. */
 interface StoredRow {
@@ -1414,7 +1418,7 @@ describe("JsonApiSync.layer atomic detection", () => {
     });
     yield* engine.push;
     yield* engine.pull;
-    return (yield* engine.query(all)).map((row) => (row.value as { title: string }).title);
+    return (yield* engine.query(all)).map((row) => decodeTitled(row.value).title);
   });
 
   it.effect("pushes through the reflected operations endpoint", () =>
@@ -1596,7 +1600,7 @@ describe("JsonApiBackend getRows after its own writes", () => {
         ]);
 
         const [row] = yield* backend.getRows(context, "todos", ["1"]);
-        expect((defined(row).value as { title?: string }).title).toBe("second");
+        expect(defined(row).value).toHaveProperty("title", "second");
         // Only the listing and the read before the write reached the server.
         expect(readsOf(server, "/todos")).toHaveLength(1);
         expect(readsOf(server, "/todos/1")).toHaveLength(1);
@@ -1651,7 +1655,7 @@ const twoUpdates = [updateRowOne, updateRowTwo];
 
 /** The title `getRows` serves for each row, by id. */
 const titlesOf = (rows: ReadonlyArray<{ readonly id: string; readonly value: unknown }>) =>
-  Object.fromEntries(rows.map((row) => [row.id, (row.value as { title?: string }).title]));
+  Object.fromEntries(rows.map((row) => [row.id, decodeMaybeTitled(row.value).title]));
 
 /**
  * The cache is updated only by writes the server applied: a rejected or

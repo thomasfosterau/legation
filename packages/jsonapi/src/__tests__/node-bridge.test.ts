@@ -28,6 +28,11 @@ import * as NodeBridge from "../NodeBridge.js";
 import { defined } from "./defined.js";
 import { TestFailure } from "./test-failure.js";
 
+const decodeIdentified = Schema.decodeUnknownSync(Schema.Struct({ id: Schema.String }));
+const decodeIdentifiedRows = Schema.decodeUnknownSync(
+  Schema.Array(Schema.Struct({ id: Schema.String }))
+);
+
 // The commerce trio, declared once as JSON:API resources. The graph is
 // acyclic (the library's resource types expand eagerly): products point at
 // reviews, and a review carries its `productId` as a plain attribute that
@@ -222,21 +227,21 @@ describe("a bridged registry over a real engine", () => {
         const mutations = Mutator.registry([
           {
             mutator: productSet,
-            local: (args, writer) => writer.put("products", (args as { id: string }).id, args),
+            local: (args, writer) => writer.put("products", decodeIdentified(args).id, args),
           },
           {
             mutator: reviewSet,
-            local: (args, writer) => writer.put("reviews", (args as { id: string }).id, args),
+            local: (args, writer) => writer.put("reviews", decodeIdentified(args).id, args),
           },
         ]);
 
         const backend = yield* MemoryBackend.make(
           MemoryBackend.validatedHandlers([
             MemoryBackend.handler(productSet, (args, writer) =>
-              writer.put("products", (args as { id: string }).id, args)
+              writer.put("products", decodeIdentified(args).id, args)
             ),
             MemoryBackend.handler(reviewSet, (args, writer) =>
-              writer.put("reviews", (args as { id: string }).id, args)
+              writer.put("reviews", decodeIdentified(args).id, args)
             ),
           ])
         );
@@ -279,8 +284,7 @@ describe("a bridged registry over a real engine", () => {
         yield* Effect.forkScoped(
           Stream.runForEach(
             client.observe({ collection: "products", include: { reviews: { first: 2 } } }),
-            (rows) =>
-              Ref.set(latest, (rows[0]?.related["reviews"] ?? []) as ReadonlyArray<{ id: string }>)
+            (rows) => Ref.set(latest, decodeIdentifiedRows(rows[0]?.related["reviews"] ?? []))
           ).pipe(Effect.ignore)
         );
         // The bridged paginated edge windows the join: newest two, edge order.

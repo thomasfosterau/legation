@@ -63,24 +63,22 @@ import * as ServiceWorkerHost from "../ServiceWorkerHost.js";
 import { defined } from "./defined.js";
 import { TestFailure } from "./test-failure.js";
 
-interface Todo {
-  readonly id: string;
-  readonly title: string;
-}
+const decodeIdentified = Schema.decodeUnknownSync(Schema.Struct({ id: Schema.String }));
+const decodeTitled = Schema.decodeUnknownSync(Schema.Struct({ title: Schema.String }));
 
 const mutators = Mutator.registry([
   {
     mutator: Mutator.make("todo/set", Schema.Unknown),
-    local: (args, writer) => writer.put("todos", (args as Todo).id, args),
+    local: (args, writer) => writer.put("todos", decodeIdentified(args).id, args),
   },
   {
     mutator: Mutator.make("todo/refused", Schema.Unknown),
-    local: (args, writer) => writer.put("todos", (args as Todo).id, args),
+    local: (args, writer) => writer.put("todos", decodeIdentified(args).id, args),
   },
 ]);
 
 const backendHandlers = {
-  "todo/set": (args, writer) => Effect.asVoid(writer.put("todos", (args as Todo).id, args)),
+  "todo/set": (args, writer) => Effect.asVoid(writer.put("todos", decodeIdentified(args).id, args)),
   // A write the backend can never accept: the permanent-rejection path.
   "todo/refused": () => Effect.fail(new MutationRejected({ reason: "not allowed" })),
 } satisfies Record<string, MemoryBackend.BackendHandler>;
@@ -269,7 +267,7 @@ const phases = (engine: ClientEngine.ClientEngine) =>
   );
 
 const titles = (rows: ReadonlyArray<{ readonly value: unknown }>) =>
-  rows.map((row) => (row.value as Todo).title).toSorted();
+  rows.map((row) => decodeTitled(row.value).title).toSorted();
 
 /** Poll `check` until it holds (real time), or fail the test after ~2s. */
 const eventually = <A, E>(read: Effect.Effect<A, E>, check: (value: A) => boolean) => {
@@ -448,7 +446,7 @@ describeWrapped("BackgroundSync", (it) => {
       listenOn(self, { readyTimeout: "50 millis" });
       const result = yield* settle(self.dispatch(BackgroundSync.defaultTag).held[0]);
       expect(result.ok).toBe(false);
-      expect(!result.ok && (result.error as { _tag?: string })._tag).toBe("HostNotReady");
+      expect(!result.ok && result.error).toHaveProperty("_tag", "HostNotReady");
     })
   );
 
@@ -537,7 +535,7 @@ describeWrapped("BackgroundSync", (it) => {
         expect(yield* Ref.get(pushes)).toEqual([]);
         // Compacted to the last edit.
         const pending = yield* store.pendingMutations;
-        expect(pending.map((m) => (m.args as Todo).title)).toEqual(["edit 5"]);
+        expect(pending.map((m) => decodeTitled(m.args).title)).toEqual(["edit 5"]);
       }).pipe(Effect.scoped)
     );
 
@@ -649,7 +647,7 @@ describeWrapped("BackgroundSync", (it) => {
           ),
           () =>
             Effect.sync(() => {
-              delete (globalThis.navigator as { onLine?: boolean }).onLine;
+              Reflect.deleteProperty(globalThis.navigator, "onLine");
             })
         );
         const self = fakeScope();
@@ -799,7 +797,7 @@ describe("BackgroundSync store failure logging", () => {
         yield* Ref.set(broken, true);
         const failed = yield* settle(self.dispatch(BackgroundSync.defaultTag).held[0]);
         expect(failed.ok).toBe(false);
-        expect(!failed.ok && (failed.error as { _tag?: string })._tag).toBe("StoreError");
+        expect(!failed.ok && failed.error).toHaveProperty("_tag", "StoreError");
         expect(logs.loud).toHaveLength(1);
         expect(logs.loud[0]).toMatch(/^Warn: .*store/);
       }).pipe(Effect.scoped)

@@ -38,6 +38,8 @@ import * as Stream from "effect/Stream";
 import * as BackgroundSync from "../BackgroundSync.js";
 import * as BrowserConnectivity from "../BrowserConnectivity.js";
 
+const decodeIdentified = Schema.decodeUnknownSync(Schema.Struct({ id: Schema.String }));
+
 /**
  * What one test's logger recorded at every level (the minimum is lowered to `All`, so debug lines
  * reach it too), split into what an app would surface (`Warn` and above) and the quiet rest.
@@ -102,7 +104,7 @@ describe("BackgroundSync without Background Sync", () => {
           const setTodo = Mutator.make("todo/set", Schema.Unknown);
           const backend = yield* MemoryBackend.make({
             "todo/set": (args, writer) =>
-              Effect.asVoid(writer.put("todos", (args as { id: string }).id, args)),
+              Effect.asVoid(writer.put("todos", decodeIdentified(args).id, args)),
           });
           const handler = yield* SyncServer.make.pipe(
             Effect.provideService(Backend.Backend, backend),
@@ -128,7 +130,7 @@ describe("BackgroundSync without Background Sync", () => {
             mutators: Mutator.registry([
               {
                 mutator: setTodo,
-                local: (args, writer) => writer.put("todos", (args as { id: string }).id, args),
+                local: (args, writer) => writer.put("todos", decodeIdentified(args).id, args),
               },
             ]),
           }).pipe(

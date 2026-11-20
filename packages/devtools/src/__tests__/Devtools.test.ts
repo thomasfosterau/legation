@@ -29,21 +29,17 @@ import {
 } from "@thomasfosterau/legation/internal";
 import * as Devtools from "../Devtools.js";
 
-interface Todo {
-  readonly id: string;
-  readonly title: string;
-  readonly done: boolean;
-}
+const decodeIdentified = Schema.decodeUnknownSync(Schema.Struct({ id: Schema.String }));
 
 const mutators = Mutator.registry([
   {
     mutator: Mutator.make("todo/set", Schema.Unknown),
-    local: (args, writer) => writer.put("todos", (args as Todo).id, args),
+    local: (args, writer) => writer.put("todos", decodeIdentified(args).id, args),
   },
 ]);
 
 const backendHandlers = {
-  "todo/set": (args, writer) => Effect.asVoid(writer.put("todos", (args as Todo).id, args)),
+  "todo/set": (args, writer) => Effect.asVoid(writer.put("todos", decodeIdentified(args).id, args)),
 } satisfies Record<string, MemoryBackend.BackendHandler>;
 
 const allTodos = Subset.make({ collection: "todos" });

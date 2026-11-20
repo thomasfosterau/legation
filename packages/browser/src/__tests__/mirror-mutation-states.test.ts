@@ -31,16 +31,19 @@ import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
 import { TestFailure } from "./test-failure.js";
 
+const decodeIdentified = Schema.decodeUnknownSync(Schema.Struct({ id: Schema.String }));
+
 const TodoArgs = Schema.Struct({
   id: Schema.String,
   title: Schema.String,
   isDone: Schema.Boolean,
 });
-type Todo = typeof TodoArgs.Type;
-
 const todoSet = Mutator.make("todo/set", TodoArgs);
 const mutators = Mutator.registry([
-  { mutator: todoSet, local: (args, writer) => writer.put("todos", (args as Todo).id, args) },
+  {
+    mutator: todoSet,
+    local: (args, writer) => writer.put("todos", decodeIdentified(args).id, args),
+  },
 ]);
 
 /** Real timers, independent of the test clock. */

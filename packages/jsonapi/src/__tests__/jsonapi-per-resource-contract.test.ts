@@ -202,24 +202,29 @@ const mutators = new Map<string, Mutator.AnyMutator>(
   ].map((mutator) => [mutator.name, mutator])
 );
 
+const decodePutRow = Schema.decodeUnknownSync(BackendContract.putRow.args);
+const decodeRowRef = Schema.decodeUnknownSync(BackendContract.delRow.args);
+const decodeCountUp = Schema.decodeUnknownSync(BackendContract.countUp.args);
+const decodeAttributes = Schema.decodeUnknownSync(Schema.Record(Schema.String, Schema.Json));
+
 /** Each contract mutator as one JSON:API write, the same expression the atomic contract test uses. */
 const writes = new Map<string, (args: unknown) => JsonApiBackend.Write>([
   [
     BackendContract.putRow.name,
     (args) => {
-      const a = args as { collection: string; id: string; value: unknown };
+      const a = decodePutRow(args);
       return {
         operation: "create",
         type: a.collection,
         id: a.id,
-        attributes: a.value as Record<string, Schema.Json>,
+        attributes: decodeAttributes(a.value),
       };
     },
   ],
   [
     BackendContract.delRow.name,
     (args) => {
-      const a = args as { collection: string; id: string };
+      const a = decodeRowRef(args);
       return { operation: "delete", type: a.collection, id: a.id };
     },
   ],
@@ -230,7 +235,7 @@ const writes = new Map<string, (args: unknown) => JsonApiBackend.Write>([
   [
     BackendContract.rejectAlways.name,
     (args) => {
-      const a = args as { collection: string; id: string };
+      const a = decodeRowRef(args);
       return {
         operation: "create",
         type: a.collection,
@@ -242,7 +247,7 @@ const writes = new Map<string, (args: unknown) => JsonApiBackend.Write>([
   [
     BackendContract.countUp.name,
     (args) => {
-      const a = args as { collection: string; id: string; gate: string };
+      const a = decodeCountUp(args);
       return {
         operation: "update",
         type: a.collection,
@@ -254,7 +259,7 @@ const writes = new Map<string, (args: unknown) => JsonApiBackend.Write>([
   [
     BackendContract.writeThenFail.name,
     (args) => {
-      const a = args as { collection: string; id: string };
+      const a = decodeRowRef(args);
       // The server stores nothing for a request it answers with 500, so the
       // write is discarded with the request.
       return {
