@@ -19,6 +19,7 @@ import * as HttpApiEndpoint from "effect/http-api/HttpApiEndpoint";
 import * as HttpApiGroup from "effect/http-api/HttpApiGroup";
 import * as HttpClient from "effect/http/HttpClient";
 import * as HttpClientResponse from "effect/http/HttpClientResponse";
+import type { Predicate } from "@thomasfosterau/legation";
 import { ClientEngine, Subset, Defined } from "@thomasfosterau/legation/internal";
 import type { JsonApiRow } from "../Derive.js";
 import * as Relationships from "../Relationships.js";
@@ -41,8 +42,8 @@ const api = HttpApi.make("app").add(crud("issues")).add(crud("comments")).add(cr
 interface Stored {
   readonly type: string;
   readonly id: string;
-  readonly attributes: Record<string, unknown>;
-  readonly relationships?: Record<string, unknown>;
+  readonly attributes: Record<string, Predicate.Literal>;
+  readonly relationships?: Record<string, Schema.Json>;
 }
 
 const readBody = (request: { readonly body: unknown }): any => {

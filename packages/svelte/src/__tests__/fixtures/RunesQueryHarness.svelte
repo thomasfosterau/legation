@@ -1,4 +1,5 @@
 <script lang="ts">
+  import type { Related } from "@thomasfosterau/legation/internal";
   import { Aggregate } from "@thomasfosterau/legation";
   import { AsyncResult } from "effect/reactivity";
   import { setClientRuntime, type ClientRuntime } from "../../index.svelte.js";
@@ -9,11 +10,7 @@
     initial,
   }: {
     runtime: ClientRuntime;
-    initial?: ReadonlyArray<{
-      readonly id: string;
-      readonly value: unknown;
-      readonly related: Record<string, unknown>;
-    }>;
+    initial?: ReadonlyArray<Related.RelatedRow>;
   } = $props();
 
   // svelte-ignore state_referenced_locally

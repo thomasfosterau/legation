@@ -511,7 +511,7 @@ export const make = (config: SqlBackendConfig): Backend.Backend => {
   // every other column stays exactly as the driver returned it, and a row
   // with nothing to decode is returned as is (no copy).
   const decodeRow = (collection: string, row: SqlRow): SqlRow => {
-    let decoded: Record<string, unknown> | undefined;
+    let decoded: SqlRow | undefined;
     Arr.forEach(booleanColumns[collection] ?? [], (field) => {
       const value = row[field];
       if (value !== 0 && value !== 1) return;

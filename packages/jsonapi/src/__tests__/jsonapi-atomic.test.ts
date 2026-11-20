@@ -72,8 +72,8 @@ const readBody = (request: { readonly body: unknown }): any => {
 
 /** A row a server holds: its attributes and, optionally, its relationships as a document has them. */
 interface StoredRow {
-  readonly attributes: Record<string, unknown>;
-  readonly relationships?: Record<string, unknown>;
+  readonly attributes: Record<string, Schema.Json>;
+  readonly relationships?: Record<string, Schema.Json>;
 }
 
 /** The rows a server holds, by id, for `GET /todos/:id`. */
@@ -218,7 +218,7 @@ const three = [
   mutation(2, "todos/update", { type: "todos", id: "2", attributes: { title: "second" } }),
   mutation(3, "todos/delete", { type: "todos", id: "3" }),
 ];
-const resource = (id: string, attributes: Record<string, unknown>) => ({
+const resource = (id: string, attributes: Record<string, Schema.Json>) => ({
   type: "todos",
   id,
   attributes,
@@ -1370,7 +1370,7 @@ describe("JsonApiBackend refuses a mutation-id gap before any write", () => {
 const makeStatefulServer = () => {
   const store = new Map<
     string,
-    { type: string; id: string; attributes: Record<string, unknown> }
+    { type: string; id: string; attributes: Record<string, Schema.Json> }
   >();
   const server = makeServer((request) => {
     if (request.method === "GET" && request.path === "/todos")

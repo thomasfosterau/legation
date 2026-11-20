@@ -78,7 +78,7 @@ describe("SpecExport.toOpenApi", () => {
     const doc = SpecExport.openApi(api) as {
       openapi: string;
       paths: Record<string, { post: { operationId: string; requestBody: unknown } }>;
-      components: { schemas: Record<string, unknown> };
+      components: { schemas: Record<string, Schema.Json> };
     };
     expect(doc.openapi).toBe("3.1.0");
     expect(doc.paths["/sync/push"].post.operationId).toBe("push");
@@ -88,7 +88,7 @@ describe("SpecExport.toOpenApi", () => {
 
   it("honours a custom path", () => {
     const doc = SpecExport.openApi({ ...api, path: "/api/v2/sync" }) as {
-      paths: Record<string, unknown>;
+      paths: Record<string, Schema.Json>;
     };
     expect(Object.keys(doc.paths)).toEqual(["/api/v2/sync/push", "/api/v2/sync/pull"]);
   });
@@ -98,9 +98,9 @@ describe("SpecExport.toAsyncApi", () => {
   it("emits push/pull/poke channels and operations", () => {
     const doc = SpecExport.asyncApi(api) as {
       asyncapi: string;
-      channels: Record<string, unknown>;
+      channels: Record<string, Schema.Json>;
       operations: Record<string, { action: string }>;
-      components: { messages: Record<string, unknown> };
+      components: { messages: Record<string, Schema.Json> };
     };
     expect(doc.asyncapi).toBe("3.0.0");
     expect(Arr.sort(Object.keys(doc.channels), Order.String)).toEqual(["pokes", "pull", "push"]);

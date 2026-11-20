@@ -145,8 +145,11 @@ export const construct = <Surface>(
     return { object, sockets: raw.sockets, run };
   });
 
-/** A Durable Object's surface, read as its members by name. */
-type Members = Readonly<Record<string | symbol, unknown>>;
+/** An RPC method of a Durable Object's surface, as the bridge calls it. */
+type RpcMethod = (...args: ReadonlyArray<unknown>) => Effect.Effect<unknown, never, RuntimeContext>;
+
+/** A Durable Object's surface, read as its members by name: its `fetch` handler and its RPC methods. */
+type Members = Readonly<Record<string | symbol, Handler | RpcMethod>>;
 
 /**
  * An in-memory namespace over `instances`. `getByName` returns a stub whose
@@ -179,11 +182,7 @@ export const makeNamespace = <Surface extends object>(
                   Effect.flatMap(lookup(name), (instance) =>
                     instance.run<unknown, never>(
                       // SAFETY: every other member of a Durable Object's surface is an RPC method.
-                      (
-                        membersOf(instance)[method] as (
-                          ...args: ReadonlyArray<unknown>
-                        ) => Effect.Effect<unknown, never, RuntimeContext>
-                      )(...args)
+                      (membersOf(instance)[method] as RpcMethod)(...args)
                     )
                   ),
         }

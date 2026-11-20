@@ -67,7 +67,7 @@ const nodes = Node.registry([categories, products, variants, offers, reviews]);
 /** A seed row: its id and whatever fields its node declares. */
 interface SeedRow {
   readonly id: string;
-  readonly [field: string]: unknown;
+  readonly [field: string]: Schema.Json;
 }
 
 const seed: Readonly<Record<string, ReadonlyArray<SeedRow>>> = {

@@ -160,7 +160,7 @@ const remove = (url: string, headers: Record<string, string> = {}): Request =>
 const withoutId = () =>
   write("POST", "/jsonapi/notes", { data: { type: "notes", attributes: { title: "a" } } });
 
-const note = (attributes: Record<string, unknown>) => ({
+const note = (attributes: Record<string, Schema.Json>) => ({
   data: { type: "notes", id: "n-1", attributes },
 });
 

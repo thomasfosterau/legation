@@ -407,7 +407,7 @@ const api = HttpApi.make("app").add(
 interface Stored {
   readonly type: string;
   readonly id: string;
-  readonly attributes: Record<string, unknown>;
+  readonly attributes: Record<string, Predicate.Literal>;
 }
 
 /** Server honouring the grammar's shorthand (`filter[f]=v`, `filter[f]=a,b`, `filter[f][eq|in]`), recording URLs. */

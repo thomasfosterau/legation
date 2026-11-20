@@ -45,7 +45,7 @@ const v2 = { id: "v-2", productId: "p-1", sku: "DSK-2" };
 const r1 = { id: "r-1", productId: "p-1", body: "Solid", createdAt: "2026-02-01T00:00:00.000Z" };
 
 const row = (
-  value: { readonly id: string; readonly [field: string]: unknown },
+  value: { readonly id: string; readonly [field: string]: Schema.Json },
   related: Related.RelatedRow["related"] = {}
 ): Related.RelatedRow => ({
   id: value.id,

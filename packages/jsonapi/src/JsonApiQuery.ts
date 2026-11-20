@@ -705,7 +705,7 @@ const projectionError = (node: Node.AnyNode, type: string): Option.Option<QueryE
 /** Check every `fields[…]` key before decoding (see {@link projectionError}). */
 const checkFields = (
   node: Node.AnyNode,
-  record: Readonly<Record<string, unknown>>
+  record: Readonly<Record<string, string | ReadonlyArray<string>>>
 ): Effect.Effect<void, QueryError> =>
   failFirst(Object.keys(record), (key) => {
     const match = /^fields\[(.*)\]$/.exec(key);
@@ -720,7 +720,7 @@ const checkFields = (
  */
 const checkPage = (
   node: Node.AnyNode,
-  record: Readonly<Record<string, unknown>>
+  record: Readonly<Record<string, string | ReadonlyArray<string>>>
 ): Effect.Effect<void, QueryError> =>
   record["page[after]"] !== undefined && record["page[offset]"] !== undefined
     ? Effect.fail(

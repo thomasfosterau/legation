@@ -19,6 +19,7 @@
 import * as Arr from "effect/Array";
 import * as P from "effect/Predicate";
 import type { ChangeHint } from "./Backend.js";
+import { fieldValue } from "./internal/EncodedField.js";
 import type * as Node from "./Node.js";
 import type * as Predicate from "./Predicate.js";
 import type * as Subset from "./Subset.js";
@@ -103,8 +104,8 @@ export const topicsForWrite = (
   Arr.forEach([values.oldValue, values.newValue], (value) => {
     if (!P.isObjectOrArray(value)) return;
     Arr.forEach(derivable, (field) => {
-      const fieldValue = (value as Record<string, unknown>)[field];
-      if (isLiteral(fieldValue)) topics.add(fine(collection, field, fieldValue));
+      const literal = fieldValue(value, field);
+      if (isLiteral(literal)) topics.add(fine(collection, field, literal));
     });
   });
   return topics;

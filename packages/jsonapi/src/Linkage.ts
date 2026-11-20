@@ -273,7 +273,7 @@ const assignLinkage = (
     query.parents.forEach((parent) => bucket(query.type, parent, query.edge));
     fetched.forEach((row) => {
       if (row.collection !== query.collection) return;
-      const parent = String((row.value as Record<string, unknown>)[query.field]);
+      const parent = String(Predicate.fieldValue(row.value, query.field));
       if (query.parents.has(parent)) bucket(query.type, parent, query.edge).push(row.value);
     });
   });

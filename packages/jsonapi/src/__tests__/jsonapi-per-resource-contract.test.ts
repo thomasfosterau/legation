@@ -62,7 +62,7 @@ const resources: ResourceMap = new Map([
 interface Stored {
   readonly type: string;
   readonly id: string;
-  readonly attributes: Record<string, unknown>;
+  readonly attributes: Record<string, Schema.Json>;
 }
 type Table = Map<string, Stored>;
 type Store = Map<string, Table>;
@@ -91,7 +91,7 @@ interface ServerRequest {
   readonly type: string;
   readonly id: Option.Option<string>;
   readonly body: Option.Option<{
-    readonly data?: { readonly id?: string; readonly attributes?: Record<string, unknown> };
+    readonly data?: { readonly id?: string; readonly attributes?: Record<string, Schema.Json> };
   }>;
 }
 
@@ -209,7 +209,7 @@ const writes = new Map<string, (args: unknown) => JsonApiBackend.Write>([
         operation: "create",
         type: a.collection,
         id: a.id,
-        attributes: a.value as Record<string, unknown>,
+        attributes: a.value as Record<string, Schema.Json>,
       };
     },
   ],

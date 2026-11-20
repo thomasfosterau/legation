@@ -337,8 +337,8 @@ const edgeOrder =
   (a, b) => {
     // The first term whose fields differ decides; equal on every term is a tie.
     const decided = Arr.findFirst(edgePlan.order, (term) => {
-      const left = (a as Record<string, unknown>)[term.field] as string | number;
-      const right = (b as Record<string, unknown>)[term.field] as string | number;
+      const left = Predicate.fieldValue(a, term.field) as string | number;
+      const right = Predicate.fieldValue(b, term.field) as string | number;
       if (left === right) return Option.none();
       const ascending = left < right;
       return Option.some<-1 | 0 | 1>(

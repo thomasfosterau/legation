@@ -89,10 +89,10 @@ const refuse = (refusal: Refusal): Effect.Effect<never, Refusal> => Effect.fail(
 const invalid = (detail: string, pointer: string): Effect.Effect<never, Refusal> =>
   refuse({ status: 400, code: "invalid_document", title: "Invalid document", detail, pointer });
 
-const isRecord = (value: unknown): value is Record<string, unknown> =>
+const isRecord = (value: Schema.Json): value is Schema.JsonObject =>
   P.isObject(value) && !Array.isArray(value);
 
-const decodeJson = Schema.decodeUnknownEffect(Schema.fromJsonString(Schema.Unknown));
+const decodeJson = Schema.decodeUnknownEffect(Schema.fromJsonString(Schema.Json));
 
 /** What a write route matched: its operation, the route's type, and the path's id for `PATCH` / `DELETE`. */
 export type Target =
@@ -102,7 +102,7 @@ export type Target =
 /** The linkage of one relationship: a related id, `None` for `data: null`, or a refusal. */
 const linkageOf = (
   name: string,
-  member: unknown,
+  member: Schema.Json,
   node: Node.AnyNode
 ): Effect.Effect<Option.Option<string>, Refusal> => {
   const pointer = `/data/relationships/${name}`;
@@ -134,9 +134,7 @@ const linkageOf = (
 };
 
 /** The body's `data` member as an object, or the refusal for a body that has none. */
-const dataOf = <E>(
-  body: Effect.Effect<string, E>
-): Effect.Effect<Record<string, unknown>, Refusal> =>
+const dataOf = <E>(body: Effect.Effect<string, E>): Effect.Effect<Schema.JsonObject, Refusal> =>
   Effect.gen(function* () {
     const text = yield* body.pipe(
       Effect.catch(() => invalid("the request body could not be read", ""))
@@ -162,7 +160,7 @@ const clientIdRequired: Refusal = {
 /** The resource id a create or an update addresses, checked against the route's type and path. */
 const idOf = (
   target: Exclude<Target, { readonly operation: "delete" }>,
-  data: Record<string, unknown>
+  data: Schema.JsonObject
 ): Effect.Effect<string, Refusal> => {
   if (data["type"] !== target.type) {
     return refuse({
@@ -194,9 +192,9 @@ const idOf = (
 
 /** An optional object member of `data` (`attributes`, `relationships`): `{}` when absent. */
 const memberOf = (
-  data: Record<string, unknown>,
+  data: Schema.JsonObject,
   name: "attributes" | "relationships"
-): Effect.Effect<Record<string, unknown>, Refusal> => {
+): Effect.Effect<Schema.JsonObject, Refusal> => {
   const member = data[name] ?? {};
   return isRecord(member)
     ? Effect.succeed(member)

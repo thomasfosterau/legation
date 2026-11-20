@@ -75,6 +75,7 @@ const attributes = {
 };
 const Row = Resource.make(COLLECTION, { attributes });
 const EvalRow = Resource.make(EVAL_COLLECTION, { attributes });
+type Attributes = (typeof Row.Type)["attributes"];
 type AnyResource = typeof Row.Type | typeof EvalRow.Type;
 
 class NotFound extends ApiError.make<NotFound>()("NotFound", {
@@ -126,7 +127,7 @@ const ClientIdRequest = Schema.Struct({
 
 /** One operation, as the default request document would decode it, without the add's client id. */
 const decodeOperation = (raw: unknown): Effect.Effect<BatchOperation> => {
-  const operation = raw as { readonly op?: unknown; readonly data?: Record<string, unknown> };
+  const operation = raw as { readonly op?: unknown; readonly data?: Record<string, Schema.Json> };
   const { id: _clientId, ...data } = operation.data ?? {};
   const withoutId = operation.op === "add" ? { ...operation, data } : operation;
   return Schema.decodeUnknownEffect(Atomic.Operations([Row, EvalRow]))(withoutId).pipe(
@@ -152,7 +153,7 @@ const api = HttpApi.make("contract")
 interface Stored {
   readonly type: string;
   readonly id: string;
-  readonly attributes: Record<string, unknown>;
+  readonly attributes: Attributes;
 }
 type Store = Map<string, Map<string, Stored>>;
 
@@ -258,7 +259,7 @@ const applyAdd = (
   const row: Stored = {
     type: operation.data.type,
     id,
-    attributes: operation.data.attributes,
+    attributes: Defined.fields(operation.data.attributes),
   };
   if (row.attributes.poison === true)
     return Effect.fail(rejection(index, "poison rows are refused"));
@@ -296,12 +297,15 @@ const applyUpdate = (
   }
   const { increment, ...merge } = operation.data.attributes ?? {};
   if (increment === undefined) {
-    const row: Stored = { ...current, attributes: { ...current.attributes, ...merge } };
+    const row: Stored = {
+      ...current,
+      attributes: { ...current.attributes, ...Defined.fields(merge) },
+    };
     tableOf(staged, row.type).set(id, row);
     return Effect.succeed({ data: resourceOf(row) });
   }
   return Effect.gen(function* () {
-    const read = Number(current.attributes.n ?? 0);
+    const read = current.attributes.n ?? 0;
     yield* BackendContract.park(increment);
     const row: Stored = { ...current, attributes: { ...current.attributes, n: read + 1 } };
     tableOf(staged, row.type).set(id, row);
@@ -437,7 +441,7 @@ const writes = new Map<string, (args: unknown) => JsonApiBackend.Write>([
         operation: "create",
         type: a.collection,
         id: a.id,
-        attributes: a.value as Record<string, unknown>,
+        attributes: a.value as Record<string, Schema.Json>,
       };
     },
   ],
