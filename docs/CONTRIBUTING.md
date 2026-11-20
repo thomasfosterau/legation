@@ -14,18 +14,18 @@ The main branch is `trunk`. Branch off `trunk`, open a pull request into `trunk`
 
 [Vite+](https://viteplus.dev) (`vp`) manages Node and pnpm; use it rather than calling them directly (`vp exec <bin>`, not `npx`). `vp install` installs dependencies, the git hooks and the Effect-patched `tsc` / `oxlint` (`prepare`). The pre-commit hook runs `vp staged` (format with fixes, then lint) and `vp run fallow:audit`.
 
-| Command                                | What it does                                                                                                                         |
-| -------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------ |
-| `vp check`                             | Format and type-aware lint                                                                                                           |
-| `vp run build`                         | Every package's `dist/` (`vp pack`)                                                                                                  |
-| `vp run pack:check`                    | Packs each publishable package and lints the tarball (publint, attw)                                                                 |
-| `vp run check`                         | The type gate: packages and tests in one Effect-patched `tsc` program                                                                |
-| `vp run check:examples`                | Each example app's own `tsc` / `svelte-check`, against `dist/`                                                                       |
-| `vp run test` / `vp run test:coverage` | Every Vitest project (builds first); with the coverage map                                                                           |
-| `vp test run packages/<name>`          | One package's tests, no build needed                                                                                                 |
-| `vp run ci`                            | Everything CI runs, in order                                                                                                         |
-| `vp run bench`                         | Benchmarks (not a gate)                                                                                                              |
-| `vp run github:plan` / `github:deploy` | The repository's GitHub settings (`stacks/github.ts`); owner-run, with an admin `GITHUB_TOKEN` and Alchemy's state-store credentials |
+| Command                                | What it does                                                                                                                               |
+| -------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------ |
+| `vp check`                             | Format and type-aware lint                                                                                                                 |
+| `vp run build`                         | Every package's `dist/` (`vp pack`)                                                                                                        |
+| `vp run pack:check`                    | Packs each publishable package as `vp pm publish` does and checks the tarball (specifiers, ranges, publint, attw); the release runs it too |
+| `vp run check`                         | The type gate: packages and tests in one Effect-patched `tsc` program                                                                      |
+| `vp run check:examples`                | Each example app's own `tsc` / `svelte-check`, against `dist/`                                                                             |
+| `vp run test` / `vp run test:coverage` | Every Vitest project (builds first); with the coverage map                                                                                 |
+| `vp test run packages/<name>`          | One package's tests, no build needed                                                                                                       |
+| `vp run ci`                            | Everything CI runs, in order                                                                                                               |
+| `vp run bench`                         | Benchmarks (not a gate)                                                                                                                    |
+| `vp run github:plan` / `github:deploy` | The repository's GitHub settings (`stacks/github.ts`); owner-run, with an admin `GITHUB_TOKEN` and Alchemy's state-store credentials       |
 
 Two suites need more than Node: the commerce façade's browser test needs Chromium (`vp run ci:chromium`; it fails rather than skips without it), and the PostgreSQL overlap test needs `DATABASE_URL` pointing at a throwaway database (it skips locally without one, and fails in CI).
 

@@ -16,7 +16,7 @@ Read [README.md](README.md) and [docs/CONTRIBUTING.md](docs/CONTRIBUTING.md) fir
 - **`.` vs `./internal`.** Engine seams (`ClientEngine`, `Subset`, `SyncServer`, `Cvr`, …) are not on the root entry, so docs and examples must import them from `@thomasfosterau/legation/internal`.
 - **`effect` is a peer, never a dependency**: two copies break `Context` identity. Never edit a version in a `package.json`.
 - **`dist/` is the product**: the example apps and the browser test consume it, while tests and `vp run check` resolve the packages to `src/`.
-- **Publish only through the Release workflow**: it publishes exactly the tarball `scripts/pack.mjs` checked, and `npm publish` in a package directory would ship `workspace:` / `catalog:` specifiers verbatim.
+- **Publish only through the Release workflow** (`vp run release`): it runs `pack:check` on the commit it publishes, and `npm publish` in a package directory would ship `workspace:` / `catalog:` specifiers verbatim. Release-path registry calls go through `vp pm` (`publish`, `view`), never `npm` / `pnpm` directly.
 - **Wire and storage formats are protocol** (`Protocol.ts`, `MirrorProtocol.ts`, the `ClientStore` layout): changing one needs a migration and a changeset that says so.
 
 ## Fallow

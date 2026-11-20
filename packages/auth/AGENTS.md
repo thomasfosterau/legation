@@ -1,6 +1,6 @@
 # packages/auth — `@thomasfosterau/legation-auth`
 
-The effect-auth bridge to legation's auth seams: identity resolution, read scopes and the sign-out reset. Read the root [AGENTS.md](../../AGENTS.md) first. **Private** (`"private": true`): it is not published until the owner sets up its npm trusted publisher; `scripts/pack.mjs` (so `pack:check` and the release) skips private packages, and it carries no changeset.
+The effect-auth bridge to legation's auth seams: identity resolution, read scopes and the sign-out reset. Read the root [AGENTS.md](../../AGENTS.md) first. **Private** (`"private": true`): it is not published until the owner sets up its npm trusted publisher; `pack:check` and `vp pm publish -r` skip private packages, and it carries no changeset.
 
 ## Boundary
 

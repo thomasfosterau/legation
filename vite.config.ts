@@ -410,8 +410,8 @@ export default defineConfig({
         command: "oxlint -c examples/oxlint.namespace-imports.json examples",
         cache: false,
       },
-      // Packs every publishable package the way the release does and lints
-      // the tarball (scripts/pack-check.mjs). No registry access.
+      // Packs every publishable package the way `vp pm publish` does and
+      // lints each tarball (scripts/pack-check.mjs). No registry access.
       "pack:check": {
         command: "node scripts/pack-check.mjs",
         dependsOn: ["build"],
@@ -436,10 +436,26 @@ export default defineConfig({
         dependsOn: ["test:coverage"],
         cache: false,
       },
-      // Packs and checks every unpublished package without publishing.
+      // The release job's publish script (.github/workflows/release.yml),
+      // after `pack:check` on the same commit: pnpm publishes every public
+      // package whose version is not on npm yet, in dependency order, under
+      // OIDC trusted publishing; then `changeset git-tag` tags each version
+      // not tagged yet and reports the new tags to `changesets/action`
+      // through `CHANGESETS_OUTPUT`, which pushes them and creates the GitHub
+      // releases. A failed publish stops before tagging; a re-run publishes
+      // only what is missing.
+      release: {
+        command: [
+          "vp pm publish -r --access public --no-git-checks -- --ignore-scripts",
+          "changeset git-tag",
+        ],
+        dependsOn: ["pack:check"],
+        cache: false,
+      },
+      // What `release` would publish, without publishing or tagging.
       "release:dry-run": {
-        command: "node scripts/publish.mjs --dry-run",
-        dependsOn: ["build"],
+        command: "vp pm publish -r --access public --dry-run --no-git-checks -- --ignore-scripts",
+        dependsOn: ["pack:check"],
         cache: false,
       },
       bench: {
