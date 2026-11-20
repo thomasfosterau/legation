@@ -402,10 +402,10 @@ const makeInProcessClient = (store: Store, probe: ServerProbe = noProbe) =>
     const client = HttpClient.make((request, url) =>
       Effect.gen(function* () {
         requests.push({ method: request.method, path: url.pathname });
-        const web = yield* HttpClientRequest.toWeb(request).pipe(Effect.orDie);
-        const response = yield* awaitPromise(() => handler(web)).pipe(Effect.orDie);
+        const web = yield* HttpClientRequest.toWeb(request);
+        const response = yield* awaitPromise(() => handler(web));
         return HttpClientResponse.fromWeb(request, response);
-      })
+      }).pipe(Effect.orDie)
     );
     return { client, requests };
   });

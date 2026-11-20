@@ -162,15 +162,12 @@ const lossyAfterApply = (base: CT, mode: Ref.Ref<"ok" | "response-lost" | "reque
         if (current === "request-lost") {
           return Effect.fail(new TransportError({ message: "request never arrived" }));
         }
-        return base
-          .push(request)
-          .pipe(
-            Effect.flatMap((response) =>
-              current === "response-lost"
-                ? Effect.fail(new TransportError({ message: "response lost" }))
-                : Effect.succeed(response)
-            )
-          );
+        return base.push(request).pipe(
+          Effect.filterOrFail(
+            () => current !== "response-lost",
+            () => new TransportError({ message: "response lost" })
+          )
+        );
       })
     ),
 });

@@ -31,6 +31,7 @@ import * as Mutator from "../Mutator.js";
 import * as Subset from "../Subset.js";
 import * as SyncServer from "../SyncServer.js";
 import { layerInMemory, ServerHandler } from "../Transport.js";
+import { awaitPromise } from "./await-promise.js";
 
 const ROWS = 10_000;
 
@@ -117,7 +118,7 @@ describe("incremental aggregates", () => {
               .pipe(Effect.andThen(engine.push), Effect.andThen(engine.pull))
           );
         };
-        yield* Effect.tryPromise(() =>
+        yield* awaitPromise(() =>
           bench(`single-row churn over ${ROWS} rows (Count + Sum + grouped Count live)`, async () => {
             await churnOnce();
           }).run()

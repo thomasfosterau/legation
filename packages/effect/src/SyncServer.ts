@@ -904,10 +904,10 @@ export const makeWithIntrospectionWith = (
           Effect.Success<ReturnType<typeof readPullOnce>>,
           Effect.Error<ReturnType<typeof readPullOnce>>
         > =>
-          Effect.flatMap(readPullOnce(backend, context, authorized, cookie, epoch), (view) =>
-            view.consistent || attempt >= PULL_VIEW_ATTEMPTS
-              ? Effect.succeed(view)
-              : read(attempt + 1)
+          Effect.filterOrElse(
+            readPullOnce(backend, context, authorized, cookie, epoch),
+            (view) => view.consistent || attempt >= PULL_VIEW_ATTEMPTS,
+            () => read(attempt + 1)
           );
         const view = yield* read(1);
         if (!view.consistent) {
