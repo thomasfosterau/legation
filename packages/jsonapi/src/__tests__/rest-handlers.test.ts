@@ -56,7 +56,7 @@ import * as RestHandlers from "../RestHandlers.js";
 
 const categories = Node.make("categories", { attributes: { name: Schema.String } });
 const products = Node.make("products", {
-  attributes: { name: Schema.String, priceCents: Schema.Number },
+  attributes: { name: Schema.String, priceCents: Schema.Finite },
   edges: {
     category: Edge.one("categories", { via: "categoryId" }),
     variants: Edge.many("variants", { inverse: "product" }),
@@ -73,7 +73,7 @@ const variants = Node.make("variants", {
   },
 });
 const offers = Node.make("offers", {
-  attributes: { priceCents: Schema.Number },
+  attributes: { priceCents: Schema.Finite },
   edges: { variant: Edge.one("variants", { via: "variantId" }) },
 });
 const reviews = Node.make("reviews", {
@@ -81,7 +81,7 @@ const reviews = Node.make("reviews", {
   edges: { product: Edge.one("products", { via: "productId" }) },
 });
 const cartItems = Node.make("cartItems", {
-  attributes: { userId: Schema.String, qty: Schema.Number },
+  attributes: { userId: Schema.String, qty: Schema.Finite },
   edges: { variant: Edge.one("variants", { via: "variantId" }) },
   filterable: { userId: ["eq"] },
 });
@@ -141,7 +141,7 @@ const narrowPolicy = Authorization.policy(catalog, { collections: nodes.collecti
 // the response side, not the request side).
 
 const Category = Resource.make("categories", { attributes: { name: Schema.String } });
-const Offer = Resource.make("offers", { attributes: { priceCents: Schema.Number } });
+const Offer = Resource.make("offers", { attributes: { priceCents: Schema.Finite } });
 const Variant = Resource.make("variants", {
   attributes: { sku: Resource.attribute(Schema.String, { resource: "optional" }) },
   relationships: { offers: Relationship.many(() => Offer) },
@@ -153,7 +153,7 @@ const Review = Resource.make("reviews", {
 const Product = Resource.make("products", {
   attributes: {
     name: Resource.attribute(Schema.String, { resource: "optional" }),
-    priceCents: Resource.attribute(Schema.Number, { resource: "optional" }),
+    priceCents: Resource.attribute(Schema.Finite, { resource: "optional" }),
   },
   relationships: {
     category: Relationship.one(() => Category),
@@ -163,7 +163,7 @@ const Product = Resource.make("products", {
 });
 /** The same node with `reviews` declared `paginated`: links only, no `include=`. */
 const PagedProduct = Resource.make("products", {
-  attributes: { name: Schema.String, priceCents: Schema.Number },
+  attributes: { name: Schema.String, priceCents: Schema.Finite },
   relationships: {
     category: Relationship.one(() => Category),
     variants: Relationship.many(() => Variant),
@@ -171,7 +171,7 @@ const PagedProduct = Resource.make("products", {
   },
 });
 const CartItem = Resource.make("cartItems", {
-  attributes: { userId: Schema.String, qty: Schema.Number },
+  attributes: { userId: Schema.String, qty: Schema.Finite },
   relationships: { variant: Relationship.one(() => Variant) },
 });
 /** Declares no relationships: the node's `contracts` edge is nobody's business. */

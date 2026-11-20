@@ -300,7 +300,7 @@ describe("NodeBridge filterable set", () => {
       attributes: {
         title: Schema.String.pipe(Filter.able(["eq", "in"]), Sort.able()),
         words: Resource.attribute(Schema.Int, { filter: true, sort: true }),
-        rating: Schema.NullOr(Schema.Number.pipe(Filter.able(["gte", "isnull"]))),
+        rating: Schema.NullOr(Schema.Finite.pipe(Filter.able(["gte", "isnull"]))),
         body: Schema.String,
         publishedAt: Schema.String.pipe(Filter.able(["gt", "lt"])),
       },

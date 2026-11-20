@@ -1060,6 +1060,10 @@ for (const mode of ["atomic", "per-resource"] as const) {
   });
 }
 
+/** The first request is refused on its create; the resend and later requests apply. */
+const refusedCreate = (request: Recorded, index: number) =>
+  index === 0 ? rejectionAt(0, "exists") : bareWrites("atomic")(request);
+
 /**
  * A create the atomic path refuses (the row already exists, a conflict) leaves
  * its row in place, so a later update or delete of that row in the same batch
@@ -1067,10 +1071,6 @@ for (const mode of ["atomic", "per-resource"] as const) {
  * the resend, and only when such a write is still to be sent.
  */
 describe("JsonApiBackend atomic batch after a refused create", () => {
-  /** The first request is refused on its create; the resend and later requests apply. */
-  const refusedCreate = (request: Recorded, index: number) =>
-    index === 0 ? rejectionAt(0, "exists") : bareWrites("atomic")(request);
-
   it.effect(
     "an update of the refused create's row carries the pre-push row, merged with the write",
     () =>
@@ -1366,37 +1366,38 @@ describe("JsonApiBackend refuses a mutation-id gap before any write", () => {
   }
 });
 
+/** A stateful server answering both the per-resource and the atomic routes. */
+const makeStatefulServer = () => {
+  const store = new Map<
+    string,
+    { type: string; id: string; attributes: Record<string, unknown> }
+  >();
+  const server = makeServer((request) => {
+    if (request.method === "GET" && request.path === "/todos")
+      return respond(200, { data: [...store.values()] }, jsonHeaders);
+    if (request.method === "POST" && request.path === "/todos") {
+      const data = request.body.data;
+      store.set(data.id, { type: "todos", id: data.id, attributes: data.attributes });
+      return respond(201, { data }, jsonHeaders);
+    }
+    if (request.method === "POST" && request.path === "/operations") {
+      const ops = request.body["atomic:operations"];
+      for (const op of ops) {
+        if (op.op === "add")
+          store.set(op.data.id, {
+            type: "todos",
+            id: op.data.id,
+            attributes: op.data.attributes,
+          });
+      }
+      return respond(200, resultsFor(ops));
+    }
+    return empty(405);
+  });
+  return { ...server, store };
+};
+
 describe("JsonApiSync.layer atomic detection", () => {
-  /** A stateful server answering both the per-resource and the atomic routes. */
-  const makeStatefulServer = () => {
-    const store = new Map<
-      string,
-      { type: string; id: string; attributes: Record<string, unknown> }
-    >();
-    const server = makeServer((request) => {
-      if (request.method === "GET" && request.path === "/todos")
-        return respond(200, { data: [...store.values()] }, jsonHeaders);
-      if (request.method === "POST" && request.path === "/todos") {
-        const data = request.body.data;
-        store.set(data.id, { type: "todos", id: data.id, attributes: data.attributes });
-        return respond(201, { data }, jsonHeaders);
-      }
-      if (request.method === "POST" && request.path === "/operations") {
-        const ops = request.body["atomic:operations"];
-        for (const op of ops) {
-          if (op.op === "add")
-            store.set(op.data.id, {
-              type: "todos",
-              id: op.data.id,
-              attributes: op.data.attributes,
-            });
-        }
-        return respond(200, resultsFor(ops));
-      }
-      return empty(405);
-    });
-    return { ...server, store };
-  };
   const all = Subset.make({ collection: "todos" });
   const createAndSync = Effect.gen(function* () {
     const engine = yield* ClientEngine.ClientEngine;

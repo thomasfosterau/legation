@@ -552,6 +552,16 @@ const noUrlReads = (url: string): QueryError =>
     query: url,
   });
 
+const noBoundary = <A>(): Effect.Effect<A, StoreError> =>
+  Effect.fail(
+    new StoreError({
+      message:
+        "Client.reset: this Client is connected to an engine hosted elsewhere " +
+        "(Client.connect), which owns the durable replica. Reset the Client that " +
+        "owns the engine — in the service worker or other host — instead.",
+    })
+  );
+
 /**
  * Build a Client over any view. The window ledger lives here, so however
  * many observers a window has — and however the view refcounts — the
@@ -715,16 +725,6 @@ export const fromView = <Graph extends Node.NodeRegistry>(
       );
     })
   );
-
-  const noBoundary = <A>(): Effect.Effect<A, StoreError> =>
-    Effect.fail(
-      new StoreError({
-        message:
-          "Client.reset: this Client is connected to an engine hosted elsewhere " +
-          "(Client.connect), which owns the durable replica. Reset the Client that " +
-          "owns the engine — in the service worker or other host — instead.",
-      })
-    );
 
   const boundary = view.identityBoundary;
 

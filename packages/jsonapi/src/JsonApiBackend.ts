@@ -586,6 +586,25 @@ const reportedTotal = (document: JsonApiDocument): Option.Option<number> => {
     : Option.none();
 };
 
+// A subset's entries and total from the rows a listing (or the
+// include cache) holds: the window is cut here, so the total is the
+// matching rows before the cut, unless the listing reported its own
+// `meta.total` (an upstream that pages its listings knows better).
+const countedFrom = (
+  values: ReadonlyArray<JsonApiRow>,
+  subset: Subset.Subset,
+  reported: Option.Option<number>
+): Backend.CountedEntries => {
+  const { rows, total } = Subset.applyCounted(
+    values.map((value) => ({ id: value.id, value })),
+    subset
+  );
+  return {
+    entries: rows.map((row) => ({ id: row.id, version: versionOf(row.value) })),
+    total: Option.getOrElse(reported, () => total),
+  };
+};
+
 /** Build the JsonApiBackend from its config; requires an `HttpClient`. */
 export const make = (
   config: JsonApiBackendConfig
@@ -822,25 +841,6 @@ export const make = (
           { concurrency: 1, discard: true }
         );
       });
-
-    // A subset's entries and total from the rows a listing (or the
-    // include cache) holds: the window is cut here, so the total is the
-    // matching rows before the cut, unless the listing reported its own
-    // `meta.total` (an upstream that pages its listings knows better).
-    const countedFrom = (
-      values: ReadonlyArray<JsonApiRow>,
-      subset: Subset.Subset,
-      reported: Option.Option<number>
-    ): Backend.CountedEntries => {
-      const { rows, total } = Subset.applyCounted(
-        values.map((value) => ({ id: value.id, value })),
-        subset
-      );
-      return {
-        entries: rows.map((row) => ({ id: row.id, version: versionOf(row.value) })),
-        total: Option.getOrElse(reported, () => total),
-      };
-    };
 
     const NO_ROWS: Backend.CountedEntries = { entries: [], total: 0 };
 

@@ -35,7 +35,7 @@ const named = Mutator.make("counter/named", Schema.Struct({ id: Schema.NonEmptyS
 // A Mutation whose args carry a transformation, so encoding is observable.
 const stamp = Mutator.make(
   "counter/stamp",
-  Schema.Struct({ id: Schema.String, at: Schema.NumberFromString })
+  Schema.Struct({ id: Schema.String, at: Schema.FiniteFromString })
 );
 
 // `seen` records the identity each bump's handler ran under.

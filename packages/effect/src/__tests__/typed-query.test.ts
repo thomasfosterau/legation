@@ -137,7 +137,7 @@ describe("canonical arg keys", () => {
 
   it.effect("reordered named-subscription args collapse to one subscription entry", () =>
     Effect.gen(function* () {
-      const QueryArgs = Schema.Struct({ isDone: Schema.Boolean, limit: Schema.Number });
+      const QueryArgs = Schema.Struct({ isDone: Schema.Boolean, limit: Schema.Finite });
       const byDone = Query.make("todos/byDone", QueryArgs);
       const queries = Query.registry([
         {

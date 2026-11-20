@@ -16,6 +16,7 @@ import { awaitPromise } from "./await-promise.js";
 import * as Exit from "effect/Exit";
 import * as Option from "effect/Option";
 import * as Ref from "effect/Ref";
+import * as Schema from "effect/Schema";
 import * as Semaphore from "effect/Semaphore";
 import { KeyValueStore } from "effect/persistence";
 import * as HttpClient from "effect/http/HttpClient";
@@ -136,7 +137,8 @@ const answerPatch = (table: Table, row: Stored, request: ServerRequest): Effect.
       return respond(200, documentOf(updated));
     }
     const read = Number(row.attributes.n ?? 0);
-    yield* BackendContract.park(String(increment));
+    const gate = yield* Schema.decodeUnknownEffect(Schema.String)(increment).pipe(Effect.orDie);
+    yield* BackendContract.park(gate);
     const updated: Stored = { ...row, attributes: { ...row.attributes, n: read + 1 } };
     table.set(row.id, updated);
     return respond(200, documentOf(updated));

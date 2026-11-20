@@ -47,10 +47,11 @@ import * as SqlBackend from "../../sql/SqlBackend.js";
 import * as Env from "../env.js";
 import { TestFailure } from "../test-failure.js";
 
+const asBackendError = (message: string) => (cause: unknown) =>
+  new BackendError({ message, cause });
+
 /** `SqlExecutor` over the Effect SQL sqlite client (fragments → unsafe statements). */
 const makeExecutor = (sql: SqlClient): SqlBackend.SqlExecutor => {
-  const asBackendError = (message: string) => (cause: unknown) =>
-    new BackendError({ message, cause });
   return {
     query: (fragment) =>
       sql

@@ -293,15 +293,12 @@ export const makeWebSocketBroker = (socket: WebSocketLike): BusBroker => ({
   publish: (payload) => Effect.sync(() => socket.send(payload)),
   subscribe: Effect.gen(function* () {
     const queue = yield* Queue.unbounded<string>();
+    const listener = (event: { readonly data: unknown }) => {
+      if (P.isString(event.data)) Queue.offerUnsafe(queue, event.data);
+    };
     yield* Effect.acquireRelease(
-      Effect.sync(() => {
-        const listener = (event: { readonly data: unknown }) => {
-          if (P.isString(event.data)) Queue.offerUnsafe(queue, event.data);
-        };
-        socket.addEventListener("message", listener);
-        return listener;
-      }),
-      (listener) => Effect.sync(() => socket.removeEventListener("message", listener))
+      Effect.sync(() => socket.addEventListener("message", listener)),
+      () => Effect.sync(() => socket.removeEventListener("message", listener))
     );
     return { take: Queue.take(queue) };
   }),
@@ -335,19 +332,16 @@ export const makeBroadcastChannelBroker = (
 ): Effect.Effect<BusBroker, never, Scope.Scope> =>
   Effect.gen(function* () {
     const queues = new Set<Queue.Queue<string>>();
+    const listener = (event: { readonly data: unknown }) => {
+      const data = event.data;
+      if (!P.isString(data)) return;
+      Arr.forEach(queues, (queue) => {
+        Queue.offerUnsafe(queue, data);
+      });
+    };
     yield* Effect.acquireRelease(
-      Effect.sync(() => {
-        const listener = (event: { readonly data: unknown }) => {
-          const data = event.data;
-          if (!P.isString(data)) return;
-          Arr.forEach(queues, (queue) => {
-            Queue.offerUnsafe(queue, data);
-          });
-        };
-        channel.addEventListener("message", listener);
-        return listener;
-      }),
-      (listener) => Effect.sync(() => channel.removeEventListener("message", listener))
+      Effect.sync(() => channel.addEventListener("message", listener)),
+      () => Effect.sync(() => channel.removeEventListener("message", listener))
     );
     return {
       publish: (payload) =>

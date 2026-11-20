@@ -470,6 +470,21 @@ describe("an id that has left the journal is never reissued", () => {
   });
 });
 
+const d = (clientId = "c") => ({ clientId, mutator: "noop", args: {}, createdAt: 0 });
+
+/** Fork both, then join: each runs as its own fiber so they interleave at yields. */
+const race = <A, B, E>(a: Effect.Effect<A, E>, b: Effect.Effect<B, E>) =>
+  Effect.gen(function* () {
+    const fa = yield* Effect.forkChild(a);
+    const fb = yield* Effect.forkChild(b);
+    yield* Fiber.join(fa);
+    yield* Fiber.join(fb);
+  });
+
+const key = (x: { clientId: string; mutationId: number }) => `${x.clientId}:${x.mutationId}`;
+
+const m = (mutationId: number, clientId = "c") => ({ ...d(clientId), mutationId });
+
 /**
  * Every memory-store operation that writes the journal, the quarantine or the
  * counters holds the same permit. `acknowledge` and
@@ -479,18 +494,7 @@ describe("an id that has left the journal is never reissued", () => {
  * every round on the unlocked code.
  */
 describeWrapped("memory store: journal writers exclude one another", (it) => {
-  const d = (clientId = "c") => ({ clientId, mutator: "noop", args: {}, createdAt: 0 });
-  const m = (mutationId: number, clientId = "c") => ({ ...d(clientId), mutationId });
   const rounds = 50;
-  /** Fork both, then join: each runs as its own fiber so they interleave at yields. */
-  const race = <A, B, E>(a: Effect.Effect<A, E>, b: Effect.Effect<B, E>) =>
-    Effect.gen(function* () {
-      const fa = yield* Effect.forkChild(a);
-      const fb = yield* Effect.forkChild(b);
-      yield* Fiber.join(fa);
-      yield* Fiber.join(fb);
-    });
-  const key = (x: { clientId: string; mutationId: number }) => `${x.clientId}:${x.mutationId}`;
 
   it.live("acknowledge never loses a concurrent releaseQuarantine", () =>
     Effect.gen(function* () {

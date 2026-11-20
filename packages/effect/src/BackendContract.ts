@@ -354,6 +354,43 @@ const ledgerMismatch = (
   return `Expected the restored ${group} ${ledger} = ${expected}, got ${reported}: the restored ledger differs`;
 };
 
+const violation = (rule: string, message: string) => new ContractViolation({ rule, message });
+
+const harnessCheck: Harness["check"] = (rule, condition, message) =>
+  condition ? Effect.void : Effect.fail(violation(rule, message));
+
+const harnessExpectOk: Harness["expectOk"] = (rule, effect) =>
+  effect.pipe(
+    Effect.mapError((error) => violation(rule, `Backend failed unexpectedly: ${error.message}`))
+  );
+
+const harnessExpectFail: Harness["expectFail"] = (rule, effect, what) =>
+  Effect.exit(effect).pipe(
+    Effect.flatMap((exit) =>
+      harnessCheck(rule, exit._tag === "Failure", `Expected failure: ${what}`)
+    )
+  );
+
+const harnessExpectRegisteredFailure: Harness["expectRegisteredFailure"] = (
+  rule,
+  effect,
+  mutator,
+  exportName
+) =>
+  Effect.exit(effect).pipe(
+    Effect.flatMap((exit) => {
+      const failure = Exit.findErrorOption(exit);
+      if (Option.isNone(failure)) {
+        return harnessCheck(rule, false, `Expected failure: the ${mutator} mutator`);
+      }
+      return harnessCheck(
+        rule,
+        !isUnregisteredFailure(failure.value, mutator),
+        `${mutator} is not registered: register BackendContract.${exportName}`
+      );
+    })
+  );
+
 const makeHarness = (
   backend: Backend,
   options: VerifyOptions | undefined,
@@ -364,36 +401,6 @@ const makeHarness = (
   const context: SyncContext = { clientGroupId: options?.clientGroupId ?? "__contract-group" };
   const clientId = CONTRACT_CLIENT;
 
-  const violation = (rule: string, message: string) => new ContractViolation({ rule, message });
-  const check: Harness["check"] = (rule, condition, message) =>
-    condition ? Effect.void : Effect.fail(violation(rule, message));
-  const expectOk: Harness["expectOk"] = (rule, effect) =>
-    effect.pipe(
-      Effect.mapError((error) => violation(rule, `Backend failed unexpectedly: ${error.message}`))
-    );
-  const expectFail: Harness["expectFail"] = (rule, effect, what) =>
-    Effect.exit(effect).pipe(
-      Effect.flatMap((exit) => check(rule, exit._tag === "Failure", `Expected failure: ${what}`))
-    );
-  const expectRegisteredFailure: Harness["expectRegisteredFailure"] = (
-    rule,
-    effect,
-    mutator,
-    exportName
-  ) =>
-    Effect.exit(effect).pipe(
-      Effect.flatMap((exit) => {
-        const failure = Exit.findErrorOption(exit);
-        if (Option.isNone(failure)) {
-          return check(rule, false, `Expected failure: the ${mutator} mutator`);
-        }
-        return check(
-          rule,
-          !isUnregisteredFailure(failure.value, mutator),
-          `${mutator} is not registered: register BackendContract.${exportName}`
-        );
-      })
-    );
   const mutation: Harness["mutation"] = (mutationId, mutator, args) => ({
     clientId,
     mutationId,
@@ -410,12 +417,12 @@ const makeHarness = (
     peerStart,
     rows,
     evalRows: `${rows}_eval`,
-    check,
-    expectOk,
-    expectFail,
-    expectRegisteredFailure,
+    check: harnessCheck,
+    expectOk: harnessExpectOk,
+    expectFail: harnessExpectFail,
+    expectRegisteredFailure: harnessExpectRegisteredFailure,
     lastIdOf: (rule) =>
-      expectOk(rule, backend.lastMutationIds(context)).pipe(
+      harnessExpectOk(rule, backend.lastMutationIds(context)).pipe(
         Effect.map((ids) => ids[clientId] ?? 0)
       ),
     mutation,

@@ -125,15 +125,15 @@ describe("journal-depth sampling reads no journal bodies", () => {
   );
 });
 
-describe("ClientStore.pendingCount", () => {
-  const entry = (mutationId: number, clientId = "c1"): Mutation => ({
-    clientId,
-    mutationId,
-    mutator: "noop",
-    args: { n: mutationId },
-    createdAt: 0,
-  });
+const entry = (mutationId: number, clientId = "c1"): Mutation => ({
+  clientId,
+  mutationId,
+  mutator: "noop",
+  args: { n: mutationId },
+  createdAt: 0,
+});
 
+describe("ClientStore.pendingCount", () => {
   it.effect("the key-value store counts the index, reading no body", () =>
     Effect.gen(function* () {
       const kv = countingKv();

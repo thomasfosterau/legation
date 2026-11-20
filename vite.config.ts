@@ -147,7 +147,7 @@ export default defineConfig({
       "effecttsgo/any-unknown-in-error-context": "warn",
       // `String(value)` on an untyped row value (a foreign key, a SQL
       // detector's COUNT/MAX column, the comparator's last-resort text form)
-      // is the intended string form at that boundary. 7 sites (2 in tests).
+      // is the intended string form at that boundary. 5 sites, all in src.
       "typescript/no-base-to-string": "warn",
       // The public API spells `unknown | undefined` / `unknown | null` on
       // purpose: TypeScript collapses the union, but the reader learns the
@@ -189,6 +189,8 @@ export default defineConfig({
       "typescript/no-unnecessary-type-arguments": "error",
       "typescript/no-unnecessary-type-assertion": "error",
       "typescript/consistent-return": "error",
+      "unicorn/consistent-function-scoping": "error",
+      "eslint/no-await-in-loop": "error",
     },
     overrides: [
       // ---- Genuine can't-applies ------------------------------------------

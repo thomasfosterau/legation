@@ -127,14 +127,26 @@ export interface UndoManager<E> {
  * `ClientEngine` yields the same mutator/store union it always has, and a
  * `Client` yields its narrower view error.
  */
-export const make = <E>(handle: MutateHandle<E>): Effect.Effect<UndoManager<E>> =>
-  Effect.gen(function* () {
+export const make = <E>(handle: MutateHandle<E>): Effect.Effect<UndoManager<E>> => {
+  const runIntent = (intent: MutationIntent): Effect.Effect<void, E> =>
+    handle.mutate(intent.mutator, intent.args);
+
+  // Replay a step's members: undo runs the `undo` intents in reverse order,
+  // redo runs the `execute` intents in order — the mirror of one another.
+  const replay = (step: Step, direction: "undo" | "redo"): Effect.Effect<void, E> =>
+    Effect.gen(function* () {
+      const ordered = direction === "undo" ? Arr.reverse(step) : step;
+      yield* Effect.forEach(
+        ordered,
+        (entry) => runIntent(direction === "undo" ? entry.undo : entry.execute),
+        { concurrency: 1, discard: true }
+      );
+    });
+
+  return Effect.gen(function* () {
     const history = yield* SubscriptionRef.make<History>(EMPTY_HISTORY);
     // The current group's accumulator, or `undefined` when not grouping.
     const groupBuffer = yield* Ref.make<ReadonlyArray<UndoEntry> | undefined>(undefined);
-
-    const runIntent = (intent: MutationIntent): Effect.Effect<void, E> =>
-      handle.mutate(intent.mutator, intent.args);
 
     // Push a completed step; a new action always clears the redo stack.
     const pushStep = (step: Step): Effect.Effect<void> =>
@@ -163,18 +175,6 @@ export const make = <E>(handle: MutateHandle<E>): Effect.Effect<UndoManager<E>> 
 
     const pushOnto = (onto: "undo" | "redo", step: Step): Effect.Effect<void> =>
       SubscriptionRef.update(history, (h) => ({ ...h, [onto]: [...h[onto], step] }));
-
-    // Replay a step's members: undo runs the `undo` intents in reverse order,
-    // redo runs the `execute` intents in order — the mirror of one another.
-    const replay = (step: Step, direction: "undo" | "redo"): Effect.Effect<void, E> =>
-      Effect.gen(function* () {
-        const ordered = direction === "undo" ? Arr.reverse(step) : step;
-        yield* Effect.forEach(
-          ordered,
-          (entry) => runIntent(direction === "undo" ? entry.undo : entry.execute),
-          { concurrency: 1, discard: true }
-        );
-      });
 
     // Pop `from`, replay it, then push it `onto` the opposite stack. Empty → no-op.
     const step = (from: "undo" | "redo", onto: "undo" | "redo"): Effect.Effect<void, E> =>
@@ -228,3 +228,4 @@ export const make = <E>(handle: MutateHandle<E>): Effect.Effect<UndoManager<E>> 
       group,
     } satisfies UndoManager<E>;
   });
+};

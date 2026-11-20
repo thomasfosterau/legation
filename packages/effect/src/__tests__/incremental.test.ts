@@ -72,6 +72,8 @@ const todos = Subset.make({ collection: "todos" });
 const users = Subset.make({ collection: "users" });
 const settle = Effect.sleep(Duration.millis(50));
 
+const page = (rows: ReadonlyArray<{ readonly id: string }>) => rows.map((r) => r.id);
+
 describe("selective live-query re-evaluation", () => {
   it.live(
     "re-evaluates a query only when its collection changes",
@@ -128,7 +130,6 @@ describe("selective live-query re-evaluation", () => {
           orderBy: [{ field: "rank", direction: "asc" }],
           limit: 2,
         });
-        const page = (rows: ReadonlyArray<{ readonly id: string }>) => rows.map((r) => r.id);
 
         const handler = yield* makeServer;
         const writer = yield* makeClient(handler, "writer");

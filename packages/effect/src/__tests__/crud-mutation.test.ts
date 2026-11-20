@@ -13,7 +13,7 @@ import * as Node from "../Node.js";
 
 const products = Node.make("products", { attributes: { name: Schema.String } });
 const reviews = Node.make("reviews", {
-  attributes: { rating: Schema.Number, body: Schema.String },
+  attributes: { rating: Schema.Finite, body: Schema.String },
   edges: { product: Edge.one("products", { via: "productId" }) },
 });
 const users = Node.make("users", { id: "username", attributes: { username: Schema.String } });

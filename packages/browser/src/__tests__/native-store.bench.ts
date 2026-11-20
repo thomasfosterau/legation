@@ -206,6 +206,28 @@ const withCounting = <A, E>(
     effect.pipe(Effect.provideService(KeyValueStore.KeyValueStore, counting.store))
   );
 
+/** Run `f` over `items` one at a time, in order: timed runs must never overlap. */
+const sequential = <A, B>(
+  items: Iterable<A>,
+  f: (item: A, index: number) => Promise<B>
+): Promise<Array<B>> =>
+  runtime.runPromise(
+    Effect.forEach(
+      items,
+      (item, index) =>
+        Effect.tryPromise({
+          try: () => f(item, index),
+          catch: (cause) =>
+            cause instanceof TestFailure
+              ? cause
+              : new TestFailure({
+                  message: P.isError(cause) ? cause.message : "bench step rejected",
+                }),
+        }),
+      { concurrency: 1 }
+    )
+  );
+
 // ─── A. KV ClientStore: cold load, write amplification, id-index growth ──────
 
 const sectionA = async () => {
@@ -247,49 +269,52 @@ const sectionA = async () => {
   console.table(coldLoad);
 
   // Write amplification: a pull touching K existing rows.
-  const amplification: Array<Record<string, number | string>> = [];
-  for (const k of [1, 100, 1000]) {
-    const ops = putOps(rows.slice(0, k));
-    counting.reset();
-    const [, pullMs] = await timed(() => withCounting(counting, kv.applyRowOps(ops)));
-    const s = counting.summarise();
-    const total = s.rowBytes + s.otherBytes;
-    amplification.push({
-      "ops in pull": k,
-      "row KB": kb(s.rowBytes),
-      "id-index KB": kb(s.indexBytes),
-      "total KB": kb(total),
-      "amplification ×": Math.round((total / s.rowBytes) * 10) / 10,
-      sets: s.rowSets + s.otherSets,
-      ms: ms(pullMs),
-    });
-  }
+  const amplification = await sequential(
+    [1, 100, 1000],
+    async (k): Promise<Record<string, number | string>> => {
+      const ops = putOps(rows.slice(0, k));
+      counting.reset();
+      const [, pullMs] = await timed(() => withCounting(counting, kv.applyRowOps(ops)));
+      const s = counting.summarise();
+      const total = s.rowBytes + s.otherBytes;
+      return {
+        "ops in pull": k,
+        "row KB": kb(s.rowBytes),
+        "id-index KB": kb(s.indexBytes),
+        "total KB": kb(total),
+        "amplification ×": Math.round((total / s.rowBytes) * 10) / 10,
+        sets: s.rowSets + s.otherSets,
+        ms: ms(pullMs),
+      };
+    }
+  );
   // eslint-disable-next-line no-console
   console.log(`A2. Write amplification per pull over a ${ROWS}-row collection`);
   // eslint-disable-next-line no-console
   console.table(amplification);
 
   // Id-index growth: size of the array value and the cost of one rewrite.
-  const growth: Array<Record<string, number | string>> = [];
-  for (const n of [10_000, 50_000, 200_000]) {
-    const c = countingStore();
-    const s = await withCounting(c, ClientStore.makeKeyValue());
-    await withCounting(c, s.applyRowOps(putOps(makeRows(mulberry32(SEED + n), n))));
-    const one = putOps(rows.slice(0, 1));
-    const samples: Array<number> = [];
-    for (let i = 0; i < 7; i++) {
-      c.reset();
-      const [, t] = await timed(() => withCounting(c, s.applyRowOps(one)));
-      samples.push(t);
+  const growth = await sequential(
+    [10_000, 50_000, 200_000],
+    async (n): Promise<Record<string, number | string>> => {
+      const c = countingStore();
+      const s = await withCounting(c, ClientStore.makeKeyValue());
+      await withCounting(c, s.applyRowOps(putOps(makeRows(mulberry32(SEED + n), n))));
+      const one = putOps(rows.slice(0, 1));
+      const samples = await sequential(Arr.range(1, 7), async () => {
+        c.reset();
+        const [, t] = await timed(() => withCounting(c, s.applyRowOps(one)));
+        return t;
+      });
+      const sum = c.summarise();
+      return {
+        rows: n,
+        "id-index KB": kb(sum.indexBytes),
+        "1-op pull KB": kb(sum.rowBytes + sum.otherBytes),
+        "1-op pull ms (median of 7)": ms(median(samples)),
+      };
     }
-    const sum = c.summarise();
-    growth.push({
-      rows: n,
-      "id-index KB": kb(sum.indexBytes),
-      "1-op pull KB": kb(sum.rowBytes + sum.otherBytes),
-      "1-op pull ms (median of 7)": ms(median(samples)),
-    });
-  }
+  );
   // eslint-disable-next-line no-console
   console.log("A3. Id-index array as the collection grows (1-op pull = read + rewrite)");
   // eslint-disable-next-line no-console
@@ -341,26 +366,22 @@ const sectionB = async () => {
       "heap delta MB": Math.round(((h1 - h0) / 1048576) * 10) / 10,
     },
   ];
-  for (const [label, where] of Object.entries(predicates)) {
-    const scan: Array<number> = [];
-    const indexed: Array<number> = [];
-    let hits = 0;
-    for (let i = 0; i < 9; i++) {
+  const evaluated = await sequential(Object.entries(predicates), async ([label, where]) => {
+    const runs = await sequential(Arr.range(1, 9), async () => {
       const [a, ta] = await timed(() => fullScan(where));
       const [b, tb] = await timed(() => CollectionIndex.evaluate(index, rowsById, where));
       if (b === undefined || a.length !== b.length)
         throw new TestFailure({ message: `mismatch for ${label}` });
-      hits = a.length;
-      scan.push(ta);
-      indexed.push(tb);
-    }
-    table.push({
-      what: label,
-      hits,
-      "full scan ms": ms(median(scan)),
-      "indexed ms": ms(median(indexed)),
+      return { hits: a.length, scan: ta, indexed: tb };
     });
-  }
+    return {
+      what: label,
+      hits: runs.at(-1)?.hits ?? 0,
+      "full scan ms": ms(median(runs.map((run) => run.scan))),
+      "indexed ms": ms(median(runs.map((run) => run.indexed))),
+    };
+  });
+  table.push(...evaluated);
   // Sort cost in memory, the fallback when orderBy is not one indexed field.
   const [, sortMs] = await timed(() =>
     storedRows.toSorted((a, b) => compareCodePoints((a.value as Item).name, (b.value as Item).name))
@@ -623,7 +644,7 @@ const sectionD = async () => {
   });
 
   // A pull as one transaction across items + journal + meta.
-  for (const k of [1, 100, 1000]) {
+  const pulls = await sequential([1, 100, 1000], async (k) => {
     const [, pullMs] = await timed(async () => {
       const tx = db.transaction([COLLECTION, "journal", "meta"], "readwrite");
       const items = tx.objectStore(COLLECTION);
@@ -634,11 +655,12 @@ const sectionD = async () => {
       tx.objectStore("meta").put({ key: "cookie", value: `cookie-${k}` });
       await complete(tx);
     });
-    table.push({
+    return {
       what: `pull touching ${k} rows: rows + ack + cookie, one transaction`,
       ms: ms(pullMs),
-    });
-  }
+    };
+  });
+  table.push(...pulls);
   // eslint-disable-next-line no-console
   console.log("D. Native schema over raw fake-indexeddb");
   // eslint-disable-next-line no-console

@@ -43,7 +43,7 @@ const categories = Node.make("categories", {
 });
 
 const products = Node.make("products", {
-  attributes: { name: Schema.String, description: Schema.String, priceCents: Schema.Number },
+  attributes: { name: Schema.String, description: Schema.String, priceCents: Schema.Finite },
   edges: {
     category: Edge.one("categories", { via: "categoryId" }),
     variants: Edge.many("variants", { inverse: "product" }),
@@ -54,13 +54,13 @@ const products = Node.make("products", {
 });
 
 const variants = Node.make("variants", {
-  attributes: { sku: Schema.String, stock: Schema.Number },
+  attributes: { sku: Schema.String, stock: Schema.Finite },
   edges: { product: Edge.one("products", { via: "productId" }) },
   filterable: { stock: { operators: ["eq", "gt"], kind: "integer" } },
 });
 
 const reviews = Node.make("reviews", {
-  attributes: { rating: Schema.Number, createdAt: Schema.String },
+  attributes: { rating: Schema.Finite, createdAt: Schema.String },
   edges: { product: Edge.one("products", { via: "productId" }) },
   filterable: { createdAt: { operators: ["gt", "lt", "isnull"], kind: "instant" } },
 });
@@ -69,8 +69,8 @@ const reviews = Node.make("reviews", {
 const corpus = Node.make("corpus", {
   attributes: {
     s: Schema.String,
-    i: Schema.Number,
-    d: Schema.Number,
+    i: Schema.Finite,
+    d: Schema.Finite,
     b: Schema.Boolean,
     t: Schema.String,
   },
@@ -286,6 +286,9 @@ describe("JsonApiQuery.foldConstants", () => {
 const encode = (where: Predicate.Predicate, orderBy: ReadonlyArray<Subset.OrderBy> = []) =>
   JsonApiQuery.defaultEncoder.encode(Subset.make({ collection: "t", where, orderBy }));
 
+const encodeFailure = (where: Predicate.Predicate) =>
+  JsonApiQuery.defaultEncoder.encode(Subset.make({ collection: "t", where })).pipe(Effect.flip);
+
 describe("JsonApiQuery.defaultEncoder", () => {
   it.effect("encodes eq / in conjuncts and sort in the grammar's canonical form", () =>
     Effect.gen(function* () {
@@ -358,16 +361,14 @@ describe("JsonApiQuery.defaultEncoder", () => {
 
   it.effect("fails closed on a predicate with no URL form", () =>
     Effect.gen(function* () {
-      const failure = (where: Predicate.Predicate) =>
-        JsonApiQuery.defaultEncoder
-          .encode(Subset.make({ collection: "t", where }))
-          .pipe(Effect.flip);
       expect(
-        yield* failure(Predicate.exists({ collection: "r", localField: "id", foreignField: "tId" }))
+        yield* encodeFailure(
+          Predicate.exists({ collection: "r", localField: "id", foreignField: "tId" })
+        )
       ).toBeInstanceOf(QueryError);
-      expect(yield* failure(Predicate.compare("gt", "a", null))).toBeInstanceOf(QueryError);
+      expect(yield* encodeFailure(Predicate.compare("gt", "a", null))).toBeInstanceOf(QueryError);
       expect(
-        yield* failure(Predicate.and(Predicate.eq("a", 1), Predicate.eq("a", "x")))
+        yield* encodeFailure(Predicate.and(Predicate.eq("a", 1), Predicate.eq("a", "x")))
       ).toMatchObject({
         parameter: "filter[a]",
       });
@@ -469,6 +470,8 @@ describe("server-side narrowing", () => {
 });
 
 // ─── URL → Query.Read ────────────────────────────────────────────────────────
+
+const parseUrl = (url: string) => JsonApiQuery.parseRead(nodes, url);
 
 describe("JsonApiQuery.parseRead", () => {
   it.effect("maps every query family onto the read, with fields[] beside it", () =>
@@ -752,9 +755,8 @@ describe("JsonApiQuery.parseRead", () => {
         // effect-jsonapi accepts the repeated-key spelling in every
         // list-valued position, so `filter[name]=a&filter[name]=b` is no longer
         // a 400: it decodes exactly as `filter[name]=a,b` does.
-        const read = (url: string) => JsonApiQuery.parseRead(nodes, url);
-        const repeated = yield* read("/products?filter[name]=a&filter[name]=b");
-        expect(repeated).toEqual(yield* read("/products?filter[name]=a,b"));
+        const repeated = yield* parseUrl("/products?filter[name]=a&filter[name]=b");
+        expect(repeated).toEqual(yield* parseUrl("/products?filter[name]=a,b"));
         expect(repeated.read.where).toMatchObject({
           _tag: "In",
           field: "name",
@@ -765,13 +767,12 @@ describe("JsonApiQuery.parseRead", () => {
 
   it.effect("reads a repeated sort key as the comma list it spells (effect-jsonapi >= 0.15)", () =>
     Effect.gen(function* () {
-      const read = (url: string) => JsonApiQuery.parseRead(nodes, url);
-      const repeated = yield* read("/products?sort=-name&sort=id");
-      expect(repeated).toEqual(yield* read("/products?sort=-name,id"));
+      const repeated = yield* parseUrl("/products?sort=-name&sort=id");
+      expect(repeated).toEqual(yield* parseUrl("/products?sort=-name,id"));
       expect(repeated.read.order).toEqual(["-name", "id"]);
       // The mixed spelling decodes to the same plan too.
-      expect(yield* read("/products?sort=-name&sort=id,priceCents")).toEqual(
-        yield* read("/products?sort=-name,id,priceCents")
+      expect(yield* parseUrl("/products?sort=-name&sort=id,priceCents")).toEqual(
+        yield* parseUrl("/products?sort=-name,id,priceCents")
       );
     })
   );
@@ -780,11 +781,10 @@ describe("JsonApiQuery.parseRead", () => {
     "reads a repeated fields[products] key as the comma list it spells (effect-jsonapi >= 0.15)",
     () =>
       Effect.gen(function* () {
-        const read = (url: string) => JsonApiQuery.parseRead(nodes, url);
-        const repeated = yield* read(
+        const repeated = yield* parseUrl(
           "/products?fields[products]=name&fields[products]=description"
         );
-        expect(repeated).toEqual(yield* read("/products?fields[products]=name,description"));
+        expect(repeated).toEqual(yield* parseUrl("/products?fields[products]=name,description"));
         expect(repeated.fields).toEqual(Option.some({ products: ["name", "description"] }));
       })
   );

@@ -19,7 +19,7 @@ import { defined } from "./defined.js";
 
 const categories = Node.make("categories", { attributes: { name: Schema.String } });
 const products = Node.make("products", {
-  attributes: { name: Schema.String, priceCents: Schema.Number },
+  attributes: { name: Schema.String, priceCents: Schema.Finite },
   sortable: ["name"],
   edges: {
     category: Edge.one("categories", { via: "categoryId" }),

@@ -209,6 +209,11 @@ describe("D1Executor", () => {
   );
 });
 
+const roomIdOf = (request: HttpServerRequest.HttpServerRequest) =>
+  Effect.succeed(
+    Option.fromNullishOr(new URL(request.url, "https://app").searchParams.get("user"))
+  );
+
 describe("routeSync", () => {
   // The stub answers which room was addressed and the path it was given.
   const stubRooms = fakeBinding<Workers.DurableObject<Room.RoomObject>>({
@@ -217,10 +222,6 @@ describe("routeSync", () => {
         Effect.succeed(HttpServerResponse.jsonUnsafe({ room: name, path: request.url })),
     }),
   });
-  const roomIdOf = (request: HttpServerRequest.HttpServerRequest) =>
-    Effect.succeed(
-      Option.fromNullishOr(new URL(request.url, "https://app").searchParams.get("user"))
-    );
   const route = (path: string, basePath?: string) =>
     routeSync({ rooms: stubRooms, roomIdOf, basePath }).pipe(
       Effect.provideService(

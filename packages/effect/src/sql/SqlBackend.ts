@@ -460,6 +460,10 @@ interface LedgerRow {
   readonly rejections: ReadonlyMap<number, string>;
 }
 
+// What a read queries: the mapping's `readRelation` when it names one
+// (typically a view), else the write target `table`.
+const readTableOf = (mapping: TableMapping) => mapping.readRelation ?? mapping.table;
+
 /**
  * A {@link Backend.Backend} over a {@link SqlExecutor}: subset evaluation, row fetch and the
  * transactional, idempotent mutation-id ledger.
@@ -477,9 +481,6 @@ export const make = (config: SqlBackendConfig): Backend.Backend => {
     const column = config.tables[collection]?.versionColumn;
     return column !== undefined ? (row[column] as string | number) : versionOf(row);
   };
-  // What a read queries: the mapping's `readRelation` when it names one
-  // (typically a view), else the write target `table`.
-  const readTableOf = (mapping: TableMapping) => mapping.readRelation ?? mapping.table;
   // Whether a decoded row is a live row, not a tombstone: no mapping or no
   // declared predicate means every row is live.
   const isLive = (collection: string, value: SqlRow): boolean => {

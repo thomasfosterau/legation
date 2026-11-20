@@ -64,6 +64,17 @@ class DefaultCorpus extends Context.Service<DefaultCorpus, FilterCorpus.Corpus>(
   );
 }
 
+// A stand-in "subject" that disagrees with the reference exactly when a
+// `ne` on `s` meets a NULL row: the JS two-valued `!==` versus SQL's
+// three-valued `<>` (ADR-0028 rule (a)).
+const disagrees = (candidate: FilterCorpus.Case) =>
+  Effect.sync(() => {
+    const hasNe =
+      Arr.isReadonlyArrayNonEmpty(leaves(candidate.predicate)) &&
+      JSON.stringify(candidate.predicate).includes('"op":"ne"');
+    return hasNe && candidate.rows.some((row) => row.value.s === null);
+  });
+
 layer(DefaultCorpus.layer)("FilterCorpus", (it) => {
   it.effect("is deterministic for a seed", () =>
     Effect.gen(function* () {
@@ -217,16 +228,6 @@ layer(DefaultCorpus.layer)("FilterCorpus", (it) => {
 
   it.effect("minimises a disagreement to the smallest reproducing predicate and rows", () =>
     Effect.gen(function* () {
-      // A stand-in "subject" that disagrees with the reference exactly when a
-      // `ne` on `s` meets a NULL row: the JS two-valued `!==` versus SQL's
-      // three-valued `<>` (ADR-0028 rule (a)).
-      const disagrees = (candidate: FilterCorpus.Case) =>
-        Effect.sync(() => {
-          const hasNe =
-            Arr.isReadonlyArrayNonEmpty(leaves(candidate.predicate)) &&
-            JSON.stringify(candidate.predicate).includes('"op":"ne"');
-          return hasNe && candidate.rows.some((row) => row.value.s === null);
-        });
       const failing: FilterCorpus.Case = {
         predicate: Predicate.and(
           Predicate.or(Predicate.ne("s", "a"), Predicate.gt("i", 3)),

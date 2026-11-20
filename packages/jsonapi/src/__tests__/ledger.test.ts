@@ -101,14 +101,15 @@ const boundApi = HttpApi.make("app").add(
 );
 const boundInspected = JsonApiSync.inspect(boundApi);
 
+const json = (status: number, document: unknown) =>
+  new Response(JSON.stringify(document), {
+    status,
+    headers: { "Content-Type": "application/vnd.api+json" },
+  });
+
 const refusingServer = HttpClient.make((request, url) =>
   Effect.sync(() => {
     const id = url.pathname.match(/^\/todos\/([^/]+)$/)?.[1];
-    const json = (status: number, document: unknown) =>
-      new Response(JSON.stringify(document), {
-        status,
-        headers: { "Content-Type": "application/vnd.api+json" },
-      });
     if (request.method === "GET" && id !== undefined)
       return HttpClientResponse.fromWeb(
         request,

@@ -60,8 +60,8 @@ const EVAL_COLLECTION = `${COLLECTION}_eval`;
 // absent values under ADR-0028, so both are nullable and optional), plus the
 // two server rules below.
 const attributes = {
-  n: Schema.optionalKey(Schema.Number),
-  rank: Schema.optionalKey(Schema.NullOr(Schema.Number)),
+  n: Schema.optionalKey(Schema.Finite),
+  rank: Schema.optionalKey(Schema.NullOr(Schema.Finite)),
   tag: Schema.optionalKey(Schema.NullOr(Schema.String)),
   /** A row the server refuses to store: a permanent rejection (422). */
   poison: Schema.optionalKey(Schema.Boolean),

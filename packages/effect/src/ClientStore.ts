@@ -1337,6 +1337,8 @@ const replicaStateWith = (read: KeyReader): Effect.Effect<ReplicaState, StoreErr
     };
   });
 
+const storeError = (message: string) => (cause: unknown) => new StoreError({ message, cause });
+
 /**
  * The durable implementation (ADR-0007): ClientStore over
  * `effect/persistence` KeyValueStore, so any platform KVS —
@@ -1393,8 +1395,6 @@ export const makeKeyValue = (
       });
     const locked = <A, E>(effect: Effect.Effect<A, E>) =>
       Semaphore.withPermit(lock, unsealed(effect));
-
-    const storeError = (message: string) => (cause: unknown) => new StoreError({ message, cause });
 
     const readDecoded = <A>(
       key: string,

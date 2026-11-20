@@ -81,16 +81,16 @@ describe("Aggregate.computeGrouped", () => {
   });
 });
 
-describe("AggregateSchema", () => {
-  const roundTrip = (agg: Aggregate.Aggregate) =>
-    Effect.gen(function* () {
-      const encoded = yield* Schema.encodeEffect(Aggregate.AggregateSchema)(agg);
-      const decoded = yield* Schema.decodeUnknownEffect(Aggregate.AggregateSchema)(
-        JSON.parse(JSON.stringify(encoded))
-      );
-      expect(decoded).toEqual(agg);
-    });
+const roundTrip = (agg: Aggregate.Aggregate) =>
+  Effect.gen(function* () {
+    const encoded = yield* Schema.encodeEffect(Aggregate.AggregateSchema)(agg);
+    const decoded = yield* Schema.decodeUnknownEffect(Aggregate.AggregateSchema)(
+      JSON.parse(JSON.stringify(encoded))
+    );
+    expect(decoded).toEqual(agg);
+  });
 
+describe("AggregateSchema", () => {
   it.effect("round-trips Count", () => roundTrip(Aggregate.count));
   it.effect("round-trips Sum", () => roundTrip(Aggregate.sum("amount")));
   it.effect("round-trips Min", () => roundTrip(Aggregate.min("amount")));

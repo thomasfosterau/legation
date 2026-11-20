@@ -715,6 +715,9 @@ const stale = (mutationId: number): Mutation => ({
   createdAt: 0,
 });
 
+const broken = (method: string, key: string) =>
+  Effect.fail(new KeyValueStore.KeyValueStoreError({ message: "injected", method, key }));
+
 describe("a committed compaction is never lost to a failure or an interrupt", () => {
   /**
    * A durable (KeyValueStore-backed) client store whose backing KVS can be
@@ -729,8 +732,6 @@ describe("a committed compaction is never lost to a failure or an interrupt", ()
       failing: false,
       afterIntent: Effect.void,
     };
-    const broken = (method: string, key: string) =>
-      Effect.fail(new KeyValueStore.KeyValueStoreError({ message: "injected", method, key }));
     const kvs = KeyValueStore.makeStringOnly({
       get: (key) => Effect.sync(() => data.get(key)),
       set: (key, value) =>

@@ -194,6 +194,14 @@ const makeMock = (options: { readonly transactional?: boolean } = {}): Mock => {
 const setTodo = Mutator.make("todo/set", Schema.Struct({ id: Schema.String }));
 const tables = { todos: { table: "todos", versionColumn: "version" } };
 
+const membership = (where: Predicate.Predicate) =>
+  Predicate.exists({
+    collection: "memberships",
+    localField: "projectId",
+    foreignField: "projectId",
+    where,
+  });
+
 describe("SqlBackend evaluate / getRows", () => {
   it.effect("compiles the WHERE and finalizes order + limit locally", () => {
     const mock = makeMock();
@@ -332,13 +340,6 @@ describe("SqlBackend evaluate / getRows", () => {
       mutators: new Map(),
       handlers: {},
     });
-    const membership = (where: Predicate.Predicate) =>
-      Predicate.exists({
-        collection: "memberships",
-        localField: "projectId",
-        foreignField: "projectId",
-        where,
-      });
 
     return Effect.gen(function* () {
       // NULL equals nothing: `Not(Exists)` keeps i2 (as `Predicate.existsValues`
@@ -398,31 +399,39 @@ describe("SqlBackend evaluate / getRows", () => {
   });
 });
 
+const makeBackend = (mock: Mock, ran: Ref.Ref<number>) =>
+  SqlBackend.make({
+    executor: mock.executor,
+    tables,
+    mutators: new Map([[setTodo.name, setTodo]]),
+    handlers: {
+      "todo/set": () =>
+        Ref.update(ran, (n) => n + 1).pipe(
+          Effect.as<ReadonlyArray<Backend.ChangeHint>>([{ collection: "todos", ids: ["1"] }])
+        ),
+    },
+  });
+
+const mutation = (mutationId: number) => ({
+  clientId: "c1",
+  mutationId,
+  mutator: "todo/set",
+  args: { id: "1" },
+  createdAt: 0,
+});
+
+const at = (id: number, mutator: string, args: unknown) => ({
+  clientId: "c1",
+  mutationId: id,
+  mutator,
+  args,
+  createdAt: 0,
+});
+
 // Trunk's behaviour, under both orderings: claim-first (transactions) and
 // handler-then-bump (no transactions, D1). The claim-specific READ COMMITTED
 // tests below stay on the transactional ordering.
 describe.each([true, false])("SqlBackend applyMutations (transactional: %s)", (transactional) => {
-  const makeBackend = (mock: Mock, ran: Ref.Ref<number>) =>
-    SqlBackend.make({
-      executor: mock.executor,
-      tables,
-      mutators: new Map([[setTodo.name, setTodo]]),
-      handlers: {
-        "todo/set": () =>
-          Ref.update(ran, (n) => n + 1).pipe(
-            Effect.as<ReadonlyArray<Backend.ChangeHint>>([{ collection: "todos", ids: ["1"] }])
-          ),
-      },
-    });
-
-  const mutation = (mutationId: number) => ({
-    clientId: "c1",
-    mutationId,
-    mutator: "todo/set",
-    args: { id: "1" },
-    createdAt: 0,
-  });
-
   it.effect("applies in order, bumps the ledger, and skips replays", () => {
     const mock = makeMock({ transactional });
     return Effect.gen(function* () {
@@ -508,13 +517,6 @@ describe.each([true, false])("SqlBackend applyMutations (transactional: %s)", (t
               .run({ text: `INSERT INTO "todos" VALUES (?)`, params: ["poison"] })
               .pipe(Effect.andThen(Effect.fail(new MutationRejected({ reason: "forbidden" })))),
         },
-      });
-      const at = (id: number, mutator: string, args: unknown) => ({
-        clientId: "c1",
-        mutationId: id,
-        mutator,
-        args,
-        createdAt: 0,
       });
 
       return Effect.gen(function* () {

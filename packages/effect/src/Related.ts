@@ -658,14 +658,14 @@ export const observeWith = (
   strategy: Strategy,
   subset: Subset.Subset
 ): Stream.Stream<ReadonlyArray<RelatedRow>> =>
-  Stream.callback<ReadonlyArray<RelatedRow>>((output) =>
-    Effect.gen(function* () {
+  Stream.callback<ReadonlyArray<RelatedRow>>((output) => {
+    const emit = (result: ReadonlyArray<RelatedRow> | undefined) =>
+      result === undefined ? Effect.void : Effect.asVoid(Queue.offer(output, result));
+
+    return Effect.gen(function* () {
       const engine = makeJoinEngine(strategy);
       const events = yield* Queue.unbounded<JoinEvent>();
       const collectionFibers = new Map<string, Fiber.Fiber<void>>();
-
-      const emit = (result: ReadonlyArray<RelatedRow> | undefined) =>
-        result === undefined ? Effect.void : Effect.asVoid(Queue.offer(output, result));
 
       const startCollection = (collection: string) =>
         Effect.gen(function* () {
@@ -709,8 +709,8 @@ export const observeWith = (
           )
         )
       );
-    })
-  ).pipe(Stream.changesWith(sameJoin));
+    });
+  }).pipe(Stream.changesWith(sameJoin));
 
 /**
  * The narrowed subsets a base page's targets pin: one `foreignField IN (...)`

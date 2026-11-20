@@ -131,35 +131,35 @@ const fail = (disagreement: FilterCorpus.Disagreement): never => {
 };
 
 /** Every corpus predicate: `subject` must return the oracle's id set. */
-const checkWhere = (corpus: FilterCorpus.Corpus, subject: Leg, oracle: Leg) =>
-  Effect.gen(function* () {
-    const disagrees = (candidate: FilterCorpus.Case) =>
+const checkWhere = (corpus: FilterCorpus.Corpus, subject: Leg, oracle: Leg) => {
+  const disagrees = (candidate: FilterCorpus.Case) =>
+    Effect.gen(function* () {
+      const expected = yield* oracle.where(candidate.predicate, candidate.rows);
+      const actual = yield* subject.where(candidate.predicate, candidate.rows);
+      return !sameIds(actual, expected);
+    });
+
+  return Effect.forEach(
+    corpus.predicates,
+    (predicate) =>
       Effect.gen(function* () {
-        const expected = yield* oracle.where(candidate.predicate, candidate.rows);
-        const actual = yield* subject.where(candidate.predicate, candidate.rows);
-        return !sameIds(actual, expected);
-      });
-    yield* Effect.forEach(
-      corpus.predicates,
-      (predicate) =>
-        Effect.gen(function* () {
-          const initial: FilterCorpus.Case = { predicate, rows: corpus.rows };
-          if (!(yield* disagrees(initial))) return;
-          const minimal = yield* FilterCorpus.minimise(initial, disagrees);
-          fail({
-            seed: corpus.seed,
-            subject: `${subject.name} disagrees with ${oracle.name}`,
-            predicate: minimal.predicate,
-            rows: minimal.rows,
-            results: {
-              [oracle.name]: yield* oracle.where(minimal.predicate, minimal.rows),
-              [subject.name]: yield* subject.where(minimal.predicate, minimal.rows),
-            },
-          });
-        }),
-      { concurrency: 1, discard: true }
-    );
-  });
+        const initial: FilterCorpus.Case = { predicate, rows: corpus.rows };
+        if (!(yield* disagrees(initial))) return;
+        const minimal = yield* FilterCorpus.minimise(initial, disagrees);
+        fail({
+          seed: corpus.seed,
+          subject: `${subject.name} disagrees with ${oracle.name}`,
+          predicate: minimal.predicate,
+          rows: minimal.rows,
+          results: {
+            [oracle.name]: yield* oracle.where(minimal.predicate, minimal.rows),
+            [subject.name]: yield* subject.where(minimal.predicate, minimal.rows),
+          },
+        });
+      }),
+    { concurrency: 1, discard: true }
+  );
+};
 
 /**
  * Every corpus predicate, every row: `subject`'s three-valued verdict must
@@ -169,35 +169,35 @@ const checkWhere = (corpus: FilterCorpus.Corpus, subject: Leg, oracle: Leg) =>
  * oracle says unknown collapses to the same id set but is still a bug, since
  * `Not` flips one and not the other.
  */
-const checkVerdicts = (corpus: FilterCorpus.Corpus, subject: Leg, oracle: Leg) =>
-  Effect.gen(function* () {
-    const disagrees = (candidate: FilterCorpus.Case) =>
+const checkVerdicts = (corpus: FilterCorpus.Corpus, subject: Leg, oracle: Leg) => {
+  const disagrees = (candidate: FilterCorpus.Case) =>
+    Effect.gen(function* () {
+      const expected = yield* oracle.judge(candidate.predicate, candidate.rows);
+      const actual = yield* subject.judge(candidate.predicate, candidate.rows);
+      return !sameIds(renderVerdicts(actual), renderVerdicts(expected));
+    });
+
+  return Effect.forEach(
+    corpus.predicates,
+    (predicate) =>
       Effect.gen(function* () {
-        const expected = yield* oracle.judge(candidate.predicate, candidate.rows);
-        const actual = yield* subject.judge(candidate.predicate, candidate.rows);
-        return !sameIds(renderVerdicts(actual), renderVerdicts(expected));
-      });
-    yield* Effect.forEach(
-      corpus.predicates,
-      (predicate) =>
-        Effect.gen(function* () {
-          const initial: FilterCorpus.Case = { predicate, rows: corpus.rows };
-          if (!(yield* disagrees(initial))) return;
-          const minimal = yield* FilterCorpus.minimise(initial, disagrees);
-          fail({
-            seed: corpus.seed,
-            subject: `${subject.name} verdicts disagree with ${oracle.name}`,
-            predicate: minimal.predicate,
-            rows: minimal.rows,
-            results: {
-              [oracle.name]: renderVerdicts(yield* oracle.judge(minimal.predicate, minimal.rows)),
-              [subject.name]: renderVerdicts(yield* subject.judge(minimal.predicate, minimal.rows)),
-            },
-          });
-        }),
-      { concurrency: 1, discard: true }
-    );
-  });
+        const initial: FilterCorpus.Case = { predicate, rows: corpus.rows };
+        if (!(yield* disagrees(initial))) return;
+        const minimal = yield* FilterCorpus.minimise(initial, disagrees);
+        fail({
+          seed: corpus.seed,
+          subject: `${subject.name} verdicts disagree with ${oracle.name}`,
+          predicate: minimal.predicate,
+          rows: minimal.rows,
+          results: {
+            [oracle.name]: renderVerdicts(yield* oracle.judge(minimal.predicate, minimal.rows)),
+            [subject.name]: renderVerdicts(yield* subject.judge(minimal.predicate, minimal.rows)),
+          },
+        });
+      }),
+    { concurrency: 1, discard: true }
+  );
+};
 
 type OrderCase = { readonly terms: ReadonlyArray<Subset.OrderBy>; readonly rows: Rows };
 type OrderDisagrees = (
@@ -247,34 +247,34 @@ const shrinkOrder = (
   });
 
 /** Every corpus `orderBy`: `subject` must produce the oracle's id sequence. */
-const checkOrder = (corpus: FilterCorpus.Corpus, subject: Leg, oracle: Leg) =>
-  Effect.gen(function* () {
-    const disagrees: OrderDisagrees = (orderBy, rows) =>
+const checkOrder = (corpus: FilterCorpus.Corpus, subject: Leg, oracle: Leg) => {
+  const disagrees: OrderDisagrees = (orderBy, rows) =>
+    Effect.gen(function* () {
+      const expected = yield* oracle.order(orderBy, rows);
+      const actual = yield* subject.order(orderBy, rows);
+      return !sameIds(actual, expected);
+    });
+
+  return Effect.forEach(
+    corpus.orderBys,
+    (orderBy) =>
       Effect.gen(function* () {
-        const expected = yield* oracle.order(orderBy, rows);
-        const actual = yield* subject.order(orderBy, rows);
-        return !sameIds(actual, expected);
-      });
-    yield* Effect.forEach(
-      corpus.orderBys,
-      (orderBy) =>
-        Effect.gen(function* () {
-          if (!(yield* disagrees(orderBy, corpus.rows))) return;
-          const { terms, rows } = yield* shrinkOrder(disagrees, orderBy, corpus.rows);
-          fail({
-            seed: corpus.seed,
-            subject: `${subject.name} order disagrees with ${oracle.name}`,
-            orderBy: terms,
-            rows,
-            results: {
-              [oracle.name]: yield* oracle.order(terms, rows),
-              [subject.name]: yield* subject.order(terms, rows),
-            },
-          });
-        }),
-      { concurrency: 1, discard: true }
-    );
-  });
+        if (!(yield* disagrees(orderBy, corpus.rows))) return;
+        const { terms, rows } = yield* shrinkOrder(disagrees, orderBy, corpus.rows);
+        fail({
+          seed: corpus.seed,
+          subject: `${subject.name} order disagrees with ${oracle.name}`,
+          orderBy: terms,
+          rows,
+          results: {
+            [oracle.name]: yield* oracle.order(terms, rows),
+            [subject.name]: yield* subject.order(terms, rows),
+          },
+        });
+      }),
+    { concurrency: 1, discard: true }
+  );
+};
 
 // ─── Suite ───────────────────────────────────────────────────────────────────
 
