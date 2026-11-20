@@ -82,7 +82,7 @@ export const make = (config: PollingHintSourceConfig): HintSource.HintSource => 
   // table mapping (nothing to poll).
   const signatureFor = (collection: string): Effect.Effect<string | undefined, BackendError> => {
     const mapping = config.tables[collection];
-    if (mapping === undefined) return Effect.succeed(undefined);
+    if (mapping === undefined) return Effect.undefined;
     return config.executor.query(detectorQuery(mapping)).pipe(Effect.map(signatureOf));
   };
 

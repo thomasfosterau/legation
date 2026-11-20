@@ -1638,7 +1638,7 @@ export const make = (
             Effect.flatMap((touched) =>
               touched !== undefined && !touched.has(collection)
                 ? ensureIndexBuilt(collection)
-                : Effect.succeed(undefined)
+                : Effect.undefined
             )
           );
         })
@@ -1745,11 +1745,11 @@ export const make = (
         const writer: LocalWriter = {
           put: (collection) => record(collection),
           del: (collection) => record(collection),
-          get: () => Effect.succeed(undefined),
+          get: () => Effect.undefined,
         };
         yield* handler(decodedArgs, writer);
         return touched;
-      }).pipe(Effect.catchTag(["MutatorError", "StoreError"], () => Effect.succeed(undefined)));
+      }).pipe(Effect.catchTag(["MutatorError", "StoreError"], () => Effect.undefined));
 
     // The union of collections a batch of journaled mutations touches (their
     // args are encoded, so decode before tracking). Any unknown/undecodable
@@ -1763,7 +1763,7 @@ export const make = (
           const definition = options.mutators.mutators.get(mutation.mutator);
           if (definition === undefined) return undefined;
           const decoded = yield* Schema.decodeUnknownEffect(definition.args)(mutation.args).pipe(
-            Effect.catchTag("SchemaError", () => Effect.succeed(undefined))
+            Effect.catchTag("SchemaError", () => Effect.undefined)
           );
           const touched = yield* collectionsTouchedBy(mutation.mutator, decoded);
           if (touched === undefined) return undefined;
@@ -3611,7 +3611,7 @@ export const make = (
             Effect.map((decoded) => local(decoded))
           )
         ),
-        Effect.catchTag(["QueryError", "SchemaError"], () => Effect.succeed(undefined))
+        Effect.catchTag(["QueryError", "SchemaError"], () => Effect.undefined)
       );
 
     // Read-only snapshot of every active subset: raw subscriptions plus each

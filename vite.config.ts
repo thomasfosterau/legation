@@ -181,6 +181,7 @@ export default defineConfig({
       "effecttsgo/flat-map-conditional-to-filter-or-fail": "error",
       "effecttsgo/on-exit-failure-to-on-error": "error",
       "effecttsgo/effect-try-without-catch": "error",
+      "effecttsgo/effect-succeed-with-undefined": "error",
     },
     overrides: [
       // ---- Genuine can't-applies ------------------------------------------

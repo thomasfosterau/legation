@@ -827,9 +827,9 @@ export const makeWithIntrospectionWith = (
       cookie: string | undefined,
       epoch: string
     ): Effect.Effect<Cvr.Cvr | undefined, StoreError> => {
-      if (cookie === undefined) return Effect.succeed(undefined);
-      if (cookieNamespaceOf(cookie) !== cookieNamespace) return Effect.succeed(undefined);
-      if (cookieEpochOf(cookie) !== epoch) return Effect.succeed(undefined);
+      if (cookie === undefined) return Effect.undefined;
+      if (cookieNamespaceOf(cookie) !== cookieNamespace) return Effect.undefined;
+      if (cookieEpochOf(cookie) !== epoch) return Effect.undefined;
       return cvrStore.get(cookie);
     };
 
