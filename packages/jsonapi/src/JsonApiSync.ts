@@ -22,6 +22,7 @@ import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
+import * as R from "effect/Record";
 import * as Scope from "effect/Scope";
 import * as HttpClient from "effect/http/HttpClient";
 import type * as HttpApi from "effect/http-api/HttpApi";
@@ -132,7 +133,7 @@ export const inspect = <Id extends string, Groups extends HttpApiGroup.Constrain
 /** Every resource collection is readable; the REST API enforces real auth. */
 const authPolicy = (resources: ResourceMap): Authorization.AuthPolicy =>
   Authorization.policy(
-    Object.fromEntries([...resources.keys()].map((type) => [type, Authorization.allowAll]))
+    R.fromEntries([...resources.keys()].map((type) => [type, Authorization.allowAll]))
   );
 
 /**

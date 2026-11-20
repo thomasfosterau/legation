@@ -27,7 +27,9 @@
  */
 
 import * as Effect from "effect/Effect";
+import * as HashMap from "effect/HashMap";
 import * as Option from "effect/Option";
+import * as R from "effect/Record";
 import * as Ref from "effect/Ref";
 import * as Schedule from "effect/Schedule";
 import type * as Duration from "effect/Duration";
@@ -77,7 +79,7 @@ const signatureOf = (rows: ReadonlyArray<SqlBackend.SqlRow>): string => {
  * when a collection changes out of band.
  */
 export const make = (config: PollingHintSourceConfig): HintSource.HintSource => {
-  const collections = config.collections ?? Object.keys(config.tables);
+  const collections = config.collections ?? R.keys(config.tables);
 
   // Current detector signature for a collection, or `None` when it has no
   // table mapping (nothing to poll).
@@ -95,11 +97,11 @@ export const make = (config: PollingHintSourceConfig): HintSource.HintSource => 
   // baseline — a collection not yet in `state` never emits a hint.
   const tick = (
     bus: InvalidationBus.InvalidationBus,
-    state: Ref.Ref<Map<string, string>>
+    state: Ref.Ref<HashMap.HashMap<string, string>>
   ): Effect.Effect<void, BackendError> =>
     Effect.gen(function* () {
       const previous = yield* Ref.get(state);
-      const next = new Map(previous);
+      let next = previous;
       const changed: Array<Backend.ChangeHint> = [];
       yield* Effect.forEach(
         collections,
@@ -108,10 +110,11 @@ export const make = (config: PollingHintSourceConfig): HintSource.HintSource => 
             const current = yield* signatureFor(collection);
             if (Option.isNone(current)) return;
             const signature = current.value;
-            if (previous.has(collection) && previous.get(collection) !== signature) {
+            const before = HashMap.get(previous, collection);
+            if (Option.isSome(before) && before.value !== signature) {
               changed.push({ collection, ids: [] });
             }
-            next.set(collection, signature);
+            next = HashMap.set(next, collection, signature);
           }),
         { concurrency: 1, discard: true }
       );
@@ -124,7 +127,7 @@ export const make = (config: PollingHintSourceConfig): HintSource.HintSource => 
       Effect.gen(function* () {
         // Per-run baseline: each fork starts fresh, so no spurious hint fires
         // for the state a previous run already saw.
-        const state = yield* Ref.make(new Map<string, string>());
+        const state = yield* Ref.make(HashMap.empty<string, string>());
         yield* Effect.forkScoped(
           // A transient query error just skips this tick — the next poll (and
           // the interval pull) recovers; poke is never a correctness path.

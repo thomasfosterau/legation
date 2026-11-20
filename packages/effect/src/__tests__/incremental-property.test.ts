@@ -16,6 +16,7 @@
  * reproducible from its printed seed.
  */
 import * as Arr from "effect/Array";
+import * as MutableHashMap from "effect/MutableHashMap";
 import * as Option from "effect/Option";
 import { describe, expect, it } from "vite-plus/test";
 import * as Hash from "../Hash.js";
@@ -72,24 +73,24 @@ const divergence = (seed: number, step: number, actual: unknown, expected: unkno
 /** Mutate ground truth by a random put/del and return the resulting delta. */
 const stepGround = <A>(
   rng: () => number,
-  ground: Map<string, Row<A>>,
+  ground: MutableHashMap.MutableHashMap<string, Row<A>>,
   ids: ReadonlyArray<string>,
   makeValue: (rng: () => number) => A,
   delChance: number
 ): Incremental.Delta<A> => {
   const id = pick(rng, ids);
   if (rng() < delChance) {
-    const old = ground.get(id);
+    const old = Option.getOrUndefined(MutableHashMap.get(ground, id));
     if (old === undefined) return Incremental.emptyDelta;
-    ground.delete(id);
+    MutableHashMap.remove(ground, id);
     return { added: [], removed: [old] };
   }
   const next: Row<A> = { id, value: makeValue(rng) };
-  const old = ground.get(id);
+  const old = Option.getOrUndefined(MutableHashMap.get(ground, id));
   if (old !== undefined && Hash.contentHash(old.value) === Hash.contentHash(next.value)) {
     return Incremental.emptyDelta;
   }
-  ground.set(id, next);
+  MutableHashMap.set(ground, id, next);
   return old === undefined ? { added: [next], removed: [] } : { added: [next], removed: [old] };
 };
 
@@ -114,7 +115,7 @@ const runSingle = <A, B>(options: {
   Option.getOrNull(
     Arr.findFirst(Arr.range(1, options.seeds), (seed) => {
       const rng = mulberry32(seed);
-      const ground = new Map<string, Row<A>>();
+      const ground = MutableHashMap.empty<string, Row<A>>();
       const operator = options.makeOperator();
       const result = new Map<string, Row<B>>();
       return Arr.findFirst(Arr.range(0, options.steps - 1), (step) => {
@@ -126,7 +127,7 @@ const runSingle = <A, B>(options: {
           options.delChance ?? 0.2
         );
         Incremental.applyDelta(result, operator.step(delta));
-        const expected = options.fromScratch([...ground.values()]);
+        const expected = options.fromScratch([...MutableHashMap.values(ground)]);
         return sameResult(result, expected)
           ? Option.none()
           : Option.some(divergence(seed, step, [...result.values()], [...expected.values()]));
@@ -150,8 +151,8 @@ const runJoin = <L, R, C>(options: {
   Option.getOrNull(
     Arr.findFirst(Arr.range(1, options.seeds), (seed) => {
       const rng = mulberry32(seed);
-      const left = new Map<string, Row<L>>();
-      const right = new Map<string, Row<R>>();
+      const left = MutableHashMap.empty<string, Row<L>>();
+      const right = MutableHashMap.empty<string, Row<R>>();
       const operator = options.makeOperator();
       const result = new Map<string, Row<C>>();
       return Arr.findFirst(Arr.range(0, options.steps - 1), (step) => {
@@ -162,7 +163,10 @@ const runJoin = <L, R, C>(options: {
           const delta = stepGround(rng, right, options.rightIds, options.makeRight, 0.2);
           Incremental.applyDelta(result, operator.stepRight(delta));
         }
-        const expected = options.fromScratch([...left.values()], [...right.values()]);
+        const expected = options.fromScratch(
+          [...MutableHashMap.values(left)],
+          [...MutableHashMap.values(right)]
+        );
         return sameResult(result, expected)
           ? Option.none()
           : Option.some(divergence(seed, step, [...result.values()], [...expected.values()]));
@@ -187,13 +191,13 @@ const runOrdered = (options: {
   Option.getOrNull(
     Arr.findFirst(Arr.range(1, options.seeds), (seed) => {
       const rng = mulberry32(seed);
-      const ground = new Map<string, Row<Ranked>>();
+      const ground = MutableHashMap.empty<string, Row<Ranked>>();
       const window = Incremental.makeOrderedWindow<Ranked>(options.orderBy, options.limit);
       return Arr.findFirst(Arr.range(0, options.steps - 1), (step) => {
         const delta = stepGround(rng, ground, options.ids, options.makeValue, 0.2);
         const paged = window.step(delta);
         const expected = Incremental.orderedWindowFromScratch(
-          [...ground.values()],
+          [...MutableHashMap.values(ground)],
           options.orderBy,
           options.limit
         );
@@ -372,7 +376,7 @@ const makeValue = (r: () => number) => ({ n: Math.floor(r() * 10) });
 /** `null` if every step of one seed matched, else a description of the first divergence. */
 const runDeltaFromChangesSession = (seed: number, steps: number): string | null => {
   const rng = mulberry32(seed);
-  const ground = new Map<string, Row<{ readonly n: number }>>();
+  const ground = MutableHashMap.empty<string, Row<{ readonly n: number }>>();
   const known = new Map<string, Row<{ readonly n: number }>>();
   const ids = ["a", "b", "c", "d", "e", "f"];
   const sessionStep = (step: number): Option.Option<string> => {
@@ -382,7 +386,7 @@ const runDeltaFromChangesSession = (seed: number, steps: number): string | null 
       const knownSizeBefore = known.size;
       const batch: ReadonlyArray<RowChange<Row<{ readonly n: number }>>> = [
         { _tag: "reset" },
-        ...[...ground.values()].map((row) => ({ _tag: "enter" as const, row })),
+        ...[...MutableHashMap.values(ground)].map((row) => ({ _tag: "enter" as const, row })),
       ];
       const recovered = Incremental.deltaFromChanges(known, batch);
       // A reset removes everything `known` held (regardless of whether it
@@ -395,15 +399,15 @@ const runDeltaFromChangesSession = (seed: number, steps: number): string | null 
         );
       }
       const recoveredIds = recovered.added.map((r) => r.id).toSorted();
-      const groundIds = [...ground.keys()].toSorted();
+      const groundIds = [...MutableHashMap.keys(ground)].toSorted();
       if (Json.show(recoveredIds) !== Json.show(groundIds)) {
         return Option.some(
           `seed ${seed} step ${step}: reset's added ids didn't match ground truth`
         );
       }
-      if (known.size !== ground.size) {
+      if (known.size !== MutableHashMap.size(ground)) {
         return Option.some(
-          `seed ${seed} step ${step}: known.size ${known.size} !== ground.size ${ground.size}`
+          `seed ${seed} step ${step}: known.size ${known.size} !== ground.size ${MutableHashMap.size(ground)}`
         );
       }
       return Option.none();
@@ -430,7 +434,7 @@ describe("Incremental.deltaFromChanges — equivalent to diffing pages, not just
   it("driving an operator via deltaFromChanges matches the from-scratch recompute", () => {
     Arr.forEach(Arr.range(1, 16), (seed) => {
       const rng = mulberry32(seed);
-      const ground = new Map<string, Row<{ readonly n: number }>>();
+      const ground = MutableHashMap.empty<string, Row<{ readonly n: number }>>();
       const known = new Map<string, Row<{ readonly n: number }>>();
       const operator = Incremental.makeFilter(geFive);
       const result = new Map<string, Row<{ readonly n: number }>>();
@@ -440,7 +444,7 @@ describe("Incremental.deltaFromChanges — equivalent to diffing pages, not just
         const batch = changeBatchOf(delta);
         const recovered = Incremental.deltaFromChanges(known, batch);
         Incremental.applyDelta(result, operator.step(recovered));
-        const expected = Incremental.filterFromScratch([...ground.values()], geFive);
+        const expected = Incremental.filterFromScratch([...MutableHashMap.values(ground)], geFive);
         expect(sameResult(result, expected)).toBe(true);
       });
     });

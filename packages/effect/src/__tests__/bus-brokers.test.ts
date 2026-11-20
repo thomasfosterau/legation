@@ -11,6 +11,7 @@ import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
 import * as Fiber from "effect/Fiber";
 import * as Logger from "effect/Logger";
+import * as MutableHashSet from "effect/MutableHashSet";
 import * as PubSub from "effect/PubSub";
 import * as Queue from "effect/Queue";
 import * as References from "effect/References";
@@ -30,15 +31,15 @@ const hint: ChangeHint = { collection: "todos", ids: ["1"] };
 
 /** A relay hub: every connected socket receives every sent frame (incl. sender). */
 const makeHub = () => {
-  const listeners = new Set<(event: { readonly data: unknown }) => void>();
+  const listeners = MutableHashSet.empty<(event: { readonly data: unknown }) => void>();
   const connect = (): BusBrokers.WebSocketLike => ({
     send: (data) => {
       Arr.forEach(listeners, (listener) => {
         listener({ data });
       });
     },
-    addEventListener: (_type, listener) => listeners.add(listener),
-    removeEventListener: (_type, listener) => listeners.delete(listener),
+    addEventListener: (_type, listener) => MutableHashSet.add(listeners, listener),
+    removeEventListener: (_type, listener) => MutableHashSet.remove(listeners, listener),
   });
   return { connect };
 };

@@ -22,9 +22,11 @@
  */
 
 import * as Arr from "effect/Array";
+import * as HashSet from "effect/HashSet";
 import * as Match from "effect/Match";
 import * as Option from "effect/Option";
 import * as P from "effect/Predicate";
+import * as R from "effect/Record";
 import * as SchemaAST from "effect/SchemaAST";
 import { AuthorizationError, FilterDeclarationError } from "./Errors.js";
 import * as Json from "./internal/Json.js";
@@ -138,8 +140,8 @@ const kindOfUnion = (members: ReadonlyArray<SchemaAST.AST>): Option.Option<Liter
         .map(kindOfAst)
     ),
     (kinds) => {
-      const distinct = new Set(kinds);
-      return distinct.size === 1 ? Arr.head([...distinct]) : Option.none();
+      const distinct = Arr.dedupe(kinds);
+      return distinct.length === 1 ? Arr.head(distinct) : Option.none();
     }
   );
 
@@ -200,9 +202,9 @@ export interface ResolveOptions {
  * runtime failure.
  */
 export const resolve = (options: ResolveOptions): FilterDeclaration => {
-  const known = new Set<string>([...options.keyFields, ...Object.keys(options.attributes)]);
+  const known = HashSet.fromIterable([...options.keyFields, ...R.keys(options.attributes)]);
   const filterable: Record<string, FilterableField> = {};
-  Arr.forEach(Object.entries(options.filterable ?? {}), ([field, input]) => {
+  Arr.forEach(R.toEntries(options.filterable ?? {}), ([field, input]) => {
     assertRowField(options, known, field, "filterable");
     filterable[field] = resolveField(options, field, normaliseInput(input));
   });
@@ -234,11 +236,11 @@ const normaliseInput = (input: FilterableInput): DeclaredField =>
 /** A declared field must be a field of the row. */
 const assertRowField = (
   options: ResolveOptions,
-  known: ReadonlySet<string>,
+  known: HashSet.HashSet<string>,
   field: string,
   role: "filterable" | "sortable"
 ): void => {
-  if (known.has(field)) return;
+  if (HashSet.has(known, field)) return;
   throw new FilterDeclarationError({
     collection: options.collection,
     field,
@@ -261,7 +263,7 @@ const resolveField = (
       message: `Collection "${options.collection}" cannot derive a literal kind for filterable field "${field}"; declare its kind explicitly (text, integer, double, boolean or instant)`,
     });
   }
-  return { kind, operators: [...new Set(declared.operators)] };
+  return { kind, operators: Arr.dedupe(declared.operators) };
 };
 
 /**
@@ -287,17 +289,17 @@ export const withKeyDefaults = (
   Arr.forEach(keyFields, (field) => {
     merged[field] = keyDefaults;
   });
-  Arr.forEach(Object.entries(filterable), ([field, declared]) => {
+  Arr.forEach(R.toEntries(filterable), ([field, declared]) => {
     const base = merged[field];
     merged[field] =
       base === undefined
         ? declared
         : {
             kind: declared.kind,
-            operators: [...new Set([...base.operators, ...declared.operators])],
+            operators: Arr.dedupe([...base.operators, ...declared.operators]),
           };
   });
-  return { filterable: merged, sortable: [...new Set([identity, ...sortable])] };
+  return { filterable: merged, sortable: Arr.dedupe([identity, ...sortable]) };
 };
 
 // ─── Enforcement (request time) ──────────────────────────────────────────────
@@ -338,7 +340,7 @@ const fieldCheck = (
     return Option.some(
       deny(
         collection,
-        `field "${field}" is not filterable (filterable: ${Object.keys(declaration.filterable).join(", ")})`
+        `field "${field}" is not filterable (filterable: ${R.keys(declaration.filterable).join(", ")})`
       )
     );
   }

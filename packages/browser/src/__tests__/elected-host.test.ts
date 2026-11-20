@@ -24,6 +24,8 @@ import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
 import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
+import * as MutableHashMap from "effect/MutableHashMap";
+import * as MutableHashSet from "effect/MutableHashSet";
 import * as Option from "effect/Option";
 import * as P from "effect/Predicate";
 import * as Ref from "effect/Ref";
@@ -103,11 +105,11 @@ const makeServer = Effect.fn("makeServer")(function* () {
  * actually uses of the Web Locks API.
  */
 const makeFakeLockManager = (): LockManager => {
-  const queues = new Map<string, Array<() => void>>();
-  const held = new Set<string>();
+  const queues = MutableHashMap.empty<string, Array<() => void>>();
+  const held = MutableHashSet.empty<string>();
 
   const advance = (name: string) => {
-    const queue = queues.get(name);
+    const queue = Option.getOrUndefined(MutableHashMap.get(queues, name));
     const next = queue?.shift();
     if (next !== undefined) next();
   };
@@ -125,22 +127,25 @@ const makeFakeLockManager = (): LockManager => {
       let settled = false;
       const attempt = () => {
         if (settled) return;
-        if (held.has(name)) {
-          const queue = queues.get(name) ?? [];
+        if (MutableHashSet.has(held, name)) {
+          const queue = Option.getOrElse(
+            MutableHashMap.get(queues, name),
+            (): Array<() => void> => []
+          );
           queue.push(attempt);
-          queues.set(name, queue);
+          MutableHashMap.set(queues, name, queue);
           return;
         }
-        held.add(name);
+        MutableHashSet.add(held, name);
         Promise.resolve(defined(callback)({ mode: options.mode ?? "exclusive", name })).then(
           (value) => {
-            held.delete(name);
+            MutableHashSet.remove(held, name);
             settled = true;
             resolve(value);
             advance(name);
           },
           (error: unknown) => {
-            held.delete(name);
+            MutableHashSet.remove(held, name);
             settled = true;
             reject(error);
             advance(name);
@@ -150,11 +155,12 @@ const makeFakeLockManager = (): LockManager => {
       options.signal?.addEventListener("abort", () => {
         if (settled) return;
         settled = true;
-        const queue = queues.get(name);
-        if (queue !== undefined)
-          queues.set(
+        const queue = MutableHashMap.get(queues, name);
+        if (Option.isSome(queue))
+          MutableHashMap.set(
+            queues,
             name,
-            queue.filter((fn) => fn !== attempt)
+            queue.value.filter((fn) => fn !== attempt)
           );
         reject(new TestFailure({ message: "aborted" }));
       });

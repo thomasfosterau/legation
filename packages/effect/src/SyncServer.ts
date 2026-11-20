@@ -28,6 +28,7 @@ import * as Layer from "effect/Layer";
 import * as Metric from "effect/Metric";
 import * as Option from "effect/Option";
 import * as P from "effect/Predicate";
+import * as R from "effect/Record";
 import * as Ref from "effect/Ref";
 import * as Scope from "effect/Scope";
 import {
@@ -85,9 +86,7 @@ const asTransportError = (cause: { readonly message: string }): TransportError =
 const sameWatermark = (
   a: Readonly<Record<string, number>>,
   b: Readonly<Record<string, number>>
-): boolean =>
-  Object.keys(a).length === Object.keys(b).length &&
-  Object.keys(a).every((key) => a[key] === b[key]);
+): boolean => R.keys(a).length === R.keys(b).length && R.keys(a).every((key) => a[key] === b[key]);
 
 /** One row a read returns: its collection beside the backend's `(id, version, value)`. */
 export type ReadRow = ReadResponse["rows"][number];

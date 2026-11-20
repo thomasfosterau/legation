@@ -47,6 +47,9 @@ import * as P from "effect/Predicate";
 import * as Defined from "./Defined.js";
 import * as Arr from "effect/Array";
 import * as Effect from "effect/Effect";
+import * as HashSet from "effect/HashSet";
+import * as MutableHashMap from "effect/MutableHashMap";
+import * as MutableHashSet from "effect/MutableHashSet";
 import * as Match from "effect/Match";
 import * as Option from "effect/Option";
 import * as Order from "effect/Order";
@@ -109,7 +112,7 @@ const literalKey = (literal: Predicate.Literal): string =>
 
 /** Deduplicate and sort keys (plain string order; only determinism matters). */
 const sortedUnique = (keys: ReadonlyArray<string>): ReadonlyArray<string> =>
-  Arr.sort(new Set(keys), Order.String);
+  Arr.sort(HashSet.fromIterable(keys), Order.String);
 
 type Junction = "And" | "Or";
 
@@ -192,13 +195,13 @@ export interface Conjunct {
  * yield the empty set. `Or`, `Not` and `Exists` members stay whole.
  */
 export const canonicalConjuncts = (predicate: Predicate.Predicate): ReadonlyArray<Conjunct> => {
-  const byKey = new Map<string, Predicate.Predicate>();
+  const byKey = MutableHashMap.empty<string, Predicate.Predicate>();
   Arr.forEach(flatten("And", [predicate]), (member) => {
     const key = structuralKey(member);
-    if (key !== "True" && !byKey.has(key)) byKey.set(key, member);
+    if (key !== "True" && !MutableHashMap.has(byKey, key)) MutableHashMap.set(byKey, key, member);
   });
   return Arr.sort(
-    byKey.entries(),
+    byKey,
     Order.mapInput(Order.String, ([key]: readonly [string, Predicate.Predicate]) => key)
   ).map(([key, member]) => ({ key, predicate: member }));
 };
@@ -209,16 +212,18 @@ const conjunctKeys = (predicate: Predicate.Predicate): ReadonlyArray<string> =>
 /** A request's predicate canonicalised once, for a scan across many subscriptions. */
 interface RequestedKeys {
   readonly keys: ReadonlyArray<string>;
-  readonly keySet: ReadonlySet<string>;
+  readonly keySet: HashSet.HashSet<string>;
 }
 
 const requestedKeysOf = (predicate: Predicate.Predicate): RequestedKeys => {
   const keys = conjunctKeys(predicate);
-  return { keys, keySet: new Set(keys) };
+  return { keys, keySet: HashSet.fromIterable(keys) };
 };
 
-const subsumedBy = (subscribed: ReadonlyArray<string>, requested: ReadonlySet<string>): boolean =>
-  subscribed.every((key) => requested.has(key));
+const subsumedBy = (
+  subscribed: ReadonlyArray<string>,
+  requested: HashSet.HashSet<string>
+): boolean => subscribed.every((key) => HashSet.has(requested, key));
 
 const sameKeys = (subscribed: ReadonlyArray<string>, requested: ReadonlyArray<string>): boolean =>
   subscribed.length === requested.length &&
@@ -232,7 +237,7 @@ const sameKeys = (subscribed: ReadonlyArray<string>, requested: ReadonlyArray<st
 export const subsumes = (
   subscribed: Predicate.Predicate,
   requested: Predicate.Predicate
-): boolean => subsumedBy(conjunctKeys(subscribed), new Set(conjunctKeys(requested)));
+): boolean => subsumedBy(conjunctKeys(subscribed), HashSet.fromIterable(conjunctKeys(requested)));
 
 /** Whether two predicates are the same conjunct set (rule 3 under a windowed subscription). */
 export const sameConjuncts = (
@@ -436,17 +441,17 @@ const windowPulled = (held: ReadonlyArray<PulledWindow>, window: Subset.Subset):
   const pinnedWanted = pinnedOf(window.where);
   if (Option.isNone(pinnedWanted)) return false;
   const wanted = pinnedWanted.value;
-  const have = new Set<string>();
+  const have = MutableHashSet.empty<string>();
   Arr.forEach(held, (entry) => {
     if (!entry.pulled || isWindowed(entry.subset)) return;
     if (entry.subset.collection !== window.collection) return;
     const pinnedEntry = pinnedOf(entry.subset.where);
     if (Option.isNone(pinnedEntry) || pinnedEntry.value.field !== wanted.field) return;
     Arr.forEach(pinnedEntry.value.values, (value) => {
-      have.add(value);
+      MutableHashSet.add(have, value);
     });
   });
-  return wanted.values.every((value) => have.has(value));
+  return wanted.values.every((value) => MutableHashSet.has(have, value));
 };
 
 /**

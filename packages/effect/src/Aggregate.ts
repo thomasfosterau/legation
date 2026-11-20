@@ -13,6 +13,7 @@
  */
 
 import * as P from "effect/Predicate";
+import * as R from "effect/Record";
 import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
 import * as RowDispatch from "./internal/RowDispatch.js";
@@ -142,9 +143,9 @@ export const sameGroupedValue = (
   a: Record<string, AggregateValue>,
   b: Record<string, AggregateValue>
 ): boolean => {
-  const keys = Object.keys(a);
+  const keys = R.keys(a);
   return (
-    keys.length === Object.keys(b).length &&
+    keys.length === R.keys(b).length &&
     keys.every((key) => Object.hasOwn(b, key) && Object.is(a[key], b[key]))
   );
 };

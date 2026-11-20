@@ -4,6 +4,9 @@
  */
 import { describe, expect, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
+import * as MutableHashMap from "effect/MutableHashMap";
+import * as Option from "effect/Option";
+import * as R from "effect/Record";
 import * as Schema from "effect/Schema";
 import { type Backend, evaluateAll, evaluateCountedAll, totalsOf } from "../Backend.js";
 import * as BackendContract from "../BackendContract.js";
@@ -13,10 +16,7 @@ import * as Subset from "../Subset.js";
 import * as UnknownMutator from "../UnknownMutator.js";
 
 /** The reference handlers without the named contract mutator, i.e. an unregistered one. */
-const withoutHandler = (name: string) =>
-  Object.fromEntries(
-    Object.entries(BackendContract.memoryHandlers).filter(([key]) => key !== name)
-  );
+const withoutHandler = (name: string) => R.remove(BackendContract.memoryHandlers, name);
 
 /** A contract counter row's value, absent before its first count. */
 const decodeCounter = Schema.decodeUnknownSync(
@@ -151,11 +151,14 @@ describe("verifyBackendContract", () => {
       // call starts, not through the stage. MemoryBackend's read validation never
       // sees that read, so a peer group's commit between the read and the write is
       // overwritten: a lost update across client groups (rule 11).
-      const snapshots = new Map<string, number>();
+      const snapshots = MutableHashMap.empty<string, number>();
       const staleCount: MemoryBackend.BackendHandler = (raw, writer, context) => {
         const args = Schema.decodeUnknownSync(BackendContract.countUp.args)(raw);
         return Effect.gen(function* () {
-          const seen = snapshots.get(context.clientGroupId) ?? 0;
+          const seen = Option.getOrElse(
+            MutableHashMap.get(snapshots, context.clientGroupId),
+            () => 0
+          );
           yield* BackendContract.park(args.gate);
           yield* writer.put(args.collection, args.id, { n: seen + 1 });
         });
@@ -169,7 +172,7 @@ describe("verifyBackendContract", () => {
         applyMutations: (context, mutations) =>
           Effect.gen(function* () {
             const [row] = yield* inner.getRows(context, "__contract", ["race"]);
-            snapshots.set(context.clientGroupId, decodeCounter(row?.value)?.n ?? 0);
+            MutableHashMap.set(snapshots, context.clientGroupId, decodeCounter(row?.value)?.n ?? 0);
             return yield* inner.applyMutations(context, mutations);
           }),
       };

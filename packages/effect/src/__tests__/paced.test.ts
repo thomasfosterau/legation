@@ -15,6 +15,7 @@ import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
 import * as Fiber from "effect/Fiber";
 import * as HashMap from "effect/HashMap";
+import * as MutableHashMap from "effect/MutableHashMap";
 import * as Option from "effect/Option";
 import * as Ref from "effect/Ref";
 import * as Schema from "effect/Schema";
@@ -680,7 +681,7 @@ describe("paced compaction renumbers the journal", () => {
           seed = (seed * 1103515245 + 12345) & 0x7fffffff;
           return seed / 0x7fffffff;
         };
-        const lastCall = new Map<string, string>();
+        const lastCall = MutableHashMap.empty<string, string>();
         const gapFailures: Array<string> = [];
 
         yield* Effect.forEach(
@@ -695,7 +696,7 @@ describe("paced compaction renumbers the journal", () => {
               const key = `s${which}k${Math.floor(next() * 4)}`;
               const title = `${key}-r${round}`;
               yield* strategy.call(key, todo(key, title));
-              lastCall.set(key, title);
+              MutableHashMap.set(lastCall, key, title);
               if (next() < 0.3) yield* TestClock.adjust(Duration.millis(10));
 
               const roll = next();
@@ -732,7 +733,7 @@ describe("paced compaction renumbers the journal", () => {
         Arr.forEach(lastCall, ([key, title]) => {
           expect(applied.findLast((t) => t.startsWith(`${key}-`))).toBe(title);
         });
-        expect(new Set(applied).size).toBe(applied.length);
+        expect(Arr.dedupe(applied).length).toBe(applied.length);
       }).pipe(Effect.scoped),
     30_000
   );
@@ -757,18 +758,18 @@ describe("a committed compaction is never lost to a failure or an interrupt", ()
    * right after the intent lands (to interrupt the caller there).
    */
   const faultyDurable = Effect.fn("faultyDurable")(function* () {
-    const data = new Map<string, string>();
+    const data = MutableHashMap.empty<string, string>();
     const fault = {
       failAfterIntent: false,
       failing: false,
       afterIntent: Effect.void,
     };
     const kvs = KeyValueStore.makeStringOnly({
-      get: (key) => Effect.sync(() => data.get(key)),
+      get: (key) => Effect.sync(() => Option.getOrUndefined(MutableHashMap.get(data, key))),
       set: (key, value) =>
         fault.failing
           ? broken("set", key)
-          : Effect.sync(() => void data.set(key, value)).pipe(
+          : Effect.sync(() => void MutableHashMap.set(data, key, value)).pipe(
               Effect.andThen(
                 key.endsWith("compactionIntent")
                   ? Effect.sync(() => {
@@ -778,10 +779,12 @@ describe("a committed compaction is never lost to a failure or an interrupt", ()
               )
             ),
       remove: (key) =>
-        fault.failing ? broken("remove", key) : Effect.sync(() => void data.delete(key)),
-      clear: Effect.sync(() => data.clear()),
-      size: Effect.sync(() => data.size),
-      keys: Effect.sync(() => [...data.keys()]),
+        fault.failing
+          ? broken("remove", key)
+          : Effect.sync(() => void MutableHashMap.remove(data, key)),
+      clear: Effect.sync(() => MutableHashMap.clear(data)),
+      size: Effect.sync(() => MutableHashMap.size(data)),
+      keys: Effect.sync(() => [...MutableHashMap.keys(data)]),
     });
     const store = yield* ClientStoreModule.makeKeyValue().pipe(
       Effect.provideService(KeyValueStore.KeyValueStore, kvs)

@@ -7,6 +7,8 @@ import { describeWrapped, expect, layer, describe } from "@effect/vitest";
 import * as Arr from "effect/Array";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
+import * as MutableHashMap from "effect/MutableHashMap";
+import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 import { KeyValueStore } from "effect/persistence";
 import * as Authorization from "../Authorization.js";
@@ -240,7 +242,7 @@ const numbered = (mutationId: number, clientId = "c1"): Mutation => ({
 
 /** A KVS that can be made to fail after a number of further writes. */
 const faultyStore = () => {
-  const data = new Map<string, string>();
+  const data = MutableHashMap.empty<string, string>();
   const reads: Array<string> = [];
   const budget = { writes: Number.POSITIVE_INFINITY };
   // When set, the write of the compaction intent lands but reports failure
@@ -256,12 +258,12 @@ const faultyStore = () => {
     get: (key) =>
       Effect.sync(() => {
         reads.push(key);
-        return data.get(key);
+        return Option.getOrUndefined(MutableHashMap.get(data, key));
       }),
     set: (key, value) =>
       key.endsWith("compactionIntent") && flaky.landButFail
         ? Effect.sync(() => {
-            data.set(key, value);
+            MutableHashMap.set(data, key, value);
             flaky.landButFail = false;
           }).pipe(
             Effect.andThen(
@@ -274,12 +276,16 @@ const faultyStore = () => {
               )
             )
           )
-        : spend("set", key).pipe(Effect.andThen(Effect.sync(() => void data.set(key, value)))),
+        : spend("set", key).pipe(
+            Effect.andThen(Effect.sync(() => void MutableHashMap.set(data, key, value)))
+          ),
     remove: (key) =>
-      spend("remove", key).pipe(Effect.andThen(Effect.sync(() => void data.delete(key)))),
-    clear: Effect.sync(() => data.clear()),
-    size: Effect.sync(() => data.size),
-    keys: Effect.sync(() => [...data.keys()]),
+      spend("remove", key).pipe(
+        Effect.andThen(Effect.sync(() => void MutableHashMap.remove(data, key)))
+      ),
+    clear: Effect.sync(() => MutableHashMap.clear(data)),
+    size: Effect.sync(() => MutableHashMap.size(data)),
+    keys: Effect.sync(() => [...MutableHashMap.keys(data)]),
   });
   return { store, data, budget, reads, flaky };
 };
@@ -311,7 +317,7 @@ const reopen = (kv: Faulty) =>
 const structuredCloneOf = (kv: Faulty): Faulty => {
   const copy = faultyStore();
   Arr.forEach(kv.data, ([key, value]) => {
-    copy.data.set(key, value);
+    MutableHashMap.set(copy.data, key, value);
   });
   return copy;
 };
@@ -339,9 +345,11 @@ const decodeJournalIndex = Schema.decodeUnknownSync(
 
 /** The journal index on disk, and how many of its entries still have a body. */
 const onDisk = (kv: Faulty) => {
-  const index = decodeJournalIndex(Json.parse(kv.data.get("legation/journalIndex") ?? "[]"));
+  const index = decodeJournalIndex(
+    Json.parse(Option.getOrElse(MutableHashMap.get(kv.data, "legation/journalIndex"), () => "[]"))
+  );
   const withBody = index.filter((e) =>
-    kv.data.has(`legation/journal/${e.clientId}/${e.mutationId}`)
+    MutableHashMap.has(kv.data, `legation/journal/${e.clientId}/${e.mutationId}`)
   ).length;
   return { index, withBody };
 };
@@ -371,7 +379,7 @@ describeWrapped("KeyValue journal compaction is crash-safe", (it) => {
               kv.budget.writes = writes;
               const exit = yield* Effect.exit(first.compactPending("c1", [2, 4]));
               ranToCompletion = kv.budget.writes > 0;
-              const intentLeft = kv.data.has("legation/compactionIntent");
+              const intentLeft = MutableHashMap.has(kv.data, "legation/compactionIntent");
               kv.budget.writes = Number.POSITIVE_INFINITY;
 
               // Once the intent is durable the compaction is committed: the caller
@@ -412,7 +420,7 @@ describeWrapped("KeyValue journal compaction is crash-safe", (it) => {
             const probe = yield* seeded(5);
             probe.kv.budget.writes = first;
             yield* Effect.exit(probe.first.compactPending("c1", [2, 4]));
-            const left = probe.kv.data.has("legation/compactionIntent");
+            const left = MutableHashMap.has(probe.kv.data, "legation/compactionIntent");
             swept = probe.kv.budget.writes > 0 && !left; // ran to completion: sweep done
             if (!left) return;
             // ...then crash the recovery on the next open `second` writes in.
@@ -496,13 +504,17 @@ describeWrapped("KeyValue journal compaction is crash-safe", (it) => {
   it.effect("refuses, uncommitted, to renumber an entry whose body is missing (N-d)", () =>
     Effect.gen(function* () {
       const { kv, first } = yield* seeded(5);
-      kv.data.delete("legation/journal/c1/3");
+      MutableHashMap.remove(kv.data, "legation/journal/c1/3");
       const exit = yield* Effect.exit(first.compactPending("c1", [2]));
       expect(Exit.isFailure(exit)).toBe(true);
-      expect(kv.data.has("legation/compactionIntent")).toBe(false);
+      expect(MutableHashMap.has(kv.data, "legation/compactionIntent")).toBe(false);
       // The index is untouched: still the full run, nothing half-renumbered.
       expect(idsOf(yield* first.pendingMutations)).toEqual([1, 2, 4, 5]);
-      expect(Json.parse(defined(kv.data.get("legation/journalIndex")))).toHaveLength(5);
+      expect(
+        Json.parse(
+          defined(Option.getOrUndefined(MutableHashMap.get(kv.data, "legation/journalIndex")))
+        )
+      ).toHaveLength(5);
     })
   );
 
@@ -609,9 +621,9 @@ describeWrapped("KeyValue acknowledge leaves no index entry without a body", (it
       const { kv } = yield* seededTwoClients();
       // A store damaged by an earlier release's crash: the bodies of c1's 4 and
       // 5 are gone, the index still lists them, and the counter never saw 5.
-      kv.data.delete("legation/journal/c1/4");
-      kv.data.delete("legation/journal/c1/5");
-      kv.data.set("legation/counters", Json.stringify({ c1: 3, c2: 2 }));
+      MutableHashMap.remove(kv.data, "legation/journal/c1/4");
+      MutableHashMap.remove(kv.data, "legation/journal/c1/5");
+      MutableHashMap.set(kv.data, "legation/counters", Json.stringify({ c1: 3, c2: 2 }));
       expect(onDisk(kv)).toMatchObject({ withBody: 5 });
       expect(onDisk(kv).index).toHaveLength(7);
 

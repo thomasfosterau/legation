@@ -13,6 +13,7 @@ import * as Cause from "effect/Cause";
 import { assert, describe, expect, it } from "@effect/vitest";
 import * as Arr from "effect/Array";
 import * as Effect from "effect/Effect";
+import * as R from "effect/Record";
 import * as Option from "effect/Option";
 import * as Exit from "effect/Exit";
 import * as Schema from "effect/Schema";
@@ -126,7 +127,7 @@ const makeRest = (prefix?: string) =>
         return writer.put(collection, decodeIdentified(value).id, value);
       },
     });
-    const puts = Object.entries(seed).flatMap(([collection, rows]) =>
+    const puts = R.toEntries(seed).flatMap(([collection, rows]) =>
       rows.map((value) => ({ collection, value }))
     );
     yield* backend.applyMutations(
@@ -143,7 +144,7 @@ const makeRest = (prefix?: string) =>
       nodes,
       backend,
       policy: Authorization.policy(
-        Object.fromEntries([...nodes.nodes.keys()].map((name) => [name, Authorization.allowAll])),
+        R.fromEntries([...nodes.nodes.keys()].map((name) => [name, Authorization.allowAll])),
         { collections: nodes.collections }
       ),
       context: () => Effect.succeed({ clientGroupId: "http" }),

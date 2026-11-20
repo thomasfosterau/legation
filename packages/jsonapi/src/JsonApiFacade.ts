@@ -102,6 +102,7 @@ import * as Arr from "effect/Array";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Match from "effect/Match";
+import * as MutableHashMap from "effect/MutableHashMap";
 import * as Option from "effect/Option";
 import * as P from "effect/Predicate";
 import * as Result from "effect/Result";
@@ -610,11 +611,11 @@ export const fetchHandler = <Id extends string, Groups extends HttpApiGroup.Cons
   /** The link prefix of a route's documents: the `prefix` option, else the route's own. */
   const prefixFor = (route: Route): string => Option.getOrElse(prefixOption, () => route.prefix);
   // One writer per link prefix the routes imply (one, for an api mounted once).
-  const writers = new Map<string, ReplicaDocuments.ReplicaDocuments>();
+  const writers = MutableHashMap.empty<string, ReplicaDocuments.ReplicaDocuments>();
   /** The writer for a link prefix: one per prefix, built when a route first needs it. */
   const writerFor = (prefix: string): ReplicaDocuments.ReplicaDocuments => {
-    const existing = writers.get(prefix);
-    if (existing !== undefined) return existing;
+    const existing = MutableHashMap.get(writers, prefix);
+    if (Option.isSome(existing)) return existing.value;
     const made = ReplicaDocuments.make({
       nodes,
       prefix,
@@ -623,7 +624,7 @@ export const fetchHandler = <Id extends string, Groups extends HttpApiGroup.Cons
         onSome: (resources) => ({ resources }),
       }),
     });
-    writers.set(prefix, made);
+    MutableHashMap.set(writers, prefix, made);
     return made;
   };
 
@@ -723,9 +724,10 @@ export const fetchHandler = <Id extends string, Groups extends HttpApiGroup.Cons
 
   const answer = ({ route, url }: Candidate) =>
     Effect.gen(function* () {
-      const docs = writers.get(prefixFor(route));
+      const writer = MutableHashMap.get(writers, prefixFor(route));
       // Every route's prefix has a writer (built above); an unknown one is the server's to answer.
-      if (docs === undefined) return yield* Effect.fail(forward);
+      if (Option.isNone(writer)) return yield* Effect.fail(forward);
+      const docs = writer.value;
       const parsed = yield* JsonApiQuery.parseRead(nodes, url).pipe(Effect.catch(rejected));
       // A collection no bound resource declares: the server rules on it.
       const needed = yield* docs.toCover(parsed.read).pipe(Effect.mapError(() => forward));

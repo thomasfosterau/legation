@@ -7,6 +7,7 @@
 import type { HttpCache } from "@thomasfosterau/legation/internal";
 import { describe, expect, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
+import * as MutableHashMap from "effect/MutableHashMap";
 import * as Option from "effect/Option";
 import { awaitPromise } from "./await-promise.js";
 import * as CacheApiHttpCache from "../CacheApiHttpCache.js";
@@ -17,18 +18,23 @@ const encodeJson = Schema.encodeSync(JsonText);
 
 /** Minimal in-memory Cache API fake, keyed by request URL. */
 const makeFakeCache = (): CacheApiHttpCache.CacheLike & {
-  readonly entries: Map<string, Response>;
+  readonly entries: MutableHashMap.MutableHashMap<string, Response>;
 } => {
-  const entries = new Map<string, Response>();
+  const entries = MutableHashMap.empty<string, Response>();
   return {
     entries,
-    match: (request) => Promise.resolve(entries.get(request.url)?.clone()),
+    match: (request) =>
+      Promise.resolve(Option.getOrUndefined(MutableHashMap.get(entries, request.url))?.clone()),
     put: (request, response) => {
-      entries.set(request.url, response);
+      MutableHashMap.set(entries, request.url, response);
       return Promise.resolve();
     },
-    delete: (request) => Promise.resolve(entries.delete(request.url)),
-    keys: () => Promise.resolve([...entries.keys()].map((url) => new Request(url))),
+    delete: (request) => {
+      const had = MutableHashMap.has(entries, request.url);
+      MutableHashMap.remove(entries, request.url);
+      return Promise.resolve(had);
+    },
+    keys: () => Promise.resolve([...MutableHashMap.keys(entries)].map((url) => new Request(url))),
   };
 };
 
@@ -64,9 +70,10 @@ describe("CacheApiHttpCache store", () => {
       const cache = makeFakeCache();
       const store = CacheApiHttpCache.make(cache);
       const request = new Request("https://api.test/foreign");
-      cache.entries.set(request.url, new Response("foreign"));
+      MutableHashMap.set(cache.entries, request.url, new Response("foreign"));
       expect(Option.isNone(yield* store.match(request))).toBe(true);
-      cache.entries.set(
+      MutableHashMap.set(
+        cache.entries,
         request.url,
         new Response("corrupt", { headers: { [CacheApiHttpCache.metaHeader]: "%7Bnot-json" } })
       );

@@ -17,7 +17,10 @@ import { describe, expect, it } from "@effect/vitest";
 import * as Arr from "effect/Array";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
+import * as HashSet from "effect/HashSet";
 import * as Match from "effect/Match";
+import * as MutableHashMap from "effect/MutableHashMap";
+import * as Option from "effect/Option";
 import * as Ref from "effect/Ref";
 import * as Schema from "effect/Schema";
 import * as Scope from "effect/Scope";
@@ -178,15 +181,16 @@ const runStep = (engine: ClientEngineModule.ClientEngine, step: Step) =>
 // what the engine's delta-maintained cache should equal.
 const referenceOverlay = (store: ClientStore, tail: ReadonlyArray<Mutation>) =>
   Effect.gen(function* () {
-    const rows = new Map<string, unknown>();
+    const rows = MutableHashMap.empty<string, unknown>();
     Arr.forEach(yield* store.listRows("todos"), (row) => {
-      rows.set(row.id, row.value);
+      MutableHashMap.set(rows, row.id, row.value);
     });
     const writer = {
       put: (_collection: string, id: string, value: unknown) =>
-        Effect.sync(() => rows.set(id, value)),
-      del: (_collection: string, id: string) => Effect.sync(() => rows.delete(id)),
-      get: (_collection: string, id: string) => Effect.sync(() => rows.get(id)),
+        Effect.sync(() => MutableHashMap.set(rows, id, value)),
+      del: (_collection: string, id: string) => Effect.sync(() => MutableHashMap.remove(rows, id)),
+      get: (_collection: string, id: string) =>
+        Effect.sync(() => Option.getOrUndefined(MutableHashMap.get(rows, id))),
     };
     yield* Effect.forEach(
       [...tail, ...(yield* store.pendingMutations)],
@@ -207,7 +211,7 @@ const byId = ([a]: readonly [string, unknown], [b]: readonly [string, unknown]) 
 const sortRows = (rows: ReadonlyArray<{ readonly id: string; readonly value: unknown }>) =>
   rows.map((r) => [r.id, r.value] as const).toSorted(byId);
 
-const sortMap = (map: Map<string, unknown>) => [...map.entries()].toSorted(byId);
+const sortMap = (map: MutableHashMap.MutableHashMap<string, unknown>) => [...map].toSorted(byId);
 
 /**
  * Run one step and track the acknowledged-but-unpulled tail. A push
@@ -228,9 +232,11 @@ const runTracked = (
     yield* runStep(engine, step);
     if (step.kind === "pull") yield* Ref.set(tail, []);
     if (step.kind !== "push") return;
-    const remaining = new Set((yield* store.pendingMutations).map((m) => m.mutationId));
+    const remaining = HashSet.fromIterable(
+      (yield* store.pendingMutations).map((m) => m.mutationId)
+    );
     const applied = before.filter(
-      (m) => !remaining.has(m.mutationId) && m.mutator !== "todo/reject"
+      (m) => !HashSet.has(remaining, m.mutationId) && m.mutator !== "todo/reject"
     );
     yield* Ref.update(tail, (current) => [...current, ...applied]);
   });

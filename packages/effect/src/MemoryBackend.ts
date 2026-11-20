@@ -44,6 +44,7 @@
 
 import * as P from "effect/Predicate";
 import * as Arr from "effect/Array";
+import * as R from "effect/Record";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
@@ -117,7 +118,7 @@ export const handler = <Args>(
 export const validatedHandlers = (
   entries: ReadonlyArray<HandlerEntry<any>>
 ): Record<string, BackendHandler> =>
-  Object.fromEntries(
+  R.fromEntries(
     entries.map(({ handle, mutator }) => [
       mutator.name,
       ((args, writer, context) =>
@@ -167,11 +168,11 @@ interface MemoryState {
 const countedOver = (s: MemoryState, subset: Subset.Subset): Effect.Effect<CountedEntries> =>
   Effect.gen(function* () {
     const collectionValues = (collection: string) =>
-      [...(s.rows.get(collection) ?? new Map<string, MemoryRow>()).values()].map((r) => r.value);
+      Arr.map(Arr.fromIterable(s.rows.get(collection)?.values() ?? []), (r) => r.value);
     const where = yield* Predicate.resolveExists(subset.where, (node) =>
       Effect.succeed(Predicate.existsValues(node, collectionValues(node.collection)))
     );
-    const rows = [...(s.rows.get(subset.collection) ?? new Map<string, MemoryRow>()).values()];
+    const rows = Arr.fromIterable(s.rows.get(subset.collection)?.values() ?? []);
     const { rows: windowed, total } = Subset.applyCounted(rows, { ...subset, where });
     return { entries: windowed.map((row) => ({ id: row.id, version: row.version })), total };
   });
@@ -519,8 +520,8 @@ export const make = (handlers: Readonly<Record<string, BackendHandler>>): Effect
             const puts = new Map<string, Map<string, unknown>>();
             Arr.forEach(stages, (stage) => foldStage(stage, touched, puts));
             return {
-              lastMutationIds: Object.fromEntries(
-                final.lastMutationIds.get(context.clientGroupId) ?? new Map()
+              lastMutationIds: R.fromEntries(
+                final.lastMutationIds.get(context.clientGroupId) ?? []
               ),
               hints: buildChangeHints(touched, puts, oldValuesOf(before, touched)),
             };
@@ -532,9 +533,7 @@ export const make = (handlers: Readonly<Record<string, BackendHandler>>): Effect
       applyMutations,
       lastMutationIds: (context) =>
         Ref.get(state).pipe(
-          Effect.map((s) =>
-            Object.fromEntries(s.lastMutationIds.get(context.clientGroupId) ?? new Map())
-          )
+          Effect.map((s) => R.fromEntries(s.lastMutationIds.get(context.clientGroupId) ?? []))
         ),
       rejections: (context) =>
         Ref.get(state).pipe(

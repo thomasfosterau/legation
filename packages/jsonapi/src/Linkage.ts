@@ -38,6 +38,9 @@
 
 import * as Arr from "effect/Array";
 import * as Effect from "effect/Effect";
+import * as HashMap from "effect/HashMap";
+import * as MutableHashMap from "effect/MutableHashMap";
+import * as Option from "effect/Option";
 import * as R from "effect/Record";
 import type { Relationship, Resource } from "@thomasfosterau/effect-jsonapi";
 import { Collection, type Node, Predicate, Query } from "@thomasfosterau/legation";
@@ -64,7 +67,7 @@ export type Fetch<E> = (
  */
 export interface Plan {
   readonly root: ReadonlyArray<string>;
-  readonly included: ReadonlyMap<string, ReadonlyArray<string>>;
+  readonly included: HashMap.HashMap<string, ReadonlyArray<string>>;
 }
 
 /** The read's rows with the included resources' linkage resolved beside them. */
@@ -80,8 +83,7 @@ const declared = (resource: Resource.Any, name: string): string =>
 
 const descriptorsOf = (
   resource: Resource.Any
-): ReadonlyArray<readonly [string, Relationship.Descriptor]> =>
-  Object.entries(resource.relationships);
+): ReadonlyArray<readonly [string, Relationship.Descriptor]> => R.toEntries(resource.relationships);
 
 /** One declared relationship checked against the node's edge of that name: same name, same arity, same target. */
 const checkDeclaration = (
@@ -127,7 +129,7 @@ export const planOf = (
   node: Node.AnyNode
 ): Plan => {
   const root = manyEdgesOf(resource, node);
-  const included = new Map<string, ReadonlyArray<string>>(
+  const included = HashMap.fromIterable<string, ReadonlyArray<string>>(
     descriptorsOf(resource).flatMap(([name, descriptor]) => {
       if (descriptor.kind === "paginated") return [];
       const target = descriptor.ref();
@@ -166,8 +168,8 @@ export const collectionsOf = (
     const edge = node.edges[name];
     return included[name] === undefined && edge !== undefined ? [edge.target] : [];
   });
-  const nested = Object.keys(included).flatMap((name) => includedTargets(nodes, node, plan, name));
-  return [...new Set([...roots, ...nested])];
+  const nested = R.keys(included).flatMap((name) => includedTargets(nodes, node, plan, name));
+  return Arr.dedupe([...roots, ...nested]);
 };
 
 /** The targets of the declared `many` edges of included edge `name`'s type. */
@@ -180,7 +182,7 @@ const includedTargets = (
   const via = node.edges[name];
   const target = via === undefined ? undefined : nodes.nodes.get(via.target);
   if (target === undefined) return [];
-  return (plan.included.get(name) ?? []).flatMap((edge) => {
+  return Option.getOrElse(HashMap.get(plan.included, name), () => []).flatMap((edge) => {
     const next = target.edges[edge];
     return next === undefined ? [] : [next.target];
   });
@@ -213,20 +215,20 @@ interface LinkageQuery {
 /** Add an included type's `many` edge to the batch for a set of parents, merging into the entry the batch already has. */
 const addLinkageQuery = (
   nodes: Node.NodeRegistry,
-  queries: Map<string, LinkageQuery>,
+  queries: MutableHashMap.MutableHashMap<string, LinkageQuery>,
   type: string,
   edge: string,
   parents: ReadonlySet<string>
 ): void => {
   const key = `${type}\0${edge}`;
-  const existing = queries.get(key);
-  if (existing !== undefined) {
-    parents.forEach((id) => existing.parents.add(id));
+  const existing = MutableHashMap.get(queries, key);
+  if (Option.isSome(existing)) {
+    parents.forEach((id) => existing.value.parents.add(id));
     return;
   }
   const relationship = Collection.relationshipsOf(nodes.collections, type).get(edge);
   if (relationship === undefined) return;
-  queries.set(key, {
+  MutableHashMap.set(queries, key, {
     type,
     edge,
     collection: relationship.collection,
@@ -244,16 +246,16 @@ const linkageQueries = (
   read: Query.Read,
   rows: ReadonlyArray<Related.RelatedRow>
 ): ReadonlyArray<LinkageQuery> => {
-  const queries = new Map<string, LinkageQuery>();
-  Object.keys(read.include ?? {}).forEach((name) => {
-    const edges = plan.included.get(name) ?? [];
+  const queries = MutableHashMap.empty<string, LinkageQuery>();
+  R.keys(read.include ?? {}).forEach((name) => {
+    const edges = Option.getOrElse(HashMap.get(plan.included, name), () => []);
     const parents = includedIds(rows, name);
     if (Arr.isReadonlyArrayEmpty(edges) || parents.size === 0) return;
     const type = node.edges[name]?.target;
     if (type === undefined) return;
     edges.forEach((edge) => addLinkageQuery(nodes, queries, type, edge, parents));
   });
-  return [...queries.values()];
+  return Arr.fromIterable(MutableHashMap.values(queries));
 };
 
 /** The fetched rows of the batch, assigned to their parents: every parent gets every edge, empty or not. */

@@ -14,7 +14,9 @@
 import * as Arr from "effect/Array";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
+import * as HashMap from "effect/HashMap";
 import * as Layer from "effect/Layer";
+import * as Option from "effect/Option";
 import * as Ref from "effect/Ref";
 import * as Schema from "effect/Schema";
 import { KeyValueStore } from "effect/persistence";
@@ -76,21 +78,12 @@ export const CvrStore = Context.Service<CvrStore>("@thomasfosterau/legation/CvrS
 
 /** In-memory CVR store (tests, single-instance servers, sync rooms). */
 export const makeMemoryStore: Effect.Effect<CvrStore> = Effect.gen(function* () {
-  const state = yield* Ref.make(new Map<string, Cvr>());
+  const state = yield* Ref.make(HashMap.empty<string, Cvr>());
   return CvrStore.of({
-    get: (cookie) => Ref.get(state).pipe(Effect.map((m) => m.get(cookie))),
-    set: (cookie, cvr) =>
-      Ref.update(state, (m) => {
-        const next = new Map(m);
-        next.set(cookie, cvr);
-        return next;
-      }),
-    remove: (cookie) =>
-      Ref.update(state, (m) => {
-        const next = new Map(m);
-        next.delete(cookie);
-        return next;
-      }),
+    get: (cookie) =>
+      Ref.get(state).pipe(Effect.map((m) => Option.getOrUndefined(HashMap.get(m, cookie)))),
+    set: (cookie, cvr) => Ref.update(state, HashMap.set(cookie, cvr)),
+    remove: (cookie) => Ref.update(state, HashMap.remove(cookie)),
   });
 });
 

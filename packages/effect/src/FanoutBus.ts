@@ -18,6 +18,7 @@
  * room simply ages out shard-side.
  */
 
+import * as Arr from "effect/Array";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Scope from "effect/Scope";
@@ -113,8 +114,8 @@ export const make = (options: MakeOptions): Effect.Effect<InvalidationBus, never
         return {
           take: pokes.take.pipe(
             Effect.map((topics) => {
-              const collections = new Set(topics.map(FanoutTopics.collectionOf));
-              return [...collections].map((collection) => ({ collection, ids: [] }));
+              const collections = Arr.dedupe(topics.map(FanoutTopics.collectionOf));
+              return collections.map((collection) => ({ collection, ids: [] }));
             })
           ),
         };

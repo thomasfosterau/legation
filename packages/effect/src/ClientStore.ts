@@ -20,6 +20,8 @@
 import * as Arr from "effect/Array";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
+import * as HashMap from "effect/HashMap";
+import * as HashSet from "effect/HashSet";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as P from "effect/Predicate";
@@ -102,13 +104,13 @@ const planCompaction = <T extends Numbered>(
   mutationIds: ReadonlyArray<number>,
   sentUpTo: number
 ): Option.Option<CompactionPlan<T>> => {
-  const wanted = new Set(mutationIds);
+  const wanted = HashSet.fromIterable(mutationIds);
   const mine = journal.filter((m) => m.clientId === clientId);
   const dropped = mine
-    .filter((m) => m.mutationId > sentUpTo && wanted.has(m.mutationId))
+    .filter((m) => m.mutationId > sentUpTo && HashSet.has(wanted, m.mutationId))
     .map((m) => m.mutationId);
   if (Arr.isReadonlyArrayEmpty(dropped)) return Option.none();
-  const droppedSet = new Set(dropped);
+  const droppedSet = HashSet.fromIterable(dropped);
   const frozen = mine.filter((m) => m.mutationId <= sentUpTo);
   const anchor = Arr.isReadonlyArrayNonEmpty(frozen)
     ? Math.max(...frozen.map((m) => m.mutationId))
@@ -121,7 +123,7 @@ const planCompaction = <T extends Numbered>(
       after.push(m);
       continue;
     }
-    if (droppedSet.has(m.mutationId)) continue;
+    if (HashSet.has(droppedSet, m.mutationId)) continue;
     next += 1;
     if (next === m.mutationId) {
       after.push(m);
@@ -552,7 +554,7 @@ export const makeMemory: Effect.Effect<ClientStore> = Effect.gen(function* () {
   const rows = yield* Ref.make(new Map<string, Map<RowId, StoredRow>>());
   const journal = yield* Ref.make<ReadonlyArray<Mutation>>([]);
   const counters = yield* Ref.make(new Map<string, number>());
-  const sentUpTo = yield* Ref.make(new Map<string, number>());
+  const sentUpTo = yield* Ref.make(HashMap.empty<string, number>());
   const cookie = yield* Ref.make(Option.none<string>());
   const identity = yield* Ref.make(Option.none<Identity.Fingerprint>());
   const quarantine = yield* Ref.make(new Map<Identity.Fingerprint, ReadonlyArray<Mutation>>());
@@ -789,7 +791,10 @@ export const makeMemory: Effect.Effect<ClientStore> = Effect.gen(function* () {
       locked(
         Effect.uninterruptible(
           Effect.gen(function* () {
-            const watermark = (yield* Ref.get(sentUpTo)).get(clientId) ?? 0;
+            const watermark = Option.getOrElse(
+              HashMap.get(yield* Ref.get(sentUpTo), clientId),
+              () => 0
+            );
             // Journal and plan move together in one `Ref.modify`, so a concurrent
             // append cannot slip between the read and the write.
             const plan = yield* Ref.modify(journal, (entries) => {
@@ -811,7 +816,9 @@ export const makeMemory: Effect.Effect<ClientStore> = Effect.gen(function* () {
       ),
     markSent: (clientId, upTo) =>
       Ref.update(sentUpTo, (m) =>
-        (m.get(clientId) ?? 0) >= upTo ? m : new Map(m).set(clientId, upTo)
+        Option.getOrElse(HashMap.get(m, clientId), () => 0) >= upTo
+          ? m
+          : HashMap.set(m, clientId, upTo)
       ),
     // Heals from the journal like `appendNext`, so it can never return an id a
     // live entry already holds (for example after a counter that lagged).
@@ -1198,8 +1205,8 @@ const appendDistinct = (
   held: ReadonlyArray<Mutation>,
   incoming: ReadonlyArray<Mutation>
 ): ReadonlyArray<Mutation> => {
-  const seen = new Set(held.map((m) => `${m.clientId}/${m.mutationId}`));
-  return [...held, ...incoming.filter((m) => !seen.has(`${m.clientId}/${m.mutationId}`))];
+  const seen = HashSet.fromIterable(held.map((m) => `${m.clientId}/${m.mutationId}`));
+  return [...held, ...incoming.filter((m) => !HashSet.has(seen, `${m.clientId}/${m.mutationId}`))];
 };
 
 /** The highest mutation id per client among `ids` (empty when none is positive). */
@@ -1292,7 +1299,7 @@ const listRowsWith = (
     const ids = yield* read(rowIndexKey(collection), IdsFromJson);
     if (ids === undefined) {
       const legacy = yield* read(legacyRowsKey(collection), RowMapFromJson);
-      return legacy === undefined ? [] : Object.values(legacy);
+      return legacy === undefined ? [] : R.values(legacy);
     }
     const rows: Array<StoredRow> = [];
     for (const id of ids) {
@@ -1775,7 +1782,7 @@ export const makeKeyValue = (
       Effect.gen(function* () {
         const map = yield* readDecoded(legacyRowsKey(collection), RowMapFromJson);
         if (map === undefined) return;
-        const ids = Object.keys(map);
+        const ids = R.keys(map);
         yield* Effect.forEach(ids, (id) => writeJson(rowKey(collection, id), map[id]), {
           concurrency: 1,
           discard: true,

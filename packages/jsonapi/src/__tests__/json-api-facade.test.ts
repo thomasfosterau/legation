@@ -13,6 +13,7 @@
 import { describe, expect, it } from "@effect/vitest";
 import * as Arr from "effect/Array";
 import * as Effect from "effect/Effect";
+import * as R from "effect/Record";
 import { awaitPromise } from "./await-promise.js";
 import * as Option from "effect/Option";
 import * as Order from "effect/Order";
@@ -145,7 +146,7 @@ const GROUP = "group-a";
  */
 /** Every node's collection readable by anyone: the server's and the REST handler's policy alike. */
 const allowEverything = Authorization.policy(
-  Object.fromEntries([...nodes.nodes.keys()].map((name) => [name, Authorization.allowAll])),
+  R.fromEntries([...nodes.nodes.keys()].map((name) => [name, Authorization.allowAll])),
   { collections: nodes.collections }
 );
 
@@ -156,7 +157,7 @@ const makeReplica = Effect.fn("makeReplica")(function* () {
       return writer.put(collection, decodeSeedRow(value).id, value);
     },
   });
-  const puts = Object.entries(seed).flatMap(([collection, rows]) =>
+  const puts = R.toEntries(seed).flatMap(([collection, rows]) =>
     rows.map((value) => ({ collection, value }))
   );
   yield* backend.applyMutations(
@@ -215,7 +216,7 @@ const makeReplica = Effect.fn("makeReplica")(function* () {
         {
           clientId: "seed",
           // The next id in the seed's contiguous run (the backend refuses a gap).
-          mutationId: Object.values(seed).reduce((count, rows) => count + rows.length, 0) + 1,
+          mutationId: R.values(seed).reduce((count, rows) => count + rows.length, 0) + 1,
           mutator: "seed/put",
           args: { collection, value },
           createdAt: 0,
@@ -836,7 +837,7 @@ describe("JsonApiFacade", () => {
         const response = Option.getOrUndefined(yield* handler.handle(jsonApi("/jsonapi/products")));
         expect(defined(response).status).toBe(200);
         const document = decodeVariantLinkage(yield* body(defined(response)));
-        const linkage = Object.fromEntries(
+        const linkage = R.fromEntries(
           document.data.map((product) => [product.id, product.relationships.variants.data.length])
         );
         expect(linkage["p-1"]).toBe(2);

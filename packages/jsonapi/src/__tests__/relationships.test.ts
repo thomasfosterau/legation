@@ -6,6 +6,7 @@ import { assert, describe, expect, it } from "@effect/vitest";
 import * as Arr from "effect/Array";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
+import * as MutableHashMap from "effect/MutableHashMap";
 import * as Match from "effect/Match";
 import * as Option from "effect/Option";
 import * as P from "effect/Predicate";
@@ -85,7 +86,7 @@ const links = (rel: unknown) => {
 };
 
 const makeServer = (seed: ReadonlyArray<Stored>) => {
-  const store = new Map(seed.map((r) => [`${r.type}:${r.id}`, r]));
+  const store = MutableHashMap.fromIterable(seed.map((r) => [`${r.type}:${r.id}`, r] as const));
   const requests: Array<string> = [];
   const headers = { "Content-Type": "application/vnd.api+json" };
   const doc = (data: unknown) => new Response(encodeJson({ data }), { status: 200, headers });
@@ -94,7 +95,7 @@ const makeServer = (seed: ReadonlyArray<Stored>) => {
   // The grammar's shorthand: `filter[f]=v` (eq), `filter[f]=a,b` (in), or
   // `filter[f][eq|in]=…` — enough for the id windows the engine pushes.
   const list = (type: string, params: URLSearchParams): Response => {
-    let rows = [...store.values()].filter((r) => r.type === type);
+    let rows = [...MutableHashMap.values(store)].filter((r) => r.type === type);
     Arr.forEach(params, ([key, value]) => {
       const match = key.match(/^filter\[([^\]]+)\](?:\[(eq|in)\])?$/);
       if (match === null) return;
@@ -106,16 +107,18 @@ const makeServer = (seed: ReadonlyArray<Stored>) => {
     });
     const include = params.get("include");
     if (include === null) return doc(rows);
-    const seen = new Map<string, Stored>();
+    const seen = MutableHashMap.empty<string, Stored>();
     Arr.forEach(rows, (r) => {
       Arr.forEach(include.split(","), (name) => {
         Arr.forEach(links(r.relationships?.[name]), (link) => {
-          const target = store.get(`${link.type}:${link.id}`);
-          if (target !== undefined) seen.set(`${link.type}:${link.id}`, target);
+          const target = Option.getOrUndefined(
+            MutableHashMap.get(store, `${link.type}:${link.id}`)
+          );
+          if (target !== undefined) MutableHashMap.set(seen, `${link.type}:${link.id}`, target);
         });
       });
     });
-    return new Response(encodeJson({ data: rows, included: [...seen.values()] }), {
+    return new Response(encodeJson({ data: rows, included: [...MutableHashMap.values(seen)] }), {
       status: 200,
       headers,
     });
@@ -132,30 +135,34 @@ const makeServer = (seed: ReadonlyArray<Stored>) => {
         Match.when("GET", () =>
           id === undefined
             ? list(type, url.searchParams)
-            : store.has(`${type}:${id}`)
-              ? doc(store.get(`${type}:${id}`))
+            : MutableHashMap.has(store, `${type}:${id}`)
+              ? doc(Option.getOrUndefined(MutableHashMap.get(store, `${type}:${id}`)))
               : empty(404)
         ),
         Match.when("POST", () => {
           const resource = readResource(request);
-          store.set(`${type}:${resource.id}`, {
+          MutableHashMap.set(store, `${type}:${resource.id}`, {
             ...resource,
             attributes: resource.attributes ?? {},
           });
-          return doc(store.get(`${type}:${resource.id}`));
+          return doc(Option.getOrUndefined(MutableHashMap.get(store, `${type}:${resource.id}`)));
         }),
         Match.when("PATCH", () => {
           const patch = readResource(request);
-          const existing = store.get(`${type}:${id}`) ?? { type, id: defined(id), attributes: {} };
+          const existing = Option.getOrUndefined(MutableHashMap.get(store, `${type}:${id}`)) ?? {
+            type,
+            id: defined(id),
+            attributes: {},
+          };
           const merged = {
             ...existing,
             attributes: { ...existing.attributes, ...patch.attributes },
           };
-          store.set(`${type}:${id}`, merged);
+          MutableHashMap.set(store, `${type}:${id}`, merged);
           return doc(merged);
         }),
         Match.when("DELETE", () => {
-          store.delete(`${type}:${id}`);
+          MutableHashMap.remove(store, `${type}:${id}`);
           return empty(204);
         }),
         Match.orElse(() => empty(405))

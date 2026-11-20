@@ -21,6 +21,7 @@
 
 import * as Defined from "./Defined.js";
 import * as Arr from "effect/Array";
+import * as R from "effect/Record";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
 import * as Option from "effect/Option";
@@ -135,9 +136,9 @@ const sameJoin = (a: ReadonlyArray<RelatedRow>, b: ReadonlyArray<RelatedRow>): b
   a.every((row, i) => {
     const other = b[i];
     if (other === undefined || row.id !== other.id || row.value !== other.value) return false;
-    const names = Object.keys(row.related);
+    const names = R.keys(row.related);
     return (
-      names.length === Object.keys(other.related).length &&
+      names.length === R.keys(other.related).length &&
       names.every((name) => sameRelated(row.related[name], other.related[name]))
     );
   });

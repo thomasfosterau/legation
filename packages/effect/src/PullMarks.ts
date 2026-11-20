@@ -23,7 +23,11 @@
  * lands.
  */
 
+import * as Arr from "effect/Array";
 import * as Effect from "effect/Effect";
+import * as HashMap from "effect/HashMap";
+import * as Option from "effect/Option";
+import * as Order from "effect/Order";
 import * as Ref from "effect/Ref";
 import * as Coverage from "./Coverage.js";
 import type { ClientEngine } from "./ClientEngine.js";
@@ -45,12 +49,12 @@ interface Window {
 interface Owner {
   readonly root: Subset.Subset;
   readonly holds: number;
-  readonly members: ReadonlyMap<string, number>;
+  readonly members: HashMap.HashMap<string, number>;
 }
 
 interface State {
-  readonly windows: ReadonlyMap<string, Window>;
-  readonly owners: ReadonlyMap<string, Owner>;
+  readonly windows: HashMap.HashMap<string, Window>;
+  readonly owners: HashMap.HashMap<string, Owner>;
 }
 
 /** The marks of one engine's registrations. */
@@ -77,35 +81,44 @@ export interface PullMarks {
 }
 
 const summarize = (state: State, key: string, applied: number): Coverage.Pulled => {
-  const owner = state.owners.get(key);
-  if (owner === undefined) return Coverage.NOT_PULLED;
+  const found = HashMap.get(state.owners, key);
+  if (Option.isNone(found)) return Coverage.NOT_PULLED;
+  const owner = found.value;
   const ownPulled = (window: Window): boolean => applied > window.since;
-  const pulledSubsets = [...state.windows.values()]
+  const pulledSubsets = Arr.fromIterable(HashMap.values(state.windows))
     .filter(ownPulled)
     .map((window) => window.subset);
   const pulled = (window: Window): boolean =>
     ownPulled(window) || pulledSubsets.some((subset) => Coverage.covers(subset, window.subset));
   // Every window the registration holds, root included, with its own mark: a read
   // is judged only by the windows its rows link to (`Coverage.pulledFor`).
-  const windows = [...owner.members.keys()].toSorted().flatMap((member) => {
-    const window = state.windows.get(member);
-    return window === undefined ? [] : [{ subset: window.subset, pulled: pulled(window) }];
-  });
+  const windows = Arr.sort(HashMap.keys(owner.members), Order.String).flatMap((member) =>
+    Arr.fromOption(
+      Option.map(HashMap.get(state.windows, member), (window) => ({
+        subset: window.subset,
+        pulled: pulled(window),
+      }))
+    )
+  );
   return { windows };
 };
 
 const withOwner = (
-  map: ReadonlyMap<string, Owner>,
+  map: HashMap.HashMap<string, Owner>,
   key: string,
   owner: Owner
-): Map<string, Owner> => new Map(map).set(key, owner);
+): HashMap.HashMap<string, Owner> => HashMap.set(map, key, owner);
 
 /** Marks over `engine`, which must be the engine the registrations are made on. */
 export const make = (engine: ClientEngine): PullMarks => {
-  const state = Ref.makeUnsafe<State>({ windows: new Map(), owners: new Map() });
+  const state = Ref.makeUnsafe<State>({ windows: HashMap.empty(), owners: HashMap.empty() });
 
   const ownerOf = (current: State, key: string, root: Subset.Subset): Owner =>
-    current.owners.get(key) ?? { root, holds: 0, members: new Map() };
+    Option.getOrElse(HashMap.get(current.owners, key), () => ({
+      root,
+      holds: 0,
+      members: HashMap.empty<string, number>(),
+    }));
 
   const subscribe = (key: string, subset: Subset.Subset): Effect.Effect<void> =>
     engine.subscribe(subset).pipe(
@@ -114,13 +127,17 @@ export const make = (engine: ClientEngine): PullMarks => {
         Ref.update(state, (current) => {
           const hash = Subset.hash(subset);
           const owner = ownerOf(current, key, subset);
-          const window = current.windows.get(hash);
-          const next = new Map(current.windows).set(hash, {
+          const window = HashMap.get(current.windows, hash);
+          const next = HashMap.set(current.windows, hash, {
             subset,
-            holds: (window?.holds ?? 0) + 1,
-            since: window === undefined ? started : window.since,
+            holds: Option.match(window, { onNone: () => 0, onSome: (w) => w.holds }) + 1,
+            since: Option.match(window, { onNone: () => started, onSome: (w) => w.since }),
           });
-          const members = new Map(owner.members).set(hash, (owner.members.get(hash) ?? 0) + 1);
+          const members = HashMap.set(
+            owner.members,
+            hash,
+            Option.getOrElse(HashMap.get(owner.members, hash), () => 0) + 1
+          );
           return {
             windows: next,
             owners: withOwner(current.owners, key, { ...owner, members }),
@@ -134,19 +151,22 @@ export const make = (engine: ClientEngine): PullMarks => {
       Effect.andThen(
         Ref.update(state, (current) => {
           const hash = Subset.hash(subset);
-          const owner = current.owners.get(key);
-          if (owner === undefined || !owner.members.has(hash)) return current;
-          const memberHolds = (owner.members.get(hash) ?? 0) - 1;
-          const members = new Map(owner.members);
-          if (memberHolds <= 0) members.delete(hash);
-          else members.set(hash, memberHolds);
-          const window = current.windows.get(hash);
-          const windows = new Map(current.windows);
-          if (window !== undefined && window.holds > 1) {
-            windows.set(hash, { ...window, holds: window.holds - 1 });
-          } else {
-            windows.delete(hash);
-          }
+          const found = HashMap.get(current.owners, key);
+          if (Option.isNone(found) || !HashMap.has(found.value.members, hash)) return current;
+          const owner = found.value;
+          const memberHolds = Option.getOrElse(HashMap.get(owner.members, hash), () => 0) - 1;
+          const members =
+            memberHolds <= 0
+              ? HashMap.remove(owner.members, hash)
+              : HashMap.set(owner.members, hash, memberHolds);
+          const window = HashMap.get(current.windows, hash);
+          const windows =
+            Option.isSome(window) && window.value.holds > 1
+              ? HashMap.set(current.windows, hash, {
+                  ...window.value,
+                  holds: window.value.holds - 1,
+                })
+              : HashMap.remove(current.windows, hash);
           return { windows, owners: withOwner(current.owners, key, { ...owner, members }) };
         })
       )
@@ -163,11 +183,13 @@ export const make = (engine: ClientEngine): PullMarks => {
       }),
     close: (key) =>
       Ref.update(state, (current) => {
-        const owner = current.owners.get(key);
-        if (owner === undefined) return current;
-        const owners = new Map(current.owners);
-        if (owner.holds <= 1) owners.delete(key);
-        else owners.set(key, { ...owner, holds: owner.holds - 1 });
+        const found = HashMap.get(current.owners, key);
+        if (Option.isNone(found)) return current;
+        const owner = found.value;
+        const owners =
+          owner.holds <= 1
+            ? HashMap.remove(current.owners, key)
+            : HashMap.set(current.owners, key, { ...owner, holds: owner.holds - 1 });
         return { ...current, owners };
       }),
     wrap: (key) => ({
@@ -184,7 +206,7 @@ export const make = (engine: ClientEngine): PullMarks => {
       { concurrency: 1 }
     ).pipe(
       Effect.map(({ current, counts }) =>
-        [...current.owners.keys()].toSorted().map((key) => ({
+        Arr.sort(HashMap.keys(current.owners), Order.String).map((key) => ({
           key,
           pulled: summarize(current, key, counts.applied),
         }))

@@ -10,9 +10,12 @@ import { describe, expect, it } from "@effect/vitest";
 import * as Arr from "effect/Array";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
+import * as HashSet from "effect/HashSet";
 import * as Match from "effect/Match";
+import * as MutableHashMap from "effect/MutableHashMap";
 import * as Option from "effect/Option";
 import * as Order from "effect/Order";
+import * as R from "effect/Record";
 import * as Schema from "effect/Schema";
 import * as Scope from "effect/Scope";
 import * as Stream from "effect/Stream";
@@ -420,10 +423,10 @@ describe("Related.related", () => {
 
       // Closing the scope unsubscribes everything the read had subscribed.
       yield* Scope.close(scope, Exit.void);
-      const unsubCollections = new Set(unsubscribed.map((s) => s.collection));
-      expect(unsubCollections.has("issues")).toBe(true);
-      expect(unsubCollections.has("comments")).toBe(true);
-      expect(unsubCollections.has("people")).toBe(true);
+      const unsubCollections = HashSet.fromIterable(unsubscribed.map((s) => s.collection));
+      expect(HashSet.has(unsubCollections, "issues")).toBe(true);
+      expect(HashSet.has(unsubCollections, "comments")).toBe(true);
+      expect(HashSet.has(unsubCollections, "people")).toBe(true);
     })
   );
 });
@@ -508,26 +511,26 @@ const PERSON_IDS = ["p0", "p1", "p2"];
 // holds — a dangling fk, which must resolve like any other non-match.
 const FK_TARGETS = [...ISSUE_IDS, "i-missing"];
 
-/** Ground truth: one `Map<id, LocalRow>` per collection, mutated by each op. */
+/** Ground truth: one `MutableHashMap<id, LocalRow>` per collection, mutated by each op. */
 interface GroundTruth {
-  readonly issues: Map<string, LocalRow>;
-  readonly people: Map<string, LocalRow>;
-  readonly comments: Map<string, LocalRow>;
-  readonly tags: Map<string, LocalRow>;
+  readonly issues: MutableHashMap.MutableHashMap<string, LocalRow>;
+  readonly people: MutableHashMap.MutableHashMap<string, LocalRow>;
+  readonly comments: MutableHashMap.MutableHashMap<string, LocalRow>;
+  readonly tags: MutableHashMap.MutableHashMap<string, LocalRow>;
 }
 
 const emptyGroundTruth = (): GroundTruth => ({
-  issues: new Map(),
-  people: new Map(),
-  comments: new Map(),
-  tags: new Map(),
+  issues: MutableHashMap.empty(),
+  people: MutableHashMap.empty(),
+  comments: MutableHashMap.empty(),
+  tags: MutableHashMap.empty(),
 });
 
 const foreignRowsOf = (truth: GroundTruth): ReadonlyMap<string, ReadonlyArray<LocalRow>> =>
   new Map([
-    ["people", [...truth.people.values()]],
-    ["comments", [...truth.comments.values()]],
-    ["tags", [...truth.tags.values()]],
+    ["people", [...MutableHashMap.values(truth.people)]],
+    ["comments", [...MutableHashMap.values(truth.comments)]],
+    ["tags", [...MutableHashMap.values(truth.tags)]],
   ]);
 
 const ForeignCollection = Schema.Literals(["people", "comments", "tags"]);
@@ -580,19 +583,22 @@ const randomOp = (rng: () => number, truth: GroundTruth): Op => {
 
   const collection = pick(rng, FOREIGN_COLLECTIONS);
   const pool = poolOf(truth, collection);
-  return choice < 0.75 || pool.size === 0
+  return choice < 0.75 || MutableHashMap.size(pool) === 0
     ? randomPutForeign(rng, collection)
-    : { _tag: "deleteForeign", collection, id: pick(rng, [...pool.keys()]) };
+    : { _tag: "deleteForeign", collection, id: pick(rng, [...MutableHashMap.keys(pool)]) };
 };
 
 const applyOp = (truth: GroundTruth, op: Op): void =>
   Match.value(op).pipe(
     Match.withReturnType<void>(),
     Match.tag("putIssue", (put) => {
-      truth.issues.set(put.id, { id: put.id, value: { id: put.id, authorId: put.authorId } });
+      MutableHashMap.set(truth.issues, put.id, {
+        id: put.id,
+        value: { id: put.id, authorId: put.authorId },
+      });
     }),
     Match.tag("deleteIssue", (del) => {
-      truth.issues.delete(del.id);
+      MutableHashMap.remove(truth.issues, del.id);
     }),
     Match.tag("putForeign", (put) => {
       const map = truth[put.collection];
@@ -602,10 +608,10 @@ const applyOp = (truth: GroundTruth, op: Op): void =>
           : put.collection === "comments"
             ? { id: put.id, issueId: put.fk }
             : { id: put.id, issueId: put.fk, rank: put.rank };
-      map.set(put.id, { id: put.id, value });
+      MutableHashMap.set(map, put.id, { id: put.id, value });
     }),
     Match.tag("deleteForeign", (del) => {
-      truth[del.collection].delete(del.id);
+      MutableHashMap.remove(truth[del.collection], del.id);
     }),
     Match.exhaustive
   );
@@ -634,9 +640,9 @@ const sameJoinUnordered = (
   actual.every((row, i) => {
     const other = defined(expected[i]);
     if (row.id !== other.id || row.value !== other.value) return false;
-    const names = Object.keys(row.related);
+    const names = R.keys(row.related);
     return (
-      names.length === Object.keys(other.related).length &&
+      names.length === R.keys(other.related).length &&
       names.every((name) => relatedValuesEqual(row.related[name], other.related[name]))
     );
   });
@@ -652,7 +658,7 @@ describe("Related delta-maintenance", () => {
 
     const primeAdded = (collections: ReadonlyArray<string>) => {
       Arr.forEach(collections, (collection) => {
-        const rows = [...truth[decodeForeign(collection)].values()];
+        const rows = [...MutableHashMap.values(truth[decodeForeign(collection)])];
         const { result } = engine.applyForeign(collection, rows);
         if (result !== undefined) lastResult = result;
       });
@@ -664,19 +670,23 @@ describe("Related delta-maintenance", () => {
 
       let removedTargets: ReadonlyArray<string> = [];
       if (P.isTagged(op, "putIssue") || P.isTagged(op, "deleteIssue")) {
-        const { added, removed, result } = engine.applyBase([...truth.issues.values()]);
+        const { added, removed, result } = engine.applyBase([
+          ...MutableHashMap.values(truth.issues),
+        ]);
         removedTargets = removed;
         if (result !== undefined) lastResult = result;
         primeAdded(added);
       } else {
-        const { result } = engine.applyForeign(op.collection, [...truth[op.collection].values()]);
+        const { result } = engine.applyForeign(op.collection, [
+          ...MutableHashMap.values(truth[op.collection]),
+        ]);
         if (result !== undefined) lastResult = result;
       }
       expect(removedTargets).toEqual([]); // this strategy's target set is static
 
       const expected = Related.hydrateFromScratch(
         strategy,
-        [...truth.issues.values()],
+        [...MutableHashMap.values(truth.issues)],
         foreignRowsOf(truth)
       );
       expect(

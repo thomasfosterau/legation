@@ -15,6 +15,7 @@
  */
 
 import * as Arr from "effect/Array";
+import * as MutableHashSet from "effect/MutableHashSet";
 import type * as Schema from "effect/Schema";
 import { DuplicateNameError, UnknownCollectionError } from "./Errors.js";
 import * as FilterPolicy from "./FilterPolicy.js";
@@ -175,12 +176,12 @@ const validateRelationships = (
   collection: AnyCollection,
   map: ReadonlyMap<string, AnyCollection>
 ): void => {
-  const seen = new Set<string>();
+  const seen = MutableHashSet.empty<string>();
   Arr.forEach(collection.relationships ?? [], (relationship) => {
-    if (seen.has(relationship.name)) {
+    if (MutableHashSet.has(seen, relationship.name)) {
       throw new DuplicateNameError({ kind: "relationship", duplicate: relationship.name });
     }
-    seen.add(relationship.name);
+    MutableHashSet.add(seen, relationship.name);
     if (!map.has(relationship.collection)) {
       throw new UnknownCollectionError({
         from: collection.name,

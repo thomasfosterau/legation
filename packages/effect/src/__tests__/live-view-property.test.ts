@@ -11,6 +11,7 @@
  * reproducible from its seed alone.
  */
 import * as Arr from "effect/Array";
+import * as HashMap from "effect/HashMap";
 import * as P from "effect/Predicate";
 import { describe, expect, it } from "vite-plus/test";
 import * as LiveView from "../LiveView.js";
@@ -46,23 +47,20 @@ const randomDeltas = (next: () => number, count: number, rankRange: number): Rea
 /** The incremental view and the from-scratch row map, side by side. */
 interface Stepped {
   readonly view: LiveView.LiveView;
-  readonly reference: Map<string, LiveView.Row>;
+  readonly reference: HashMap.HashMap<string, LiveView.Row>;
 }
 
 /** Apply one delta to both the incremental view and the from-scratch row map. */
 const step = (
   view: LiveView.LiveView,
-  reference: Map<string, LiveView.Row>,
+  reference: HashMap.HashMap<string, LiveView.Row>,
   delta: Delta
 ): Stepped => {
-  const nextReference = new Map(reference);
   if (P.isTagged(delta, "del")) {
-    nextReference.delete(delta.id);
-    return { view: LiveView.del(view, delta.id), reference: nextReference };
+    return { view: LiveView.del(view, delta.id), reference: HashMap.remove(reference, delta.id) };
   }
   const row: LiveView.Row = { id: delta.id, value: { rank: delta.rank } };
-  nextReference.set(delta.id, row);
-  return { view: LiveView.put(view, row), reference: nextReference };
+  return { view: LiveView.put(view, row), reference: HashMap.set(reference, delta.id, row) };
 };
 
 const SEEDS = [1, 2, 3, 4, 5, 6, 7, 8];
@@ -103,11 +101,11 @@ describe("LiveView property: maintained order ≡ Subset.apply after every delta
       // boundary is crossed by both inserts and deletes many times over.
       const deltas = randomDeltas(next, 200, 5);
       let view = LiveView.make(subset, []);
-      let reference = new Map<string, LiveView.Row>();
+      let reference = HashMap.empty<string, LiveView.Row>();
       Arr.forEach(deltas, (delta, i) => {
         ({ view, reference } = step(view, reference, delta));
         const maintained = LiveView.result(view).map((r) => r.id);
-        const expected = Subset.apply([...reference.values()], subset).map((r) => r.id);
+        const expected = Subset.apply([...HashMap.values(reference)], subset).map((r) => r.id);
         expect(maintained, `seed ${seed}, step ${i} (${Json.show(delta)})`).toEqual(expected);
       });
     });

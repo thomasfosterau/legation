@@ -165,7 +165,11 @@ const RejectionsJson = Schema.fromJsonString(Schema.Unknown);
 
 /** The `rejections` column's value: a JSON object of mutation id → reason, or `null` when none is remembered. */
 const encodeRejections = (rejections: ReadonlyMap<number, string>): string | null =>
-  rejections.size === 0 ? null : Schema.encodeSync(RejectionsJson)(Object.fromEntries(rejections));
+  rejections.size === 0
+    ? null
+    : Schema.encodeSync(RejectionsJson)(
+        R.fromEntries(Arr.map([...rejections], ([id, reason]) => [String(id), reason] as const))
+      );
 
 /** Decode the `rejections` column (`null` and absent both mean none remembered). */
 const decodeRejections = (
@@ -185,10 +189,10 @@ const decodeRejections = (
       Effect.try({
         try: () =>
           new Map(
-            // SAFETY: `Object.entries` takes any value, throwing only on
+            // SAFETY: `R.toEntries` takes any value, throwing only on
             // `null` (which `Effect.try` maps to `notRejections`), and each
             // reason goes through `String`, so no value is read as a string.
-            Object.entries(parsed as Record<string, string>).map(
+            R.toEntries(parsed as Record<string, string>).map(
               ([id, reason]) => [Number(id), String(reason)] as const
             )
           ),
@@ -301,8 +305,8 @@ export const fromCollection = (
   }
 ): TableMapping => {
   const { filterable } = Collection.filterDeclarationOf(collection);
-  const kinds: Sql.Kinds = Object.fromEntries(
-    Object.entries(filterable).map(([field, declared]) => [field, declared.kind])
+  const kinds: Sql.Kinds = R.fromEntries(
+    R.toEntries(filterable).map(([field, declared]) => [field, declared.kind])
   );
   return { ...options, kinds };
 };
@@ -503,17 +507,17 @@ export const make = (config: SqlBackendConfig): Backend.Backend => {
 
   // Every mapping's declared kinds, keyed by collection, for the inner
   // `where` of an `Exists` (the compiler picks the foreign collection's).
-  const foreignKinds: Record<string, Sql.Kinds> = Object.fromEntries(
-    Object.entries(config.tables).flatMap(([collection, mapping]) =>
+  const foreignKinds: Record<string, Sql.Kinds> = R.fromEntries(
+    R.toEntries(config.tables).flatMap(([collection, mapping]) =>
       mapping.kinds === undefined ? [] : [[collection, mapping.kinds] as const]
     )
   );
   // The columns declared `boolean` per collection, fixed once so decoding a
   // row costs nothing for a collection with none.
-  const booleanColumns: Record<string, ReadonlyArray<string>> = Object.fromEntries(
-    Object.entries(config.tables).map(([collection, mapping]) => [
+  const booleanColumns: Record<string, ReadonlyArray<string>> = R.fromEntries(
+    R.toEntries(config.tables).map(([collection, mapping]) => [
       collection,
-      Object.entries(mapping.kinds ?? {})
+      R.toEntries(mapping.kinds ?? {})
         .filter(([, kind]) => kind === "boolean")
         .map(([field]) => field),
     ])
@@ -859,8 +863,8 @@ export const make = (config: SqlBackendConfig): Backend.Backend => {
       })
       .pipe(
         Effect.map((rows) =>
-          Object.fromEntries(
-            rows.map((row) => [String(row.client_id), Number(row.last_mutation_id)])
+          R.fromEntries(
+            rows.map((row) => [String(row.client_id), Number(row.last_mutation_id)] as const)
           )
         )
       );

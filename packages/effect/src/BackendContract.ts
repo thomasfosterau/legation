@@ -67,6 +67,7 @@ import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
 import * as Fiber from "effect/Fiber";
+import * as MutableHashMap from "effect/MutableHashMap";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 import type { Backend, SubsetEntry, SyncContext } from "./Backend.js";
@@ -98,7 +99,7 @@ interface ParkGate {
 }
 
 /** The gates the harness has registered, by name. Args carry the name, never the gate. */
-const parkGates = new Map<string, ParkGate>();
+const parkGates = MutableHashMap.empty<string, ParkGate>();
 
 /**
  * The park a `contract/count-up` handler takes between its read and its write.
@@ -107,12 +108,13 @@ const parkGates = new Map<string, ParkGate>();
  * Only the contract's `countUp` handler calls it, so no production handler should.
  */
 export const park = (gate: string): Effect.Effect<void> => {
-  const registered = parkGates.get(gate);
-  return registered === undefined
-    ? Effect.void
-    : Deferred.succeed(registered.entered, undefined).pipe(
+  return Option.match(MutableHashMap.get(parkGates, gate), {
+    onNone: () => Effect.void,
+    onSome: (registered) =>
+      Deferred.succeed(registered.entered, undefined).pipe(
         Effect.andThen(Deferred.await(registered.release))
-      );
+      ),
+  });
 };
 
 // ─── Contract mutators ───────────────────────────────────────────────────────
@@ -932,7 +934,7 @@ const rule11CrossGroupLostUpdate: Rule = (h) =>
       entered: yield* Deferred.make<void>(),
       release: yield* Deferred.make<void>(),
     };
-    parkGates.set(gate, parked);
+    MutableHashMap.set(parkGates, gate, parked);
     const increment = (mutationId: number, gateName: string) =>
       h.mutation(mutationId, countUp.name, { collection: h.rows, id: row, gate: gateName });
 
@@ -1000,7 +1002,7 @@ const rule11CrossGroupLostUpdate: Rule = (h) =>
 
     yield* run().pipe(
       Effect.ensuring(
-        Effect.sync(() => parkGates.delete(gate)).pipe(
+        Effect.sync(() => MutableHashMap.remove(parkGates, gate)).pipe(
           Effect.andThen(Deferred.succeed(parked.release, undefined))
         )
       )

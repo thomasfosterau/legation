@@ -19,6 +19,8 @@ import * as Context from "effect/Context";
 import * as Deferred from "effect/Deferred";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
+import * as HashMap from "effect/HashMap";
+import * as HashSet from "effect/HashSet";
 import * as Layer from "effect/Layer";
 import * as Match from "effect/Match";
 import * as Metric from "effect/Metric";
@@ -1273,7 +1275,7 @@ export const make = (
     // In-flight `ensureSubset` pulls, keyed by `Subset.hash`, so concurrent
     // prefetches of the same subset share one pull instead of racing N of them.
     const ensurePulls = yield* Ref.make(
-      new Map<
+      HashMap.empty<
         string,
         Deferred.Deferred<
           void,
@@ -1632,11 +1634,10 @@ export const make = (
     // collection has no indexed fields) — the next access rebuilds it.
     // `generations` guard that rebuild against writes racing it.
     const indexFields = yield* Ref.make(
-      new Map<string, Set<string>>(
-        Object.entries(options.indexes ?? {}).map(([collection, fields]) => [
-          collection,
-          new Set(fields),
-        ])
+      HashMap.fromIterable(
+        R.toEntries(options.indexes ?? {}).map(
+          ([collection, fields]) => [collection, HashSet.fromIterable(fields)] as const
+        )
       )
     );
     const indexState = yield* Ref.make<IndexState>({
@@ -1653,12 +1654,12 @@ export const make = (
       const discovered = indexableFieldsOf(subset.where);
       if (Arr.isReadonlyArrayEmpty(discovered)) return Effect.void;
       return Ref.modify(indexFields, (map) => {
-        const current = map.get(subset.collection) ?? new Set<string>();
-        const grown = new Set([...current, ...discovered]);
-        if (grown.size === current.size) return [false, map] as const;
-        const next = new Map(map);
-        next.set(subset.collection, grown);
-        return [true, next] as const;
+        const current = Option.getOrElse(HashMap.get(map, subset.collection), () =>
+          HashSet.empty<string>()
+        );
+        const grown = HashSet.union(current, HashSet.fromIterable(discovered));
+        if (HashSet.size(grown) === HashSet.size(current)) return [false, map] as const;
+        return [true, HashMap.set(map, subset.collection, grown)] as const;
       }).pipe(
         Effect.flatMap((grew) =>
           grew
@@ -1705,8 +1706,9 @@ export const make = (
             // a widening between the two reads would install an index over the old field set,
             // with nothing left to invalidate it (a missed index until the next rebuild).
             const before = yield* Ref.get(indexState);
-            const fields = (yield* Ref.get(indexFields)).get(collection);
-            if (fields === undefined || fields.size === 0) return undefined;
+            const found = HashMap.get(yield* Ref.get(indexFields), collection);
+            if (Option.isNone(found) || HashSet.size(found.value) === 0) return undefined;
+            const fields = found.value;
             const existing = before.built.get(collection);
             if (existing !== undefined) return existing;
             const fresh = Index.empty(fields);
@@ -2906,22 +2908,18 @@ export const make = (
       void,
       TransportError | StoreError | MutatorError | VersionNotSupportedError
     >;
-    type PullMap = Map<string, PullDeferred>;
+    type PullMap = HashMap.HashMap<string, PullDeferred>;
     type PullClaim = { readonly deferred: PullDeferred; readonly owner: boolean };
     const claimPull = (hash: string, own: PullDeferred): Effect.Effect<PullClaim> =>
       Ref.modify(ensurePulls, (map): readonly [PullClaim, PullMap] => {
-        const existing = map.get(hash);
-        return existing !== undefined
-          ? [{ deferred: existing, owner: false }, map]
-          : [{ deferred: own, owner: true }, new Map(map).set(hash, own)];
+        const existing = HashMap.get(map, hash);
+        return Option.isSome(existing)
+          ? [{ deferred: existing.value, owner: false }, map]
+          : [{ deferred: own, owner: true }, HashMap.set(map, hash, own)];
       });
 
     const releasePull = (hash: string): Effect.Effect<void> =>
-      Ref.update(ensurePulls, (map) => {
-        const next = new Map(map);
-        next.delete(hash);
-        return next;
-      });
+      Ref.update(ensurePulls, HashMap.remove(hash));
 
     // A single deduped pull for a subset: the owner runs `pull` and settles the
     // shared deferred; everyone else just awaits it.

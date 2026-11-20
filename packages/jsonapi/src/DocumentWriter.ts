@@ -322,7 +322,7 @@ const assemble = (input: Input, node: Node.AnyNode) => {
   const included =
     include === undefined
       ? undefined
-      : Object.keys(include)
+      : R.keys(include)
           .toSorted(Predicate.compareText)
           .flatMap((name) => includedOf(env, node, input.rows, name))
           .map((resource) => project(resource, env.fields));

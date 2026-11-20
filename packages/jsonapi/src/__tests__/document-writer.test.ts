@@ -7,6 +7,8 @@
  */
 import { describe, expect, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
+import * as HashSet from "effect/HashSet";
+import * as R from "effect/Record";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 import { Edge, Node, Predicate, type Query } from "@thomasfosterau/legation";
@@ -117,7 +119,7 @@ describe("DocumentWriter.collection", () => {
       read: { collection: "products" },
       rows: [row(desk)],
     });
-    expect(Object.keys(defined(defined(partial.data[0]).relationships))).toEqual([
+    expect(R.keys(defined(defined(partial.data[0]).relationships))).toEqual([
       "category",
       "reviews",
     ]);
@@ -228,14 +230,16 @@ describe("DocumentWriter.collection", () => {
         ]);
         // Every included variant is referenced by a primary resource's linkage,
         // and the included variants are full (no fields[variants]).
-        const linked = new Set(
+        const linked = HashSet.fromIterable(
           document.data.flatMap((resource) => {
             const linkage = decodeManyLinkage(defined(resource.relationships)["variants"]);
             return linkage.data.map((identifier) => identifier.id);
           })
         );
         expect(defined(document.included).map((resource) => resource.id)).toEqual(["v-1", "v-2"]);
-        expect(defined(document.included).every((resource) => linked.has(resource.id))).toBe(true);
+        expect(
+          defined(document.included).every((resource) => HashSet.has(linked, resource.id))
+        ).toBe(true);
         expect(defined(document.included)[0]).toEqual({
           type: "variants",
           id: "v-1",

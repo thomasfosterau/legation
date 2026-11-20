@@ -12,8 +12,10 @@
 import { describe, expect, it } from "@effect/vitest";
 import * as Arr from "effect/Array";
 import * as Effect from "effect/Effect";
+import * as R from "effect/Record";
 import * as Option from "effect/Option";
 import * as Layer from "effect/Layer";
+import * as MutableHashMap from "effect/MutableHashMap";
 import * as Schema from "effect/Schema";
 import * as HttpApi from "effect/http-api/HttpApi";
 import * as HttpApiEndpoint from "effect/http-api/HttpApiEndpoint";
@@ -1377,23 +1379,27 @@ describe("JsonApiBackend refuses a mutation-id gap before any write", () => {
 
 /** A stateful server answering both the per-resource and the atomic routes. */
 const makeStatefulServer = () => {
-  const store = new Map<
+  const store = MutableHashMap.empty<
     string,
     { type: string; id: string; attributes: Record<string, Schema.Json> }
   >();
   const server = makeServer((request) => {
     if (request.method === "GET" && request.path === "/todos")
-      return respond(200, { data: [...store.values()] }, jsonHeaders);
+      return respond(200, { data: [...MutableHashMap.values(store)] }, jsonHeaders);
     if (request.method === "POST" && request.path === "/todos") {
       const data = request.body.data;
-      store.set(data.id, { type: "todos", id: data.id, attributes: data.attributes });
+      MutableHashMap.set(store, data.id, {
+        type: "todos",
+        id: data.id,
+        attributes: data.attributes,
+      });
       return respond(201, { data }, jsonHeaders);
     }
     if (request.method === "POST" && request.path === "/operations") {
       const ops: ReadonlyArray<any> = request.body["atomic:operations"];
       Arr.forEach(ops, (op) => {
         if (op.op === "add")
-          store.set(op.data.id, {
+          MutableHashMap.set(store, op.data.id, {
             type: "todos",
             id: op.data.id,
             attributes: op.data.attributes,
@@ -1434,7 +1440,7 @@ describe("JsonApiSync.layer atomic detection", () => {
         )
       );
       expect(titles).toEqual(["atomic"]);
-      expect(server.store.has("1")).toBe(true);
+      expect(MutableHashMap.has(server.store, "1")).toBe(true);
       const writes = server.requests.filter((request) => request.method === "POST");
       expect(writes.map((request) => request.path)).toEqual(["/operations"]);
     }).pipe(Effect.scoped)
@@ -1655,7 +1661,7 @@ const twoUpdates = [updateRowOne, updateRowTwo];
 
 /** The title `getRows` serves for each row, by id. */
 const titlesOf = (rows: ReadonlyArray<{ readonly id: string; readonly value: unknown }>) =>
-  Object.fromEntries(rows.map((row) => [row.id, decodeMaybeTitled(row.value).title]));
+  R.fromEntries(rows.map((row) => [row.id, decodeMaybeTitled(row.value).title]));
 
 /**
  * The cache is updated only by writes the server applied: a rejected or

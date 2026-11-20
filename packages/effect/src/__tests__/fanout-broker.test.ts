@@ -19,6 +19,9 @@ import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
 import * as Fiber from "effect/Fiber";
+import * as HashMap from "effect/HashMap";
+import * as HashSet from "effect/HashSet";
+import * as Option from "effect/Option";
 import * as Ref from "effect/Ref";
 import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
@@ -211,17 +214,15 @@ const advanceUntil = <A>(read: Effect.Effect<A>, until: (value: A) => boolean, m
  */
 const observedBroker = (broker: FanoutBroker.FanoutBroker) =>
   Effect.gen(function* () {
-    const registered = yield* Ref.make(new Map<string, ReadonlySet<string>>());
-    const published = yield* Ref.make<ReadonlyArray<ReadonlySet<string>>>([]);
+    const registered = yield* Ref.make(HashMap.empty<string, ReadonlySet<string>>());
+    const published = yield* Ref.make<ReadonlyArray<HashSet.HashSet<string>>>([]);
     const observed: FanoutBroker.FanoutBroker = {
       register: (roomId, topics, ttl) =>
         broker
           .register(roomId, topics, ttl)
-          .pipe(
-            Effect.tap(() => Ref.update(registered, (map) => new Map(map).set(roomId, topics)))
-          ),
+          .pipe(Effect.tap(() => Ref.update(registered, HashMap.set(roomId, topics)))),
       publish: (topics) => {
-        const all = new Set(topics);
+        const all = HashSet.fromIterable(topics);
         return broker
           .publish(all)
           .pipe(Effect.tap(() => Ref.update(published, (list) => [...list, all])));
@@ -353,9 +354,10 @@ describe("two rooms over one broker", () => {
         // then registers the window; a heartbeat leases its fine topic.
         yield* advanceUntil(Ref.get(emissions), (n) => n > 0);
         yield* reader.engine.pull.pipe(Effect.orDie);
-        yield* advanceUntil(
-          Ref.get(registered),
-          (rooms) => rooms.get("room-a")?.has("reviews/productId=p-1") === true
+        yield* advanceUntil(Ref.get(registered), (rooms) =>
+          Option.exists(HashMap.get(rooms, "room-a"), (topics) =>
+            topics.has("reviews/productId=p-1")
+          )
         );
 
         // Room B's user writes a p-1 review: fine topic → room A → poke → pull.
@@ -391,7 +393,7 @@ describe("two rooms over one broker", () => {
         });
         yield* advanceUntil(Ref.get(roomB.pushes), (pushes) => pushes.length > 1);
         expect(
-          (yield* Ref.get(published)).some((topics) => topics.has("reviews/productId=p-9"))
+          (yield* Ref.get(published)).some((topics) => HashSet.has(topics, "reviews/productId=p-9"))
         ).toBe(true);
         // Two debounce windows later nothing more has been pushed: each write
         // went to room B exactly once.

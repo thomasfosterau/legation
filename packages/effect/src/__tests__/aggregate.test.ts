@@ -10,6 +10,7 @@ import { describe, expect, it } from "@effect/vitest";
 import * as Arr from "effect/Array";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
+import * as MutableHashMap from "effect/MutableHashMap";
 import * as Ref from "effect/Ref";
 import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
@@ -325,9 +326,9 @@ const INCREMENTAL_AGGS: ReadonlyArray<Aggregate.Aggregate> = [
 ];
 
 const matchingRows = (
-  truth: ReadonlyMap<string, unknown>
+  truth: MutableHashMap.MutableHashMap<string, unknown>
 ): ReadonlyArray<{ readonly id: string; readonly value: unknown }> =>
-  [...truth.entries()]
+  [...truth]
     .filter(([, value]) => Predicate.test(INCREMENTAL_WHERE, value))
     .map(([id, value]) => ({ id, value }));
 
@@ -378,24 +379,26 @@ const expectAggMatches = (
  */
 const checkIncrementalSeed = (seed: number): void => {
   const ops = randomOps(mulberry32(seed), 60);
-  const truth = new Map<string, unknown>();
-  const states = new Map(INCREMENTAL_AGGS.map((agg) => [agg, Aggregate.initState(agg, [])]));
-  const groupedStates = new Map(
-    INCREMENTAL_AGGS.map((agg) => [agg, Aggregate.initGroupedState(agg, [], INCREMENTAL_GROUP_BY)])
-  );
+  const truth = MutableHashMap.empty<string, unknown>();
+  // Each aggregate's incremental states, in `INCREMENTAL_AGGS` order.
+  const tracked = INCREMENTAL_AGGS.map((agg) => ({
+    agg,
+    state: Aggregate.initState(agg, []),
+    grouped: Aggregate.initGroupedState(agg, [], INCREMENTAL_GROUP_BY),
+  }));
 
   Arr.forEach(ops, (op) => {
-    if (P.isTagged(op, "Del")) truth.delete(op.id);
-    else truth.set(op.id, op.value);
+    if (P.isTagged(op, "Del")) MutableHashMap.remove(truth, op.id);
+    else MutableHashMap.set(truth, op.id, op.value);
 
-    Arr.forEach(INCREMENTAL_AGGS, (agg) => {
-      states.set(agg, applyOpToState(defined(states.get(agg)), agg, op));
-      groupedStates.set(agg, applyOpToGroupedState(defined(groupedStates.get(agg)), agg, op));
+    Arr.forEach(tracked, (entry) => {
+      entry.state = applyOpToState(entry.state, entry.agg, op);
+      entry.grouped = applyOpToGroupedState(entry.grouped, entry.agg, op);
     });
 
     const rows = matchingRows(truth);
-    Arr.forEach(INCREMENTAL_AGGS, (agg) => {
-      expectAggMatches(agg, defined(states.get(agg)), defined(groupedStates.get(agg)), rows);
+    Arr.forEach(tracked, (entry) => {
+      expectAggMatches(entry.agg, entry.state, entry.grouped, rows);
     });
   });
 };

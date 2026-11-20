@@ -38,6 +38,7 @@ import * as Arr from "effect/Array";
 import * as Clock from "effect/Clock";
 import * as Effect from "effect/Effect";
 import * as P from "effect/Predicate";
+import * as R from "effect/Record";
 import * as Exit from "effect/Exit";
 import * as Fiber from "effect/Fiber";
 import * as Ref from "effect/Ref";
@@ -488,16 +489,14 @@ const stubUrls: Client.UrlReads = {
           include:
             include === null
               ? undefined
-              : Object.fromEntries(include.split(",").map((edge) => [edge, true as const])),
+              : R.fromEntries(include.split(",").map((edge) => [edge, true as const])),
         }),
       });
     }),
   canonical: (read) =>
     Effect.succeed(
       `/${read.collection}${
-        read.include === undefined
-          ? ""
-          : `?include=${Object.keys(read.include).toSorted().join(",")}`
+        read.include === undefined ? "" : `?include=${R.keys(read.include).toSorted().join(",")}`
       }`
     ),
 };
@@ -532,7 +531,7 @@ describe("URL-keyed subscriptions over the mirror channel", () => {
       // registers under the page's id, exactly as Subscribe + SubscribeRelated.
       yield* channel.post({ _tag: "SubscribeUrl", mirrorId: "page", url: "/todos?include=author" });
       const registered = yield* eventually(hashes(engine), (current) => current.length === 2);
-      expect(new Set(registered)).toEqual(new Set([todosRoot, authorWindow]));
+      expect(registered.toSorted()).toEqual([todosRoot, authorWindow].toSorted());
 
       // A URL the host cannot parse registers nothing (and is logged).
       yield* channel.post({ _tag: "SubscribeUrl", mirrorId: "page", url: "/widgets" });
@@ -559,7 +558,7 @@ describe("URL-keyed subscriptions over the mirror channel", () => {
       yield* engine.mutate("todo/set", { id: "1", title: "by url", isDone: false, authorId: "u1" });
       yield* channel.post({ _tag: "SubscribeUrl", mirrorId: "page", url: "/todos?include=author" });
       const registered = yield* eventually(hashes(engine), (current) => current.length === 2);
-      expect(new Set(registered)).toEqual(new Set([todosRoot, authorWindow]));
+      expect(registered.toSorted()).toEqual([todosRoot, authorWindow].toSorted());
     })
   );
 
@@ -603,7 +602,7 @@ describe("URL-keyed subscriptions over the mirror channel", () => {
           expect(yield* client.subscriptions).toEqual(["/todos", "/todos?include=author"]);
           // The host holds the root once for both pins, plus the author window.
           const registered = yield* eventually(hashes(engine), (current) => current.length === 2);
-          expect(new Set(registered)).toEqual(new Set([todosRoot, authorWindow]));
+          expect(registered.toSorted()).toEqual([todosRoot, authorWindow].toSorted());
           yield* engine.pull.pipe(Effect.orDie);
           expect(
             (yield* eventually(

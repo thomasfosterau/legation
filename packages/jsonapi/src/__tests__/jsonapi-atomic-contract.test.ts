@@ -16,10 +16,13 @@ import * as Effect from "effect/Effect";
 import { awaitPromise } from "./await-promise.js";
 import * as Exit from "effect/Exit";
 import * as Fiber from "effect/Fiber";
+import * as HashMap from "effect/HashMap";
 import * as Layer from "effect/Layer";
 import * as Match from "effect/Match";
+import * as MutableHashMap from "effect/MutableHashMap";
 import * as Option from "effect/Option";
 import * as P from "effect/Predicate";
+import * as R from "effect/Record";
 import * as Ref from "effect/Ref";
 import * as Schema from "effect/Schema";
 import * as Semaphore from "effect/Semaphore";
@@ -156,13 +159,14 @@ interface Stored {
   readonly id: string;
   readonly attributes: Attributes;
 }
-type Store = Map<string, Map<string, Stored>>;
+type Table = MutableHashMap.MutableHashMap<string, Stored>;
+type Store = MutableHashMap.MutableHashMap<string, Table>;
 
-const tableOf = (store: Store, type: string): Map<string, Stored> => {
-  const existing = store.get(type);
-  if (existing !== undefined) return existing;
-  const created = new Map<string, Stored>();
-  store.set(type, created);
+const tableOf = (store: Store, type: string): Table => {
+  const existing = MutableHashMap.get(store, type);
+  if (Option.isSome(existing)) return existing.value;
+  const created = MutableHashMap.empty<string, Stored>();
+  MutableHashMap.set(store, type, created);
   return created;
 };
 
@@ -184,14 +188,16 @@ const rowsLive = (store: Store) =>
     handlers
       .handle("list", () =>
         Effect.succeed(
-          Handlers.collection([...tableOf(store, COLLECTION).values()].map(contractResource))
+          Handlers.collection(
+            [...MutableHashMap.values(tableOf(store, COLLECTION))].map(contractResource)
+          )
         )
       )
       .handle("get", ({ params }) =>
         Effect.gen(function* () {
-          const row = tableOf(store, COLLECTION).get(params.id);
-          if (row === undefined) return yield* new NotFound();
-          return Handlers.data(contractResource(row));
+          const row = MutableHashMap.get(tableOf(store, COLLECTION), params.id);
+          if (Option.isNone(row)) return yield* new NotFound();
+          return Handlers.data(contractResource(row.value));
         })
       )
   );
@@ -201,14 +207,16 @@ const evalRowsLive = (store: Store) =>
     handlers
       .handle("list", () =>
         Effect.succeed(
-          Handlers.collection([...tableOf(store, EVAL_COLLECTION).values()].map(evalResource))
+          Handlers.collection(
+            [...MutableHashMap.values(tableOf(store, EVAL_COLLECTION))].map(evalResource)
+          )
         )
       )
       .handle("get", ({ params }) =>
         Effect.gen(function* () {
-          const row = tableOf(store, EVAL_COLLECTION).get(params.id);
-          if (row === undefined) return yield* new NotFound();
-          return Handlers.data(evalResource(row));
+          const row = MutableHashMap.get(tableOf(store, EVAL_COLLECTION), params.id);
+          if (Option.isNone(row)) return yield* new NotFound();
+          return Handlers.data(evalResource(row.value));
         })
       )
   );
@@ -239,10 +247,10 @@ interface Hold {
   readonly release: Deferred.Deferred<void>;
 }
 interface ServerProbe {
-  readonly holds: ReadonlyMap<string, Hold>;
+  readonly holds: HashMap.HashMap<string, Hold>;
   readonly publishEarly: boolean;
 }
-const noProbe: ServerProbe = { holds: new Map(), publishEarly: false };
+const noProbe: ServerProbe = { holds: HashMap.empty(), publishEarly: false };
 
 /** `add`: honour the client id recovered from the raw document; apply the two server rules. */
 const applyAdd = (
@@ -266,15 +274,15 @@ const applyAdd = (
     return Effect.fail(rejection(index, "poison rows are refused"));
   // Staged before the crash check: a row written and then crashed must be
   // discarded with the batch, not leaked into the committed store.
-  tableOf(staged, row.type).set(id, row);
+  MutableHashMap.set(tableOf(staged, row.type), id, row);
   if (row.attributes.crash === true)
     return Effect.die(new TestFailure({ message: "the server fell over" }));
   return Effect.gen(function* () {
-    if (probe.publishEarly) tableOf(committed, row.type).set(id, row);
-    const hold = probe.holds.get(id);
-    if (hold !== undefined) {
-      yield* Deferred.succeed(hold.entered, undefined);
-      yield* Deferred.await(hold.release);
+    if (probe.publishEarly) MutableHashMap.set(tableOf(committed, row.type), id, row);
+    const hold = HashMap.get(probe.holds, id);
+    if (Option.isSome(hold)) {
+      yield* Deferred.succeed(hold.value.entered, undefined);
+      yield* Deferred.await(hold.value.release);
     }
     return { data: resourceOf(row) };
   });
@@ -292,7 +300,10 @@ const applyUpdate = (
   operation: Extract<BatchOperation, { readonly op: "update" }>
 ): Effect.Effect<Entry, Rejection> => {
   const id = operation.data.id;
-  const current = id === undefined ? undefined : tableOf(staged, operation.data.type).get(id);
+  const current =
+    id === undefined
+      ? undefined
+      : Option.getOrUndefined(MutableHashMap.get(tableOf(staged, operation.data.type), id));
   if (id === undefined || current === undefined) {
     return Effect.fail(rejection(index, "no such row to update"));
   }
@@ -302,14 +313,14 @@ const applyUpdate = (
       ...current,
       attributes: { ...current.attributes, ...Defined.fields(merge) },
     };
-    tableOf(staged, row.type).set(id, row);
+    MutableHashMap.set(tableOf(staged, row.type), id, row);
     return Effect.succeed({ data: resourceOf(row) });
   }
   return Effect.gen(function* () {
     const read = current.attributes.n ?? 0;
     yield* BackendContract.park(increment);
     const row: Stored = { ...current, attributes: { ...current.attributes, n: read + 1 } };
-    tableOf(staged, row.type).set(id, row);
+    MutableHashMap.set(tableOf(staged, row.type), id, row);
     return { data: resourceOf(row) };
   });
 };
@@ -323,7 +334,7 @@ const applyRemove = (
   if (!("id" in operation.ref)) {
     return Effect.fail(rejection(index, "remove by lid is unsupported"));
   }
-  tableOf(staged, operation.ref.type).delete(operation.ref.id);
+  MutableHashMap.remove(tableOf(staged, operation.ref.type), operation.ref.id);
   return Effect.succeed({});
 };
 
@@ -367,7 +378,12 @@ const operationsLive = (store: Store, lock: Semaphore.Semaphore, probe: ServerPr
           Effect.flatMap(Schema.decodeUnknownEffect(RequestClientIds)),
           Effect.orDie
         );
-        const staged: Store = new Map([...store].map(([type, rows]) => [type, new Map(rows)]));
+        const staged: Store = MutableHashMap.fromIterable(
+          Arr.map(
+            Arr.fromIterable(store),
+            ([type, rows]) => [type, MutableHashMap.fromIterable(rows)] as const
+          )
+        );
         const entries: Array<Entry> = [];
         yield* Effect.forEach(
           payload["atomic:operations"].entries(),
@@ -380,9 +396,9 @@ const operationsLive = (store: Store, lock: Semaphore.Semaphore, probe: ServerPr
           { concurrency: 1, discard: true }
         );
         // Commit.
-        store.clear();
+        MutableHashMap.clear(store);
         Arr.forEach(staged, ([type, rows]) => {
-          store.set(type, rows);
+          MutableHashMap.set(store, type, rows);
         });
         return Atomic.results(entries);
       }).pipe(Semaphore.withPermits(lock, 1))
@@ -531,7 +547,7 @@ const makeBackend = (
   options: BackendOptions = {}
 ) =>
   Effect.gen(function* () {
-    const store: Store = options.store ?? new Map();
+    const store: Store = options.store ?? MutableHashMap.empty();
     const { client, requests } = yield* makeInProcessClient(store, probe);
     const atomic = yield* Effect.fromOption(Convention.reflectAtomic(api));
     const backend = yield* JsonApiBackend.make({
@@ -624,7 +640,7 @@ const probeBatch = (publishEarly: boolean) =>
     const entered = yield* Deferred.make<void>();
     const release = yield* Deferred.make<void>();
     const { backend } = yield* makeBackend(undefined, {
-      holds: new Map([[heldRow, { entered, release }]]),
+      holds: HashMap.make([heldRow, { entered, release }]),
       publishEarly,
     });
     const push = yield* Effect.forkChild(
@@ -728,7 +744,7 @@ describe("JsonApiBackend ledger store, atomic mode", () => {
     scoped.effect("keeps lastMutationIds and a committed rejection across a restart", () =>
       Effect.gen(function* () {
         const ledger = Ledger.keyValue(yield* KeyValueStore.KeyValueStore);
-        const server: Store = new Map();
+        const server: Store = MutableHashMap.empty();
         const first = yield* makeBackend(undefined, noProbe, { ledger, store: server });
         const pushed = yield* first.backend.applyMutations(restartContext, restartPush());
         const rejected = pushed.rejected ?? [];
@@ -763,7 +779,7 @@ describe("JsonApiBackend ledger store failures, atomic mode", () => {
           const failWrites = yield* Ref.make(0);
           const failReads = yield* Ref.make(0);
           const ledger = flakyLedger(Ledger.keyValue(kv), { failWrites, failReads });
-          const server: Store = new Map();
+          const server: Store = MutableHashMap.empty();
           const { backend } = yield* makeBackend(undefined, noProbe, { ledger, store: server });
 
           // The batch's rejection is remembered by the first ledger write, which runs
@@ -771,7 +787,7 @@ describe("JsonApiBackend ledger store failures, atomic mode", () => {
           yield* Ref.set(failWrites, 1);
           const failure = yield* Effect.flip(backend.applyMutations(restartContext, restartPush()));
           expect(failure).toBeInstanceOf(BackendError);
-          expect(tableOf(server, COLLECTION).has("kept")).toBe(true);
+          expect(MutableHashMap.has(tableOf(server, COLLECTION), "kept")).toBe(true);
 
           // Nothing is acknowledged: the cache and the store both hold the group as it was.
           expect(yield* backend.lastMutationIds(restartContext)).toEqual({});
@@ -800,13 +816,16 @@ describe("JsonApiBackend ledger store failures, atomic mode", () => {
         // Seed the store with a ledger that a backend over it must read back.
         const seeded = yield* makeBackend(undefined, noProbe, {
           ledger: durable,
-          store: new Map(),
+          store: MutableHashMap.empty(),
         });
         yield* seeded.backend.applyMutations(restartContext, restartPush());
 
         const failReads = yield* Ref.make(1);
         const ledger = flakyLedger(durable, { failWrites: yield* Ref.make(0), failReads });
-        const { backend } = yield* makeBackend(undefined, noProbe, { ledger, store: new Map() });
+        const { backend } = yield* makeBackend(undefined, noProbe, {
+          ledger,
+          store: MutableHashMap.empty(),
+        });
         const failure = yield* Effect.flip(backend.lastMutationIds(restartContext));
         expect(failure).toBeInstanceOf(BackendError);
         // The failed read cached nothing, so the next read reaches the store and sees its ledger.
@@ -821,7 +840,7 @@ describe("JsonApiBackend ledger store failures, atomic mode", () => {
       Effect.gen(function* () {
         const kv = yield* KeyValueStore.KeyValueStore;
         const ledger = Ledger.keyValue(kv);
-        const server: Store = new Map();
+        const server: Store = MutableHashMap.empty();
         const first = yield* makeBackend(undefined, noProbe, { ledger, store: server });
         const mutation = (mutationId: number, mutator: string, args: unknown) => ({
           clientId: restartClient,
@@ -883,7 +902,7 @@ describe("JsonApiBackend ledger store failures, atomic mode", () => {
           });
           const acknowledged = yield* first.backend.lastMutationIds(firstContext);
           const rejected = yield* first.backend.rejections(firstContext);
-          expect(Object.keys(acknowledged)).not.toHaveLength(0);
+          expect(R.keys(acknowledged)).not.toHaveLength(0);
           expect(rejected).not.toHaveLength(0);
 
           // The restart: a new backend over the same durable store reports the group it left.

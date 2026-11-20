@@ -74,6 +74,7 @@
 import { Resource } from "@thomasfosterau/effect-jsonapi";
 import { Edge, type FilterPolicy, Node } from "@thomasfosterau/legation";
 import * as Arr from "effect/Array";
+import * as HashSet from "effect/HashSet";
 import * as R from "effect/Record";
 import * as Result from "effect/Result";
 import * as Option from "effect/Option";
@@ -263,7 +264,7 @@ const discoverInverse = (
   target: string,
   targetOneEdges: Record<string, Edge.One>
 ): string => {
-  const candidates = Object.entries(targetOneEdges).filter(([, edge]) => edge.target === source);
+  const candidates = R.toEntries(targetOneEdges).filter(([, edge]) => edge.target === source);
   const only = candidates[0];
   if (candidates.length === 1 && only !== undefined) return only[0];
   return fail(
@@ -352,10 +353,10 @@ const attributesOf = (
   resource: Resource.Any,
   edges: Record<string, Edge.Edge>
 ): Schema.Struct.Fields => {
-  const keys = new Set(
-    Object.values(edges).flatMap((edge) => (edge.kind === "one" ? [edge.via] : []))
+  const keys = HashSet.fromIterable(
+    R.values(edges).flatMap((edge) => (edge.kind === "one" ? [edge.via] : []))
   );
-  return R.filter(resource.fields.attributes.fields, (_, field) => !keys.has(field));
+  return R.filter(resource.fields.attributes.fields, (_, field) => !HashSet.has(keys, field));
 };
 
 /** One entry of `Resource.filterable`, as the bridge reads it. */

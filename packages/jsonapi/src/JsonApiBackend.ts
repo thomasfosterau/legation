@@ -108,7 +108,10 @@
 
 import * as Arr from "effect/Array";
 import * as Effect from "effect/Effect";
+import * as HashMap from "effect/HashMap";
+import * as HashSet from "effect/HashSet";
 import * as Match from "effect/Match";
+import * as MutableHashMap from "effect/MutableHashMap";
 import * as Option from "effect/Option";
 import * as P from "effect/Predicate";
 import * as R from "effect/Record";
@@ -237,17 +240,17 @@ const appendQuery = (query: string, extra: string): string =>
  * `None` if it isn't id-pinned. Used to recognize auto-subscribed
  * relationship subsets that the include fast-path can serve from cache.
  */
-const pinnedIds = (predicate: Predicate.Predicate): Option.Option<ReadonlySet<string>> =>
+const pinnedIds = (predicate: Predicate.Predicate): Option.Option<HashSet.HashSet<string>> =>
   Match.value(predicate).pipe(
-    Match.withReturnType<Option.Option<ReadonlySet<string>>>(),
+    Match.withReturnType<Option.Option<HashSet.HashSet<string>>>(),
     Match.tag("In", (node) =>
       node.field === "id"
-        ? Option.some(new Set(node.values.map((value) => String(value))))
+        ? Option.some(HashSet.fromIterable(node.values.map((value) => String(value))))
         : Option.none()
     ),
     Match.tag("Compare", (node) =>
       node.op === "eq" && node.field === "id"
-        ? Option.some(new Set([String(node.value)]))
+        ? Option.some(HashSet.make(String(node.value)))
         : Option.none()
     ),
     Match.tag("And", (node) => Arr.findFirst(node.predicates, pinnedIds)),
@@ -537,13 +540,13 @@ const rejectionsOf = (
           readonly source?: { readonly pointer?: string };
         }>)
       : [];
-  const byIndex = new Map<number, string>();
+  const byIndex = MutableHashMap.empty<number, string>();
   errors.forEach((error) => {
     const pointer = error?.source?.pointer;
     if (!P.isString(pointer)) return;
     const index = operationIndex(pointer, count);
-    if (Option.isNone(index) || byIndex.has(index.value)) return;
-    byIndex.set(index.value, error.detail ?? error.title ?? fallbackReason);
+    if (Option.isNone(index) || MutableHashMap.has(byIndex, index.value)) return;
+    MutableHashMap.set(byIndex, index.value, error.detail ?? error.title ?? fallbackReason);
   });
   return [...byIndex].map(([index, reason]) => ({ index, reason }));
 };
@@ -600,12 +603,12 @@ const groupOf = (ledger: Ledger.GroupLedger): Group => {
     ids.set(entry.mutationId, entry.reason);
     rejections.set(entry.clientId, ids);
   });
-  return { acknowledged: new Map(Object.entries(ledger.lastMutationIds)), rejections };
+  return { acknowledged: new Map(R.toEntries(ledger.lastMutationIds)), rejections };
 };
 
 /** A group as the store holds it. */
 const ledgerOf = (group: Group): Ledger.GroupLedger => ({
-  lastMutationIds: Object.fromEntries(group.acknowledged),
+  lastMutationIds: R.fromEntries(group.acknowledged),
   rejections: [...group.rejections].flatMap(([clientId, ids]) =>
     [...ids].map(([mutationId, reason]) => ({ clientId, mutationId, reason }))
   ),
@@ -660,7 +663,7 @@ export const make = (
     const includedIds = yield* Ref.make(new Map<string, Set<string>>());
     // clientGroupId → the group's ledger: read from the store on first use,
     // then kept current with each change written to it.
-    const groups = yield* Ref.make(new Map<string, Group>());
+    const groups = yield* Ref.make(HashMap.empty<string, Group>());
     const ledgerStore = config.ledger ?? Ledger.memory;
     // Every ledger read-modify-write runs under this lock, so the store is never
     // written with a group that a concurrent change has already moved past.
@@ -678,9 +681,9 @@ export const make = (
     // request, forbidden, conflict): the server did not apply the write, so it
     // is a MutationRejected that skips the mutation without poisoning the queue.
     // 408/429 are the transient exceptions in the 4xx band (timeout, rate limit).
-    const transientStatuses = new Set([408, 429]);
+    const transientStatuses = HashSet.make(408, 429);
     const isPermanentStatus = (status: number): boolean =>
-      status >= 400 && status < 500 && !transientStatuses.has(status);
+      status >= 400 && status < 500 && !HashSet.has(transientStatuses, status);
     /** Send one write; the resource document it answers with, if it answers with one. */
     const sendWrite = (request: HttpClientRequest.HttpClientRequest) =>
       Effect.scoped(client.execute(request)).pipe(
@@ -1057,10 +1060,10 @@ export const make = (
     /** The group's ledger, filled from the store on first use. Callers hold `ledgerLock`. */
     const fillGroup = (clientGroupId: string): Effect.Effect<Group, BackendError> =>
       Effect.gen(function* () {
-        const cached = (yield* Ref.get(groups)).get(clientGroupId);
-        if (cached !== undefined) return cached;
+        const cached = HashMap.get(yield* Ref.get(groups), clientGroupId);
+        if (Option.isSome(cached)) return cached.value;
         const group = groupOf(yield* ledgerStore.read(clientGroupId));
-        yield* Ref.update(groups, (current) => new Map(current).set(clientGroupId, group));
+        yield* Ref.update(groups, HashMap.set(clientGroupId, group));
         return group;
       });
 
@@ -1082,7 +1085,7 @@ export const make = (
           const next = change(current);
           if (next === current) return;
           yield* ledgerStore.write(clientGroupId, ledgerOf(next));
-          yield* Ref.update(groups, (all) => new Map(all).set(clientGroupId, next));
+          yield* Ref.update(groups, HashMap.set(clientGroupId, next));
         })
       );
 
@@ -1155,7 +1158,7 @@ export const make = (
 
     const lastMutationIdsOf = (context: Backend.SyncContext) =>
       readGroup(context.clientGroupId).pipe(
-        Effect.map((group) => Object.fromEntries(group.acknowledged))
+        Effect.map((group) => R.fromEntries(group.acknowledged))
       );
 
     /** The group's remembered rejections, each with its reason. A pull reports those its watermark covers. */
@@ -1383,7 +1386,7 @@ export const make = (
         });
 
         // Batch index → rejection reason; each round trip drops at least one.
-        const rejectedAt = new Map<number, string>();
+        const rejectedAt = MutableHashMap.empty<number, string>();
         type Pending = ReadonlyArray<(typeof batch)[number] & { readonly index: number }>;
         // One round trip; refused operations are dropped and the rest resent.
         const round = (
@@ -1405,9 +1408,9 @@ export const make = (
             });
             outcome.rejections.forEach(({ index, reason }) => {
               const entry = pending[index];
-              if (entry !== undefined) rejectedAt.set(entry.index, reason);
+              if (entry !== undefined) MutableHashMap.set(rejectedAt, entry.index, reason);
             });
-            const next = pending.filter((entry) => !rejectedAt.has(entry.index));
+            const next = pending.filter((entry) => !MutableHashMap.has(rejectedAt, entry.index));
             // A create the server refused may have left its row in place: read it
             // before the resend when a later write of it still needs the old value.
             yield* readRefusedCreates(acc, refused, next);

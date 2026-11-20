@@ -34,9 +34,11 @@ import * as Defined from "./Defined.js";
 import * as Arr from "effect/Array";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
+import * as HashMap from "effect/HashMap";
 import * as Option from "effect/Option";
 import * as Order from "effect/Order";
 import * as P from "effect/Predicate";
+import * as R from "effect/Record";
 import * as Result from "effect/Result";
 import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
@@ -257,7 +259,7 @@ const isPredicateWhere = (where: NonNullable<Read["where"]>): where is Predicate
 const compileWhere = (where: Read["where"]): Predicate.Predicate => {
   if (where === undefined) return Predicate.always;
   if (isPredicateWhere(where)) return where;
-  const terms = Object.entries(where).map(([field, value]) => Predicate.eq(field, value));
+  const terms = R.toEntries(where).map(([field, value]) => Predicate.eq(field, value));
   const only = terms[0];
   return terms.length === 1 && only !== undefined ? only : Predicate.and(...terms);
 };
@@ -294,7 +296,7 @@ export const plan = (nodes: Node.NodeRegistry, read: Read): Plan => {
   });
   const node = nodes.nodes.get(read.collection);
   const edges: Array<EdgePlan> = [];
-  Arr.forEach(Object.entries(read.include ?? {}), ([name, options]) => {
+  Arr.forEach(R.toEntries(read.include ?? {}), ([name, options]) => {
     if (node === undefined) {
       throw new QueryError({
         message: `Unknown collection for include: ${read.collection}`,
@@ -552,13 +554,14 @@ export const QueryResolver = Context.Service<QueryResolver>(
 export const resolver = (
   entries: ReadonlyArray<{ readonly query: AnyQuery; readonly server: ServerQuery<any> }>
 ): QueryResolver => {
-  const map = new Map(entries.map((entry) => [entry.query.name, entry] as const));
+  const map = HashMap.fromIterable(entries.map((entry) => [entry.query.name, entry] as const));
   return {
     resolve: (name, encodedArgs, context) => {
-      const entry = map.get(name);
-      if (entry === undefined) {
+      const found = HashMap.get(map, name);
+      if (Option.isNone(found)) {
         return Effect.fail(new QueryError({ message: `Unknown query: ${name}`, query: name }));
       }
+      const entry = found.value;
       return Schema.decodeUnknownEffect(entry.query.args)(encodedArgs).pipe(
         Effect.mapError(
           (cause) =>

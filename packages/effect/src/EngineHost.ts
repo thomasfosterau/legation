@@ -81,6 +81,7 @@ import * as Eq from "effect/Equal";
 import * as Exit from "effect/Exit";
 import * as Fiber from "effect/Fiber";
 import * as HashMap from "effect/HashMap";
+import * as HashSet from "effect/HashSet";
 import * as Match from "effect/Match";
 import * as Option from "effect/Option";
 import * as Ref from "effect/Ref";
@@ -175,9 +176,9 @@ interface Registered {
 
 /** One actively-broadcast registration: which mirrors hold it, its fiber, teardown. */
 interface Active {
-  readonly mirrors: ReadonlySet<string>;
+  readonly mirrors: HashSet.HashSet<string>;
   /** The mirrors holding this registration by URL (`SubscribeUrl`); the URL is reported while any remains. */
-  readonly urlMirrors: ReadonlySet<string>;
+  readonly urlMirrors: HashSet.HashSet<string>;
   /**
    * The broadcast loop: each run observes the engine afresh, so its first
    * emission is the replica as it stands when the run starts.
@@ -209,15 +210,10 @@ const subscriptionOf = (entry: Active): Option.Option<Coverage.Subscription> =>
     ? Option.none()
     : Option.some({
         ...entry.registered.registration,
-        ...Defined.fields({ url: entry.urlMirrors.size > 0 ? entry.registered.url : undefined }),
+        ...Defined.fields({
+          url: HashSet.size(entry.urlMirrors) > 0 ? entry.registered.url : undefined,
+        }),
       });
-
-/** A set with one member fewer. */
-const without = (set: ReadonlySet<string>, member: string): ReadonlySet<string> => {
-  const next = new Set(set);
-  next.delete(member);
-  return next;
-};
 
 /** Liveness settings with their defaults applied. */
 const livenessOf = (options: EngineHostOptions) => ({
@@ -286,7 +282,7 @@ export const run = (options: EngineHostOptions): Effect.Effect<Host, never, Scop
     const engine = Subscriptions.counted(options.engine);
     const inbox = yield* channel.subscribe;
     const active = yield* Ref.make(new Map<string, Active>());
-    const lastSeen = yield* Ref.make(new Map<string, number>());
+    const lastSeen = yield* Ref.make(HashMap.empty<string, number>());
     // Each registration's pull mark: pulled once a pull started after it has applied.
     const marks = PullMarks.make(engine);
     // The scope broadcast loops run in, so a loop restarted by `announce` lives as long as the host.
@@ -373,14 +369,9 @@ export const run = (options: EngineHostOptions): Effect.Effect<Host, never, Scop
 
     const touch = (mirrorId: string) =>
       Clock.currentTimeMillis.pipe(
-        Effect.flatMap((now) => Ref.update(lastSeen, (map) => new Map(map).set(mirrorId, now)))
+        Effect.flatMap((now) => Ref.update(lastSeen, HashMap.set(mirrorId, now)))
       );
-    const forget = (mirrorId: string) =>
-      Ref.update(lastSeen, (map) => {
-        const next = new Map(map);
-        next.delete(mirrorId);
-        return next;
-      });
+    const forget = (mirrorId: string) => Ref.update(lastSeen, HashMap.remove(mirrorId));
 
     const broadcast = (key: string, rows: ReadonlyArray<ClientEngine.LocalRow>) =>
       channel.post(MirrorProtocol.mirrorUpdate(key, rows));
@@ -427,8 +418,8 @@ export const run = (options: EngineHostOptions): Effect.Effect<Host, never, Scop
           yield* Ref.update(active, (map) =>
             new Map(map).set(key, {
               ...existing,
-              mirrors: new Set(existing.mirrors).add(mirrorId),
-              urlMirrors: byUrl ? new Set(existing.urlMirrors).add(mirrorId) : existing.urlMirrors,
+              mirrors: HashSet.add(existing.mirrors, mirrorId),
+              urlMirrors: byUrl ? HashSet.add(existing.urlMirrors, mirrorId) : existing.urlMirrors,
               ...Defined.fields({ registered: known }),
             })
           );
@@ -446,8 +437,8 @@ export const run = (options: EngineHostOptions): Effect.Effect<Host, never, Scop
             const fiber = yield* Ref.make(yield* Effect.forkIn(loop, hostScope));
             yield* Ref.update(active, (map) =>
               new Map(map).set(key, {
-                mirrors: new Set([mirrorId]),
-                urlMirrors: new Set(byUrl ? [mirrorId] : []),
+                mirrors: HashSet.make(mirrorId),
+                urlMirrors: byUrl ? HashSet.make(mirrorId) : HashSet.empty<string>(),
                 loop,
                 fiber,
                 teardown,
@@ -464,14 +455,14 @@ export const run = (options: EngineHostOptions): Effect.Effect<Host, never, Scop
     const release = (mirrorId: string, key: string) =>
       Effect.gen(function* () {
         const entry = (yield* Ref.get(active)).get(key);
-        if (entry === undefined || !entry.mirrors.has(mirrorId)) return;
-        const mirrors = without(entry.mirrors, mirrorId);
-        if (mirrors.size > 0) {
+        if (entry === undefined || !HashSet.has(entry.mirrors, mirrorId)) return;
+        const mirrors = HashSet.remove(entry.mirrors, mirrorId);
+        if (HashSet.size(mirrors) > 0) {
           yield* Ref.update(active, (map) =>
             new Map(map).set(key, {
               ...entry,
               mirrors,
-              urlMirrors: without(entry.urlMirrors, mirrorId),
+              urlMirrors: HashSet.remove(entry.urlMirrors, mirrorId),
             })
           );
           return;
@@ -861,7 +852,7 @@ export const run = (options: EngineHostOptions): Effect.Effect<Host, never, Scop
     const handleDisconnect = (mirrorId: string) =>
       Effect.gen(function* () {
         const keys = [...(yield* Ref.get(active))]
-          .filter(([, entry]) => entry.mirrors.has(mirrorId))
+          .filter(([, entry]) => HashSet.has(entry.mirrors, mirrorId))
           .map(([key]) => key);
         yield* Effect.forEach(keys, (key) => release(mirrorId, key), {
           concurrency: 1,
@@ -1005,7 +996,7 @@ export const run = (options: EngineHostOptions): Effect.Effect<Host, never, Scop
     const sweep = Effect.fnUntraced(function* () {
       const now = yield* Clock.currentTimeMillis;
       const cutoff = now - Duration.toMillis(mirrorTimeout);
-      const stale = [...(yield* Ref.get(lastSeen))]
+      const stale = Arr.fromIterable(yield* Ref.get(lastSeen))
         .filter(([, seen]) => seen < cutoff)
         .map(([mirrorId]) => mirrorId);
       yield* Effect.forEach(stale, (mirrorId) => handleDisconnect(mirrorId), {
@@ -1059,12 +1050,20 @@ export const run = (options: EngineHostOptions): Effect.Effect<Host, never, Scop
         { concurrency: 1 }
       ).pipe(
         Effect.map(({ entries, pulled }) => {
-          const summaries = new Map(pulled.map((entry) => [entry.key, entry.pulled]));
+          const summaries = HashMap.fromIterable(pulled.map((entry) => [entry.key, entry.pulled]));
           return [...entries].flatMap(([key, entry]) => {
             const subscription = subscriptionOf(entry);
             return Option.isNone(subscription)
               ? []
-              : [{ ...subscription.value, pulled: summaries.get(key) ?? Coverage.NOT_PULLED }];
+              : [
+                  {
+                    ...subscription.value,
+                    pulled: Option.getOrElse(
+                      HashMap.get(summaries, key),
+                      () => Coverage.NOT_PULLED
+                    ),
+                  },
+                ];
           });
         })
       ),

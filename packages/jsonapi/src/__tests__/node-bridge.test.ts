@@ -8,6 +8,7 @@
 import { assert, describe, expect, it } from "@effect/vitest";
 import * as Arr from "effect/Array";
 import * as Effect from "effect/Effect";
+import * as R from "effect/Record";
 import * as Order from "effect/Order";
 import * as Ref from "effect/Ref";
 import * as Schema from "effect/Schema";
@@ -66,7 +67,7 @@ describe("NodeBridge.fromResource", () => {
   it("bridges one relationships to one-edges with the derived key field", () => {
     const node = NodeBridge.fromResource(Category);
     expect(node.type).toBe("categories");
-    expect(Object.keys(node.attributes)).toEqual(["name"]);
+    expect(R.keys(node.attributes)).toEqual(["name"]);
 
     const withEdge = NodeBridge.fromResource(
       Resource.make("profiles", {
@@ -106,7 +107,7 @@ describe("NodeBridge.fromResource", () => {
       via: "productId",
     });
     // The promoted attribute now lives on the edge, not in attributes.
-    expect(Arr.sort(Object.keys(node.attributes), Order.String)).toEqual(["body", "createdAt"]);
+    expect(Arr.sort(R.keys(node.attributes), Order.String)).toEqual(["body", "createdAt"]);
     expect([...Node.derivableSet(node)]).toEqual(["productId"]);
   });
 
@@ -363,7 +364,7 @@ describe("NodeBridge filterable set", () => {
     });
     expect(node.sortable).toEqual(["id", "createdAt"]);
     // Nothing declared: only the key fields are reachable.
-    expect(Object.keys(NodeBridge.fromResource(Category).filterable)).toEqual(["id"]);
+    expect(R.keys(NodeBridge.fromResource(Category).filterable)).toEqual(["id"]);
   });
 });
 

@@ -14,6 +14,7 @@ import { describeWrapped, expect, layer, describe } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import { awaitPromise } from "./await-promise.js";
 import * as Exit from "effect/Exit";
+import * as MutableHashMap from "effect/MutableHashMap";
 import * as Option from "effect/Option";
 import * as Ref from "effect/Ref";
 import * as Schema from "effect/Schema";
@@ -67,14 +68,14 @@ interface Stored {
   readonly id: string;
   readonly attributes: Record<string, Schema.Json>;
 }
-type Table = Map<string, Stored>;
-type Store = Map<string, Table>;
+type Table = MutableHashMap.MutableHashMap<string, Stored>;
+type Store = MutableHashMap.MutableHashMap<string, Table>;
 
 const tableOf = (store: Store, type: string): Table => {
-  const existing = store.get(type);
-  if (existing !== undefined) return existing;
-  const created: Table = new Map();
-  store.set(type, created);
+  const existing = MutableHashMap.get(store, type);
+  if (Option.isSome(existing)) return existing.value;
+  const created: Table = MutableHashMap.empty();
+  MutableHashMap.set(store, type, created);
   return created;
 };
 
@@ -106,10 +107,12 @@ const CRASH = "crash";
 /** A GET: the collection, or one row (404 when absent). Reads never wait. */
 const answerGet = (table: Table, id: Option.Option<string>): Response => {
   if (Option.isNone(id)) {
-    return respond(200, { data: [...table.values()].map((row) => documentOf(row).data) });
+    return respond(200, {
+      data: [...MutableHashMap.values(table)].map((row) => documentOf(row).data),
+    });
   }
-  const row = table.get(id.value);
-  return row === undefined ? respond(404) : respond(200, documentOf(row));
+  const row = MutableHashMap.get(table, id.value);
+  return Option.isNone(row) ? respond(404) : respond(200, documentOf(row.value));
 };
 
 /** A POST: an upsert of the row the body names, or the rejection or fault its marker asks for. */
@@ -121,7 +124,7 @@ const answerPost = (table: Table, request: ServerRequest): Response => {
     return respond(422, { errors: [{ status: "422", title: "Poison row refused" }] });
   if (attributes[CRASH] === true) return respond(500);
   const row: Stored = { type: request.type, id, attributes };
-  table.set(id, row);
+  MutableHashMap.set(table, id, row);
   return respond(201, documentOf(row));
 };
 
@@ -136,14 +139,14 @@ const answerPatch = (table: Table, row: Stored, request: ServerRequest): Effect.
     const { increment, ...merge } = attributes;
     if (increment === undefined) {
       const updated: Stored = { ...row, attributes: { ...row.attributes, ...merge } };
-      table.set(row.id, updated);
+      MutableHashMap.set(table, row.id, updated);
       return respond(200, documentOf(updated));
     }
     const read = Number(row.attributes.n ?? 0);
     const gate = yield* Schema.decodeUnknownEffect(Schema.String)(increment).pipe(Effect.orDie);
     yield* BackendContract.park(gate);
     const updated: Stored = { ...row, attributes: { ...row.attributes, n: read + 1 } };
-    table.set(row.id, updated);
+    MutableHashMap.set(table, row.id, updated);
     return respond(200, documentOf(updated));
   });
 
@@ -153,13 +156,13 @@ const serve = (store: Store, request: ServerRequest): Effect.Effect<Response> =>
     if (request.method === "GET") return answerGet(table, request.id);
     if (request.method === "POST") return answerPost(table, request);
     const id = Option.getOrElse(request.id, () => "");
-    const row = table.get(id);
-    if (row === undefined) return respond(404);
+    const row = MutableHashMap.get(table, id);
+    if (Option.isNone(row)) return respond(404);
     if (request.method === "DELETE") {
-      table.delete(id);
+      MutableHashMap.remove(table, id);
       return respond(204);
     }
-    return yield* answerPatch(table, row, request);
+    return yield* answerPatch(table, row.value, request);
   });
 
 /** The server as an `HttpClient`, recording every request it serves. */
@@ -276,7 +279,7 @@ const makeBackend = (
   options: { readonly ledger?: Ledger.LedgerStore; readonly store?: Store } = {}
 ) =>
   Effect.gen(function* () {
-    const store: Store = options.store ?? new Map();
+    const store: Store = options.store ?? MutableHashMap.empty();
     const { client, requests } = yield* makeInProcessClient(store);
     const backend = yield* JsonApiBackend.make({
       baseUrl: "http://contract.test",
@@ -343,7 +346,7 @@ describe("JsonApiBackend ledger store, per-resource mode", () => {
     scoped.effect("keeps lastMutationIds and a committed rejection across a restart", () =>
       Effect.gen(function* () {
         const ledger = Ledger.keyValue(yield* KeyValueStore.KeyValueStore);
-        const server: Store = new Map();
+        const server: Store = MutableHashMap.empty();
         const first = yield* makeBackend({ ledger, store: server });
         const pushed = yield* first.backend.applyMutations(restartContext, restartPush());
         const rejected = pushed.rejected ?? [];
@@ -387,7 +390,7 @@ describe("JsonApiBackend ledger store failures, per-resource mode", () => {
                 )
               ),
           };
-          const server: Store = new Map();
+          const server: Store = MutableHashMap.empty();
           const { backend, requests } = yield* makeBackend({ ledger, store: server });
           const push = [1, 2].map((mutationId) => ({
             clientId: restartClient,
@@ -405,7 +408,11 @@ describe("JsonApiBackend ledger store failures, per-resource mode", () => {
           expect(failure).toBeInstanceOf(BackendError);
           // Both writes reached the server. Mutation 1 is acknowledged in the cache and the
           // store; mutation 2 is not, because its acknowledgement write failed.
-          expect(server.get(COLLECTION)?.has("second")).toBe(true);
+          expect(
+            Option.exists(MutableHashMap.get(server, COLLECTION), (table) =>
+              MutableHashMap.has(table, "second")
+            )
+          ).toBe(true);
           expect(yield* backend.lastMutationIds(restartContext)).toEqual({ [restartClient]: 1 });
           expect(yield* durable.read(restartContext.clientGroupId)).toEqual({
             lastMutationIds: { [restartClient]: 1 },
@@ -437,7 +444,7 @@ describe("JsonApiBackend ledger store failures, per-resource mode", () => {
             failWrites,
             failReads: yield* Ref.make(0),
           });
-          const server: Store = new Map();
+          const server: Store = MutableHashMap.empty();
           const { backend } = yield* makeBackend({ ledger, store: server });
 
           // The first mutation's write applies on the server; the ledger write that
@@ -445,7 +452,11 @@ describe("JsonApiBackend ledger store failures, per-resource mode", () => {
           yield* Ref.set(failWrites, 1);
           const failure = yield* Effect.flip(backend.applyMutations(restartContext, restartPush()));
           expect(failure).toBeInstanceOf(BackendError);
-          expect(server.get(COLLECTION)?.has("kept")).toBe(true);
+          expect(
+            Option.exists(MutableHashMap.get(server, COLLECTION), (table) =>
+              MutableHashMap.has(table, "kept")
+            )
+          ).toBe(true);
 
           // Nothing is acknowledged: the cache and the store both hold the group as it was.
           expect(yield* backend.lastMutationIds(restartContext)).toEqual({});

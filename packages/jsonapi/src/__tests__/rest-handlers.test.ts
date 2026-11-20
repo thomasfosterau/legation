@@ -639,9 +639,7 @@ describe("RestHandlers over the read path", () => {
             "/api/products?fields[products]=name&include=variants&fields[variants]="
           );
           expect(status).toBe(200);
-          expect(many(body).every((r) => Object.keys(attributesOf(r)).join() === "name")).toBe(
-            true
-          );
+          expect(many(body).every((r) => R.keys(attributesOf(r)).join() === "name")).toBe(true);
           // Linkage survives the projection; the rows behind it were full.
           expect(toOne(defined(many(body)[0]), "category").id).toBe("c-audio");
           expect(included(body).every((r) => R.isEmptyReadonlyRecord(attributesOf(r)))).toBe(true);

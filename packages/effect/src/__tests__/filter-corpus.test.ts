@@ -12,6 +12,9 @@ import * as Layer from "effect/Layer";
 import * as Arr from "effect/Array";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
+import * as HashMap from "effect/HashMap";
+import * as MutableHashSet from "effect/MutableHashSet";
+import * as Option from "effect/Option";
 import * as Match from "effect/Match";
 import * as P from "effect/Predicate";
 import * as R from "effect/Record";
@@ -118,18 +121,18 @@ layer(DefaultCorpus.layer)("FilterCorpus", (it) => {
   it.effect("covers every literal kind, NULL, absent, boundary numerics, and astral text", () =>
     Effect.gen(function* () {
       const corpus = yield* DefaultCorpus;
-      const seen = new Set<string>();
+      const seen = MutableHashSet.empty<string>();
       Arr.forEach(corpus.rows, (row) => {
         Arr.forEach(corpus.columns, (column) => {
-          if (!(column.name in row.value)) seen.add(`${column.name}:absent`);
-          else if (row.value[column.name] === null) seen.add(`${column.name}:null`);
-          else seen.add(`${column.name}:${column.kind}`);
+          if (!(column.name in row.value)) MutableHashSet.add(seen, `${column.name}:absent`);
+          else if (row.value[column.name] === null) MutableHashSet.add(seen, `${column.name}:null`);
+          else MutableHashSet.add(seen, `${column.name}:${column.kind}`);
         });
       });
       Arr.forEach(corpus.columns, (column) => {
-        expect(seen).toContain(`${column.name}:absent`);
-        expect(seen).toContain(`${column.name}:null`);
-        expect(seen).toContain(`${column.name}:${column.kind}`);
+        expect([...seen]).toContain(`${column.name}:absent`);
+        expect([...seen]).toContain(`${column.name}:null`);
+        expect([...seen]).toContain(`${column.name}:${column.kind}`);
       });
       const strings = corpus.rows.map((row) => row.value.s).filter(P.isString);
       expect(strings).toContain("");
@@ -147,13 +150,15 @@ layer(DefaultCorpus.layer)("FilterCorpus", (it) => {
   it.effect("never compares a column against a literal of another kind (rule d)", () =>
     Effect.gen(function* () {
       const corpus = yield* DefaultCorpus;
-      const columns = new Map(corpus.columns.map((column) => [column.name, column]));
+      const columns = HashMap.fromIterable(corpus.columns.map((column) => [column.name, column]));
       const allLeaves = corpus.predicates.flatMap(leaves);
       expect(allLeaves.length).toBeGreaterThan(0);
-      const unknownFields = allLeaves.filter((leaf) => !columns.has(leaf.field));
+      const unknownFields = allLeaves.filter((leaf) => !HashMap.has(columns, leaf.field));
       expect(unknownFields).toEqual([]);
       const crossTyped = allLeaves.filter(
-        (leaf) => leaf.literal !== null && !kindOf(leaf.literal, defined(columns.get(leaf.field)))
+        (leaf) =>
+          leaf.literal !== null &&
+          !kindOf(leaf.literal, defined(Option.getOrUndefined(HashMap.get(columns, leaf.field))))
       );
       expect(crossTyped).toEqual([]);
     })
@@ -221,7 +226,7 @@ layer(DefaultCorpus.layer)("FilterCorpus", (it) => {
       Arr.forEach(corpus.orderBys, (orderBy) => {
         expect(orderBy.length).toBeGreaterThanOrEqual(1);
         expect(orderBy.length).toBeLessThanOrEqual(2);
-        expect(new Set(orderBy.map((term) => term.field)).size).toBe(orderBy.length);
+        expect(Arr.dedupe(orderBy.map((term) => term.field)).length).toBe(orderBy.length);
       });
     })
   );

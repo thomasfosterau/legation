@@ -37,11 +37,13 @@ import {
   Subscriptions,
   Subset,
 } from "@thomasfosterau/legation/internal";
+import * as Arr from "effect/Array";
 import * as Context from "effect/Context";
 import type * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
 import * as Layer from "effect/Layer";
+import * as MutableHashMap from "effect/MutableHashMap";
 import * as Option from "effect/Option";
 import * as Ref from "effect/Ref";
 import * as Scope from "effect/Scope";
@@ -161,25 +163,25 @@ const switchingView = (
   viewRef: SubscriptionRef.SubscriptionRef<ClientView.ClientView>
 ): Effect.Effect<ClientView.ClientView, never, Scope.Scope> =>
   Effect.gen(function* () {
-    const pinnedSubsets = yield* Ref.make(new Map<string, Subset.Subset>());
-    const pinnedNamed = yield* Ref.make(
-      new Map<string, { readonly name: string; readonly args: unknown }>()
-    );
+    const pinnedSubsets = MutableHashMap.empty<string, Subset.Subset>();
+    const pinnedNamed = MutableHashMap.empty<
+      string,
+      { readonly name: string; readonly args: unknown }
+    >();
 
     // Skip the CURRENT value (already active) and replay pins onto every
     // view this switches to AFTER that.
     yield* Effect.forkScoped(
       Stream.runForEach(Stream.drop(SubscriptionRef.changes(viewRef), 1), (view) =>
         Effect.gen(function* () {
-          const subsets = yield* Ref.get(pinnedSubsets);
-          const named = yield* Ref.get(pinnedNamed);
+          const subsets = Arr.fromIterable(MutableHashMap.values(pinnedSubsets));
+          const named = Arr.fromIterable(MutableHashMap.values(pinnedNamed));
+          yield* Effect.forEach(subsets, (subset) => view.subscribe(subset).pipe(Effect.ignore), {
+            concurrency: 1,
+            discard: true,
+          });
           yield* Effect.forEach(
-            subsets.values(),
-            (subset) => view.subscribe(subset).pipe(Effect.ignore),
-            { concurrency: 1, discard: true }
-          );
-          yield* Effect.forEach(
-            named.values(),
+            named,
             (entry) => view.subscribeQuery(entry.name, entry.args).pipe(Effect.ignore),
             { concurrency: 1, discard: true }
           );
@@ -200,25 +202,21 @@ const switchingView = (
           Stream.switchMap((view) => view.observeChanges(subset, changeOptions))
         ),
       subscribe: (subset) =>
-        Ref.update(pinnedSubsets, (map) => new Map(map).set(Subset.hash(subset), subset)).pipe(
+        Effect.sync(() => MutableHashMap.set(pinnedSubsets, Subset.hash(subset), subset)).pipe(
           Effect.andThen(withCurrent((view) => view.subscribe(subset)))
         ),
       unsubscribe: (subset) =>
-        Ref.update(pinnedSubsets, (map) => {
-          const next = new Map(map);
-          next.delete(Subset.hash(subset));
-          return next;
-        }).pipe(Effect.andThen(withCurrent((view) => view.unsubscribe(subset)))),
+        Effect.sync(() => MutableHashMap.remove(pinnedSubsets, Subset.hash(subset))).pipe(
+          Effect.andThen(withCurrent((view) => view.unsubscribe(subset)))
+        ),
       subscribeQuery: (name, args) =>
-        Ref.update(pinnedNamed, (map) =>
-          new Map(map).set(MirrorProtocol.namedKey(name, args), { name, args })
+        Effect.sync(() =>
+          MutableHashMap.set(pinnedNamed, MirrorProtocol.namedKey(name, args), { name, args })
         ).pipe(Effect.andThen(withCurrent((view) => view.subscribeQuery(name, args)))),
       unsubscribeQuery: (name, args) =>
-        Ref.update(pinnedNamed, (map) => {
-          const next = new Map(map);
-          next.delete(MirrorProtocol.namedKey(name, args));
-          return next;
-        }).pipe(Effect.andThen(withCurrent((view) => view.unsubscribeQuery(name, args)))),
+        Effect.sync(() =>
+          MutableHashMap.remove(pinnedNamed, MirrorProtocol.namedKey(name, args))
+        ).pipe(Effect.andThen(withCurrent((view) => view.unsubscribeQuery(name, args)))),
       queryNamed: (name, args) => withCurrent((view) => view.queryNamed(name, args)),
       pulled: (key) => withCurrent((view) => view.pulled(key)),
       // A switch of tier moves every summary, so it is a change of its own.

@@ -9,6 +9,8 @@
  */
 import { expect, layer, describe } from "@effect/vitest";
 import * as Effect from "effect/Effect";
+import * as MutableHashMap from "effect/MutableHashMap";
+import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 import { KeyValueStore } from "effect/persistence";
 import * as Authorization from "../Authorization.js";
@@ -36,19 +38,19 @@ const mutation = (mutationId: number, clientId = "c1"): Mutation => ({
 
 /** An in-memory KeyValueStore that counts `set` calls per key. */
 const countingStore = () => {
-  const data = new Map<string, string>();
-  const sets = new Map<string, number>();
+  const data = MutableHashMap.empty<string, string>();
+  const sets = MutableHashMap.empty<string, number>();
   const store = KeyValueStore.makeStringOnly({
-    get: (key) => Effect.sync(() => data.get(key)),
+    get: (key) => Effect.sync(() => Option.getOrUndefined(MutableHashMap.get(data, key))),
     set: (key, value) =>
       Effect.sync(() => {
-        sets.set(key, (sets.get(key) ?? 0) + 1);
-        data.set(key, value);
+        MutableHashMap.set(sets, key, Option.getOrElse(MutableHashMap.get(sets, key), () => 0) + 1);
+        MutableHashMap.set(data, key, value);
       }),
-    remove: (key) => Effect.sync(() => void data.delete(key)),
-    clear: Effect.sync(() => data.clear()),
-    size: Effect.sync(() => data.size),
-    keys: Effect.sync(() => [...data.keys()]),
+    remove: (key) => Effect.sync(() => void MutableHashMap.remove(data, key)),
+    clear: Effect.sync(() => MutableHashMap.clear(data)),
+    size: Effect.sync(() => MutableHashMap.size(data)),
+    keys: Effect.sync(() => [...MutableHashMap.keys(data)]),
   });
   return { store, sets, data };
 };
@@ -148,13 +150,13 @@ describe("ClientStore per-row layout", () => {
           yield* s.appendMutation(mutation(1));
           yield* s.appendMutation(mutation(2));
           // Each large body is written exactly once.
-          expect(sets.get("legation/journal/c1/1")).toBe(1);
-          expect(sets.get("legation/journal/c1/2")).toBe(1);
+          expect(Option.getOrUndefined(MutableHashMap.get(sets, "legation/journal/c1/1"))).toBe(1);
+          expect(Option.getOrUndefined(MutableHashMap.get(sets, "legation/journal/c1/2"))).toBe(1);
 
           // Acknowledging #1 removes its body and rewrites only the tiny index —
           // the surviving body #2 is never touched again.
           yield* s.acknowledge("c1", 1);
-          expect(sets.get("legation/journal/c1/2")).toBe(1);
+          expect(Option.getOrUndefined(MutableHashMap.get(sets, "legation/journal/c1/2"))).toBe(1);
           expect(yield* s.pendingMutations).toHaveLength(1);
         }).pipe(Effect.provideService(KeyValueStore.KeyValueStore, store));
       })
@@ -175,15 +177,15 @@ describe("ClientStore per-row layout", () => {
           // the newest call supersedes nothing behind it) renumbers nothing, so
           // no surviving body is rewritten — only the tiny index.
           yield* s.compactPending("c1", [3]);
-          expect(sets.get("legation/journal/c1/1")).toBe(1);
-          expect(sets.get("legation/journal/c1/2")).toBe(1);
+          expect(Option.getOrUndefined(MutableHashMap.get(sets, "legation/journal/c1/1"))).toBe(1);
+          expect(Option.getOrUndefined(MutableHashMap.get(sets, "legation/journal/c1/2"))).toBe(1);
           expect((yield* s.pendingMutations).map((m) => m.mutationId)).toEqual([1, 2]);
 
           // Dropping #1 keeps the ids contiguous: #2 becomes #1. Exactly that one
           // survivor body is rewritten (at its new id), never the whole journal.
           yield* s.compactPending("c1", [1]);
-          expect(sets.get("legation/journal/c1/1")).toBe(2);
-          expect(sets.get("legation/journal/c1/2")).toBe(1);
+          expect(Option.getOrUndefined(MutableHashMap.get(sets, "legation/journal/c1/1"))).toBe(2);
+          expect(Option.getOrUndefined(MutableHashMap.get(sets, "legation/journal/c1/2"))).toBe(1);
           expect((yield* s.pendingMutations).map((m) => m.mutationId)).toEqual([1]);
         }).pipe(Effect.provideService(KeyValueStore.KeyValueStore, store));
       })
@@ -205,7 +207,7 @@ describe("ClientStore per-row layout", () => {
             value: { i },
           }));
           yield* s.applyRowOps(seed);
-          sets.clear();
+          MutableHashMap.clear(sets);
 
           // A 3-op patch over the 500-row collection.
           yield* s.applyRowOps([
@@ -216,11 +218,13 @@ describe("ClientStore per-row layout", () => {
           // 2 row-value writes for the puts (dels remove, not set), plus the
           // single index rewrite and the collections track — a small constant,
           // not the 500-row collection re-serialised per op.
-          const rowValueWrites = [...sets.keys()].filter((k) =>
+          const rowValueWrites = [...MutableHashMap.keys(sets)].filter((k) =>
             k.startsWith("legation/row/todos/")
           ).length;
           expect(rowValueWrites).toBe(2);
-          expect(sets.get("legation/rowIndex/todos")).toBe(1);
+          expect(Option.getOrUndefined(MutableHashMap.get(sets, "legation/rowIndex/todos"))).toBe(
+            1
+          );
         }).pipe(Effect.provideService(KeyValueStore.KeyValueStore, store));
       })
     );

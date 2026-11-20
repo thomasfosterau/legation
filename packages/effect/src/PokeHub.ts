@@ -7,6 +7,8 @@
  */
 
 import * as Effect from "effect/Effect";
+import * as HashMap from "effect/HashMap";
+import * as Option from "effect/Option";
 import * as PubSub from "effect/PubSub";
 import * as Ref from "effect/Ref";
 import type * as Scope from "effect/Scope";
@@ -44,13 +46,13 @@ export interface PokeHub {
  * down together when the enclosing scope closes.
  */
 export const make: Effect.Effect<PokeHub, never, Scope.Scope> = Effect.gen(function* () {
-  const hubs = yield* Ref.make(new Map<string, PubSub.PubSub<Poke>>());
+  const hubs = yield* Ref.make(HashMap.empty<string, PubSub.PubSub<Poke>>());
   const lock = yield* Semaphore.make(1);
   // One finalizer shuts every group's hub down when the scope closes.
   yield* Effect.addFinalizer(() =>
     Ref.get(hubs).pipe(
       Effect.flatMap((map) =>
-        Effect.forEach([...map.values()], (hub) => PubSub.shutdown(hub), { concurrency: 1 })
+        Effect.forEach(HashMap.values(map), (hub) => PubSub.shutdown(hub), { concurrency: 1 })
       ),
       Effect.asVoid
     )
@@ -61,10 +63,10 @@ export const make: Effect.Effect<PokeHub, never, Scope.Scope> = Effect.gen(funct
     Semaphore.withPermit(
       lock,
       Effect.gen(function* () {
-        const existing = (yield* Ref.get(hubs)).get(clientGroupId);
-        if (existing !== undefined) return existing;
+        const existing = HashMap.get(yield* Ref.get(hubs), clientGroupId);
+        if (Option.isSome(existing)) return existing.value;
         const hub = yield* PubSub.sliding<Poke>({ capacity: 1, replay: 1 });
-        yield* Ref.update(hubs, (map) => new Map(map).set(clientGroupId, hub));
+        yield* Ref.update(hubs, HashMap.set(clientGroupId, hub));
         return hub;
       })
     );

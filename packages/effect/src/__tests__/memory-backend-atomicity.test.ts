@@ -12,6 +12,7 @@ import * as P from "effect/Predicate";
 import { describe, expect, it } from "@effect/vitest";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
+import * as R from "effect/Record";
 import * as Fiber from "effect/Fiber";
 import * as HashMap from "effect/HashMap";
 import * as Option from "effect/Option";
@@ -850,9 +851,7 @@ describe("MemoryBackend serialisable isolation across client groups", () => {
       expect(yield* built.getRows({ clientGroupId: "group-x" }, rows, ["out"])).toEqual([]);
       expect(yield* built.lastMutationIds({ clientGroupId: "group-x" })).toEqual({});
       // Group y's own commits, one per run, did land.
-      expect(Object.keys(yield* built.lastMutationIds({ clientGroupId: "group-y" }))).toHaveLength(
-        16
-      );
+      expect(R.keys(yield* built.lastMutationIds({ clientGroupId: "group-y" }))).toHaveLength(16);
     })
   );
 
