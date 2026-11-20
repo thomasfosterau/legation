@@ -100,6 +100,8 @@ overrides:
   effect: "catalog:"
   "@effect/platform-node-shared": "catalog:"
   "@effect/sql-d1": "catalog:"
+  # `@effect/sql-d1` pins an exact release; one copy keeps `DurableObjectState` assignable.
+  "@cloudflare/workers-types": "catalog:"
   # Vite+'s managed overrides.
   vite@*: "catalog:"
   vitest@*: "catalog:"
