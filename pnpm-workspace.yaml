@@ -38,7 +38,7 @@ catalog:
   # node_modules/@effect/tsgo/dist/effect-tsgo.cjs before bumping it,
   # `@typescript/native` or `vite-plus`.
   "@effect/tsgo": 0.69.0
-  "@electric-sql/pglite": ^0.5.16
+  "@electric-sql/pglite": ^0.5.17
   "@enfect/oxlint": 0.10.0
   "@sveltejs/adapter-node": ^6.0.5
   "@sveltejs/adapter-static": ^4.0.1
