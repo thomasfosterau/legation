@@ -33,12 +33,12 @@ catalog:
   "@effect/vitest": 4.1.4
   "@effect/language-service": ^0.87.3
   # `effect-tsgo patch` replaces the native `tsc` and vite-plus's oxlint /
-  # tsgolint with Effect-patched builds and fails `pnpm install` on versions
-  # it doesn't support. 0.69.0 supports typescript 7.0.2, oxlint 1.91.0–1.93.0
-  # and tsgolint 7.0.2005–7.0.2007. Check the `components` table in
+  # tsrs with Effect-patched builds and fails `pnpm install` on versions it
+  # doesn't support. 0.73.2 supports typescript 7.0.2, oxlint 1.91.0–1.94.0
+  # and tsrs 7.1.0-beta.tsrs2–tsrs3. Check the `components` table in
   # node_modules/@effect/tsgo/dist/effect-tsgo.cjs before bumping it,
   # `@typescript/native` or `vite-plus`.
-  "@effect/tsgo": 0.70.0
+  "@effect/tsgo": 0.73.2
   "@electric-sql/pglite": ^0.5.17
   "@enfect/oxlint": 0.10.0
   "@sveltejs/adapter-node": ^6.0.5
@@ -51,7 +51,7 @@ catalog:
   "@types/better-sqlite3": ^9.6.0
   "@types/node": ^26.6.6
   # Must equal the vitest vite-plus bundles.
-  "@vitest/coverage-v8": 5.1.1
+  "@vitest/coverage-v8": 5.1.0
   better-auth: ^1.7.26
   better-sqlite3: ^13.2.0
   fake-indexeddb: ^6.2.8
@@ -67,10 +67,11 @@ catalog:
   # `tsc` that type-checks, whose version must match @effect/tsgo's binary.
   typescript: "npm:@typescript/typescript6@6.0.2"
   "@typescript/native": "npm:typescript@7.0.2"
-  # vite-plus pins oxlint, oxfmt and vitest; `vite` is its aliased core.
+  # vite-plus pins oxlint, oxfmt and vitest; `vite` (its aliased core, no
+  # longer the vite-plus version) and `vitest` equal what it depends on.
   vite-plus: 1.7.0
-  vite: npm:@voidzero-dev/vite-plus-core@1.6.0
-  vitest: 5.1.1
+  vite: npm:@voidzero-dev/vite-plus-core@8.3.8000
+  vitest: 5.1.0
 
 # The published peer ranges (`pnpm pack` writes them into the tarball). Never
 # exact. `effect` is `^4.0.0` unless a package's own dependency requires more;
@@ -127,14 +128,6 @@ permissions:
 
 skills:
   dirs: [.claude/skills]
-
-peerDependencyRules:
-  allowAny:
-    - vite
-    - vitest
-  allowedVersions:
-    vite: "*"
-    vitest: "*"
 
 # Hold new versions for 24 hours (minutes); first-party releases are exempt.
 minimumReleaseAge: 1440

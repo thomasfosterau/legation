@@ -31,7 +31,7 @@
         "diagnosticSeverity": {
           // JSON.parse/stringify is intentional for wire framing and storage
           // serialization; schema validation happens via ProtocolSchema.
-          "preferSchemaOverJson": "off",
+          "globalJsonInEffect": "off",
           // Effect.runFork inside event-handler callbacks (WebSocket/IDB
           // bridges) is the intended pattern for those modules.
           "runEffectInsideEffect": "suggestion",

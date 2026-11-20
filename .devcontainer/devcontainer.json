@@ -1,7 +1,7 @@
 {
   "name": "legation",
   // The tag follows the catalog's `vite-plus` pin (moved by hand).
-  "image": "ghcr.io/voidzero-dev/vite-plus:1.6.0",
+  "image": "ghcr.io/voidzero-dev/vite-plus:1.7.0",
   "features": {
     "ghcr.io/devcontainers/features/github-cli:1": {},
     "ghcr.io/anthropics/devcontainer-features/claude-code:1.0": {}

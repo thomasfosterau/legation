@@ -137,7 +137,7 @@ export default defineConfig({
       "effect/prefer-effect-fn": "warn", // 7 sites, exported effect values (public API)
       "effect/no-known-value-widening": "warn", // 3 sites, exported return types (public API)
 
-      // ---- Type-aware rules (oxlint-tsgolint) -------------------------------
+      // ---- Type-aware rules (tsrs) ------------------------------------------
       // Effect 4 marks much of its HTTP surface `@stability unstable`.
       "effecttsgo/unstable-api-usage": "off",
       // `unknown` in an error channel: left only where a public option takes
@@ -372,8 +372,8 @@ export default defineConfig({
         },
       },
     ],
-    // Type-aware lint through oxlint-tsgolint (patched by `effect-tsgo patch
-    // --oxlint`, so `effecttsgo/*` rules run too). tsgolint types each file
+    // Type-aware lint through tsrs (patched by `effect-tsgo patch --tsrs`, so
+    // `effecttsgo/*` rules run too). tsrs types each file
     // under its nearest tsconfig.json: the packages' own cover `src/` and the
     // `src/__tests__/tsconfig.json` files (and `packages/devtools/svelte/`)
     // extend tsconfig.check.json, so a clean tree with no `dist/` types the
