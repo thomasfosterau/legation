@@ -116,6 +116,17 @@ allowBuilds:
   # Nothing here runs workerd; the Alchemy adapter's tests stub the provider.
   workerd: false
 
+# Agent skills dependencies ship (pnpm 12.11+). `fallow` ships `fallow` and
+# `fallow-setup`; only `fallow` is linked, since the repository is already set
+# up. Build grants stay in `allowBuilds`: a `permissions` entry without `build`
+# leaves its package's `allowBuilds` grant in force.
+permissions:
+  fallow:
+    skills: [fallow]
+
+skills:
+  dirs: [.claude/skills]
+
 peerDependencyRules:
   allowAny:
     - vite
