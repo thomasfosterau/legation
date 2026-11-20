@@ -47,7 +47,7 @@ catalog:
   "@sveltejs/vite-plugin-svelte": ^7.3.1
   "@thomasfosterau/effect-jsonapi": ^0.22.1
   "@thomasfosterau/effect-auth": 0.5.2
-  "@thomasfosterau/effect-svelte": ^0.7.0
+  "@thomasfosterau/effect-svelte": ^0.8.0
   "@types/better-sqlite3": ^9.6.0
   "@types/node": ^26.6.6
   # Must equal the vitest vite-plus bundles.
