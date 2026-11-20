@@ -1,5 +1,18 @@
 # @thomasfosterau/legation-browser
 
+## 0.3.3
+
+### Patch Changes
+
+- ae17206: The IndexedDB store now type-checks against `effect` 4.0.x, the floor of its `^4.0.0` peer: it passed `keys` to `KeyValueStore.make` as an object literal, which only `effect` 4.1's options declare (#691). The store's behaviour is unchanged on both lines.
+- a6cb2f0: Doc comments no longer cite issue numbers.
+- 7cd6f7f: Doc comments no longer cite tracker issues; each now says what it meant in its own words. No behaviour changes.
+- Updated dependencies [a6cb2f0]
+- Updated dependencies [7cd6f7f]
+- Updated dependencies [cfa9b14]
+- Updated dependencies [fc73997]
+  - @thomasfosterau/legation@0.6.1
+
 ## 0.3.2
 
 ### Patch Changes
