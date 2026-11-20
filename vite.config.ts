@@ -182,6 +182,7 @@ export default defineConfig({
       "effecttsgo/on-exit-failure-to-on-error": "error",
       "effecttsgo/effect-try-without-catch": "error",
       "effecttsgo/effect-succeed-with-undefined": "error",
+      "unicorn/prefer-add-event-listener": "error",
     },
     overrides: [
       // ---- Genuine can't-applies ------------------------------------------
