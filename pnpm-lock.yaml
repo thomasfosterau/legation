@@ -228,8 +228,8 @@ catalogs:
       specifier: ^7.3.1
       version: 7.3.1
     '@thomasfosterau/effect-auth':
-      specifier: 0.5.2
-      version: 0.5.2
+      specifier: 0.7.0
+      version: 0.7.0
     '@thomasfosterau/effect-jsonapi':
       specifier: ^0.22.2
       version: 0.22.2
@@ -374,7 +374,7 @@ importers:
     dependencies:
       '@thomasfosterau/effect-auth':
         specifier: 'catalog:'
-        version: 0.5.2(@thomasfosterau/effect-jsonapi@0.22.2(@effect/platform-browser@4.1.4(effect@4.1.4))(@effect/platform-node@4.1.4(effect@4.1.4)(redis@6.3.0))(effect@4.1.4))(effect@4.1.4)
+        version: 0.7.0(@thomasfosterau/effect-jsonapi@0.22.2(@effect/platform-browser@4.1.4(effect@4.1.4))(@effect/platform-node@4.1.4(effect@4.1.4)(redis@6.3.0))(effect@4.1.4))(effect@4.1.4)
       '@thomasfosterau/effect-jsonapi':
         specifier: 'catalog:'
         version: 0.22.2(@effect/platform-browser@4.1.4(effect@4.1.4))(@effect/platform-node@4.1.4(effect@4.1.4)(redis@6.3.0))(effect@4.1.4)
@@ -630,7 +630,7 @@ importers:
         version: 4.1.4(effect@4.1.4)(vitest@5.1.0)
       '@thomasfosterau/effect-auth':
         specifier: 'catalog:'
-        version: 0.5.2(@thomasfosterau/effect-jsonapi@0.22.2(@effect/platform-browser@4.1.4(effect@4.1.4))(@effect/platform-node@4.1.4(effect@4.1.4)(redis@6.3.0))(effect@4.1.4))(effect@4.1.4)
+        version: 0.7.0(@thomasfosterau/effect-jsonapi@0.22.2(@effect/platform-browser@4.1.4(effect@4.1.4))(@effect/platform-node@4.1.4(effect@4.1.4)(redis@6.3.0))(effect@4.1.4))(effect@4.1.4)
       effect:
         specifier: 4.1.4
         version: 4.1.4
@@ -2176,9 +2176,9 @@ packages:
     peerDependencies:
       '@testing-library/dom': '>=7.21.4'
 
-  '@thomasfosterau/effect-auth@0.5.2':
-    resolution: {integrity: sha512-T/uJkR72wYD0m2zh5J58Z20WFvdUb2zLQ/ZAdmn3lGpKlE1KGGD6NicSbcyTTJwEoRfCllqYJkgICzrpEsKMew==}
-    engines: {node: ^20.19.0 || ^22.18.0 || >=24.11.0}
+  '@thomasfosterau/effect-auth@0.7.0':
+    resolution: {integrity: sha512-agIn5N4+QK7eEfZ9C1rN/FxAhUzNTWIQjn2kAwEcGcaQ+iC/Ih7tawjW0o8QZLMI2UBsm2Q+DiYEHx4LwqIVqA==}
+    engines: {node: '>=22'}
     peerDependencies:
       '@node-saml/node-saml': ^5.2.0
       '@thomasfosterau/effect-jsonapi': ^0.22.1
@@ -2188,6 +2188,12 @@ packages:
         optional: true
       '@thomasfosterau/effect-jsonapi':
         optional: true
+
+  '@thomasfosterau/effect-connect@0.2.1':
+    resolution: {integrity: sha512-TNmuk+V+m9sHejoRyf3qKK2H9a0Qd3NHg2qXVK1Se58ReujQyl6+2MkBPiaeOTv8gN3OIu1sX7vzWZJm+V0hVQ==}
+    engines: {node: '>=22'}
+    peerDependencies:
+      effect: 4.1.4
 
   '@thomasfosterau/effect-ext@0.2.0':
     resolution: {integrity: sha512-T1EukW6BJDub7EMdii65Qisy1uDMwAkbso6s2gQQD9MbUC8jGycJppsL4McRdnjgboEu5yVxirzr2pobkh9qFw==}
@@ -4966,11 +4972,16 @@ snapshots:
     dependencies:
       '@testing-library/dom': 10.4.2
 
-  '@thomasfosterau/effect-auth@0.5.2(@thomasfosterau/effect-jsonapi@0.22.2(@effect/platform-browser@4.1.4(effect@4.1.4))(@effect/platform-node@4.1.4(effect@4.1.4)(redis@6.3.0))(effect@4.1.4))(effect@4.1.4)':
+  '@thomasfosterau/effect-auth@0.7.0(@thomasfosterau/effect-jsonapi@0.22.2(@effect/platform-browser@4.1.4(effect@4.1.4))(@effect/platform-node@4.1.4(effect@4.1.4)(redis@6.3.0))(effect@4.1.4))(effect@4.1.4)':
     dependencies:
+      '@thomasfosterau/effect-connect': 0.2.1(effect@4.1.4)
       effect: 4.1.4
     optionalDependencies:
       '@thomasfosterau/effect-jsonapi': 0.22.2(@effect/platform-browser@4.1.4(effect@4.1.4))(@effect/platform-node@4.1.4(effect@4.1.4)(redis@6.3.0))(effect@4.1.4)
+
+  '@thomasfosterau/effect-connect@0.2.1(effect@4.1.4)':
+    dependencies:
+      effect: 4.1.4
 
   '@thomasfosterau/effect-ext@0.2.0(@effect/platform-browser@4.1.4(effect@4.1.4))(@effect/platform-node@4.1.4(effect@4.1.4)(redis@6.3.0))(@thomasfosterau/effect-jsonapi@0.22.2(@effect/platform-browser@4.1.4(effect@4.1.4))(@effect/platform-node@4.1.4(effect@4.1.4)(redis@6.3.0))(effect@4.1.4))(effect@4.1.4)':
     dependencies:
