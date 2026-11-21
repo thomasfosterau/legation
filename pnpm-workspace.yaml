@@ -45,7 +45,7 @@ catalog:
   "@sveltejs/adapter-static": ^4.0.1
   "@sveltejs/kit": ^3.4.0
   "@sveltejs/vite-plugin-svelte": ^7.3.1
-  "@thomasfosterau/effect-jsonapi": ^0.22.1
+  "@thomasfosterau/effect-jsonapi": ^0.22.2
   "@thomasfosterau/effect-auth": 0.5.2
   "@thomasfosterau/effect-svelte": ^0.8.0
   "@types/better-sqlite3": ^9.6.0
@@ -94,7 +94,7 @@ catalogs:
   # legation-jsonapi: effect-jsonapi 0.22.x peers `effect ^4.1.0`.
   jsonapi-peers:
     effect: ^4.1.0
-    "@thomasfosterau/effect-jsonapi": ^0.22.1
+    "@thomasfosterau/effect-jsonapi": ^0.22.2
 
 overrides:
   # `effect` must be a singleton: two copies break Context / Layer / Schema identity.
