@@ -55,7 +55,7 @@ catalog:
   better-auth: ^1.7.26
   better-sqlite3: ^13.2.0
   fake-indexeddb: ^6.2.8
-  fallow: 3.43.2
+  fallow: 3.44.0
   jsdom: ^31.0.1
   # Exact: each release expects one Chromium revision.
   playwright-core: 1.65.1
