@@ -1,5 +1,14 @@
 # @thomasfosterau/legation-jsonapi
 
+## 0.6.2
+
+### Patch Changes
+
+- d4ffe63: JSON is encoded and decoded through Schema's JSON codec. The text is byte-identical; a value with no JSON text (`undefined`, a function, a `BigInt`, a cycle) now fails with a `SchemaError` instead of a `TypeError` or an `undefined` result.
+- Updated dependencies [caa0dfe]
+- Updated dependencies [d4ffe63]
+  - @thomasfosterau/legation@0.6.2
+
 ## 0.6.1
 
 ### Patch Changes
