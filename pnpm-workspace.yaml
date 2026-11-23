@@ -51,7 +51,7 @@ catalog:
   "@types/better-sqlite3": ^9.6.0
   "@types/node": ^26.6.6
   # Must equal the vitest vite-plus bundles.
-  "@vitest/coverage-v8": 5.1.0
+  "@vitest/coverage-v8": 5.1.1
   better-auth: ^1.7.26
   better-sqlite3: ^13.2.0
   fake-indexeddb: ^6.2.8
@@ -71,7 +71,7 @@ catalog:
   # longer the vite-plus version) and `vitest` equal what it depends on.
   vite-plus: 1.7.0
   vite: npm:@voidzero-dev/vite-plus-core@8.3.8000
-  vitest: 5.1.0
+  vitest: 5.1.1
 
 # The published peer ranges (`pnpm pack` writes them into the tarball). Never
 # exact. `effect` is `^4.0.0` unless a package's own dependency requires more;
