@@ -7,7 +7,7 @@ packages:
 catalogMode: strict
 
 catalog:
-  "@effect/docgen": ^4.1.4
+  "@effect/docgen": ^4.1.5
   # One release train at exact versions. 2.0.0-beta.87 is the release the apps
   # pin; it requires `effect ^4.1.4` (see `catalogs.alchemy-peers`).
   alchemy: 2.0.0-beta.87
@@ -21,16 +21,16 @@ catalog:
   # The Effect dev pin: `effect` and every `@effect/*` runtime package at one
   # version. `vp run ci:floor` (scripts/effect-floor.mjs) rewrites these
   # entries to a published floor.
-  effect: 4.1.4
-  "@effect/platform-browser": 4.1.4
-  "@effect/platform-node": 4.1.4
+  effect: 4.1.5
+  "@effect/platform-browser": 4.1.5
+  "@effect/platform-node": 4.1.5
   # Transitive (of `@effect/platform-node` and `@alchemy.run/cloudflare`),
   # held at the pin by `overrides` so the lockfile has one Effect line.
-  "@effect/platform-node-shared": 4.1.4
-  "@effect/sql-d1": 4.1.4
-  "@effect/sql-pg": 4.1.4
-  "@effect/sql-sqlite-node": 4.1.4
-  "@effect/vitest": 4.1.4
+  "@effect/platform-node-shared": 4.1.5
+  "@effect/sql-d1": 4.1.5
+  "@effect/sql-pg": 4.1.5
+  "@effect/sql-sqlite-node": 4.1.5
+  "@effect/vitest": 4.1.5
   "@effect/language-service": ^0.87.3
   # `effect-tsgo patch` replaces the native `tsc` and vite-plus's oxlint /
   # tsrs with Effect-patched builds and fails `pnpm install` on versions it
