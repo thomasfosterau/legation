@@ -52,7 +52,7 @@ catalog:
   "@types/node": ^26.6.6
   # Must equal the vitest vite-plus bundles.
   "@vitest/coverage-v8": 5.1.0
-  better-auth: ^1.7.27
+  better-auth: ^1.7.28
   better-sqlite3: ^13.2.0
   fake-indexeddb: ^6.2.8
   fallow: 3.48.0
