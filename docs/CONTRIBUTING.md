@@ -54,12 +54,12 @@ Every change to a published package's behaviour, or to doc comments that reach i
 
 Dependabot ([dependabot.yml](../.github/dependabot.yml)) opens `@thomasfosterau/*` updates daily and every other update weekly, on Wednesday morning Melbourne time: the named runtime sets (`effect` and the like) each in one PR, and every other development dependency in the single `toolchain` group. Security updates skip the schedule and open as soon as an advisory lands, one PR each. Vite+ selects Node.js from `.node-version` and pnpm from `packageManager`; pnpm's own switching is off (`runtimeOnFail` / `pmOnFail`), so one version of each is installed and used.
 
-Every external version is in the `pnpm-workspace.yaml` catalog; package.json files use `catalog:`, `catalog:<name>` or `workspace:`. After editing the catalog, run `vp install` and commit `pnpm-lock.yaml`.
+Every direct external dependency's version is in the `pnpm-workspace.yaml` catalog, so Dependabot tracks nothing else; a transitive pin lives in `overrides` as a literal version. package.json files use `catalog:`, `catalog:<name>` or `workspace:`. After editing the catalog, run `vp install` and commit `pnpm-lock.yaml`.
 
 Dependabot groups the sets that must move together. It can't make the moves below: make them in a PR from a new branch started from its PR's head (never push to a `dependabot/*` branch, which stops it rebasing), and it closes its own PR once yours merges:
 
 - **Toolchain** (`vite-plus`): run `vp dlx --package=vite-plus@<v> vp migrate --no-interactive` to re-pin `vite` and `vitest`, then drop the `minimumReleaseAgeExclude` entries it adds, and move the devcontainer image tag. `typescript` / `@typescript/native` move only with an `@effect/tsgo` that supports them (see its catalog comment).
-- **Effect**: move the `@effect/*` entries referenced only from `overrides` to the new version.
+- **Effect**: move the literal `@effect/*` pins in `overrides` (transitive only, so not in the catalog) to the new version.
 - **Alchemy**: move `catalogs.alchemy-peers` with it, with a `minor` changeset.
 
 **Effect floors.** The catalog's `effect` is the dev pin; the published floors are `catalogs.peers` (`^4.0.0`) and the named `catalogs.*-peers`, raised only when a package's own dependency requires it (named in the catalog comment), with a `minor` changeset. CI doesn't test the floors before 1.0. To check one by hand: `node scripts/effect-floor.mjs point <catalog> && pnpm install --no-frozen-lockfile && FLOOR=<core|alchemy-cloudflare|auth|jsonapi> vp run ci:floor`, then restore `pnpm-workspace.yaml` and `pnpm-lock.yaml`.

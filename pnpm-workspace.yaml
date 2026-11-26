@@ -24,10 +24,6 @@ catalog:
   effect: 4.1.5
   "@effect/platform-browser": 4.1.5
   "@effect/platform-node": 4.1.5
-  # Transitive (of `@effect/platform-node` and `@alchemy.run/cloudflare`),
-  # held at the pin by `overrides` so the lockfile has one Effect line.
-  "@effect/platform-node-shared": 4.1.5
-  "@effect/sql-d1": 4.1.5
   "@effect/sql-pg": 4.1.5
   "@effect/sql-sqlite-node": 4.1.5
   "@effect/vitest": 4.1.5
@@ -100,8 +96,11 @@ catalogs:
 overrides:
   # `effect` must be a singleton: two copies break Context / Layer / Schema identity.
   effect: "catalog:"
-  "@effect/platform-node-shared": "catalog:"
-  "@effect/sql-d1": "catalog:"
+  # Transitive only (of `@effect/platform-node` and `@alchemy.run/cloudflare`),
+  # so pinned here rather than in `catalog`: they stay off Dependabot's list
+  # and move by hand with the Effect pin, keeping one Effect line in the lockfile.
+  "@effect/platform-node-shared": 4.1.5
+  "@effect/sql-d1": 4.1.5
   # `@effect/sql-d1` pins an exact release; one copy keeps `DurableObjectState` assignable.
   "@cloudflare/workers-types": "catalog:"
   # Vite+'s managed overrides.
