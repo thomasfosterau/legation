@@ -1,11 +1,38 @@
-# Groups exist only for sets that must move together; the by-hand follow-ups
-# are in docs/CONTRIBUTING.md.
+# Shared policy (one copy per thomasfosterau repository): first-party packages
+# daily, everything else weekly on Wednesday morning in Melbourne. Security
+# updates ignore the schedule and open as soon as an advisory lands, one PR
+# each. By-hand follow-ups for the lockstep sets are in docs/CONTRIBUTING.md.
 version: 2
 updates:
+  # Dependabot allows one entry per ecosystem, directory and target branch;
+  # naming the branch lets this daily entry sit beside the weekly one.
+  - package-ecosystem: "npm"
+    directory: "/"
+    target-branch: "trunk"
+    schedule:
+      interval: "daily"
+      time: "06:00"
+      timezone: "Australia/Melbourne"
+    allow:
+      - dependency-name: "@thomasfosterau/*"
+    groups:
+      thomasfosterau:
+        patterns:
+          - "@thomasfosterau/*"
+    assignees:
+      - thomasfosterau
+    labels:
+      - "dependencies"
+    commit-message:
+      prefix: "chore"
+
   - package-ecosystem: "npm"
     directory: "/"
     schedule:
-      interval: "daily"
+      interval: "weekly"
+      day: "wednesday"
+      time: "06:00"
+      timezone: "Australia/Melbourne"
     open-pull-requests-limit: 10
     assignees:
       - thomasfosterau
@@ -13,43 +40,45 @@ updates:
       - "dependencies"
     commit-message:
       prefix: "chore"
+    # Matches pnpm's `minimumReleaseAge` (24 hours).
     cooldown:
       default-days: 1
-      exclude:
-        - "@thomasfosterau/*"
+    ignore:
+      # Updated daily by the entry above.
+      - dependency-name: "@thomasfosterau/*"
+    # A dependency joins the first group it matches, so the named sets come
+    # first and `toolchain` takes every other development dependency.
+    # Production dependencies outside a named set get a PR each.
     groups:
-      toolchain:
-        applies-to: version-updates
-        patterns:
-          - "vite-plus"
-          - "@voidzero-dev/*"
-          - "vitest"
-          - "@vitest/*"
-          - "@effect/tsgo"
       effect:
-        applies-to: version-updates
         patterns:
           - "effect"
           - "@effect/*"
         exclude-patterns:
+          - "@effect/language-service"
           - "@effect/tsgo"
       svelte:
-        applies-to: version-updates
         patterns:
           - "svelte"
           - "@sveltejs/*"
           - "svelte-check"
       alchemy:
-        applies-to: version-updates
         patterns:
           - "alchemy"
           - "@alchemy.run/*"
+      toolchain:
+        dependency-type: "development"
+        patterns:
+          - "*"
 
+  # Dependabot regenerates .github/workflows/actions.lock in the same PR.
   - package-ecosystem: "github-actions"
     directory: "/"
     schedule:
-      interval: "daily"
-    open-pull-requests-limit: 5
+      interval: "weekly"
+      day: "wednesday"
+      time: "06:00"
+      timezone: "Australia/Melbourne"
     assignees:
       - thomasfosterau
     labels:
@@ -58,12 +87,18 @@ updates:
       prefix: "chore"
     cooldown:
       default-days: 1
+    groups:
+      actions:
+        patterns:
+          - "*"
 
   - package-ecosystem: "devcontainers"
     directory: "/"
     schedule:
-      interval: "daily"
-    open-pull-requests-limit: 5
+      interval: "weekly"
+      day: "wednesday"
+      time: "06:00"
+      timezone: "Australia/Melbourne"
     assignees:
       - thomasfosterau
     labels:
