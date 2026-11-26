@@ -9,14 +9,114 @@
     "noEmit": true,
     "paths": {
       "@thomasfosterau/legation": ["./packages/effect/src/index.ts"],
+      "@thomasfosterau/legation/Node": ["./packages/effect/src/Node.ts"],
+      "@thomasfosterau/legation/Edge": ["./packages/effect/src/Edge.ts"],
+      "@thomasfosterau/legation/Collection": ["./packages/effect/src/Collection.ts"],
+      "@thomasfosterau/legation/Query": ["./packages/effect/src/Query.ts"],
+      "@thomasfosterau/legation/Aggregate": ["./packages/effect/src/Aggregate.ts"],
+      "@thomasfosterau/legation/Mutation": ["./packages/effect/src/Mutator.ts"],
+      "@thomasfosterau/legation/CrudMutation": ["./packages/effect/src/CrudMutation.ts"],
+      "@thomasfosterau/legation/Client": ["./packages/effect/src/Client.ts"],
+      "@thomasfosterau/legation/ClientStore": ["./packages/effect/src/ClientStore.ts"],
+      "@thomasfosterau/legation/Identity": ["./packages/effect/src/Identity.ts"],
+      "@thomasfosterau/legation/Transport": ["./packages/effect/src/Transport.ts"],
+      "@thomasfosterau/legation/Hydration": ["./packages/effect/src/Hydration.ts"],
+      "@thomasfosterau/legation/Server": ["./packages/effect/src/Server.ts"],
+      "@thomasfosterau/legation/Backend": ["./packages/effect/src/Backend.ts"],
+      "@thomasfosterau/legation/MemoryBackend": ["./packages/effect/src/MemoryBackend.ts"],
+      "@thomasfosterau/legation/Authorization": ["./packages/effect/src/Authorization.ts"],
+      "@thomasfosterau/legation/FilterPolicy": ["./packages/effect/src/FilterPolicy.ts"],
+      "@thomasfosterau/legation/Predicate": ["./packages/effect/src/Predicate.ts"],
       "@thomasfosterau/legation/internal": ["./packages/effect/src/internal.ts"],
       "@thomasfosterau/legation/sql": ["./packages/effect/src/sql/index.ts"],
       "@thomasfosterau/legation-browser": ["./packages/browser/src/index.ts"],
+      "@thomasfosterau/legation-browser/IndexedDbClientStore": [
+        "./packages/browser/src/IndexedDbClientStore.ts"
+      ],
+      "@thomasfosterau/legation-browser/BroadcastMirrorChannel": [
+        "./packages/browser/src/BroadcastMirrorChannel.ts"
+      ],
+      "@thomasfosterau/legation-browser/ServiceWorkerHost": [
+        "./packages/browser/src/ServiceWorkerHost.ts"
+      ],
+      "@thomasfosterau/legation-browser/ElectedHost": ["./packages/browser/src/ElectedHost.ts"],
+      "@thomasfosterau/legation-browser/CacheApiHttpCache": [
+        "./packages/browser/src/CacheApiHttpCache.ts"
+      ],
+      "@thomasfosterau/legation-browser/HttpCacheInvalidation": [
+        "./packages/browser/src/HttpCacheInvalidation.ts"
+      ],
+      "@thomasfosterau/legation-browser/BrowserConnectivity": [
+        "./packages/browser/src/BrowserConnectivity.ts"
+      ],
+      "@thomasfosterau/legation-browser/BackgroundSync": [
+        "./packages/browser/src/BackgroundSync.ts"
+      ],
+      "@thomasfosterau/legation-browser/PushPoke": ["./packages/browser/src/PushPoke.ts"],
       "@thomasfosterau/legation-browser/http-cache": ["./packages/browser/src/http-cache.ts"],
       "@thomasfosterau/legation-alchemy-cloudflare": ["./packages/alchemy-cloudflare/src/index.ts"],
+      "@thomasfosterau/legation-alchemy-cloudflare/BindingTransport": [
+        "./packages/alchemy-cloudflare/src/BindingTransport.ts"
+      ],
+      "@thomasfosterau/legation-alchemy-cloudflare/D1Executor": [
+        "./packages/alchemy-cloudflare/src/D1Executor.ts"
+      ],
+      "@thomasfosterau/legation-alchemy-cloudflare/DurableCvrStore": [
+        "./packages/alchemy-cloudflare/src/DurableCvrStore.ts"
+      ],
+      "@thomasfosterau/legation-alchemy-cloudflare/DurableFanoutBroker": [
+        "./packages/alchemy-cloudflare/src/DurableFanoutBroker.ts"
+      ],
+      "@thomasfosterau/legation-alchemy-cloudflare/EdgeInvalidation": [
+        "./packages/alchemy-cloudflare/src/EdgeInvalidation.ts"
+      ],
+      "@thomasfosterau/legation-alchemy-cloudflare/FanoutShard": [
+        "./packages/alchemy-cloudflare/src/FanoutShard.ts"
+      ],
+      "@thomasfosterau/legation-alchemy-cloudflare/Room": [
+        "./packages/alchemy-cloudflare/src/Room.ts"
+      ],
+      "@thomasfosterau/legation-alchemy-cloudflare/RoomProtocol": [
+        "./packages/alchemy-cloudflare/src/RoomProtocol.ts"
+      ],
+      "@thomasfosterau/legation-alchemy-cloudflare/RoomTransport": [
+        "./packages/alchemy-cloudflare/src/RoomTransport.ts"
+      ],
+      "@thomasfosterau/legation-alchemy-cloudflare/Worker": [
+        "./packages/alchemy-cloudflare/src/Worker.ts"
+      ],
       "@thomasfosterau/legation-auth": ["./packages/auth/src/index.ts"],
+      "@thomasfosterau/legation-auth/Principal": ["./packages/auth/src/Principal.ts"],
+      "@thomasfosterau/legation-auth/ReadScopes": ["./packages/auth/src/ReadScopes.ts"],
+      "@thomasfosterau/legation-auth/Resolver": ["./packages/auth/src/Resolver.ts"],
       "@thomasfosterau/legation-auth/client": ["./packages/auth/src/client.ts"],
       "@thomasfosterau/legation-jsonapi": ["./packages/jsonapi/src/index.ts"],
+      "@thomasfosterau/legation-jsonapi/JsonApiSchema": ["./packages/jsonapi/src/schema.ts"],
+      "@thomasfosterau/legation-jsonapi/CollectionLoader": [
+        "./packages/jsonapi/src/CollectionLoader.ts"
+      ],
+      "@thomasfosterau/legation-jsonapi/Convention": ["./packages/jsonapi/src/Convention.ts"],
+      "@thomasfosterau/legation-jsonapi/Derive": ["./packages/jsonapi/src/Derive.ts"],
+      "@thomasfosterau/legation-jsonapi/DocumentWriter": [
+        "./packages/jsonapi/src/DocumentWriter.ts"
+      ],
+      "@thomasfosterau/legation-jsonapi/JsonApiBackend": [
+        "./packages/jsonapi/src/JsonApiBackend.ts"
+      ],
+      "@thomasfosterau/legation-jsonapi/JsonApiFacade": ["./packages/jsonapi/src/JsonApiFacade.ts"],
+      "@thomasfosterau/legation-jsonapi/FacadeWrites": ["./packages/jsonapi/src/FacadeWrites.ts"],
+      "@thomasfosterau/legation-jsonapi/JsonApiQuery": ["./packages/jsonapi/src/JsonApiQuery.ts"],
+      "@thomasfosterau/legation-jsonapi/JsonApiSync": ["./packages/jsonapi/src/JsonApiSync.ts"],
+      "@thomasfosterau/legation-jsonapi/MutationStatus": [
+        "./packages/jsonapi/src/MutationStatus.ts"
+      ],
+      "@thomasfosterau/legation-jsonapi/Ledger": ["./packages/jsonapi/src/Ledger.ts"],
+      "@thomasfosterau/legation-jsonapi/NodeBridge": ["./packages/jsonapi/src/NodeBridge.ts"],
+      "@thomasfosterau/legation-jsonapi/Relationships": ["./packages/jsonapi/src/Relationships.ts"],
+      "@thomasfosterau/legation-jsonapi/ReplicaDocuments": [
+        "./packages/jsonapi/src/ReplicaDocuments.ts"
+      ],
+      "@thomasfosterau/legation-jsonapi/RestHandlers": ["./packages/jsonapi/src/RestHandlers.ts"],
       "@thomasfosterau/legation-svelte": ["./packages/svelte/src/index.svelte.ts"],
       "@thomasfosterau/legation-svelte/kit": ["./packages/svelte/src/kit/index.ts"],
       "@thomasfosterau/legation-devtools": ["./packages/devtools/src/index.ts"]

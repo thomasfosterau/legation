@@ -261,3 +261,7 @@ internal modules or subpath exports for tooling. Target surface:
 ## Amendment (2026-10-23, #208): shared anonymous CVRs
 
 The per-client reference topology has one exception, [ADR-0032](0032-shared-anonymous-cvrs.md). A subscription whose collection's auth filter is a constant for the anonymous identity, checked when the policy is built, shares one CVR keyed by (subscription, cookie generation). It lives in a shared room rather than a user's room, its pull is edge-cacheable, and its pokes route per topic. Everything else keeps per-client CVRs and per-user rooms. Designed now and built when an adopter needs it.
+
+## Amendment (2026-11-26, #742): per-module subpaths
+
+Each module a package's root entry re-exports as a PascalCase namespace also gets its own subpath, named after the namespace, as Effect v4's libraries do: `@thomasfosterau/legation/Node` is the same module as the root's `Node`. Engine seams don't: they stay reachable only through `./internal`, so the split between the app surface and the seams is unchanged. A deprecated alias (the root's `Mutator`) gets no subpath.

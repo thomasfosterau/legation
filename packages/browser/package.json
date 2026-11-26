@@ -42,6 +42,42 @@
       "types": "./dist/http-cache.d.ts",
       "import": "./dist/http-cache.js"
     },
+    "./IndexedDbClientStore": {
+      "types": "./dist/IndexedDbClientStore.d.ts",
+      "import": "./dist/IndexedDbClientStore.js"
+    },
+    "./BroadcastMirrorChannel": {
+      "types": "./dist/BroadcastMirrorChannel.d.ts",
+      "import": "./dist/BroadcastMirrorChannel.js"
+    },
+    "./ServiceWorkerHost": {
+      "types": "./dist/ServiceWorkerHost.d.ts",
+      "import": "./dist/ServiceWorkerHost.js"
+    },
+    "./ElectedHost": {
+      "types": "./dist/ElectedHost.d.ts",
+      "import": "./dist/ElectedHost.js"
+    },
+    "./CacheApiHttpCache": {
+      "types": "./dist/CacheApiHttpCache.d.ts",
+      "import": "./dist/CacheApiHttpCache.js"
+    },
+    "./HttpCacheInvalidation": {
+      "types": "./dist/HttpCacheInvalidation.d.ts",
+      "import": "./dist/HttpCacheInvalidation.js"
+    },
+    "./BrowserConnectivity": {
+      "types": "./dist/BrowserConnectivity.d.ts",
+      "import": "./dist/BrowserConnectivity.js"
+    },
+    "./BackgroundSync": {
+      "types": "./dist/BackgroundSync.d.ts",
+      "import": "./dist/BackgroundSync.js"
+    },
+    "./PushPoke": {
+      "types": "./dist/PushPoke.d.ts",
+      "import": "./dist/PushPoke.js"
+    },
     "./package.json": "./package.json"
   },
   "publishConfig": {

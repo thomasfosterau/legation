@@ -36,6 +36,70 @@
       "types": "./dist/index.d.ts",
       "import": "./dist/index.js"
     },
+    "./JsonApiSchema": {
+      "types": "./dist/schema.d.ts",
+      "import": "./dist/schema.js"
+    },
+    "./CollectionLoader": {
+      "types": "./dist/CollectionLoader.d.ts",
+      "import": "./dist/CollectionLoader.js"
+    },
+    "./Convention": {
+      "types": "./dist/Convention.d.ts",
+      "import": "./dist/Convention.js"
+    },
+    "./Derive": {
+      "types": "./dist/Derive.d.ts",
+      "import": "./dist/Derive.js"
+    },
+    "./DocumentWriter": {
+      "types": "./dist/DocumentWriter.d.ts",
+      "import": "./dist/DocumentWriter.js"
+    },
+    "./JsonApiBackend": {
+      "types": "./dist/JsonApiBackend.d.ts",
+      "import": "./dist/JsonApiBackend.js"
+    },
+    "./JsonApiFacade": {
+      "types": "./dist/JsonApiFacade.d.ts",
+      "import": "./dist/JsonApiFacade.js"
+    },
+    "./FacadeWrites": {
+      "types": "./dist/FacadeWrites.d.ts",
+      "import": "./dist/FacadeWrites.js"
+    },
+    "./JsonApiQuery": {
+      "types": "./dist/JsonApiQuery.d.ts",
+      "import": "./dist/JsonApiQuery.js"
+    },
+    "./JsonApiSync": {
+      "types": "./dist/JsonApiSync.d.ts",
+      "import": "./dist/JsonApiSync.js"
+    },
+    "./MutationStatus": {
+      "types": "./dist/MutationStatus.d.ts",
+      "import": "./dist/MutationStatus.js"
+    },
+    "./Ledger": {
+      "types": "./dist/Ledger.d.ts",
+      "import": "./dist/Ledger.js"
+    },
+    "./NodeBridge": {
+      "types": "./dist/NodeBridge.d.ts",
+      "import": "./dist/NodeBridge.js"
+    },
+    "./Relationships": {
+      "types": "./dist/Relationships.d.ts",
+      "import": "./dist/Relationships.js"
+    },
+    "./ReplicaDocuments": {
+      "types": "./dist/ReplicaDocuments.d.ts",
+      "import": "./dist/ReplicaDocuments.js"
+    },
+    "./RestHandlers": {
+      "types": "./dist/RestHandlers.d.ts",
+      "import": "./dist/RestHandlers.js"
+    },
     "./package.json": "./package.json"
   },
   "publishConfig": {

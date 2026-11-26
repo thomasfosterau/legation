@@ -53,6 +53,78 @@
       "types": "./dist/sql/index.d.ts",
       "import": "./dist/sql/index.js"
     },
+    "./Node": {
+      "types": "./dist/Node.d.ts",
+      "import": "./dist/Node.js"
+    },
+    "./Edge": {
+      "types": "./dist/Edge.d.ts",
+      "import": "./dist/Edge.js"
+    },
+    "./Collection": {
+      "types": "./dist/Collection.d.ts",
+      "import": "./dist/Collection.js"
+    },
+    "./Query": {
+      "types": "./dist/Query.d.ts",
+      "import": "./dist/Query.js"
+    },
+    "./Aggregate": {
+      "types": "./dist/Aggregate.d.ts",
+      "import": "./dist/Aggregate.js"
+    },
+    "./Mutation": {
+      "types": "./dist/Mutator.d.ts",
+      "import": "./dist/Mutator.js"
+    },
+    "./CrudMutation": {
+      "types": "./dist/CrudMutation.d.ts",
+      "import": "./dist/CrudMutation.js"
+    },
+    "./Client": {
+      "types": "./dist/Client.d.ts",
+      "import": "./dist/Client.js"
+    },
+    "./ClientStore": {
+      "types": "./dist/ClientStore.d.ts",
+      "import": "./dist/ClientStore.js"
+    },
+    "./Identity": {
+      "types": "./dist/Identity.d.ts",
+      "import": "./dist/Identity.js"
+    },
+    "./Transport": {
+      "types": "./dist/Transport.d.ts",
+      "import": "./dist/Transport.js"
+    },
+    "./Hydration": {
+      "types": "./dist/Hydration.d.ts",
+      "import": "./dist/Hydration.js"
+    },
+    "./Server": {
+      "types": "./dist/Server.d.ts",
+      "import": "./dist/Server.js"
+    },
+    "./Backend": {
+      "types": "./dist/Backend.d.ts",
+      "import": "./dist/Backend.js"
+    },
+    "./MemoryBackend": {
+      "types": "./dist/MemoryBackend.d.ts",
+      "import": "./dist/MemoryBackend.js"
+    },
+    "./Authorization": {
+      "types": "./dist/Authorization.d.ts",
+      "import": "./dist/Authorization.js"
+    },
+    "./FilterPolicy": {
+      "types": "./dist/FilterPolicy.d.ts",
+      "import": "./dist/FilterPolicy.js"
+    },
+    "./Predicate": {
+      "types": "./dist/Predicate.d.ts",
+      "import": "./dist/Predicate.js"
+    },
     "./package.json": "./package.json"
   },
   "publishConfig": {

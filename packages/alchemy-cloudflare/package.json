@@ -37,6 +37,46 @@
       "types": "./dist/index.d.ts",
       "import": "./dist/index.js"
     },
+    "./BindingTransport": {
+      "types": "./dist/BindingTransport.d.ts",
+      "import": "./dist/BindingTransport.js"
+    },
+    "./D1Executor": {
+      "types": "./dist/D1Executor.d.ts",
+      "import": "./dist/D1Executor.js"
+    },
+    "./DurableCvrStore": {
+      "types": "./dist/DurableCvrStore.d.ts",
+      "import": "./dist/DurableCvrStore.js"
+    },
+    "./DurableFanoutBroker": {
+      "types": "./dist/DurableFanoutBroker.d.ts",
+      "import": "./dist/DurableFanoutBroker.js"
+    },
+    "./EdgeInvalidation": {
+      "types": "./dist/EdgeInvalidation.d.ts",
+      "import": "./dist/EdgeInvalidation.js"
+    },
+    "./FanoutShard": {
+      "types": "./dist/FanoutShard.d.ts",
+      "import": "./dist/FanoutShard.js"
+    },
+    "./Room": {
+      "types": "./dist/Room.d.ts",
+      "import": "./dist/Room.js"
+    },
+    "./RoomProtocol": {
+      "types": "./dist/RoomProtocol.d.ts",
+      "import": "./dist/RoomProtocol.js"
+    },
+    "./RoomTransport": {
+      "types": "./dist/RoomTransport.d.ts",
+      "import": "./dist/RoomTransport.js"
+    },
+    "./Worker": {
+      "types": "./dist/Worker.d.ts",
+      "import": "./dist/Worker.js"
+    },
     "./package.json": "./package.json"
   },
   "publishConfig": {
