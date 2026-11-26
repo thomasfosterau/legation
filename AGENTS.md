@@ -19,6 +19,12 @@ Read [README.md](README.md) and [docs/CONTRIBUTING.md](docs/CONTRIBUTING.md) fir
 - **Publish only through the Release workflow** (`vp run release`): it runs `pack:check` on the commit it publishes, and `npm publish` in a package directory would ship `workspace:` / `catalog:` specifiers verbatim. Release-path registry calls go through `vp pm` (`publish`, `view`), never `npm` / `pnpm` directly.
 - **Wire and storage formats are protocol** (`Protocol.ts`, `MirrorProtocol.ts`, the `ClientStore` layout): changing one needs a migration and a changeset that says so.
 
+## Pull requests
+
+- **Write the PR body with the `pr` skill** from Matt Pocock's skills (`mattpocock-skills:pr`), filling in the repository's pull request template where there is one.
+- **Resolve merge conflicts before you hand a PR over.** Rebase onto `origin/trunk` and push; a PR that conflicts with `trunk` isn't finished.
+- **Mark the PR ready for review as soon as the initial draft is finished.** Don't wait for CI to run, for reviews, or for the owner to do it. Keep fixing CI failures and review findings on the ready PR.
+
 ## Fallow
 
 - `vp install` links the `fallow` skill into `.claude/skills/fallow` from the installed package (approved in `pnpm-workspace.yaml` `permissions`); the repository's own rules (the pre-commit `fallow:audit` gate, the boundaries in `.fallowrc.json`) are in [docs/CONTRIBUTING.md](docs/CONTRIBUTING.md).
