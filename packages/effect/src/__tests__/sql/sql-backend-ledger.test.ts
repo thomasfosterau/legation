@@ -442,6 +442,26 @@ describe("SqlBackend rejection memory on SQLite", () => {
     )
   );
 
+  it.effect.each(["[1, 2]", '{"1": 7}', "not json"])(
+    "a rejections column holding %s fails the push with a BackendError",
+    (stored) =>
+      withDatabase((sql) =>
+        Effect.gen(function* () {
+          const backend = backendWith(sql, rejectingHandlers);
+          yield* backend.applyMutations(context, [mutation(1, "todo/reject")]);
+          yield* sql
+            .unsafe(`UPDATE sync_mutations SET rejections = ?`, [stored])
+            .pipe(Effect.orDie);
+
+          const error = yield* Effect.flip(
+            backend.applyMutations(context, [mutation(1, "todo/reject")])
+          );
+          expect(error._tag).toBe("BackendError");
+          expect(error.message).toContain("not a rejection memory");
+        })
+      )
+  );
+
   it.effect(
     "on an executor without transactions a replayed rejection reports its stored reason",
     () =>

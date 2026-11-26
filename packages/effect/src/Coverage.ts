@@ -576,7 +576,7 @@ export const coverageOf =
       Query.plan(nodes, read),
       options?.snapshot === undefined ? rowsOf : snapshotOf(options.snapshot, rowsOf)
     ).pipe(
-      Effect.flatMap((requested) => Effect.map(entries, (held) => verdictOf(held, requested))),
+      Effect.zipWith(entries, (requested, held) => verdictOf(held, requested)),
       // `E` is the caller's generic row-read error: any failed read is uncovered by contract.
       Effect.orElseSucceed((): Verdict => ({ _tag: "Uncovered" }))
     );

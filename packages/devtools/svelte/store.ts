@@ -98,7 +98,7 @@ export interface DevtoolsStores {
 export const makeStores = (core: Devtools.DevtoolsCore): DevtoolsStores => ({
   mutationStates: toStreamStore(core.mutationStates, EMPTY_STATES),
   subscriptions: toSnapshotStore(core.subscriptions, core.events, []),
-  cookie: toSnapshotStore(core.cookie, core.events, undefined as string | undefined),
+  cookie: toSnapshotStore(core.cookie, core.events, undefined),
   collections: toSnapshotStore(core.collections, core.events, []),
   events: toLogStore(core.events, 50),
   // Re-read on every event, and on a tick: a terminal failure need not be

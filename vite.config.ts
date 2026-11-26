@@ -129,7 +129,6 @@ export default defineConfig({
       // At `warn` with the count left when the preset was adopted: a new site
       // is a defect. Delete a line once its count reaches zero.
       "effect/avoid-native-object-helpers": "warn", // 343 sites: per-row and per-change maps, public ReadonlyMap/ReadonlySet types, insertion-order and reference-identity collections, benches
-      "effect/require-safety-comment-for-type-assertion": "warn", // 2 sites
       "effect/imperative-loops": "warn", // 110 sites, per-row and per-change paths in src
       "effect/yield-in-for-loop": "warn", // 39 sites: per-row writes in src, the op-count-sensitive journal race tests
       "effect/avoid-direct-tag-checks": "warn", // 6 sites, the measured switches in internal/RowDispatch.ts

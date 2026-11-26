@@ -436,14 +436,8 @@ describe("a push larger than the pull-ahead threshold", () => {
       const releasesNothing: ClientTransport = {
         ...inner,
         pull: (request) =>
-          Ref.get(silent).pipe(
-            Effect.flatMap((on) =>
-              inner
-                .pull(request)
-                .pipe(
-                  Effect.map((response) => (on ? { ...response, lastMutationIds: {} } : response))
-                )
-            )
+          Effect.zipWith(Ref.get(silent), inner.pull(request), (on, response) =>
+            on ? { ...response, lastMutationIds: {} } : response
           ),
       };
       const log: Array<string> = [];

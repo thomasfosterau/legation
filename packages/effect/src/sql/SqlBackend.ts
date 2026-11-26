@@ -160,8 +160,8 @@ interface SqlUnit {
   readonly staleRejection: boolean;
 }
 
-/** The `rejections` column's JSON text. */
-const RejectionsJson = Schema.fromJsonString(Schema.Unknown);
+/** The `rejections` column's JSON text: mutation id → reason. */
+const RejectionsJson = Schema.fromJsonString(Schema.Record(Schema.String, Schema.String));
 
 /** The `rejections` column's value: a JSON object of mutation id → reason, or `null` when none is remembered. */
 const encodeRejections = (rejections: ReadonlyMap<number, string>): string | null =>
@@ -177,28 +177,16 @@ const decodeRejections = (
   mutationsTable: string
 ): Effect.Effect<ReadonlyMap<number, string>, BackendError> => {
   if (text === null || text === undefined) return Effect.succeed(new Map());
-  const notRejections = (cause: unknown) =>
-    new BackendError({
-      message: `The "rejections" column of the mutation ledger "${mutationsTable}" holds a value that is not a rejection memory`,
-      cause,
-    });
-  if (!P.isString(text)) return Effect.fail(notRejections(new TypeError("not text")));
-  return Schema.decodeEffect(RejectionsJson)(text).pipe(
-    Effect.mapError(notRejections),
-    Effect.flatMap((parsed) =>
-      Effect.try({
-        try: () =>
-          new Map(
-            // SAFETY: `R.toEntries` takes any value, throwing only on
-            // `null` (which `Effect.try` maps to `notRejections`), and each
-            // reason goes through `String`, so no value is read as a string.
-            R.toEntries(parsed as Record<string, string>).map(
-              ([id, reason]) => [Number(id), String(reason)] as const
-            )
-          ),
-        catch: notRejections,
-      })
-    )
+  return Schema.decodeUnknownEffect(RejectionsJson)(text).pipe(
+    Effect.mapBoth({
+      onFailure: (cause) =>
+        new BackendError({
+          message: `The "rejections" column of the mutation ledger "${mutationsTable}" holds a value that is not a rejection memory`,
+          cause,
+        }),
+      onSuccess: (parsed) =>
+        new Map(Arr.map(R.toEntries(parsed), ([id, reason]) => [Number(id), reason] as const)),
+    })
   );
 };
 
