@@ -55,6 +55,7 @@ import { defined } from "./defined.js";
 import { TestFailure } from "./test-failure.js";
 import { idOf, stringField } from "./shapes.js";
 import { ClientGroupId, RowId } from "../Protocol.js";
+import { takes } from "./takes.js";
 
 const bodyOf = stringField("body");
 
@@ -141,7 +142,7 @@ describe("FanoutTopics", () => {
  * routed from not routed without waiting: a take forked here either finds the
  * batch at once or is still suspended once the test has yielded to it.
  */
-const waitingPoke = (pokes: FanoutBroker.TopicPokes) =>
+const waitingPoke = (pokes: { readonly take: Effect.Effect<ReadonlyArray<string>> }) =>
   Effect.gen(function* () {
     const taker = yield* Effect.forkChild(pokes.take);
     // Zero-length turns, not one: a routed batch is handed over within a few
@@ -166,7 +167,7 @@ describe("FanoutBroker leases", () => {
     Effect.scoped(
       Effect.gen(function* () {
         const broker = yield* FanoutBroker.makeInProcess;
-        const pokes = yield* broker.pokes("room-a");
+        const pokes = yield* takes(broker.pokes("room-a"));
         yield* broker.register("room-a", p1Reviews, "150 millis");
 
         // A non-intersecting publish stays silent; an intersecting one lands.
@@ -193,7 +194,7 @@ describe("FanoutBroker leases", () => {
       Effect.gen(function* () {
         const broker = yield* FanoutBroker.makeInProcess;
         // Subscribed but never taken from: the room is behind.
-        yield* broker.pokes("room-a");
+        yield* Effect.asVoid(broker.pokes("room-a"));
         yield* broker.register("room-a", p1Reviews, "1 minute");
         const dropped = Metric.value(Telemetry.fanoutPokesDroppedTotal).pipe(
           Effect.map((state) => state.count)
@@ -353,11 +354,7 @@ describe("two rooms over one broker", () => {
         const roomAPokes = yield* Ref.make<ReadonlyArray<ReadonlyArray<string>>>([]);
         const probe = yield* broker.pokes("room-a");
         yield* Effect.forkScoped(
-          Effect.forever(
-            probe.take.pipe(
-              Effect.flatMap((topics) => Ref.update(roomAPokes, (all) => [...all, topics]))
-            )
-          )
+          Stream.runForEach(probe, (topics) => Ref.update(roomAPokes, (all) => [...all, topics]))
         );
         const roomA = yield* makeRoom("room-a", backend, broker);
         const roomB = yield* recordPushes(yield* makeRoom("room-b", backend, broker));

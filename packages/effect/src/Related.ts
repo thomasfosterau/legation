@@ -675,23 +675,29 @@ type JoinEvent =
  * re-group or a full base re-hydrate. A collection is observed for as long as
  * (and only as long as) the base page targets it: a linkage shift diffs the
  * targeted set and starts/stops just the newly (un)targeted collections'
- * observers, leaving the rest running.
+ * observers, leaving the rest running. The first observer to fail ends the
+ * stream with its error.
  */
 export const observeWith = (
   view: ClientView.Reader,
   strategy: Strategy,
   subset: Subset.Subset
-): Stream.Stream<ReadonlyArray<RelatedRow>> =>
-  Stream.callback<ReadonlyArray<RelatedRow>>((output) => {
+): Stream.Stream<ReadonlyArray<RelatedRow>, ClientView.ClientViewError> =>
+  Stream.callback<ReadonlyArray<RelatedRow>, ClientView.ClientViewError>((output) => {
     const emit = (result: ReadonlyArray<RelatedRow> | undefined) =>
       result === undefined ? Effect.void : Effect.asVoid(Queue.offer(output, result));
-    // The observers run in forked fibers: one that dies ends the join's stream
-    // with its defect, where it would otherwise stop the join without a word.
-    const endOnDefect = <A, R>(self: Effect.Effect<A, never, R>): Effect.Effect<A, never, R> =>
+    // The observers run in forked fibers: one that fails or dies ends the
+    // join's stream with its cause, where it would otherwise stop the join
+    // without a word.
+    const endOnFailure = <A, R>(
+      self: Effect.Effect<A, ClientView.ClientViewError, R>
+    ): Effect.Effect<void, never, R> =>
       self.pipe(
         Effect.tapCause((cause) =>
           Cause.hasInterruptsOnly(cause) ? Effect.void : Queue.failCause(output, cause)
-        )
+        ),
+        // The failure now ends the output; the fiber itself stops quietly.
+        Effect.ignore
       );
 
     return Effect.gen(function* () {
@@ -704,9 +710,9 @@ export const observeWith = (
         FiberMap.run(
           collectionFibers,
           collection,
-          Stream.runForEach(view.observe(Subset.make({ collection })).pipe(Stream.orDie), (rows) =>
+          Stream.runForEach(view.observe(Subset.make({ collection })), (rows) =>
             Queue.offer(events, { _tag: "foreign", collection, rows })
-          ).pipe(endOnDefect)
+          ).pipe(endOnFailure)
         );
 
       const stopCollection = (collection: string) => FiberMap.remove(collectionFibers, collection);
@@ -714,9 +720,9 @@ export const observeWith = (
       // The base observer runs for the join's whole lifetime; foreign
       // observers come and go with `applyBase`'s targeted-set diff below.
       yield* Effect.forkScoped(
-        Stream.runForEach(view.observe(subset).pipe(Stream.orDie), (rows) =>
+        Stream.runForEach(view.observe(subset), (rows) =>
           Queue.offer(events, { _tag: "base", rows })
-        ).pipe(endOnDefect)
+        ).pipe(endOnFailure)
       );
 
       yield* Effect.forkScoped(
@@ -739,7 +745,7 @@ export const observeWith = (
                 : emit(engine.applyForeign(event.collection, event.rows).result)
             )
           )
-        ).pipe(endOnDefect)
+        ).pipe(endOnFailure)
       );
     });
   }).pipe(Stream.changesWith(sameJoin));
@@ -919,8 +925,11 @@ export const relatedWith = (
   engine: ClientEngine,
   strategy: Strategy,
   subset: Subset.Subset
-): Effect.Effect<Stream.Stream<ReadonlyArray<RelatedRow>>, never, Scope.Scope> =>
-  trackWith(engine, strategy, subset).pipe(Effect.as(observeWith(engine, strategy, subset)));
+): Effect.Effect<
+  Stream.Stream<ReadonlyArray<RelatedRow>, ClientView.ClientViewError>,
+  never,
+  Scope.Scope
+> => trackWith(engine, strategy, subset).pipe(Effect.as(observeWith(engine, strategy, subset)));
 
 /** A row from an external source, tagged with its collection. */
 export interface SourcedRow {
@@ -1007,14 +1016,18 @@ export const queryRows = (
     base
   );
 
-/** Live, incrementally-maintained join over a subset's declared relationships. */
+/**
+ * Live, incrementally-maintained join over a subset's declared relationships.
+ * A read of the base or a targeted collection that fails ends the stream
+ * with that {@link ClientView.ClientViewError}.
+ */
 export const observe = (
   view: ClientView.Reader,
   registry: Collection.CollectionRegistry,
   collectionName: string,
   subset: Subset.Subset,
   edges: ReadonlyArray<string | EdgeSelect>
-): Stream.Stream<ReadonlyArray<RelatedRow>> =>
+): Stream.Stream<ReadonlyArray<RelatedRow>, ClientView.ClientViewError> =>
   observeWith(
     view,
     fieldMappingStrategy(selectRelationships(registry, collectionName, edges)),
@@ -1043,7 +1056,8 @@ export const trackEdges = (
 /**
  * Auto-subscribing relational read over a subset's declared relationships: syncs
  * the base and the narrowed foreign subsets, tracks the live linkage, and tears
- * the subscriptions down when the scope closes.
+ * the subscriptions down when the scope closes. The stream fails with the
+ * {@link ClientView.ClientViewError} of a read it is joined from.
  */
 export const related = (
   engine: ClientEngine,
@@ -1051,7 +1065,11 @@ export const related = (
   collectionName: string,
   subset: Subset.Subset,
   edges: ReadonlyArray<string | EdgeSelect>
-): Effect.Effect<Stream.Stream<ReadonlyArray<RelatedRow>>, never, Scope.Scope> =>
+): Effect.Effect<
+  Stream.Stream<ReadonlyArray<RelatedRow>, ClientView.ClientViewError>,
+  never,
+  Scope.Scope
+> =>
   relatedWith(
     engine,
     fieldMappingStrategy(selectRelationships(registry, collectionName, edges)),

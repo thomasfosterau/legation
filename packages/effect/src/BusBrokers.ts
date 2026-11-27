@@ -20,11 +20,14 @@ import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
 import * as P from "effect/Predicate";
+import * as PubSub from "effect/PubSub";
 import * as Queue from "effect/Queue";
 import * as Schedule from "effect/Schedule";
 import * as Schema from "effect/Schema";
 import * as Scope from "effect/Scope";
+import * as Stream from "effect/Stream";
 import { Redis } from "effect/persistence";
+import * as Subscribe from "./internal/Subscribe.js";
 import type { BusBroker } from "./InvalidationBus.js";
 
 // ─── Redis Streams broker ────────────────────────────────────────────────────
@@ -214,7 +217,6 @@ export const makeRedisBroker: (
         Effect.ignore
       ),
     subscribe: Effect.gen(function* () {
-      const queue = yield* Queue.unbounded<string>();
       // The ID the next XREAD continues from. `from: "0"` needs no lookup. Any
       // other start gets one bounded attempt here, so a publish made right after
       // `subscribe` returns is not missed while Redis answers in time. If the
@@ -238,7 +240,7 @@ export const makeRedisBroker: (
         Effect.tap(() => answered),
         Effect.retry(readerRetry)
       );
-      const readFrom = (position: string) =>
+      const readFrom = (queue: Queue.Enqueue<string>, position: string) =>
         Effect.gen(function* () {
           const reply = yield* boundRead(
             redis.send<XReadReply>("XREAD", "BLOCK", blockMs, "STREAMS", stream, position)
@@ -260,13 +262,18 @@ export const makeRedisBroker: (
             { concurrency: 1, discard: true }
           );
         }).pipe(Effect.retry(readerRetry));
-      const readOnce = Effect.gen(function* () {
-        const position = Option.isSome(cursor) ? cursor.value : yield* resolveStart;
-        cursor = Option.some(position);
-        yield* readFrom(position);
-      });
-      yield* Effect.forkScoped(Effect.forever(readOnce));
-      return { take: Queue.take(queue) };
+      const readOnce = (queue: Queue.Enqueue<string>) =>
+        Effect.gen(function* () {
+          const position = Option.isSome(cursor) ? cursor.value : yield* resolveStart;
+          cursor = Option.some(position);
+          yield* readFrom(queue, position);
+        });
+      // The reader starts here, not when the stream is first run, so it reads
+      // from the cursor fixed above whenever the consumer starts.
+      // `orDie`: every step retries on the unbounded `readerRetry`, so no failure reaches here.
+      return yield* Subscribe.subscribeNow(
+        Stream.callback<string>((queue) => Effect.orDie(Effect.forever(readOnce(queue))))
+      );
     }),
   };
 });
@@ -293,17 +300,12 @@ export interface WebSocketLike {
  */
 export const makeWebSocketBroker = (socket: WebSocketLike): BusBroker => ({
   publish: (payload) => Effect.sync(() => socket.send(payload)),
-  subscribe: Effect.gen(function* () {
-    const queue = yield* Queue.unbounded<string>();
-    const listener = (event: { readonly data: unknown }) => {
-      if (P.isString(event.data)) Queue.offerUnsafe(queue, event.data);
-    };
-    yield* Effect.acquireRelease(
-      Effect.sync(() => socket.addEventListener("message", listener)),
-      () => Effect.sync(() => socket.removeEventListener("message", listener))
-    );
-    return { take: Queue.take(queue) };
-  }),
+  subscribe: Subscribe.subscribeNow(
+    Stream.fromEventListener<{ readonly data: unknown }>(socket, "message").pipe(
+      Stream.map((event) => event.data),
+      Stream.filter(P.isString)
+    )
+  ),
 });
 
 // ─── BroadcastChannel broker ─────────────────────────────────────────────────
@@ -334,13 +336,12 @@ export const makeBroadcastChannelBroker: (
 ) => Effect.Effect<BusBroker, never, Scope.Scope> = Effect.fn(
   "legation/BusBrokers.makeBroadcastChannelBroker"
 )(function* (channel) {
-  const queues = new Set<Queue.Queue<string>>();
+  // This broker's subscribers, fed by both the channel and its own publishes.
+  const hub = yield* Effect.acquireRelease(PubSub.unbounded<string>(), (created) =>
+    PubSub.shutdown(created)
+  );
   const listener = (event: { readonly data: unknown }) => {
-    const data = event.data;
-    if (!P.isString(data)) return;
-    Arr.forEach(queues, (queue) => {
-      Queue.offerUnsafe(queue, data);
-    });
+    if (P.isString(event.data)) PubSub.publishUnsafe(hub, event.data);
   };
   yield* Effect.acquireRelease(
     Effect.sync(() => channel.addEventListener("message", listener)),
@@ -349,18 +350,9 @@ export const makeBroadcastChannelBroker: (
   return {
     publish: (payload) =>
       Effect.sync(() => {
-        Arr.forEach(queues, (queue) => {
-          Queue.offerUnsafe(queue, payload);
-        }); // self
+        PubSub.publishUnsafe(hub, payload); // self
         channel.postMessage(payload); // other contexts
       }),
-    subscribe: Effect.gen(function* () {
-      const queue = yield* Queue.unbounded<string>();
-      yield* Effect.acquireRelease(
-        Effect.sync(() => queues.add(queue)),
-        () => Effect.sync(() => queues.delete(queue))
-      );
-      return { take: Queue.take(queue) };
-    }),
+    subscribe: Effect.map(PubSub.subscribe(hub), Stream.fromSubscription),
   };
 });

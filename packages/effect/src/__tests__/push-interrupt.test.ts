@@ -18,6 +18,7 @@ import * as MemoryBackend from "../MemoryBackend.js";
 import * as Mutator from "../Mutator.js";
 import * as SyncServer from "../SyncServer.js";
 import { ClientGroupId, MutationId, RowId } from "../Protocol.js";
+import { takes } from "./takes.js";
 
 const todoSet = Mutator.make("todo/set", Schema.Struct({ id: Schema.String }));
 const handlers = MemoryBackend.validatedHandlers([
@@ -44,7 +45,7 @@ describe("SyncServer.handlePush and interruption", () => {
       };
       const bus = yield* InvalidationBus.makeInProcess;
       // Subscribe before the push, so every published batch is observable.
-      const subscription = yield* bus.subscribe;
+      const subscription = yield* takes(bus.subscribe);
       const server = yield* SyncServer.make.pipe(
         Effect.provideService(Backend, parked),
         Effect.provideService(

@@ -65,7 +65,8 @@ export const defaultReconnect = (
 /**
  * Build the transport. The poke socket dials lazily on first subscription
  * and re-dials on the `reconnect` schedule; each frame becomes one
- * contentless poke.
+ * contentless poke. `status` reports the HTTP tier and stays
+ * `"connected"` while the socket is down, since sync stays correct without it.
  */
 export const make = (options: MakeOptions): Transport.ClientTransport => {
   const target = { base: options.url, headers: options.headers ?? {}, label: "room" };
@@ -102,7 +103,8 @@ export const make = (options: MakeOptions): Transport.ClientTransport => {
     pull: post(target, routes.pull, Protocol.PullResponse),
     read: post(target, routes.read, Protocol.ReadResponse),
     pokes,
-    // Correctness never depends on the socket; report the HTTP tier.
+    // Reports the HTTP tier only: pokes are hints, and the pull interval
+    // recovers any a dead socket misses, so a socket outage is not degraded sync.
     status: Effect.succeed("connected"),
     statusChanges: Stream.succeed("connected"),
   };

@@ -6,6 +6,7 @@
 import { describe, expect, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as BusBrokers from "../BusBrokers.js";
+import { takes } from "./takes.js";
 
 const openChannel = (name: string) =>
   Effect.acquireRelease(
@@ -20,8 +21,8 @@ describe("makeBroadcastChannelBroker", () => {
       const channelB: BusBrokers.BroadcastChannelLike = yield* openChannel("legation-bus-test");
       const brokerA = yield* BusBrokers.makeBroadcastChannelBroker(channelA);
       const brokerB = yield* BusBrokers.makeBroadcastChannelBroker(channelB);
-      const subA = yield* brokerA.subscribe;
-      const subB = yield* brokerB.subscribe;
+      const subA = yield* takes(brokerA.subscribe);
+      const subB = yield* takes(brokerB.subscribe);
 
       yield* brokerA.publish("hint-1");
       expect(yield* subA.take).toBe("hint-1"); // self-delivery

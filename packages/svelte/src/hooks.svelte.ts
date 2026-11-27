@@ -37,11 +37,25 @@ import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
 import { AsyncResult } from "effect/reactivity";
 import { Aggregate, Client, Query } from "@thomasfosterau/legation";
-import { ClientEngine, type MutationState, type Undo } from "@thomasfosterau/legation/internal";
+import {
+  ClientEngine,
+  type ClientView,
+  type MutationState,
+  type Undo,
+} from "@thomasfosterau/legation/internal";
 import { getClient, getClientRuntime, type ClientRuntime } from "./Runtime.js";
 import { unavailable } from "./unavailable.js";
 
-/** A live result: `current` re-renders whatever reads it on every emission. */
+/**
+ * A live result: `current` re-renders whatever reads it on every emission.
+ *
+ * A read hook's `E` is the {@link ReadError} its Client's view can fail
+ * with: a refused registration or a failed read ends the stream, so
+ * `current` becomes a `Failure` whose cause carries the error, and
+ * `promise` rejects with the error itself. A defect (no Client in context,
+ * a read the graph cannot plan) is a `Failure` over a die, and rejects
+ * `promise` with the squashed cause.
+ */
 export interface Live<A, E = never> {
   /**
    * The current result. `Initial` until the first emission, then `Success`
@@ -49,6 +63,8 @@ export interface Live<A, E = never> {
    * result is kept with `waiting: true` (stale-while-revalidate). An
    * `initial` seed starts as a non-waiting `Success` — "we have data", no
    * spinner over server-rendered content — until the first real emission.
+   * A stream that fails ends at a `Failure`; the hook subscribes again when
+   * its inputs next change.
    */
   readonly current: AsyncResult.AsyncResult<A, E>;
   /**
@@ -63,6 +79,12 @@ export interface Live<A, E = never> {
    */
   readonly promise: Promise<A>;
 }
+
+/**
+ * What a live read hook fails with: the Client view's typed error
+ * (`ClientView.ClientViewError`), a `Schema.TaggedError` to match on `_tag`.
+ */
+export type ReadError = ClientView.ClientViewError;
 
 /** Options shared by the live hooks. */
 export interface LiveOptions<A> {
@@ -181,7 +203,7 @@ const live = <A, E>(
 export const useQuery = <const R extends Query.Read>(
   read: () => (R & Query.Validate<Client.Registered, R>) | undefined,
   options?: LiveOptions<ResolvedRows<R>>
-): Live<ResolvedRows<R>> =>
+): Live<ResolvedRows<R>, ReadError> =>
   live(
     getClientRuntime(),
     () => {
@@ -208,7 +230,7 @@ export const useQuery = <const R extends Query.Read>(
 export const useAnswer = <const R extends Query.Read>(
   read: () => (R & Query.Validate<Client.Registered, R>) | undefined,
   options?: LiveOptions<Client.Answer<R>>
-): Live<Client.Answer<R>> =>
+): Live<Client.Answer<R>, ReadError> =>
   live(
     getClientRuntime(),
     () => {
@@ -220,7 +242,10 @@ export const useAnswer = <const R extends Query.Read>(
   );
 
 /** A live, growing connection over a read's root window (ADR-0024). */
-export interface Connection<R extends Query.Read = Query.Read> extends Live<ResolvedRows<R>> {
+export interface Connection<R extends Query.Read = Query.Read> extends Live<
+  ResolvedRows<R>,
+  ReadError
+> {
   /**
    * Widen the window by one page. A no-op while a widen is still resolving
    * or once {@link hasMore} is false — call it freely from a click handler.
@@ -361,10 +386,9 @@ export const useConnection = <const R extends Query.Read>(
             // observation correct even if that ordering ever changes.
             if (pages > 1) retargetHandle.retarget(pages * pageSize);
             return opened.rows.pipe(
-              Stream.orDie,
               Stream.map((rows) => rows.map((row) => ({ ...row, related: {} })))
             );
-          }).pipe(Effect.orDie)
+          })
         );
     },
     options
@@ -407,14 +431,14 @@ export const useConnection = <const R extends Query.Read>(
 export const useNamedQuery = (
   query: () => { readonly name: string; readonly args: unknown } | undefined,
   options?: LiveOptions<ReadonlyArray<ClientEngine.LocalRow>>
-): Live<ReadonlyArray<ClientEngine.LocalRow>> =>
+): Live<ReadonlyArray<ClientEngine.LocalRow>, ReadError> =>
   live(
     getClientRuntime(),
     () => {
       const value = query();
       if (value === undefined) return undefined;
       const { name, args } = value;
-      return (client) => client.view.observeNamed(name, args).pipe(Stream.orDie);
+      return (client) => client.view.observeNamed(name, args);
     },
     options
   );
@@ -428,17 +452,14 @@ export const useAggregate = <const R extends Query.Read>(
   read: () => (R & Query.Validate<Client.Registered, R>) | undefined,
   aggregate: Aggregate.Aggregate,
   options?: LiveOptions<Aggregate.AggregateValue>
-): Live<Aggregate.AggregateValue> =>
+): Live<Aggregate.AggregateValue, ReadError> =>
   live(
     getClientRuntime(),
     () => {
       const value = read();
       if (value === undefined) return undefined;
       return (client) =>
-        Aggregate.observe(
-          client.view.observe(Query.plan(client.nodes, value).root).pipe(Stream.orDie),
-          aggregate
-        );
+        Aggregate.observe(client.view.observe(Query.plan(client.nodes, value).root), aggregate);
     },
     options
   );
@@ -453,7 +474,7 @@ export const useAggregateGrouped = <const R extends Query.Read>(
   aggregate: Aggregate.Aggregate,
   groupBy: string,
   options?: LiveOptions<Record<string, Aggregate.AggregateValue>>
-): Live<Record<string, Aggregate.AggregateValue>> =>
+): Live<Record<string, Aggregate.AggregateValue>, ReadError> =>
   live(
     getClientRuntime(),
     () => {
@@ -461,7 +482,7 @@ export const useAggregateGrouped = <const R extends Query.Read>(
       if (value === undefined) return undefined;
       return (client) =>
         Aggregate.observeGrouped(
-          client.view.observe(Query.plan(client.nodes, value).root).pipe(Stream.orDie),
+          client.view.observe(Query.plan(client.nodes, value).root),
           aggregate,
           groupBy
         );

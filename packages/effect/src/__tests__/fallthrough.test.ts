@@ -519,7 +519,7 @@ const holdingRows = (view: ClientView.ClientView, pass: number) =>
   });
 
 /** Every emission of `stream`, in order, recorded as it arrives. */
-const recording = (stream: Stream.Stream<Client.Answer>) =>
+const recording = (stream: Stream.Stream<Client.Answer, ClientView.ClientViewError>) =>
   Effect.gen(function* () {
     const log = yield* Ref.make<ReadonlyArray<Client.Answer>>([]);
     yield* Effect.forkScoped(

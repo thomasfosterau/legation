@@ -22,6 +22,7 @@ import * as Arr from "effect/Array";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Scope from "effect/Scope";
+import * as Stream from "effect/Stream";
 import type { FanoutBroker } from "./FanoutBroker.js";
 import * as FanoutTopics from "./FanoutTopics.js";
 import type { InvalidationBus } from "./InvalidationBus.js";
@@ -109,16 +110,12 @@ export const make: (options: MakeOptions) => Effect.Effect<InvalidationBus, neve
         // Freshen the lease alongside the write — a busy room never expires.
         return bounded("publish", options.broker.publish(topics)).pipe(Effect.andThen(registerNow));
       },
-      subscribe: Effect.gen(function* () {
-        const pokes = yield* options.broker.pokes(options.roomId);
-        return {
-          take: pokes.take.pipe(
-            Effect.map((topics) => {
-              const collections = Arr.dedupe(topics.map(FanoutTopics.collectionOf));
-              return collections.map((collection) => ({ collection, ids: [] }));
-            })
-          ),
-        };
-      }),
+      subscribe: Effect.map(
+        options.broker.pokes(options.roomId),
+        Stream.map((topics) => {
+          const collections = Arr.dedupe(topics.map(FanoutTopics.collectionOf));
+          return collections.map((collection) => ({ collection, ids: [] }));
+        })
+      ),
     };
   });

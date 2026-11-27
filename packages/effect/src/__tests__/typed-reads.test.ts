@@ -16,6 +16,7 @@ import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
 import * as Client from "../Client.js";
+import type * as ClientView from "../ClientView.js";
 import * as Edge from "../Edge.js";
 import * as Mutator from "../Mutator.js";
 import * as Node from "../Node.js";
@@ -168,7 +169,10 @@ describe("typed reads", () => {
     compileOnly(() => {
       const stream = client.observe(allProducts);
       expectTypeOf(stream).toEqualTypeOf<
-        Stream.Stream<ReadonlyArray<Client.ResolvedRow<typeof allProducts, Graph>>>
+        Stream.Stream<
+          ReadonlyArray<Client.ResolvedRow<typeof allProducts, Graph>>,
+          ClientView.ClientViewError
+        >
       >();
     }));
 
@@ -182,7 +186,10 @@ describe("typed reads", () => {
       expectTypeOf<(typeof answer.rows)[number]["value"]>().toEqualTypeOf<ProductRow>();
       expectTypeOf(answer.completeness).toEqualTypeOf<Client.Completeness>();
       expectTypeOf(client.observeAnswers(productDetail("p1"))).toEqualTypeOf<
-        Stream.Stream<Client.Answer<ReturnType<typeof productDetail>, Graph>>
+        Stream.Stream<
+          Client.Answer<ReturnType<typeof productDetail>, Graph>,
+          ClientView.ClientViewError
+        >
       >();
       // A dynamic read's answer holds untyped rows, as its query does.
       const collection: string = "products";

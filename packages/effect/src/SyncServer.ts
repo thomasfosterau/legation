@@ -32,6 +32,7 @@ import * as P from "effect/Predicate";
 import * as R from "effect/Record";
 import * as Ref from "effect/Ref";
 import * as Scope from "effect/Scope";
+import * as Stream from "effect/Stream";
 import {
   Backend,
   type ChangeHint,
@@ -668,47 +669,38 @@ export const makeWithIntrospectionWith: (
   // The exception is a Redis Streams broker while Redis is unreachable, which
   // may miss a publish that races `subscribe`; a hint so missed only delays the
   // next pull.
-  const hintSubscription = yield* bus.subscribe;
+  const hintStream = yield* bus.subscribe;
   yield* Effect.forkScoped(
-    Effect.forever(
-      hintSubscription.take.pipe(
-        Effect.flatMap((hints) =>
-          Effect.gen(function* () {
-            const start = yield* Clock.currentTimeMillis;
-            const touched = new Set(hints.map((hint) => hint.collection));
-            const groups = yield* Ref.get(activeSubsets);
-            const cvrs = yield* Ref.get(activeCvrs);
-            // A write to a named set's source may move the set: those
-            // sessions are poked whatever their windows hold.
-            const scoped = yield* recordWrites(HashSet.fromIterable(touched));
-            yield* Effect.forEach(
-              groups,
-              ([clientGroupId, subsets]) =>
-                Effect.gen(function* () {
-                  if (HashSet.has(scoped, clientGroupId)) {
-                    yield* pokeHub.publish(clientGroupId, { reason: undefined });
-                    yield* Metric.update(Telemetry.pokesTotal, 1);
-                    return;
-                  }
-                  if (!collectionMatch(touched, subsets)) return;
-                  if (
-                    predicateMatch(hints, subsets, Option.fromUndefinedOr(cvrs.get(clientGroupId)))
-                  ) {
-                    yield* pokeHub.publish(clientGroupId, { reason: undefined });
-                    yield* Metric.update(Telemetry.pokesTotal, 1);
-                  } else {
-                    yield* Metric.update(Telemetry.pokesSuppressedTotal, 1);
-                  }
-                }),
-              { concurrency: 1, discard: true }
-            );
-            yield* Metric.update(
-              Telemetry.fanoutLatencyMs,
-              (yield* Clock.currentTimeMillis) - start
-            );
-          })
-        )
-      )
+    Stream.runForEach(hintStream, (hints) =>
+      Effect.gen(function* () {
+        const start = yield* Clock.currentTimeMillis;
+        const touched = new Set(hints.map((hint) => hint.collection));
+        const groups = yield* Ref.get(activeSubsets);
+        const cvrs = yield* Ref.get(activeCvrs);
+        // A write to a named set's source may move the set: those
+        // sessions are poked whatever their windows hold.
+        const scoped = yield* recordWrites(HashSet.fromIterable(touched));
+        yield* Effect.forEach(
+          groups,
+          ([clientGroupId, subsets]) =>
+            Effect.gen(function* () {
+              if (HashSet.has(scoped, clientGroupId)) {
+                yield* pokeHub.publish(clientGroupId, { reason: undefined });
+                yield* Metric.update(Telemetry.pokesTotal, 1);
+                return;
+              }
+              if (!collectionMatch(touched, subsets)) return;
+              if (predicateMatch(hints, subsets, Option.fromUndefinedOr(cvrs.get(clientGroupId)))) {
+                yield* pokeHub.publish(clientGroupId, { reason: undefined });
+                yield* Metric.update(Telemetry.pokesTotal, 1);
+              } else {
+                yield* Metric.update(Telemetry.pokesSuppressedTotal, 1);
+              }
+            }),
+          { concurrency: 1, discard: true }
+        );
+        yield* Metric.update(Telemetry.fanoutLatencyMs, (yield* Clock.currentTimeMillis) - start);
+      })
     )
   );
 

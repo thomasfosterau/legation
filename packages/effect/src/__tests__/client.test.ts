@@ -567,6 +567,68 @@ describe("Client.query coverage (ADR-0029: conjunct subsumption with strict wind
     )
   );
 
+  it.effect(
+    "an observe whose registration the view refuses fails typed and leaves the ledger clean",
+    () =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const { engine } = yield* makeCountingEngine();
+          const view = ClientView.fromEngine(engine);
+          const refusing: ClientView.ClientView = {
+            ...view,
+            subscribe: () => Effect.fail(new StoreError({ message: "store unavailable" })),
+          };
+          const client = Client.fromView(nodes, refusing);
+          const read = { collection: "products" };
+
+          const error = yield* Effect.flip(Stream.runCollect(client.observe(read)));
+          expect(error).toBeInstanceOf(StoreError);
+          expect(yield* client.subscriptions).toEqual([]);
+          expect(yield* rootHashes(engine)).toEqual([]);
+        })
+      )
+  );
+
+  it.effect("a view read that fails ends the observed stream with its error", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const { engine } = yield* makeCountingEngine();
+        const view = ClientView.fromEngine(engine);
+        const failing: ClientView.ClientView = {
+          ...view,
+          observe: () => Stream.fail(new StoreError({ message: "replica unreadable" })),
+        };
+        const client = Client.fromView(nodes, failing);
+        const read = { collection: "products" };
+
+        const observed = yield* Effect.flip(Stream.runCollect(client.observe(read)));
+        expect(observed).toBeInstanceOf(StoreError);
+        const answered = yield* Effect.flip(Stream.runCollect(client.observeAnswers(read)));
+        expect(answered).toBeInstanceOf(StoreError);
+        // The stream's registration went with it.
+        yield* eventually(client.subscriptions, Arr.isReadonlyArrayEmpty);
+      })
+    )
+  );
+
+  it.effect("a joined read whose foreign rows fail ends Query.observe with the error", () =>
+    Effect.gen(function* () {
+      const product = { id: RowId.make("p1"), value: { id: "p1", name: "Amp", categoryId: "c" } };
+      const reader: ClientView.Reader = {
+        query: () => Effect.succeed([]),
+        observe: (subset) =>
+          subset.collection === "products"
+            ? Stream.concat(Stream.make([product]), Stream.never)
+            : Stream.fail(new StoreError({ message: "reviews unreadable" })),
+      };
+      const read: Query.Read = { collection: "products", include: { reviews: true } };
+
+      const error = yield* Effect.flip(Stream.runCollect(Query.observe(reader, nodes, read)));
+      expect(error).toBeInstanceOf(StoreError);
+      expect(error.message).toBe("reviews unreadable");
+    })
+  );
+
   it.effect("two pins sharing a root are released one at a time", () =>
     Effect.scoped(
       Effect.gen(function* () {

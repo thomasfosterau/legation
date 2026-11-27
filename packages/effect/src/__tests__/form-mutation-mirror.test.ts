@@ -274,9 +274,8 @@ describe("enhanced form submit over a connected host", () => {
         // and its engine has no such mutator, so it answers `MutateError`.
         const inbox = yield* pair.host.subscribe;
         yield* Effect.forkScoped(
-          Effect.forever(
-            inbox.take.pipe(
-              Effect.flatMap(MirrorProtocol.decodeMirrorMessage),
+          Stream.runForEach(inbox, (raw) =>
+            MirrorProtocol.decodeMirrorMessage(raw).pipe(
               Effect.flatMap((message) =>
                 message?._tag === "Mutate"
                   ? pair.host.post({

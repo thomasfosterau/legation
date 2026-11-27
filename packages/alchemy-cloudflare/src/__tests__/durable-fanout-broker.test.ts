@@ -12,7 +12,9 @@ import { RuntimeContext } from "alchemy/RuntimeContext";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
 import * as Fiber from "effect/Fiber";
+import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
+import * as Stream from "effect/Stream";
 import * as TestClock from "effect/testing/TestClock";
 import { Edge, Node } from "@thomasfosterau/legation";
 import { FanoutTopics, Protocol } from "@thomasfosterau/legation/internal";
@@ -113,7 +115,7 @@ describe("DurableFanoutBroker publish", () => {
       const { broker, notify } = yield* makeBroker(hungShards().shards);
       const pokes = yield* broker.pokes("room-a");
       yield* notify([FanoutTopics.coarse("products")]);
-      expect(yield* pokes.take).toEqual([FanoutTopics.coarse("products")]);
+      expect(yield* Stream.runHead(pokes)).toEqual(Option.some([FanoutTopics.coarse("products")]));
     }).pipe(Effect.scoped)
   );
 });

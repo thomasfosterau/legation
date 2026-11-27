@@ -23,6 +23,7 @@ import * as Defined from "./Defined.js";
 import * as Arr from "effect/Array";
 import * as Clock from "effect/Clock";
 import * as Context from "effect/Context";
+import * as Data from "effect/Data";
 import * as Deferred from "effect/Deferred";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
@@ -328,6 +329,15 @@ export type EngineEvent =
     };
 
 /**
+ * Tag helpers for {@link EngineEvent}: `EngineEvent.$is("PullCompleted")`
+ * narrows an event, `EngineEvent.$match(event, { … })` matches every tag.
+ */
+export const EngineEvent: Pick<Data.TaggedEnum.Constructor<EngineEvent>, "$is" | "$match"> = {
+  $is: Data.taggedEnum<EngineEvent>().$is,
+  $match: Data.taggedEnum<EngineEvent>().$match,
+};
+
+/**
  * A row-level delta produced by a mutator's local handler: unlike a
  * `PatchOp`, it carries no server version — the row is optimistic, not yet
  * confirmed. Structurally interchangeable with `PatchOp`'s `Put`/`Del` for
@@ -361,6 +371,8 @@ const isClear = (op: PatchOp | OverlayOp): op is Extract<PatchOp, { readonly _ta
 type ViewChange =
   | { readonly _tag: "Patch"; readonly ops: ReadonlyArray<PatchOp | OverlayOp> }
   | { readonly _tag: "Rebuild"; readonly collections?: ReadonlySet<string> };
+
+const ViewChange = Data.taggedEnum<ViewChange>();
 
 /** The global rebuild: `collections` undefined, so every observer re-materializes. */
 const REBUILD: ViewChange = { _tag: "Rebuild" };
@@ -1329,15 +1341,16 @@ export const make: (
   const emitEngineEvent = (event: EngineEvent): Effect.Effect<void> =>
     Effect.asVoid(PubSub.publish(engineEventsHub, event));
   // A Rebuild change is a view rebuild; carry its scoped collections.
-  const viewRebuiltEvent = (change: ViewChange): Effect.Effect<void> =>
-    P.isTagged(change, "Rebuild")
-      ? emitEngineEvent({
-          _tag: "ViewRebuilt",
-          ...Defined.fields({
-            collections: change.collections !== undefined ? [...change.collections] : undefined,
-          }),
-        })
-      : Effect.void;
+  const viewRebuiltEvent: (change: ViewChange) => Effect.Effect<void> = ViewChange.$match({
+    Patch: () => Effect.void,
+    Rebuild: ({ collections }) =>
+      emitEngineEvent({
+        _tag: "ViewRebuilt",
+        ...Defined.fields({
+          collections: collections !== undefined ? [...collections] : undefined,
+        }),
+      }),
+  });
   const publishChange = (change: ViewChange): Effect.Effect<void> =>
     Ref.updateAndGet(changeSeq, (n) => n + 1).pipe(
       Effect.flatMap((seq) => PubSub.publish(changes, { seq, change })),

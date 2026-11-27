@@ -9,8 +9,8 @@
 import { TransportError } from "@thomasfosterau/legation";
 import { MirrorChannel } from "@thomasfosterau/legation/internal";
 import * as Effect from "effect/Effect";
-import * as Queue from "effect/Queue";
 import * as Scope from "effect/Scope";
+import * as Stream from "effect/Stream";
 
 /** A {@link MirrorChannel.MirrorChannel} over a `BroadcastChannel` name. */
 export const make: (
@@ -28,16 +28,10 @@ export const make: (
         try: () => channel.postMessage(message),
         catch: (cause) => new TransportError({ message: `BroadcastChannel post failed`, cause }),
       }),
-    subscribe: Effect.gen(function* () {
-      const queue = yield* Queue.unbounded<unknown>();
-      const listener = (event: MessageEvent) => {
-        Queue.offerUnsafe(queue, event.data);
-      };
-      yield* Effect.acquireRelease(
-        Effect.sync(() => channel.addEventListener("message", listener)),
-        () => Effect.sync(() => channel.removeEventListener("message", listener))
-      );
-      return { take: Queue.take(queue) };
-    }),
+    subscribe: MirrorChannel.subscribeNow(
+      Stream.fromEventListener<MessageEvent>(channel, "message").pipe(
+        Stream.map((event) => event.data)
+      )
+    ),
   };
 });

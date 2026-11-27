@@ -31,6 +31,7 @@ import * as Subset from "../Subset.js";
 import * as SyncServer from "../SyncServer.js";
 import * as Transport from "../Transport.js";
 import { ClientGroupId, RowId } from "../Protocol.js";
+import * as Stream from "effect/Stream";
 
 const Note = Schema.Struct({ id: Schema.String });
 
@@ -101,15 +102,11 @@ const scriptedHost = <E>(
   Effect.gen(function* () {
     const inbox = yield* host.subscribe;
     yield* Effect.forkScoped(
-      Effect.forever(
-        inbox.take.pipe(
-          Effect.flatMap((raw) =>
-            Option.match(Option.filter(decodeMessage(raw), isMutate), {
-              onNone: () => Effect.void,
-              onSome: (message) => Effect.ignore(answer(message)),
-            })
-          )
-        )
+      Stream.runForEach(inbox, (raw) =>
+        Option.match(Option.filter(decodeMessage(raw), isMutate), {
+          onNone: () => Effect.void,
+          onSome: (message) => Effect.ignore(answer(message)),
+        })
       )
     );
   });

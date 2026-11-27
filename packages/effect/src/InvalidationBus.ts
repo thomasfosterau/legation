@@ -23,6 +23,7 @@ import * as Metric from "effect/Metric";
 import * as PubSub from "effect/PubSub";
 import * as Schema from "effect/Schema";
 import * as Scope from "effect/Scope";
+import * as Stream from "effect/Stream";
 import type { ChangeHint } from "./Backend.js";
 import * as Json from "./internal/Json.js";
 import { RowId } from "./Protocol.js";
@@ -49,13 +50,11 @@ export interface BusCapacityOptions {
 const countIfDropped = (published: boolean): Effect.Effect<void> =>
   published ? Effect.void : Metric.update(Telemetry.hintsDroppedTotal, 1);
 
-/** Subscribe to a PubSub and expose a `take`-only handle (shared by the bus and broker). */
-const takeHandle = <A>(
+/** Subscribe to a PubSub now and stream what it receives (shared by the bus and broker). */
+const subscribed = <A>(
   pubsub: PubSub.PubSub<A>
-): Effect.Effect<{ readonly take: Effect.Effect<A> }, never, Scope.Scope> =>
-  PubSub.subscribe(pubsub).pipe(
-    Effect.map((subscription) => ({ take: PubSub.take(subscription) }))
-  );
+): Effect.Effect<Stream.Stream<A>, never, Scope.Scope> =>
+  Effect.map(PubSub.subscribe(pubsub), Stream.fromSubscription);
 
 /**
  * Allocate a bounded, dropping PubSub (shut down with the scope) plus a
@@ -79,12 +78,6 @@ const droppingHub = Effect.fnUntraced(function* <A>(
   };
 });
 
-/** A live subscription to the bus. */
-export interface HintSubscription {
-  /** The next hint batch; suspends until one arrives. */
-  readonly take: Effect.Effect<ReadonlyArray<ChangeHint>>;
-}
-
 /**
  * The channel carrying committed-write hints from the backend to sync sessions; a missed hint
  * only delays the next pull.
@@ -93,12 +86,13 @@ export interface InvalidationBus {
   readonly publish: (hints: ReadonlyArray<ChangeHint>) => Effect.Effect<void>;
   /**
    * Subscribe to hint batches. The subscription is established once the
-   * effect completes, so a consumer can subscribe first and start its
-   * processing loop later. Hints published afterwards are never missed, with
-   * one exception: the Redis Streams broker may miss a publish that races
-   * `subscribe` while Redis is unreachable.
+   * effect completes, so a consumer can subscribe first and run the returned
+   * stream later. The stream is single-use and ends when the scope closes.
+   * Hints published afterwards are never missed, with one exception: the
+   * Redis Streams broker may miss a publish that races `subscribe` while
+   * Redis is unreachable.
    */
-  readonly subscribe: Effect.Effect<HintSubscription, never, Scope.Scope>;
+  readonly subscribe: Effect.Effect<Stream.Stream<ReadonlyArray<ChangeHint>>, never, Scope.Scope>;
 }
 
 /** The {@link InvalidationBus} service the sync server and hint sources use. */
@@ -125,7 +119,7 @@ export const makeInProcessWith: (
   const hub = yield* droppingHub<ReadonlyArray<ChangeHint>>(options?.capacity);
   return InvalidationBus.of({
     publish: (hints) => (Arr.isReadonlyArrayEmpty(hints) ? Effect.void : hub.publish(hints)),
-    subscribe: takeHandle(hub.pubsub),
+    subscribe: subscribed(hub.pubsub),
   });
 });
 
@@ -156,11 +150,14 @@ export const layerInProcessWith = (options?: BusCapacityOptions): Layer.Layer<In
 export interface BusBroker {
   readonly publish: (payload: string) => Effect.Effect<void>;
   /**
-   * Subscribe to the channel; established when the effect completes. While the
+   * Subscribe to the channel; established when the effect completes, and the
+   * single-use stream emits each payload received from then on, in order,
+   * ending when the scope closes. A listener-backed broker builds it with
+   * `Stream.fromEventListener` and `MirrorChannel.subscribeNow`. While the
    * transport is unreachable, a publish that races this call may be missed (the
    * Redis Streams broker may miss one while Redis is unreachable).
    */
-  readonly subscribe: Effect.Effect<{ readonly take: Effect.Effect<string> }, never, Scope.Scope>;
+  readonly subscribe: Effect.Effect<Stream.Stream<string>, never, Scope.Scope>;
 }
 
 /**
@@ -223,13 +220,9 @@ export const makeSerialized = (
                 ),
             })
           ),
-    subscribe: broker.subscribe.pipe(
-      Effect.map((subscription) => {
-        const take: Effect.Effect<ReadonlyArray<ChangeHint>> = subscription.take.pipe(
-          Effect.flatMap((payload) => decodeHints(payload).pipe(Effect.catch(() => take)))
-        );
-        return { take };
-      })
+    subscribe: Effect.map(
+      broker.subscribe,
+      Stream.filterMapEffect((payload: string) => Effect.result(decodeHints(payload)))
     ),
   });
 };
@@ -257,7 +250,7 @@ export const makeMemoryBrokerWith: (
   "legation/InvalidationBus.makeMemoryBrokerWith"
 )(function* (options) {
   const hub = yield* droppingHub<string>(options?.capacity);
-  return { publish: hub.publish, subscribe: takeHandle(hub.pubsub) };
+  return { publish: hub.publish, subscribe: subscribed(hub.pubsub) };
 });
 
 /** In-memory broker with the default capacity. */

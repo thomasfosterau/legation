@@ -159,7 +159,7 @@ describe("backpressure — invalidation bus", () => {
     Effect.gen(function* () {
       const bus = yield* InvalidationBus.makeInProcessWith({ capacity: 2 });
       // Hold a subscription open but never take: publishes past capacity drop.
-      yield* bus.subscribe;
+      yield* Effect.asVoid(bus.subscribe);
       const before = (yield* Metric.value(Telemetry.hintsDroppedTotal)).count;
       yield* Effect.forEach(
         Array.from({ length: 20 }),

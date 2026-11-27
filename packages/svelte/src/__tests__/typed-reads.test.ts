@@ -15,6 +15,7 @@ import {
   useConnection,
   useQuery,
   type Live,
+  type ReadError,
   type ResolvedRows,
 } from "../index.svelte.js";
 
@@ -29,7 +30,7 @@ describe("typed reads, unregistered", () => {
   it("resolves a literal read to untyped rows when no graph is registered", () =>
     compileOnly(() => {
       const rows = useQuery(() => allTodos);
-      expectTypeOf(rows).toEqualTypeOf<Live<ResolvedRows<typeof allTodos>>>();
+      expectTypeOf(rows).toEqualTypeOf<Live<ResolvedRows<typeof allTodos>, ReadError>>();
       expectTypeOf<ResolvedRows<typeof allTodos>>().toEqualTypeOf<
         ReadonlyArray<Client.ResolvedRow>
       >();
@@ -38,7 +39,7 @@ describe("typed reads, unregistered", () => {
   it("types useAnswer's rows as useQuery's, beside the completeness", () =>
     compileOnly(() => {
       const answer = useAnswer(() => allTodos);
-      expectTypeOf(answer).toEqualTypeOf<Live<Client.Answer<typeof allTodos>>>();
+      expectTypeOf(answer).toEqualTypeOf<Live<Client.Answer<typeof allTodos>, ReadError>>();
       expectTypeOf<Client.Answer<typeof allTodos>["rows"]>().toEqualTypeOf<
         ResolvedRows<typeof allTodos>
       >();

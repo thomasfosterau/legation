@@ -181,9 +181,8 @@ const scriptedHost = (
   Effect.gen(function* () {
     const inbox = yield* channel.subscribe;
     yield* Effect.forkScoped(
-      Effect.forever(
-        inbox.take.pipe(
-          Effect.flatMap(MirrorProtocol.decodeMirrorMessage),
+      Stream.runForEach(inbox, (raw) =>
+        MirrorProtocol.decodeMirrorMessage(raw).pipe(
           Effect.flatMap((message) =>
             isHostRequest(message) ? Effect.ignore(answer(message)) : Effect.void
           )
