@@ -34,6 +34,7 @@ import * as Telemetry from "../Telemetry.js";
 import { ClientTransport, makeInMemory, type ClientTransport as CT } from "../Transport.js";
 import type { ServerHandler } from "../Transport.js";
 import { idOf, titleOf } from "./shapes.js";
+import { ClientGroupId, RowId } from "../Protocol.js";
 
 interface Todo {
   readonly id: string;
@@ -44,12 +45,12 @@ interface Todo {
 const setTodo = Mutator.registry([
   {
     mutator: Mutator.make("todo/set", Schema.Unknown),
-    local: (todo: Todo, writer) => writer.put("todos", todo.id, todo),
+    local: (todo: Todo, writer) => writer.put("todos", RowId.make(todo.id), todo),
   },
 ]);
 
 const backendHandlers = {
-  "todo/set": (args, writer) => Effect.asVoid(writer.put("todos", idOf(args), args)),
+  "todo/set": (args, writer) => Effect.asVoid(writer.put("todos", RowId.make(idOf(args)), args)),
 } satisfies Record<string, MemoryBackend.BackendHandler>;
 
 const authPolicy = Authorization.policy({ todos: Authorization.allowAll });
@@ -132,10 +133,10 @@ describe("retry integration", () => {
       // Commit a remote write first so a successful pull has something to bring.
       const writer = yield* Effect.gen(function* () {
         const store = yield* ClientStoreModule.makeMemory;
-        const base = yield* makeInMemory(handler, "group-writer");
+        const base = yield* makeInMemory(handler, ClientGroupId.make("group-writer"));
         const engine = yield* ClientEngineModule.make({
           clientId: "writer",
-          clientGroupId: "group-writer",
+          clientGroupId: ClientGroupId.make("group-writer"),
           mutators: setTodo,
         }).pipe(
           Effect.provideService(ClientStore, store),
@@ -149,7 +150,7 @@ describe("retry integration", () => {
 
       // Reader: pull fails twice with TransportError, then delegates.
       const store = yield* ClientStoreModule.makeMemory;
-      const base = yield* makeInMemory(handler, "group-reader");
+      const base = yield* makeInMemory(handler, ClientGroupId.make("group-reader"));
       const failuresLeft = yield* Ref.make(2);
       const flaky: CT = {
         push: base.push,
@@ -167,7 +168,7 @@ describe("retry integration", () => {
       };
       const reader = yield* ClientEngineModule.make({
         clientId: "reader",
-        clientGroupId: "group-reader",
+        clientGroupId: ClientGroupId.make("group-reader"),
         mutators: setTodo,
         retry: { pull: fast },
         syncLoop: { pullInterval: Duration.millis(50) },
@@ -192,7 +193,7 @@ describe("retry integration", () => {
     Effect.gen(function* () {
       const handler = yield* makeServer();
       const store = yield* ClientStoreModule.makeMemory;
-      const base = yield* makeInMemory(handler, "group-down");
+      const base = yield* makeInMemory(handler, ClientGroupId.make("group-down"));
       // A transport whose pull never recovers.
       const down: CT = {
         push: base.push,
@@ -203,7 +204,7 @@ describe("retry integration", () => {
       };
       const engine = yield* ClientEngineModule.make({
         clientId: "c",
-        clientGroupId: "group-down",
+        clientGroupId: ClientGroupId.make("group-down"),
         mutators: setTodo,
         retry: { pull: Schedule.max([Schedule.recurs(2), Schedule.spaced(Duration.millis(5))]) },
         syncLoop: { pullInterval: Duration.millis(50) },
@@ -240,10 +241,10 @@ describe("retry integration", () => {
       // Remote write to converge on once the poke lands.
       const w = yield* Effect.gen(function* () {
         const store = yield* ClientStoreModule.makeMemory;
-        const base = yield* makeInMemory(handler, "group-w");
+        const base = yield* makeInMemory(handler, ClientGroupId.make("group-w"));
         const engine = yield* ClientEngineModule.make({
           clientId: "w",
-          clientGroupId: "group-w",
+          clientGroupId: ClientGroupId.make("group-w"),
           mutators: setTodo,
         }).pipe(
           Effect.provideService(ClientStore, store),
@@ -256,7 +257,7 @@ describe("retry integration", () => {
       yield* w.push;
 
       const store = yield* ClientStoreModule.makeMemory;
-      const base = yield* makeInMemory(handler, "group-r");
+      const base = yield* makeInMemory(handler, ClientGroupId.make("group-r"));
       const subs = yield* Ref.make(0);
       const poke: Poke = { reason: "test" };
       // First subscription to pokes fails; the second (after retry) emits a poke.
@@ -278,7 +279,7 @@ describe("retry integration", () => {
       };
       const reader = yield* ClientEngineModule.make({
         clientId: "r",
-        clientGroupId: "group-r",
+        clientGroupId: ClientGroupId.make("group-r"),
         mutators: setTodo,
         retry: { pokes: fast },
       }).pipe(

@@ -6,7 +6,7 @@
  * fine-tag row budget.
  */
 import type { ClientEngine, HttpCache } from "@thomasfosterau/legation/internal";
-import { Telemetry } from "@thomasfosterau/legation/internal";
+import { Telemetry, Protocol } from "@thomasfosterau/legation/internal";
 import { StoreError } from "@thomasfosterau/legation";
 import { describe, expect, it } from "@effect/vitest";
 import * as Deferred from "effect/Deferred";
@@ -230,7 +230,7 @@ describe("collectionChanges", () => {
           _tag: "PullCompleted",
           ops: 1,
           collections: ["todos"],
-          rows: [{ collection: "todos", id: "1" }],
+          rows: [{ collection: "todos", id: Protocol.RowId.make("1") }],
         },
         { _tag: "PullCompleted", ops: 0, collections: [], rows: [] },
         { _tag: "ViewRebuilt", collections: ["notes"] },

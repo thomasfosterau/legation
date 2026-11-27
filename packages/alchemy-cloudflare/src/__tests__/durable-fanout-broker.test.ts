@@ -15,7 +15,7 @@ import * as Fiber from "effect/Fiber";
 import * as Schema from "effect/Schema";
 import * as TestClock from "effect/testing/TestClock";
 import { Edge, Node } from "@thomasfosterau/legation";
-import { FanoutTopics } from "@thomasfosterau/legation/internal";
+import { FanoutTopics, Protocol } from "@thomasfosterau/legation/internal";
 import * as DurableFanoutBroker from "../DurableFanoutBroker.js";
 import type * as FanoutShard from "../FanoutShard.js";
 import { fakeBinding, runtimeContext } from "./harness.js";
@@ -173,9 +173,11 @@ describe("DurableFanoutBroker.publishOutOfBand", () => {
         yield* publish([
           {
             collection: "reviews",
-            ids: ["r-1"],
-            values: [{ id: "r-1", value: { body: "new", productId: "p-1" } }],
-            oldValues: [{ id: "r-1", value: { body: "old", productId: "p-2" } }],
+            ids: [Protocol.RowId.make("r-1")],
+            values: [{ id: Protocol.RowId.make("r-1"), value: { body: "new", productId: "p-1" } }],
+            oldValues: [
+              { id: Protocol.RowId.make("r-1"), value: { body: "old", productId: "p-2" } },
+            ],
           },
         ]);
         expect(published.toSorted()).toEqual([

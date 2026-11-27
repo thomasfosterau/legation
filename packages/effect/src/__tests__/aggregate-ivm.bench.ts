@@ -33,13 +33,14 @@ import * as SyncServer from "../SyncServer.js";
 import { layerInMemory, ServerHandler } from "../Transport.js";
 import { awaitPromise } from "./await-promise.js";
 import { idOf } from "./shapes.js";
+import { ClientGroupId, RowId } from "../Protocol.js";
 
 const ROWS = 10_000;
 
 const mutators = Mutator.registry([
   {
     mutator: Mutator.make("row/set", Schema.Unknown),
-    local: (a: { id: string }, w) => w.put("rows", a.id, a),
+    local: (a: { id: string }, w) => w.put("rows", RowId.make(a.id), a),
   },
 ]);
 
@@ -47,7 +48,7 @@ const allRows = Subset.make({ collection: "rows" });
 
 const makeServer = Effect.fnUntraced(function* () {
   const backend = yield* MemoryBackend.make({
-    "row/set": (args, writer) => Effect.asVoid(writer.put("rows", idOf(args), args)),
+    "row/set": (args, writer) => Effect.asVoid(writer.put("rows", RowId.make(idOf(args)), args)),
   });
   const cvrStore = yield* Cvr.makeMemoryStore;
   const bus = yield* InvalidationBus.makeInProcess;
@@ -73,11 +74,13 @@ describe("incremental aggregates", () => {
         const server = yield* makeServer();
         const store = yield* ClientStoreModule.makeMemory;
         const transport = yield* Layer.build(
-          layerInMemory("bench").pipe(Layer.provide(Layer.succeed(ServerHandler)(server)))
+          layerInMemory(ClientGroupId.make("bench")).pipe(
+            Layer.provide(Layer.succeed(ServerHandler)(server))
+          )
         );
         const engine = yield* ClientEngineModule.make({
           clientId: "bench",
-          clientGroupId: "bench",
+          clientGroupId: ClientGroupId.make("bench"),
           mutators,
         }).pipe(Effect.provideService(ClientStore, store), Effect.provideContext(transport));
 

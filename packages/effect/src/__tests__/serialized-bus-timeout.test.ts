@@ -12,8 +12,9 @@ import * as Ref from "effect/Ref";
 import * as TestClock from "effect/testing/TestClock";
 import * as InvalidationBus from "../InvalidationBus.js";
 import { TestFailure } from "./test-failure.js";
+import { RowId } from "../Protocol.js";
 
-const hint = { collection: "todos", ids: ["1"] };
+const hint = { collection: "todos", ids: [RowId.make("1")] };
 
 /** A custom broker whose publish never returns: only the bus's bound can finish it. */
 const hungBroker: InvalidationBus.BusBroker = {

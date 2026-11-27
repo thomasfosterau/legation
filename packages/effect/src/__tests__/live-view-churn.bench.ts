@@ -17,6 +17,7 @@ import * as Arr from "effect/Array";
 import { describe, test } from "vite-plus/test";
 import * as LiveView from "../LiveView.js";
 import * as Subset from "../Subset.js";
+import { RowId } from "../Protocol.js";
 
 const subset = Subset.make({
   collection: "items",
@@ -25,7 +26,7 @@ const subset = Subset.make({
 });
 
 const seedRows = (n: number): ReadonlyArray<LiveView.Row> =>
-  Array.from({ length: n }, (_, i) => ({ id: `r${i}`, value: { rank: i } }));
+  Array.from({ length: n }, (_, i) => ({ id: RowId.make(`r${i}`), value: { rank: i } }));
 
 /** Total time (ms) for `updates` single-row `put`s against an n-row view. */
 const churn = (n: number, updates: number): number => {
@@ -37,7 +38,7 @@ const churn = (n: number, updates: number): number => {
   const start = performance.now();
   Arr.reduce(Arr.range(0, updates - 1), view, (current, i) => {
     const target = Math.floor((i * (n / updates)) % n);
-    return LiveView.put(current, { id: `r${target}`, value: { rank: n + i } });
+    return LiveView.put(current, { id: RowId.make(`r${target}`), value: { rank: n + i } });
   });
   return performance.now() - start;
 };
@@ -62,7 +63,10 @@ describe("LiveView churn (100k rows, single-row updates)", () => {
     await bench("200 single-row updates over a 100k-row maintained set", () => {
       Arr.reduce(Arr.range(0, UPDATES - 1), view, (current, i) => {
         const target = Math.floor((i * 500) % 100_000);
-        return LiveView.put(current, { id: `r${target}`, value: { rank: 100_000 + i } });
+        return LiveView.put(current, {
+          id: RowId.make(`r${target}`),
+          value: { rank: 100_000 + i },
+        });
       });
     }).run({ time: 1000 });
   });
@@ -70,8 +74,8 @@ describe("LiveView churn (100k rows, single-row updates)", () => {
   test("single delete + reinsert (window-boundary churn) over 100k rows", async ({ bench }) => {
     await bench("single delete + reinsert (window-boundary churn) over 100k rows", () => {
       let current = view;
-      current = LiveView.del(current, "r10");
-      current = LiveView.put(current, { id: "r10", value: { rank: 5 } });
+      current = LiveView.del(current, RowId.make("r10"));
+      current = LiveView.put(current, { id: RowId.make("r10"), value: { rank: 5 } });
     }).run({ time: 1000 });
   });
 });

@@ -124,7 +124,7 @@ import {
   Predicate,
   type Mutator,
 } from "../index.js";
-import { Hash, Subset, UnknownMutator } from "../internal.js";
+import { Hash, Protocol, Subset, UnknownMutator } from "../internal.js";
 import * as Sql from "./Sql.js";
 
 // Decode pushed args against the mutator's schema (untrusted input).
@@ -175,7 +175,7 @@ const encodeRejections = (rejections: ReadonlyMap<number, string>): string | nul
 const decodeRejections = (
   text: unknown,
   mutationsTable: string
-): Effect.Effect<ReadonlyMap<number, string>, BackendError> => {
+): Effect.Effect<ReadonlyMap<Protocol.MutationId, string>, BackendError> => {
   if (text === null || text === undefined) return Effect.succeed(new Map());
   return Schema.decodeUnknownEffect(RejectionsJson)(text).pipe(
     Effect.mapBoth({
@@ -185,7 +185,12 @@ const decodeRejections = (
           cause,
         }),
       onSuccess: (parsed) =>
-        new Map(Arr.map(R.toEntries(parsed), ([id, reason]) => [Number(id), reason] as const)),
+        new Map(
+          Arr.map(
+            R.toEntries(parsed),
+            ([id, reason]) => [Protocol.MutationId.make(Number(id)), reason] as const
+          )
+        ),
     })
   );
 };
@@ -460,7 +465,7 @@ export const versionOf = Hash.contentHash;
 /** One client's ledger row: its watermark and the rejections it still remembers. */
 interface LedgerRow {
   readonly last: number;
-  readonly rejections: ReadonlyMap<number, string>;
+  readonly rejections: ReadonlyMap<Protocol.MutationId, string>;
 }
 
 // What a read queries: the mapping's `readRelation` when it names one
@@ -573,7 +578,10 @@ export const make = (config: SqlBackendConfig): Backend.Backend => {
     // — the same mechanism a row vanishing from the relation
     // outright already relies on.
     const values = rows
-      .map((row) => ({ id: String(row[idColumn]), value: decodeRow(subset.collection, row) }))
+      .map((row) => ({
+        id: Protocol.RowId.make(String(row[idColumn])),
+        value: decodeRow(subset.collection, row),
+      }))
       .filter((row) => isLive(subset.collection, row.value));
     const { rows: windowed, total } = Subset.applyCounted(values, { ...subset, where });
     return {
@@ -817,7 +825,7 @@ export const make = (config: SqlBackendConfig): Backend.Backend => {
     queryRowsById(collection, ids).pipe(
       Effect.map((rows) =>
         rows.map((row) => ({
-          id: String(row[idOf(collection)]),
+          id: Protocol.RowId.make(String(row[idOf(collection)])),
           version: versionFor(collection, row),
           value: row,
         }))
@@ -827,7 +835,9 @@ export const make = (config: SqlBackendConfig): Backend.Backend => {
   // Current (id, value) pairs for explicit ids, for hint enrichment.
   const rowValuesFor = (collection: string, ids: ReadonlyArray<string>) =>
     queryRowsById(collection, ids).pipe(
-      Effect.map((rows) => rows.map((row) => ({ id: String(row[idOf(collection)]), value: row })))
+      Effect.map((rows) =>
+        rows.map((row) => ({ id: Protocol.RowId.make(String(row[idOf(collection)])), value: row }))
+      )
     );
 
   // Attach the current row values to a handler-emitted hint (best-effort, for
@@ -842,7 +852,7 @@ export const make = (config: SqlBackendConfig): Backend.Backend => {
 
   const readLastIds = (
     clientGroupId: string
-  ): Effect.Effect<Record<string, number>, BackendError> =>
+  ): Effect.Effect<Record<string, Protocol.MutationId>, BackendError> =>
     executor
       .query({
         text: `SELECT ${q("client_id")}, ${q("last_mutation_id")} FROM ${q(mutationsTable)} WHERE ${q("client_group_id")} = ${ph(1)}`,
@@ -851,7 +861,13 @@ export const make = (config: SqlBackendConfig): Backend.Backend => {
       .pipe(
         Effect.map((rows) =>
           R.fromEntries(
-            rows.map((row) => [String(row.client_id), Number(row.last_mutation_id)] as const)
+            rows.map(
+              (row) =>
+                [
+                  String(row.client_id),
+                  Protocol.MutationId.make(Number(row.last_mutation_id)),
+                ] as const
+            )
           )
         )
       );
@@ -901,7 +917,7 @@ export const make = (config: SqlBackendConfig): Backend.Backend => {
   const writeRejections = (
     clientGroupId: string,
     clientId: string,
-    rejections: ReadonlyMap<number, string>
+    rejections: ReadonlyMap<Protocol.MutationId, string>
   ) =>
     executor.run({
       text: `UPDATE ${q(mutationsTable)} SET ${q("rejections")} = ${ph(1)} WHERE ${q("client_group_id")} = ${ph(2)} AND ${q("client_id")} = ${ph(3)}`,
@@ -916,7 +932,7 @@ export const make = (config: SqlBackendConfig): Backend.Backend => {
   const recordRejection = Effect.fnUntraced(function* (
     clientGroupId: string,
     clientId: string,
-    mutationId: number,
+    mutationId: Protocol.MutationId,
     reason: string
   ) {
     yield* ensureLedgerRow(clientGroupId, clientId);

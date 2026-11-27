@@ -117,12 +117,19 @@ import * as Option from "effect/Option";
 import * as P from "effect/Predicate";
 import * as R from "effect/Record";
 import * as Ref from "effect/Ref";
+import * as Result from "effect/Result";
 import * as Schema from "effect/Schema";
 import * as Semaphore from "effect/Semaphore";
 import * as HttpClient from "effect/http/HttpClient";
 import * as HttpClientRequest from "effect/http/HttpClientRequest";
 import { Atomic } from "@thomasfosterau/effect-jsonapi";
-import { Backend, BackendError, MutationRejected, Predicate } from "@thomasfosterau/legation";
+import {
+  Backend,
+  BackendError,
+  Collection,
+  MutationRejected,
+  Predicate,
+} from "@thomasfosterau/legation";
 import {
   Hash,
   Protocol,
@@ -141,6 +148,7 @@ import {
 import type { EndpointRef, Operation, ResourceMap } from "./Convention.js";
 import { toRow, type JsonApiRow, type OperationInfo } from "./Derive.js";
 import { defaultEncoder, type QueryEncoder } from "./JsonApiQuery.js";
+import type { InvalidWriteArgs } from "./errors.js";
 import * as Ledger from "./Ledger.js";
 import { type JsonApiDocument, Relationship, ResourceObject } from "./schema.js";
 
@@ -152,10 +160,17 @@ import { type JsonApiDocument, Relationship, ResourceObject } from "./schema.js"
 export interface Write {
   readonly operation: "create" | "update" | "delete";
   readonly type: string;
-  readonly id: string;
+  readonly id: Collection.RowId;
   readonly attributes?: Record<string, unknown>;
   readonly relationships?: Record<string, unknown>;
 }
+
+/**
+ * How one mutator's decoded args replay as a single JSON:API {@link Write},
+ * or the {@link InvalidWriteArgs} refusing them. A refusal fails the push as
+ * args that do not decode do; a function that throws is a defect.
+ */
+export type Expression = (args: unknown) => Result.Result<Write, InvalidWriteArgs>;
 
 /** Configuration for {@link make}. */
 export interface JsonApiBackendConfig {
@@ -170,9 +185,10 @@ export interface JsonApiBackendConfig {
    * Mutators beyond the derived CRUD ones, and how to express each one's
    * decoded args as a single JSON:API `Write`. Consulted before `operations`,
    * so an app can push its own named intents through this backend as long
-   * as each is one create/update/delete of one resource.
+   * as each is one create/update/delete of one resource. A function refuses
+   * args it cannot express by returning an {@link InvalidWriteArgs} failure.
    */
-  readonly writes?: ReadonlyMap<string, (args: unknown) => Write>;
+  readonly writes?: ReadonlyMap<string, Expression>;
   /**
    * The server's JSON:API Atomic Operations endpoint (`POST {path}`), when it
    * has one. With it set, `applyMutations` pushes a whole batch as one
@@ -268,15 +284,15 @@ type WriteEffect = { readonly _tag: "put"; readonly value: unknown } | { readonl
  * delete.
  */
 const recordEffect = (
-  puts: Map<string, Map<string, unknown>>,
+  puts: Map<string, Map<Collection.RowId, unknown>>,
   collection: string,
-  id: string,
+  id: Collection.RowId,
   effect: WriteEffect
 ): void => {
   if (P.isTagged(effect, "put")) {
     puts.set(
       collection,
-      (puts.get(collection) ?? new Map<string, unknown>()).set(id, effect.value)
+      (puts.get(collection) ?? new Map<Collection.RowId, unknown>()).set(id, effect.value)
     );
   } else {
     puts.get(collection)?.delete(id);
@@ -284,8 +300,12 @@ const recordEffect = (
 };
 
 /** Record a touched id under its collection (mutates `touched`). */
-const recordTouched = (touched: Map<string, Set<string>>, collection: string, id: string): void => {
-  touched.set(collection, (touched.get(collection) ?? new Set<string>()).add(id));
+const recordTouched = (
+  touched: Map<string, Set<Collection.RowId>>,
+  collection: string,
+  id: Collection.RowId
+): void => {
+  touched.set(collection, (touched.get(collection) ?? new Set<Collection.RowId>()).add(id));
 };
 
 /** What one push knows about a row it writes (ADR-0023's `oldValues`). */
@@ -298,22 +318,30 @@ interface RowEntry {
 
 /** The mutable accumulators one push folds its per-mutation outcomes into. */
 interface WriteAccumulator {
-  readonly touched: Map<string, Set<string>>;
-  readonly puts: Map<string, Map<string, unknown>>;
+  readonly touched: Map<string, Set<Collection.RowId>>;
+  readonly puts: Map<string, Map<Collection.RowId, unknown>>;
   readonly rejected: Array<Backend.RejectedMutation>;
   /** The rows this push has read or applied a write to, by collection, then id. */
-  readonly rows: Map<string, Map<string, RowEntry>>;
+  readonly rows: Map<string, Map<Collection.RowId, RowEntry>>;
 }
 
 /** The row entry for (collection, id), if this push has entered the row. */
-const entryOf = (acc: WriteAccumulator, collection: string, id: string): Option.Option<RowEntry> =>
-  Option.fromUndefinedOr(acc.rows.get(collection)?.get(id));
+const entryOf = (
+  acc: WriteAccumulator,
+  collection: string,
+  id: Collection.RowId
+): Option.Option<RowEntry> => Option.fromUndefinedOr(acc.rows.get(collection)?.get(id));
 
 /** Enter a row under (collection, id) (mutates `acc`). */
-const setEntry = (acc: WriteAccumulator, collection: string, id: string, entry: RowEntry): void => {
+const setEntry = (
+  acc: WriteAccumulator,
+  collection: string,
+  id: Collection.RowId,
+  entry: RowEntry
+): void => {
   acc.rows.set(
     collection,
-    (acc.rows.get(collection) ?? new Map<string, RowEntry>()).set(id, entry)
+    (acc.rows.get(collection) ?? new Map<Collection.RowId, RowEntry>()).set(id, entry)
   );
 };
 
@@ -321,14 +349,14 @@ const setEntry = (acc: WriteAccumulator, collection: string, id: string, entry: 
  * The pre-push values this push read, as the hints' `olds`: the same snapshot
  * MemoryBackend takes before it applies a batch.
  */
-const oldsOf = (acc: WriteAccumulator): Map<string, Map<string, unknown>> => {
-  const olds = new Map<string, Map<string, unknown>>();
+const oldsOf = (acc: WriteAccumulator): Map<string, Map<Collection.RowId, unknown>> => {
+  const olds = new Map<string, Map<Collection.RowId, unknown>>();
   acc.rows.forEach((entries, collection) =>
     entries.forEach((entry, id) => {
       if (Option.isSome(entry.before)) {
         olds.set(
           collection,
-          (olds.get(collection) ?? new Map<string, unknown>()).set(id, entry.before.value)
+          (olds.get(collection) ?? new Map<Collection.RowId, unknown>()).set(id, entry.before.value)
         );
       }
     })
@@ -458,7 +486,7 @@ const writeOf = (operation: OperationInfo, args: unknown): Effect.Effect<Write, 
       // SAFETY: `operation` names a derived CRUD mutator, whose args schema
       // (`Derive.CreateArgs` here, and likewise below) decoded `args`.
       const a = args as {
-        id: string;
+        id: Collection.RowId;
         attributes: WriteAttributes;
         relationships?: WriteRelationships;
       };
@@ -472,7 +500,7 @@ const writeOf = (operation: OperationInfo, args: unknown): Effect.Effect<Write, 
     }),
     Match.when("update", () => {
       // SAFETY: decoded by `Derive.UpdateArgs` (see `create`).
-      const a = args as { id: string; attributes: WriteAttributes };
+      const a = args as { id: Collection.RowId; attributes: WriteAttributes };
       return Effect.succeed({
         operation: "update",
         type: operation.type,
@@ -482,7 +510,7 @@ const writeOf = (operation: OperationInfo, args: unknown): Effect.Effect<Write, 
     }),
     Match.when("delete", () => {
       // SAFETY: decoded by `Derive.DeleteArgs` (see `create`).
-      const a = args as { id: string };
+      const a = args as { id: Collection.RowId };
       return Effect.succeed({ operation: "delete", type: operation.type, id: a.id });
     }),
     Match.orElse((op) =>
@@ -598,15 +626,15 @@ const enterBatchCreate = (acc: WriteAccumulator, write: Write): void => {
  * mutation id per client, and the rejections remembered per client, by mutation id.
  */
 interface Group {
-  readonly acknowledged: ReadonlyMap<string, number>;
-  readonly rejections: ReadonlyMap<string, ReadonlyMap<number, string>>;
+  readonly acknowledged: ReadonlyMap<string, Backend.MutationId>;
+  readonly rejections: ReadonlyMap<string, ReadonlyMap<Backend.MutationId, string>>;
 }
 
 /** A stored group ledger, as the backend holds it. */
 const groupOf = (ledger: Ledger.GroupLedger): Group => {
-  const rejections = new Map<string, Map<number, string>>();
+  const rejections = new Map<string, Map<Backend.MutationId, string>>();
   ledger.rejections.forEach((entry) => {
-    const ids = rejections.get(entry.clientId) ?? new Map<number, string>();
+    const ids = rejections.get(entry.clientId) ?? new Map<Backend.MutationId, string>();
     ids.set(entry.mutationId, entry.reason);
     rejections.set(entry.clientId, ids);
   });
@@ -639,7 +667,7 @@ const countedFrom = (
   reported: Option.Option<number>
 ): Backend.CountedEntries => {
   const { rows, total } = Subset.applyCounted(
-    values.map((value) => ({ id: value.id, value })),
+    values.map((value) => ({ id: Collection.RowId.make(value.id), value })),
     subset
   );
   return {
@@ -995,16 +1023,10 @@ export const make: (
     const args = yield* Schema.decodeUnknownEffect(definition.args)(mutation.args).pipe(
       Effect.mapError(backendError(`Invalid args for mutator "${mutation.mutator}"`))
     );
-    // A `writes` function that refuses its args (it throws, as
-    // `FacadeWrites.writesOf` does for args naming another type) fails as
-    // args that do not decode do, never as a defect.
-    if (Option.isSome(custom)) {
-      const express = custom.value;
-      return yield* Effect.try({
-        try: () => express(args),
-        catch: backendError(`Invalid args for mutator "${mutation.mutator}"`),
-      });
-    }
+    if (Option.isSome(custom))
+      return yield* Effect.fromResult(custom.value(args)).pipe(
+        Effect.mapError(backendError(`Invalid args for mutator "${mutation.mutator}"`))
+      );
     if (operation === undefined) return yield* UnknownMutator.make(mutation.mutator);
     return yield* writeOf(operation, args);
   });
@@ -1099,7 +1121,7 @@ export const make: (
   /** Acknowledge mutations in the ledger, in the order given, in one update. */
   const bumpLedger = (
     context: Backend.SyncContext,
-    mutations: ReadonlyArray<{ readonly clientId: string; readonly mutationId: number }>
+    mutations: ReadonlyArray<{ readonly clientId: string; readonly mutationId: Backend.MutationId }>
   ) =>
     Arr.isReadonlyArrayEmpty(mutations)
       ? Effect.void

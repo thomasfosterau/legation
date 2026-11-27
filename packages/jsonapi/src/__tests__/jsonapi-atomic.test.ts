@@ -25,7 +25,7 @@ import type * as HttpClientRequest from "effect/http/HttpClientRequest";
 import * as HttpClientResponse from "effect/http/HttpClientResponse";
 import { Atomic } from "@thomasfosterau/effect-jsonapi";
 import type { Backend } from "@thomasfosterau/legation";
-import { ClientEngine, Subset, Defined } from "@thomasfosterau/legation/internal";
+import { ClientEngine, Subset, Defined, Protocol } from "@thomasfosterau/legation/internal";
 import * as Convention from "../Convention.js";
 import * as JsonApiBackend from "../JsonApiBackend.js";
 import * as JsonApiSync from "../JsonApiSync.js";
@@ -216,10 +216,10 @@ const makeBackend = (server: ReturnType<typeof makeServer>) =>
     atomic: { path: "/operations" },
   }).pipe(withLayer(server.layer));
 
-const context: Backend.SyncContext = { clientGroupId: "group-1" };
+const context: Backend.SyncContext = { clientGroupId: Protocol.ClientGroupId.make("group-1") };
 const mutation = (mutationId: number, mutator: string, args: unknown) => ({
   clientId: "client-1",
-  mutationId,
+  mutationId: Protocol.MutationId.make(mutationId),
   mutator,
   args,
   createdAt: 0,
@@ -420,7 +420,7 @@ describe("JsonApiBackend in atomic mode", () => {
         { op: "remove", ref: { type: "todos", id: "3" } },
       ]);
       expect(result.rejected).toEqual([
-        { clientId: "client-1", mutationId: 2, reason: "title taken" },
+        { clientId: "client-1", mutationId: Protocol.MutationId.make(2), reason: "title taken" },
       ]);
       expect(result.lastMutationIds).toEqual({ "client-1": 3 });
       expect(result.hints).toEqual([
@@ -458,8 +458,8 @@ describe("JsonApiBackend in atomic mode", () => {
           defined(writesOf(server)[1]).body["atomic:operations"].map((op: any) => op.op)
         ).toEqual(["update"]);
         expect(result.rejected).toEqual([
-          { clientId: "client-1", mutationId: 1, reason: "bad title" },
-          { clientId: "client-1", mutationId: 3, reason: "Gone" },
+          { clientId: "client-1", mutationId: Protocol.MutationId.make(1), reason: "bad title" },
+          { clientId: "client-1", mutationId: Protocol.MutationId.make(3), reason: "Gone" },
         ]);
         expect(result.lastMutationIds).toEqual({ "client-1": 3 });
       })
@@ -724,7 +724,11 @@ Arr.forEach(["atomic", "per-resource"] as const, (mode) => {
         ]);
 
         expect(result.rejected).toEqual([
-          { clientId: "client-1", mutationId: 2, reason: expect.any(String) },
+          {
+            clientId: "client-1",
+            mutationId: Protocol.MutationId.make(2),
+            reason: expect.any(String),
+          },
         ]);
         expect(result.hints).toEqual([
           {
@@ -1101,7 +1105,7 @@ describe("JsonApiBackend atomic batch after a refused create", () => {
           "POST /operations",
         ]);
         expect(result.rejected).toEqual([
-          { clientId: "client-1", mutationId: 1, reason: "exists" },
+          { clientId: "client-1", mutationId: Protocol.MutationId.make(1), reason: "exists" },
         ]);
         expect(result.lastMutationIds).toEqual({ "client-1": 2 });
         expect(result.hints).toEqual([
@@ -1192,7 +1196,9 @@ describe("JsonApiBackend atomic batch after a refused create", () => {
       // Nothing the resend writes needs the refused row's old value, so no read can fail the push.
       expect(readsOf(server, "/todos/1")).toHaveLength(0);
       expect(sequenceOf(server)).toEqual(["POST /operations", "POST /operations"]);
-      expect(result.rejected).toEqual([{ clientId: "client-1", mutationId: 1, reason: "exists" }]);
+      expect(result.rejected).toEqual([
+        { clientId: "client-1", mutationId: Protocol.MutationId.make(1), reason: "exists" },
+      ]);
       expect(result.hints[0]?.oldValues).toBeUndefined();
     })
   );
@@ -1435,7 +1441,7 @@ describe("JsonApiSync.layer atomic detection", () => {
           JsonApiSync.layer(api, {
             baseUrl: "http://api.test",
             clientId: "client-1",
-            clientGroupId: "group-1",
+            clientGroupId: Protocol.ClientGroupId.make("group-1"),
           }).pipe(Layer.provide(server.layer))
         )
       );
@@ -1454,7 +1460,7 @@ describe("JsonApiSync.layer atomic detection", () => {
           JsonApiSync.layer(api, {
             baseUrl: "http://api.test",
             clientId: "client-1",
-            clientGroupId: "group-1",
+            clientGroupId: Protocol.ClientGroupId.make("group-1"),
             atomic: false,
           }).pipe(Layer.provide(server.layer))
         )
@@ -1605,7 +1611,7 @@ describe("JsonApiBackend getRows after its own writes", () => {
           mutation(1, "todos/update", { type: "todos", id: "1", attributes: { title: "second" } }),
         ]);
 
-        const [row] = yield* backend.getRows(context, "todos", ["1"]);
+        const [row] = yield* backend.getRows(context, "todos", [Protocol.RowId.make("1")]);
         expect(defined(row).value).toHaveProperty("title", "second");
         // Only the listing and the read before the write reached the server.
         expect(readsOf(server, "/todos")).toHaveLength(1);
@@ -1624,7 +1630,7 @@ describe("JsonApiBackend getRows after its own writes", () => {
         ]);
 
         // The row is gone from the cache, so the server answers the read: its 404 omits it.
-        expect(yield* backend.getRows(context, "todos", ["1"])).toEqual([]);
+        expect(yield* backend.getRows(context, "todos", [Protocol.RowId.make("1")])).toEqual([]);
       })
     );
   });
@@ -1683,7 +1689,9 @@ describe("JsonApiBackend getRows after rejected and failed writes", () => {
 
         const result = yield* backend.applyMutations(context, [updateRowOne]);
         expect(result.rejected?.map((entry) => entry.mutationId)).toEqual([1]);
-        expect(titlesOf(yield* backend.getRows(context, "todos", ["1"]))).toEqual({
+        expect(
+          titlesOf(yield* backend.getRows(context, "todos", [Protocol.RowId.make("1")]))
+        ).toEqual({
           "1": "before",
         });
       })
@@ -1703,7 +1711,14 @@ describe("JsonApiBackend getRows after rejected and failed writes", () => {
 
         const result = yield* backend.applyMutations(context, twoUpdates);
         expect(result.rejected?.map((entry) => entry.mutationId)).toEqual([2]);
-        expect(titlesOf(yield* backend.getRows(context, "todos", ["1", "2"]))).toEqual({
+        expect(
+          titlesOf(
+            yield* backend.getRows(context, "todos", [
+              Protocol.RowId.make("1"),
+              Protocol.RowId.make("2"),
+            ])
+          )
+        ).toEqual({
           "1": "second",
           "2": "before",
         });
@@ -1718,7 +1733,14 @@ describe("JsonApiBackend getRows after rejected and failed writes", () => {
 
       const failure = yield* Effect.flip(backend.applyMutations(context, twoUpdates));
       expect(failure._tag).toBe("BackendError");
-      expect(titlesOf(yield* backend.getRows(context, "todos", ["1", "2"]))).toEqual({
+      expect(
+        titlesOf(
+          yield* backend.getRows(context, "todos", [
+            Protocol.RowId.make("1"),
+            Protocol.RowId.make("2"),
+          ])
+        )
+      ).toEqual({
         "1": "before",
         "2": "before",
       });
@@ -1737,7 +1759,14 @@ describe("JsonApiBackend getRows after rejected and failed writes", () => {
 
         const failure = yield* Effect.flip(backend.applyMutations(context, twoUpdates));
         expect(failure._tag).toBe("BackendError");
-        expect(titlesOf(yield* backend.getRows(context, "todos", ["1", "2"]))).toEqual({
+        expect(
+          titlesOf(
+            yield* backend.getRows(context, "todos", [
+              Protocol.RowId.make("1"),
+              Protocol.RowId.make("2"),
+            ])
+          )
+        ).toEqual({
           "1": "second",
           "2": "before",
         });

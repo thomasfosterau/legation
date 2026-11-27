@@ -25,7 +25,13 @@ import {
   Mutator,
   Predicate,
 } from "@thomasfosterau/legation";
-import { Cvr, InvalidationBus, Subset, SyncServer } from "@thomasfosterau/legation/internal";
+import {
+  Cvr,
+  InvalidationBus,
+  Subset,
+  SyncServer,
+  Protocol,
+} from "@thomasfosterau/legation/internal";
 import { Principal, ReadScopes } from "@thomasfosterau/legation-auth";
 import { Crash, failureOf, mentions, orFail } from "./support.js";
 
@@ -112,7 +118,10 @@ const principalOf = (userId: string): Principal.Principal => ({
   permissions: Option.none(),
 });
 
-const contextOf = (principal: Principal.Principal) => ({ clientGroupId: "g", identity: principal });
+const contextOf = (principal: Principal.Principal) => ({
+  clientGroupId: Protocol.ClientGroupId.make("g"),
+  identity: principal,
+});
 
 const filterOf = (scope: AuthScope.ReadScope): AuthScope.ReadScope => scope;
 
@@ -530,7 +539,9 @@ describe("ReadScopes behind SyncServer", () => {
         filter(context).pipe(Effect.tap((scope) => Ref.update(scopes, (all) => [...all, scope])));
       const backend = yield* MemoryBackend.make(
         MemoryBackend.validatedHandlers([
-          MemoryBackend.handler(putPost, (args, writer) => writer.put("posts", args.id, args)),
+          MemoryBackend.handler(putPost, (args, writer) =>
+            writer.put("posts", Protocol.RowId.make(args.id), args)
+          ),
         ])
       );
       const server = yield* SyncServer.make.pipe(
@@ -546,18 +557,18 @@ describe("ReadScopes behind SyncServer", () => {
         })
       );
       yield* server.handlePush({
-        clientGroupId: "writer",
+        clientGroupId: Protocol.ClientGroupId.make("writer"),
         mutations: [
           {
             clientId: "w",
-            mutationId: 1,
+            mutationId: Protocol.MutationId.make(1),
             mutator: "post/put",
             args: { id: "bob-f", ownerId: "user-bob", visibility: "followers" },
             createdAt: 0,
           },
           {
             clientId: "w",
-            mutationId: 2,
+            mutationId: Protocol.MutationId.make(2),
             mutator: "post/put",
             args: { id: "pub", ownerId: "user-carol", visibility: "public" },
             createdAt: 0,
@@ -566,14 +577,14 @@ describe("ReadScopes behind SyncServer", () => {
       });
       const subscription = Subset.make({ collection: "posts" });
       const first = yield* server.handlePull({
-        clientGroupId: "group-alice",
+        clientGroupId: Protocol.ClientGroupId.make("group-alice"),
         subscriptions: [subscription],
       });
       expect(putIds(first.patch)).toEqual(["pub"]);
 
       yield* Ref.set(members, ["user-bob"]);
       const second = yield* server.handlePull({
-        clientGroupId: "group-alice",
+        clientGroupId: Protocol.ClientGroupId.make("group-alice"),
         subscriptions: [subscription],
         cookie: first.cookie,
       });
@@ -599,17 +610,19 @@ const putFollow = Mutator.make(
 const followsBackend = Effect.fn("followsBackend")(function* () {
   const memory = yield* MemoryBackend.make(
     MemoryBackend.validatedHandlers([
-      MemoryBackend.handler(putFollow, (args, writer) => writer.put("follows", args.id, args)),
+      MemoryBackend.handler(putFollow, (args, writer) =>
+        writer.put("follows", Protocol.RowId.make(args.id), args)
+      ),
     ])
   );
   yield* memory.applyMutations(
-    { clientGroupId: "seed" },
+    { clientGroupId: Protocol.ClientGroupId.make("seed") },
     [
       { id: "a-b", followerId: "user-alice", followeeId: "user-bob" },
       { id: "b-c", followerId: "user-bob", followeeId: "user-carol" },
     ].map((args, index) => ({
       clientId: "seed",
-      mutationId: index + 1,
+      mutationId: Protocol.MutationId.make(index + 1),
       mutator: "follow/put",
       args,
       createdAt: 0,
@@ -650,8 +663,13 @@ describe("ReadScopes.userSet: a named set keyed on the principal's user", () => 
       const { backend, evaluations } = yield* followsBackend();
       const set = followingIn(backend);
       expect(yield* set.resolve(contextOf(Principal.anonymous))).toEqual([]);
-      expect(yield* set.resolve({ clientGroupId: "g", identity: "user-alice" })).toEqual([]);
-      expect(yield* set.resolve({ clientGroupId: "g" })).toEqual([]);
+      expect(
+        yield* set.resolve({
+          clientGroupId: Protocol.ClientGroupId.make("g"),
+          identity: "user-alice",
+        })
+      ).toEqual([]);
+      expect(yield* set.resolve({ clientGroupId: Protocol.ClientGroupId.make("g") })).toEqual([]);
       expect(yield* Ref.get(evaluations)).toBe(0);
     })
   );

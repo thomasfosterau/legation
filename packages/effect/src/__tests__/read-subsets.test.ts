@@ -10,6 +10,7 @@ import * as Exit from "effect/Exit";
 import * as Schema from "effect/Schema";
 import { Authorization, type Backend, MemoryBackend, Mutator, Predicate } from "../index.js";
 import { Subset, SyncServer } from "../internal.js";
+import { ClientGroupId, MutationId, RowId } from "../Protocol.js";
 
 const put = Mutator.make("row/put", Schema.Unknown);
 const decodeRowRef = Schema.decodeUnknownSync(
@@ -20,18 +21,18 @@ const makeBackend = Effect.fn("makeBackend")(function* () {
   const memory = yield* MemoryBackend.make({
     [put.name]: (args, writer) => {
       const { collection, id } = decodeRowRef(args);
-      return writer.put(collection, id, args);
+      return writer.put(collection, RowId.make(id), args);
     },
   });
   yield* memory.applyMutations(
-    { clientGroupId: "seed" },
+    { clientGroupId: ClientGroupId.make("seed") },
     [
       { collection: "products", id: "p-1", name: "Desk" },
       { collection: "products", id: "p-2", name: "Lamp" },
       { collection: "products", id: "p-3", name: "Chair" },
     ].map((row, index) => ({
       clientId: "seed",
-      mutationId: index + 1,
+      mutationId: MutationId.make(index + 1),
       mutator: put.name,
       args: row,
       createdAt: 0,
@@ -54,7 +55,7 @@ const makeBackend = Effect.fn("makeBackend")(function* () {
 });
 
 const policy = Authorization.policy({ products: Authorization.allowAll });
-const context = { clientGroupId: "g" };
+const context = { clientGroupId: ClientGroupId.make("g") };
 
 /** Every product, ordered by name. */
 const byName = (direction: "asc" | "desc") =>
@@ -68,7 +69,7 @@ describe("SyncServer.readSubsets", () => {
         const { backend, calls } = yield* makeBackend();
         const exit = yield* Effect.exit(
           SyncServer.readSubsets({ backend, authPolicy: policy }, context, {
-            clientGroupId: "g",
+            clientGroupId: ClientGroupId.make("g"),
             subsets: [
               Subset.make({ collection: "products" }),
               Subset.make({ collection: "secrets" }), // no auth filter: denied by default
@@ -86,7 +87,7 @@ describe("SyncServer.readSubsets", () => {
     Effect.gen(function* () {
       const { backend, calls } = yield* makeBackend();
       const rows = yield* SyncServer.readSubsets({ backend, authPolicy: policy }, context, {
-        clientGroupId: "g",
+        clientGroupId: ClientGroupId.make("g"),
         subsets: [
           Subset.make({
             collection: "products",
@@ -132,7 +133,7 @@ describe("SyncServer.readSubsets", () => {
         },
         context,
         {
-          clientGroupId: "g",
+          clientGroupId: ClientGroupId.make("g"),
           subsets: [byName("asc"), Subset.make({ collection: "notes" }), byName("desc")],
         }
       );

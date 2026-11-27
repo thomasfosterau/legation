@@ -22,6 +22,7 @@ import * as SyncRoom from "../SyncRoom.js";
 import { layerInMemory } from "../Transport.js";
 import { TestFailure } from "./test-failure.js";
 import { idOf } from "./shapes.js";
+import { ClientGroupId, RowId } from "../Protocol.js";
 
 interface Todo {
   readonly id: string;
@@ -31,26 +32,26 @@ interface Todo {
 const mutators = Mutator.registry([
   {
     mutator: Mutator.make("todo/set", Schema.Unknown),
-    local: (args: Todo, writer) => writer.put("todos", args.id, args),
+    local: (args: Todo, writer) => writer.put("todos", RowId.make(args.id), args),
   },
   {
     mutator: Mutator.make("todo/reject", Schema.Unknown),
-    local: (args: Todo, writer) => writer.put("todos", args.id, args),
+    local: (args: Todo, writer) => writer.put("todos", RowId.make(args.id), args),
   },
 ]);
 
 const handlers = {
-  "todo/set": (args, writer) => Effect.asVoid(writer.put("todos", idOf(args), args)),
+  "todo/set": (args, writer) => Effect.asVoid(writer.put("todos", RowId.make(idOf(args)), args)),
   "todo/reject": () => Effect.fail(new MutationRejected({ reason: "not allowed" })),
 } satisfies Record<string, MemoryBackend.BackendHandler>;
 
 const engineLayer = ClientEngineModule.layer({
   clientId: "c1",
-  clientGroupId: "group-1",
+  clientGroupId: ClientGroupId.make("group-1"),
   mutators,
 }).pipe(
   Layer.provide(
-    layerInMemory("group-1").pipe(
+    layerInMemory(ClientGroupId.make("group-1")).pipe(
       Layer.provide(
         SyncRoom.layer.pipe(
           Layer.provide(Layer.effect(Backend)(MemoryBackend.make(handlers))),

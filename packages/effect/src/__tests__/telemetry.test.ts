@@ -21,16 +21,17 @@ import * as SyncServer from "../SyncServer.js";
 import * as Telemetry from "../Telemetry.js";
 import { ClientTransport, makeInMemory } from "../Transport.js";
 import { idOf } from "./shapes.js";
+import { ClientGroupId, RowId } from "../Protocol.js";
 
 const mutators = Mutator.registry([
   {
     mutator: Mutator.make("todo/set", Schema.Unknown),
-    local: (args: { id: string }, writer) => writer.put("todos", args.id, args),
+    local: (args: { id: string }, writer) => writer.put("todos", RowId.make(args.id), args),
   },
 ]);
 
 const handlers = {
-  "todo/set": (args, writer) => Effect.asVoid(writer.put("todos", idOf(args), args)),
+  "todo/set": (args, writer) => Effect.asVoid(writer.put("todos", RowId.make(idOf(args)), args)),
 } satisfies Record<string, MemoryBackend.BackendHandler>;
 
 const makeServer = Effect.fn("makeServer")(function* () {
@@ -64,10 +65,10 @@ describe("Telemetry", () => {
     Effect.gen(function* () {
       const handler = yield* makeServer();
       const store = yield* ClientStoreModule.makeMemory;
-      const transport = yield* makeInMemory(handler, "group-1");
+      const transport = yield* makeInMemory(handler, ClientGroupId.make("group-1"));
       const engine = yield* ClientEngineModule.make({
         clientId: "client-1",
-        clientGroupId: "group-1",
+        clientGroupId: ClientGroupId.make("group-1"),
         mutators,
       }).pipe(
         Effect.provideService(ClientStore, store),

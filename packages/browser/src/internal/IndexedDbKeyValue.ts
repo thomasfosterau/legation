@@ -15,6 +15,7 @@ import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as P from "effect/Predicate";
 import * as Result from "effect/Result";
+import type * as Scope from "effect/Scope";
 import { KeyValueStore } from "effect/persistence";
 
 /**
@@ -305,14 +306,15 @@ const commitOps = (
   );
 
 /**
- * A connection for the layer's lifetime. A database that cannot open fails the layer as a defect
- * carrying the `StoreError`: the `ClientStore` layers build infallibly
- * (`IndexedDbClientStore.layer`, core's `layerKeyValue`).
+ * A connection for the layer's lifetime. A database that cannot open (blocked, or refused) fails
+ * the layer with the `StoreError`, so the app can recover from it (a fallback store, a retry).
  */
-const acquireConnection = (database?: string) =>
+const acquireConnection = (
+  database?: string
+): Effect.Effect<Connection, StoreError, IndexedDb.IndexedDb | Scope.Scope> =>
   Effect.acquireRelease(openDatabase(database ?? PLATFORM_DATABASE), (opened) =>
     Effect.sync(() => opened.db.close())
-  ).pipe(Effect.orDie);
+  );
 
 /**
  * The platform `KeyValueStore` over IndexedDB, opened without a version (see
@@ -320,7 +322,7 @@ const acquireConnection = (database?: string) =>
  */
 export const keyValueLayer = (
   database?: string
-): Layer.Layer<KeyValueStore.KeyValueStore, never, IndexedDb.IndexedDb> =>
+): Layer.Layer<KeyValueStore.KeyValueStore, StoreError, IndexedDb.IndexedDb> =>
   Layer.effect(KeyValueStore.KeyValueStore)(
     Effect.gen(function* () {
       const connection = yield* acquireConnection(database);
@@ -359,7 +361,7 @@ const readEntries = (
  */
 export const atomicKeyValueLayer = (
   database?: string
-): Layer.Layer<AtomicKeyValue.AtomicKeyValue, never, IndexedDb.IndexedDb> =>
+): Layer.Layer<AtomicKeyValue.AtomicKeyValue, StoreError, IndexedDb.IndexedDb> =>
   Layer.effect(AtomicKeyValue.AtomicKeyValue)(
     Effect.gen(function* () {
       const connection = yield* acquireConnection(database);

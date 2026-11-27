@@ -61,6 +61,7 @@
 import { Defined } from "@thomasfosterau/legation/internal";
 import { Handlers } from "@thomasfosterau/effect-jsonapi";
 import * as Option from "effect/Option";
+import * as P from "effect/Predicate";
 import * as R from "effect/Record";
 import * as Result from "effect/Result";
 import { type Node, Predicate, type Query } from "@thomasfosterau/legation";
@@ -231,7 +232,7 @@ const relationshipOf = (
 ): Option.Option<RelationshipValue> => {
   const edge = node.edges[name];
   if (edge === undefined) return Option.none();
-  if (edge.kind === "one") {
+  if (P.isTagged(edge, "one")) {
     const key = Predicate.fieldValue(row.value, edge.via);
     return Option.some({
       data: key === undefined || key === null ? null : { type: edge.target, id: String(key) },
@@ -240,7 +241,7 @@ const relationshipOf = (
   const data = Option.map(edgeRowsOf(env, node, row, name), (rows) => ({
     data: rows.map((value) => ({ type: edge.target, id: idOf(value) })),
   }));
-  if (edge.kind === "many") return data;
+  if (P.isTagged(edge, "many")) return data;
   return Option.some({
     links: {
       self: `${env.prefix}${Handlers.relationshipLink(node.type, row.id, name)}`,

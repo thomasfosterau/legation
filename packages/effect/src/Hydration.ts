@@ -87,7 +87,7 @@ import { StoreError } from "./Errors.js";
 import * as Mutator from "./Mutator.js";
 import type * as Client from "./Client.js";
 import type * as Node from "./Node.js";
-import { Mutation } from "./Protocol.js";
+import { type ClientGroupId, Mutation, type RowId } from "./Protocol.js";
 import * as Query from "./Query.js";
 import * as Subset from "./Subset.js";
 import * as WireFlags from "./internal/WireFlags.js";
@@ -501,7 +501,7 @@ export const handler = (gate: Gate): HostRequest.Handler =>
  * `Client.ResolvedRow` types it, and no edges resolved.
  */
 export interface SeedRow<Value = unknown> {
-  readonly id: string;
+  readonly id: RowId;
   readonly value: Value;
   readonly related: Record<never, never>;
 }
@@ -542,7 +542,7 @@ export interface SnapshotOptions {
    * carried in an HTTP cookie), so the cookie in the produced snapshot
    * continues that group's CVR conversation on the client's first pull.
    */
-  readonly clientGroupId: string;
+  readonly clientGroupId: ClientGroupId;
   /** Client id for the request-scoped engine (never pushes). Default `"ssr"`. */
   readonly clientId?: string;
   /** The node graph the reads compile against. */

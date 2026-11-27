@@ -5,14 +5,15 @@
  */
 import { describe, expect, it } from "vite-plus/test";
 import * as RejectionMemory from "../RejectionMemory.js";
+import { MutationId } from "../Protocol.js";
 
 describe("RejectionMemory.floorsOf", () => {
   it("takes the lowest mutation id per client", () => {
     const floors = RejectionMemory.floorsOf([
-      { clientId: "a", mutationId: 7 },
-      { clientId: "b", mutationId: 3 },
-      { clientId: "a", mutationId: 5 },
-      { clientId: "a", mutationId: 9 },
+      { clientId: "a", mutationId: MutationId.make(7) },
+      { clientId: "b", mutationId: MutationId.make(3) },
+      { clientId: "a", mutationId: MutationId.make(5) },
+      { clientId: "a", mutationId: MutationId.make(9) },
     ]);
     expect([...floors]).toEqual([
       ["a", 5],

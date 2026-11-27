@@ -100,33 +100,36 @@ export const layer: Layer.Layer<EngineIntrospection, never, ClientEngine | Clien
 // ─── Over the mirror seam ─────────────────────────────────────────────
 
 /** Wire codec for one `ClientEngine.EngineEvent`. */
+/** A mutation id in an engine event: finite on the wire, as before it was branded. */
+const EventMutationId = Schema.Finite.pipe(Schema.brand("legation/MutationId"));
+
 export const EngineEvent: Schema.Codec<EngineEventType, unknown> = Schema.Union([
   Schema.Struct({
     _tag: Schema.tag("MutationJournaled"),
     clientId: Schema.String,
-    mutationId: Schema.Finite,
+    mutationId: EventMutationId,
   }),
   Schema.Struct({
     _tag: Schema.tag("MutationAcknowledged"),
     clientId: Schema.String,
-    mutationId: Schema.Finite,
+    mutationId: EventMutationId,
   }),
   Schema.Struct({
     _tag: Schema.tag("MutationRejected"),
     clientId: Schema.String,
-    mutationId: Schema.Finite,
+    mutationId: EventMutationId,
     reason: Schema.String,
   }),
   Schema.Struct({
     _tag: Schema.tag("MutationDropped"),
     clientId: Schema.String,
-    mutationId: Schema.Finite,
+    mutationId: EventMutationId,
   }),
   Schema.Struct({
     _tag: Schema.tag("MutationRenumbered"),
     clientId: Schema.String,
-    previousMutationId: Schema.Finite,
-    mutationId: Schema.Finite,
+    previousMutationId: EventMutationId,
+    mutationId: EventMutationId,
   }),
   Schema.Struct({ _tag: Schema.tag("PushStarted") }),
   Schema.Struct({ _tag: Schema.tag("PushCompleted"), mutations: Schema.Finite }),
@@ -135,7 +138,7 @@ export const EngineEvent: Schema.Codec<EngineEventType, unknown> = Schema.Union(
     _tag: Schema.tag("PullCompleted"),
     ops: Schema.Finite,
     collections: Schema.Array(Schema.String),
-    rows: Schema.Array(Schema.Struct({ collection: Schema.String, id: Schema.String })),
+    rows: Schema.Array(Schema.Struct({ collection: Schema.String, id: Protocol.RowId })),
   }),
   Schema.Struct({ _tag: Schema.tag("PokeReceived"), reason: Schema.optionalKey(Schema.String) }),
   Schema.Struct({

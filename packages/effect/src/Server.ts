@@ -27,6 +27,7 @@
  * broadcast), and it answers a {@link Receipt} carrying the backend's ruling.
  */
 
+import * as Arr from "effect/Array";
 import * as Clock from "effect/Clock";
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
@@ -36,9 +37,10 @@ import * as Authorization from "./Authorization.js";
 import { Backend, type Backend as BackendService } from "./Backend.js";
 import * as Cvr from "./Cvr.js";
 import { BackendError, type TransportError, type VersionNotSupportedError } from "./Errors.js";
+import * as Ids from "./internal/Ids.js";
 import * as InvalidationBus from "./InvalidationBus.js";
 import type * as Mutator from "./Mutator.js";
-import type { PushResponse } from "./Protocol.js";
+import type { ClientGroupId, MutationId, PushResponse } from "./Protocol.js";
 import * as Query from "./Query.js";
 import * as SyncServer from "./SyncServer.js";
 import type * as Transport from "./Transport.js";
@@ -60,11 +62,11 @@ export interface Broadcast {
  */
 export interface MutateRequest<Args, ArgsEncoded> {
   /** The client group the mutation belongs to (ADR-0020's client-group cookie). */
-  readonly clientGroupId: string;
+  readonly clientGroupId: ClientGroupId;
   /** The client that names the mutation: a form client id for a form action. */
   readonly clientId: string;
-  /** The mutation's id for that client: `1` for a freshly rendered form. */
-  readonly mutationId: number;
+  /** The mutation's id for that client: `MutationId.make(1)` for a freshly rendered form. */
+  readonly mutationId: MutationId;
   /** The Mutation definition to run; its name selects the backend's handler. */
   readonly mutation: Mutator.Mutator<string, Args, ArgsEncoded>;
   /**
@@ -250,7 +252,8 @@ export const make: (options: MakeOptions) => Effect.Effect<Server, never, Scope.
   });
   return {
     handler: built,
-    broadcast: (change) => bus.publish([{ collection: change.collection, ids: change.ids ?? [] }]),
+    broadcast: (change) =>
+      bus.publish([{ collection: change.collection, ids: Arr.map(change.ids ?? [], Ids.rowId) }]),
     mutate,
   };
 });

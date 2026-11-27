@@ -40,7 +40,9 @@ import * as Random from "effect/Random";
 import * as R from "effect/Record";
 import * as Result from "effect/Result";
 import * as Predicate from "./Predicate.js";
+import * as Ids from "./internal/Ids.js";
 import * as Json from "./internal/Json.js";
+import type { RowId } from "./Protocol.js";
 import type * as Subset from "./Subset.js";
 import * as Schema from "effect/Schema";
 
@@ -251,7 +253,7 @@ const poolFor: (kind: Predicate.LiteralKind, options: ResolvedOptions) => Pool =
  * (ADR-0028 rule (b)).
  */
 export interface CorpusRow {
-  readonly id: string;
+  readonly id: RowId;
   readonly value: Readonly<Record<string, Predicate.Literal>>;
 }
 
@@ -312,7 +314,7 @@ const generateRow = Effect.fnUntraced(function* (
       }),
     { concurrency: 1, discard: true }
   );
-  return { id: `r${String(index).padStart(3, "0")}`, value };
+  return { id: Ids.rowId(`r${String(index).padStart(3, "0")}`), value };
 });
 
 /**

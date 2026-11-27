@@ -21,6 +21,7 @@ import {
   MirrorChannel,
   SyncServer,
   Mirror,
+  Protocol,
 } from "@thomasfosterau/legation/internal";
 import { describe, expect, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
@@ -33,19 +34,22 @@ const decodeIdentified = Schema.decodeUnknownSync(Schema.Struct({ id: Schema.Str
 const mutators = Mutator.registry([
   {
     mutator: Mutator.make("todo/set", Schema.Unknown),
-    local: (args, writer) => writer.put("todos", decodeIdentified(args).id, args),
+    local: (args, writer) =>
+      writer.put("todos", Protocol.RowId.make(decodeIdentified(args).id), args),
   },
   {
     mutator: Mutator.make("todo/forbidden", Schema.Unknown),
-    local: (args, writer) => writer.put("todos", decodeIdentified(args).id, args),
+    local: (args, writer) =>
+      writer.put("todos", Protocol.RowId.make(decodeIdentified(args).id), args),
   },
 ]);
 
 const backendHandlers = {
-  "todo/set": (args, writer) => Effect.asVoid(writer.put("todos", decodeIdentified(args).id, args)),
+  "todo/set": (args, writer) =>
+    Effect.asVoid(writer.put("todos", Protocol.RowId.make(decodeIdentified(args).id), args)),
   "todo/forbidden": (args, writer) =>
     writer
-      .put("todos", decodeIdentified(args).id, args)
+      .put("todos", Protocol.RowId.make(decodeIdentified(args).id), args)
       .pipe(Effect.andThen(Effect.fail(new MutationRejected({ reason: "permission revoked" })))),
 } satisfies Record<string, MemoryBackend.BackendHandler>;
 
@@ -76,10 +80,10 @@ const makeEngine = Effect.fn("makeEngine")(function* () {
     Effect.provideService(InvalidationBus.InvalidationBus, yield* InvalidationBus.makeInProcess)
   );
   const store = yield* ClientStore.makeMemory;
-  const transport = yield* Transport.makeInMemory(handler, "group-a");
+  const transport = yield* Transport.makeInMemory(handler, Protocol.ClientGroupId.make("group-a"));
   const engine = yield* ClientEngine.make({
     clientId: "client-a",
-    clientGroupId: "group-a",
+    clientGroupId: Protocol.ClientGroupId.make("group-a"),
     mutators,
   }).pipe(
     Effect.provideService(ClientStore.ClientStore, store),

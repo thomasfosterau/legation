@@ -36,6 +36,7 @@ import * as MirrorProtocol from "../MirrorProtocol.js";
 import * as Mutator from "../Mutator.js";
 import * as SyncServer from "../SyncServer.js";
 import * as Transport from "../Transport.js";
+import { ClientGroupId } from "../Protocol.js";
 
 const mutators = Mutator.registry([]);
 
@@ -89,8 +90,12 @@ const makeEngine = Effect.fn("makeEngine")(function* () {
     Effect.provideService(Cvr.CvrStore, yield* Cvr.makeMemoryStore),
     Effect.provideService(InvalidationBus.InvalidationBus, yield* InvalidationBus.makeInProcess)
   );
-  const transport = yield* Transport.makeInMemory(handler, "group-a");
-  return yield* ClientEngine.make({ clientId: "host-a", clientGroupId: "group-a", mutators }).pipe(
+  const transport = yield* Transport.makeInMemory(handler, ClientGroupId.make("group-a"));
+  return yield* ClientEngine.make({
+    clientId: "host-a",
+    clientGroupId: ClientGroupId.make("group-a"),
+    mutators,
+  }).pipe(
     Effect.provideService(ClientStore.ClientStore, yield* ClientStore.makeMemory),
     Effect.provideService(Transport.ClientTransport, transport)
   );

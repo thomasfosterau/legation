@@ -43,20 +43,21 @@ import { ClientTransport, makeInMemory } from "../Transport.js";
 import { defined } from "./defined.js";
 import * as Json from "../internal/Json.js";
 import { countOf, idOf, optionalCountOf } from "./shapes.js";
+import { ClientGroupId, MutationId, RowId } from "../Protocol.js";
 
 const decodeSnapshot = Schema.decodeSync(Hydration.SnapshotFromJson);
 
 // A non-idempotent counter: a double application shows as an extra count.
 const incrementCounter = <E>(
   writer: {
-    readonly get: (collection: string, id: string) => Effect.Effect<unknown, E>;
-    readonly put: (collection: string, id: string, value: unknown) => Effect.Effect<void, E>;
+    readonly get: (collection: string, id: RowId) => Effect.Effect<unknown, E>;
+    readonly put: (collection: string, id: RowId, value: unknown) => Effect.Effect<void, E>;
   },
   id: string
 ): Effect.Effect<void, E> =>
   Effect.gen(function* () {
-    const current = optionalCountOf(yield* writer.get("counters", id));
-    yield* writer.put("counters", id, { id, n: (current ?? 0) + 1 });
+    const current = optionalCountOf(yield* writer.get("counters", RowId.make(id)));
+    yield* writer.put("counters", RowId.make(id), { id, n: (current ?? 0) + 1 });
   });
 
 const counterMutators = Mutator.registry([
@@ -111,11 +112,11 @@ const makeCounterEngine = (
   refusing?: Ref.Ref<boolean>
 ) =>
   Effect.gen(function* () {
-    const inner = yield* makeInMemory(handler, "group-a");
+    const inner = yield* makeInMemory(handler, ClientGroupId.make("group-a"));
     const transport = refusing === undefined ? inner : refusingPulls(inner, refusing);
     return yield* ClientEngineModule.make({
       clientId: "client-a",
-      clientGroupId: "group-a",
+      clientGroupId: ClientGroupId.make("group-a"),
       mutators: counterMutators,
       ...Defined.fields({ unpulledLimit }),
     }).pipe(
@@ -135,7 +136,7 @@ const tailOf = (store: ClientStore) =>
 
 const mutation = (clientId: string, mutationId: number): Mutation => ({
   clientId,
-  mutationId,
+  mutationId: MutationId.make(mutationId),
   mutator: "counter/inc",
   args: { id: "c" },
   createdAt: 0,
@@ -244,10 +245,10 @@ const gatedKeyValue = (
 
 // The row `id`'s counter value, or `undefined` when the store holds no such row.
 const rowCount = (store: ClientStore, id: string) =>
-  store.getRow("counters", id).pipe(Effect.map((row) => optionalCountOf(row?.value)));
+  store.getRow("counters", RowId.make(id)).pipe(Effect.map((row) => optionalCountOf(row?.value)));
 
 const putCounter = (store: ClientStore, id: string, n: number) =>
-  store.putRow("counters", { id, version: 1, value: { id, n } });
+  store.putRow("counters", { id: RowId.make(id), version: 1, value: { id, n } });
 
 const rowKeyOf = (id: string) => `legation/row/counters/${id}`;
 
@@ -1048,7 +1049,11 @@ describe("a pull release that fails part-way", () => {
 
           // The snapshot sets `c` to 5 and says nothing about `d`.
           const source = yield* ClientStoreModule.makeMemory;
-          yield* source.putRow("counters", { id: "c", version: 1, value: { id: "c", n: 5 } });
+          yield* source.putRow("counters", {
+            id: RowId.make("c"),
+            version: 1,
+            value: { id: "c", n: 5 },
+          });
           yield* Hydration.hydrate(store, yield* Hydration.dehydrate(source));
 
           const reopened = yield* ClientStoreModule.makeKeyValue();
@@ -1067,7 +1072,9 @@ describe("a pull release that fails part-way", () => {
         expect(Exit.isFailure(yield* Effect.exit(engine.pull))).toBe(true);
 
         // The store is sealed: reads and writes fail, and nothing runs over the outstanding release.
-        expect(Exit.isFailure(yield* Effect.exit(store.getRow("counters", "c")))).toBe(true);
+        expect(Exit.isFailure(yield* Effect.exit(store.getRow("counters", RowId.make("c"))))).toBe(
+          true
+        );
         expect(
           Exit.isFailure(yield* Effect.exit(store.parkUnpulled([mutation("client-a", 99)])))
         ).toBe(true);
@@ -1111,11 +1118,21 @@ describe("a pull release that fails part-way", () => {
           lastMutationIds: {},
           cookie: "cookie-1",
           patch: [
-            { _tag: "Put", collection: "counters", id: "c", version: 1, value: { id: "c", n: 1 } },
+            {
+              _tag: "Put",
+              collection: "counters",
+              id: RowId.make("c"),
+              version: 1,
+              value: { id: "c", n: 1 },
+            },
           ],
         });
         const source = yield* ClientStoreModule.makeMemory;
-        yield* source.putRow("counters", { id: "c", version: 2, value: { id: "c", n: 5 } });
+        yield* source.putRow("counters", {
+          id: RowId.make("c"),
+          version: 2,
+          value: { id: "c", n: 5 },
+        });
         yield* Hydration.hydrate(first, yield* Hydration.dehydrate(source));
 
         // The release is not re-applied over the snapshot on the next open.
@@ -1137,7 +1154,7 @@ describe("a pull release that fails part-way", () => {
               {
                 _tag: "Put",
                 collection: "counters",
-                id: "c",
+                id: RowId.make("c"),
                 version: 1,
                 value: { id: "c", n: 1 },
               },
@@ -1174,7 +1191,7 @@ const releaseScenario = (store: ClientStore) =>
         {
           _tag: "Put",
           collection: "counters",
-          id: "c",
+          id: RowId.make("c"),
           version: 1,
           value: { id: "c", n: 1 },
         },
@@ -1233,7 +1250,7 @@ describe("a release record's guarantees across both stores", () => {
               {
                 _tag: "Put",
                 collection: "counters",
-                id: "c",
+                id: RowId.make("c"),
                 version: 1,
                 value: { id: "c", n: 1 },
               },
@@ -1257,13 +1274,13 @@ describe("a release record's guarantees across both stores", () => {
               {
                 _tag: "Put",
                 collection: "counters",
-                id: "c",
+                id: RowId.make("c"),
                 version: 1,
                 value: { id: "c", n: 1 },
               },
             ],
           });
-          yield* store.delRow("counters", "c");
+          yield* store.delRow("counters", RowId.make("c"));
           yield* store.finishRelease;
           expect(yield* rowCount(store, "c")).toBeUndefined();
         })
@@ -1282,7 +1299,7 @@ describe("a release record's guarantees across both stores", () => {
                 {
                   _tag: "Put",
                   collection: "counters",
-                  id: "c",
+                  id: RowId.make("c"),
                   version: 1,
                   value: { id: "c", n: 1 },
                 },
@@ -1308,7 +1325,7 @@ describe("a release record's guarantees across both stores", () => {
               {
                 _tag: "Put",
                 collection: "counters",
-                id: "c",
+                id: RowId.make("c"),
                 version: 1,
                 value: { id: "c", n: 1 },
               },
@@ -1387,7 +1404,13 @@ describe("a release record's guarantees across both stores", () => {
           lastMutationIds: {},
           cookie: "cookie-1",
           patch: [
-            { _tag: "Put", collection: "counters", id: "c", version: 1, value: { id: "c", n: 1 } },
+            {
+              _tag: "Put",
+              collection: "counters",
+              id: RowId.make("c"),
+              version: 1,
+              value: { id: "c", n: 1 },
+            },
           ],
         });
         yield* putCounter(first, "c", 5);
@@ -1417,7 +1440,7 @@ describe("a release record's guarantees across both stores", () => {
               {
                 _tag: "Put",
                 collection: "counters",
-                id: "c",
+                id: RowId.make("c"),
                 version: 1,
                 value: { id: "c", n: 1 },
               },
@@ -1509,7 +1532,13 @@ const batchMembersScenario = (store: ClientStore) =>
       lastMutationIds: { c1: 2 },
       cookie: "cookie-2",
       patch: [
-        { _tag: "Put", collection: "counters", id: "c", version: 2, value: { id: "c", n: 2 } },
+        {
+          _tag: "Put",
+          collection: "counters",
+          id: RowId.make("c"),
+          version: 2,
+          value: { id: "c", n: 2 },
+        },
       ],
     });
     return {
@@ -1533,7 +1562,13 @@ const recordMembersScenario = (store: ClientStore) =>
       lastMutationIds: { c1: 2 },
       cookie: "cookie-2",
       patch: [
-        { _tag: "Put", collection: "counters", id: "c", version: 2, value: { id: "c", n: 2 } },
+        {
+          _tag: "Put",
+          collection: "counters",
+          id: RowId.make("c"),
+          version: 2,
+          value: { id: "c", n: 2 },
+        },
       ],
     });
     yield* store.finishRelease;
@@ -1585,14 +1620,14 @@ describe("the memory store's atomic batch members", () => {
               {
                 _tag: "Put",
                 collection: "counters",
-                id: "c",
+                id: RowId.make("c"),
                 version: 1,
                 value: { id: "c", n: 1 },
               },
               {
                 _tag: "Put",
                 collection: "counters",
-                id: "d",
+                id: RowId.make("d"),
                 version: 1,
                 value: { id: "d", n: 1 },
               },
@@ -1606,7 +1641,7 @@ describe("the memory store's atomic batch members", () => {
               {
                 _tag: "Put",
                 collection: "counters",
-                id: "c",
+                id: RowId.make("c"),
                 version: 2,
                 value: { id: "c", n: 2 },
               },
@@ -1782,7 +1817,9 @@ describe("the engine's release failure paths", () => {
 
           yield* Ref.set(holdNext, true);
           const seeding = yield* Effect.forkChild(
-            engine.seed([{ collection: "counters", id: "c", version: 1, value: { id: "c", n: 4 } }])
+            engine.seed([
+              { collection: "counters", id: RowId.make("c"), version: 1, value: { id: "c", n: 4 } },
+            ])
           );
           yield* Deferred.await(reached);
 
@@ -1804,7 +1841,11 @@ describe("the engine's release failure paths", () => {
     scoped.effect("a reset waits for the overlay lock while it clears the confirmed rows", () =>
       Effect.gen(function* () {
         const inner = yield* ClientStoreModule.makeMemory;
-        yield* inner.putRow("counters", { id: "c", version: 1, value: { id: "c", n: 4 } });
+        yield* inner.putRow("counters", {
+          id: RowId.make("c"),
+          version: 1,
+          value: { id: "c", n: 4 },
+        });
         const holdNext = yield* Ref.make(false);
         const reached = yield* Deferred.make<void>();
         const release = yield* Deferred.make<void>();
@@ -1862,7 +1903,7 @@ describe("the in-process finish reads the record, and seals only after it writes
               {
                 _tag: "Put",
                 collection: "counters",
-                id: "c",
+                id: RowId.make("c"),
                 version: 1,
                 value: { id: "c", n: 1 },
               },
@@ -1919,7 +1960,7 @@ describe("the in-process finish reads the record, and seals only after it writes
           concurrency: 1,
           discard: true,
         });
-        yield* store.delRow("counters", "r0");
+        yield* store.delRow("counters", RowId.make("r0"));
         expect(yield* Ref.get(reads)).toBe(0);
       })
     );
@@ -1930,7 +1971,11 @@ describeWrapped("the engine's clears", (it) => {
   it.effect("a clearRows waits for the overlay lock while it clears the confirmed rows", () =>
     Effect.gen(function* () {
       const inner = yield* ClientStoreModule.makeMemory;
-      yield* inner.putRow("counters", { id: "c", version: 1, value: { id: "c", n: 4 } });
+      yield* inner.putRow("counters", {
+        id: RowId.make("c"),
+        version: 1,
+        value: { id: "c", n: 4 },
+      });
       const holdNext = yield* Ref.make(false);
       const reached = yield* Deferred.make<void>();
       const release = yield* Deferred.make<void>();
@@ -2025,7 +2070,7 @@ const engineWith = (
 ) =>
   ClientEngineModule.make({
     clientId: "client-a",
-    clientGroupId: "group-a",
+    clientGroupId: ClientGroupId.make("group-a"),
     mutators: counterMutators,
     unpulledLimit,
     ...Defined.fields({ retry }),
@@ -2078,7 +2123,9 @@ describeWrapped("a push that takes the tail to half the bound pulls ahead of it"
         Effect.gen(function* () {
           const server = yield* serverOver(yield* MemoryBackend.make(backendHandlers));
           const store = yield* ClientStoreModule.makeMemory;
-          const probe = yield* probedTransport(yield* makeInMemory(server, "group-a"));
+          const probe = yield* probedTransport(
+            yield* makeInMemory(server, ClientGroupId.make("group-a"))
+          );
           const engine = yield* engineWith(probe.transport, store, SMALL_LIMIT);
           yield* engine.subscribe(countersSubset);
 
@@ -2117,7 +2164,9 @@ describeWrapped("a push that takes the tail to half the bound pulls ahead of it"
         Effect.gen(function* () {
           const server = yield* serverOver(yield* MemoryBackend.make(backendHandlers));
           const store = yield* ClientStoreModule.makeMemory;
-          const probe = yield* probedTransport(yield* makeInMemory(server, "group-a"));
+          const probe = yield* probedTransport(
+            yield* makeInMemory(server, ClientGroupId.make("group-a"))
+          );
           const engine = yield* engineWith(probe.transport, store, BURST_LIMIT);
           yield* engine.subscribe(countersSubset);
 
@@ -2166,7 +2215,9 @@ describeWrapped("a push that takes the tail to half the bound pulls ahead of it"
       Effect.gen(function* () {
         const server = yield* serverOver(yield* MemoryBackend.make(backendHandlers));
         const store = yield* ClientStoreModule.makeMemory;
-        const probe = yield* probedTransport(yield* makeInMemory(server, "group-a"));
+        const probe = yield* probedTransport(
+          yield* makeInMemory(server, ClientGroupId.make("group-a"))
+        );
         // No retries: the failing pull ends at once, so the test does not wait out a backoff.
         const engine = yield* engineWith(probe.transport, store, BURST_LIMIT, {
           pull: Schedule.recurs(0),
@@ -2401,7 +2452,13 @@ describeWrapped("a memory snapshot is one pull's state", (it) => {
               lastMutationIds: {},
               cookie: `c${k}`,
               patch: [
-                { _tag: "Put", collection: "counters", id: "a", version: k, value: { n: k } },
+                {
+                  _tag: "Put",
+                  collection: "counters",
+                  id: RowId.make("a"),
+                  version: k,
+                  value: { n: k },
+                },
               ],
             }),
           { concurrency: 1, discard: true }

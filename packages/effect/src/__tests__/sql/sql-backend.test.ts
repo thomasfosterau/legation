@@ -30,6 +30,7 @@ import * as SqlBackend from "../../sql/SqlBackend.js";
 import { defined } from "../defined.js";
 import { TestFailure } from "../test-failure.js";
 import { idOf } from "../shapes.js";
+import { ClientGroupId, MutationId, RowId } from "../../Protocol.js";
 
 interface Mock {
   readonly executor: SqlBackend.SqlExecutor;
@@ -251,7 +252,7 @@ describe("SqlBackend evaluate / getRows", () => {
     });
 
     return Effect.gen(function* () {
-      const entries = yield* backend.evaluate({ clientGroupId: "g" }, subset);
+      const entries = yield* backend.evaluate({ clientGroupId: ClientGroupId.make("g") }, subset);
       // SQL pushed the predicate; Subset.apply ordered by rank + limited to 1.
       expect(entries).toEqual([{ id: "2", version: "b" }]);
       const select = defined(mock.queries.at(-1));
@@ -290,7 +291,7 @@ describe("SqlBackend evaluate / getRows", () => {
     });
 
     return Effect.gen(function* () {
-      const entries = yield* backend.evaluate({ clientGroupId: "g" }, subset);
+      const entries = yield* backend.evaluate({ clientGroupId: ClientGroupId.make("g") }, subset);
       // The boolean literal was bound as 0, the instant got no collation
       // clause, and the decoded row (done: false) survived Subset.apply's
       // re-evaluation against the boolean literal.
@@ -299,7 +300,9 @@ describe("SqlBackend evaluate / getRows", () => {
       expect(select.text).toBe(`SELECT * FROM "todos" WHERE "done" = ? AND "createdAt" > ?`);
       expect(select.params).toEqual([0, "2000-01-01T00:00:00.000Z"]);
 
-      const rows = yield* backend.getRows({ clientGroupId: "g" }, "todos", ["1"]);
+      const rows = yield* backend.getRows({ clientGroupId: ClientGroupId.make("g") }, "todos", [
+        RowId.make("1"),
+      ]);
       expect(defined(rows[0]).value).toEqual({
         id: "1",
         done: true,
@@ -339,7 +342,7 @@ describe("SqlBackend evaluate / getRows", () => {
     });
 
     return Effect.gen(function* () {
-      const entries = yield* backend.evaluate({ clientGroupId: "g" }, visible);
+      const entries = yield* backend.evaluate({ clientGroupId: ClientGroupId.make("g") }, visible);
       expect(entries.map((e) => e.id)).toEqual(["i1", "i3"]);
       // The correlated subquery was issued with the inner predicate's params.
       expect(mock.queries[0]).toEqual({
@@ -372,7 +375,7 @@ describe("SqlBackend evaluate / getRows", () => {
       // NULL equals nothing: `Not(Exists)` keeps i2 (as `Predicate.existsValues`
       // does for MemoryBackend) instead of going unknown on the NULL.
       const hidden = yield* backend.evaluate(
-        { clientGroupId: "g" },
+        { clientGroupId: ClientGroupId.make("g") },
         Subset.make({ collection: "issues", where: Predicate.not(membership(Predicate.always)) })
       );
       expect(hidden.map((e) => e.id)).toEqual(["i2"]);
@@ -380,7 +383,7 @@ describe("SqlBackend evaluate / getRows", () => {
       const subquery = defined(mock.queries.find((q) => q.text.startsWith("SELECT DISTINCT")));
       expect(subquery.text).toBe(`SELECT DISTINCT "projectId" FROM "memberships" WHERE 1 = 1`);
       const named = yield* backend.evaluate(
-        { clientGroupId: "g" },
+        { clientGroupId: ClientGroupId.make("g") },
         Subset.make({ collection: "issues", where: membership(Predicate.eq("userId", "alice")) })
       );
       expect(named.map((e) => e.id)).toEqual(["i1"]);
@@ -390,7 +393,7 @@ describe("SqlBackend evaluate / getRows", () => {
       // A boolean foreign field yields true/false, not 1/0, so the resolved
       // `In` matches the decoded local column.
       const flagged = yield* backend.evaluate(
-        { clientGroupId: "g" },
+        { clientGroupId: ClientGroupId.make("g") },
         Subset.make({
           collection: "issues",
           where: Predicate.exists({
@@ -415,7 +418,9 @@ describe("SqlBackend evaluate / getRows", () => {
       handlers: {},
     });
     return Effect.gen(function* () {
-      const rows = yield* backend.getRows({ clientGroupId: "g" }, "todos", ["1"]);
+      const rows = yield* backend.getRows({ clientGroupId: ClientGroupId.make("g") }, "todos", [
+        RowId.make("1"),
+      ]);
       expect(rows).toEqual([
         { id: "1", version: "a", value: { id: "1", version: "a", title: "x" } },
       ]);
@@ -434,14 +439,16 @@ const makeBackend = (mock: Mock, ran: Ref.Ref<number>) =>
     handlers: {
       "todo/set": () =>
         Ref.update(ran, (n) => n + 1).pipe(
-          Effect.as<ReadonlyArray<Backend.ChangeHint>>([{ collection: "todos", ids: ["1"] }])
+          Effect.as<ReadonlyArray<Backend.ChangeHint>>([
+            { collection: "todos", ids: [RowId.make("1")] },
+          ])
         ),
     },
   });
 
 const mutation = (mutationId: number) => ({
   clientId: "c1",
-  mutationId,
+  mutationId: MutationId.make(mutationId),
   mutator: "todo/set",
   args: { id: "1" },
   createdAt: 0,
@@ -449,7 +456,7 @@ const mutation = (mutationId: number) => ({
 
 const at = (id: number, mutator: string, args: unknown) => ({
   clientId: "c1",
-  mutationId: id,
+  mutationId: MutationId.make(id),
   mutator,
   args,
   createdAt: 0,
@@ -465,19 +472,23 @@ describe.each([true, false])("SqlBackend applyMutations (transactional: %s)", (t
       const ran = yield* Ref.make(0);
       const backend = makeBackend(mock, ran);
 
-      const first = yield* backend.applyMutations({ clientGroupId: "g" }, [mutation(1)]);
+      const first = yield* backend.applyMutations({ clientGroupId: ClientGroupId.make("g") }, [
+        mutation(1),
+      ]);
       expect(first.lastMutationIds).toEqual({ c1: 1 });
       // The hint carries the PUT's current row values (best-effort); the mock
       // executor stores nothing, so the enrichment read finds no row.
       expect(first.hints).toEqual([{ collection: "todos", ids: ["1"], values: [] }]);
 
       // Replaying id 1 is an idempotent no-op (handler does not run again).
-      yield* backend.applyMutations({ clientGroupId: "g" }, [mutation(1)]);
+      yield* backend.applyMutations({ clientGroupId: ClientGroupId.make("g") }, [mutation(1)]);
       expect(yield* Ref.get(ran)).toBe(1);
 
-      yield* backend.applyMutations({ clientGroupId: "g" }, [mutation(2)]);
+      yield* backend.applyMutations({ clientGroupId: ClientGroupId.make("g") }, [mutation(2)]);
       expect(yield* Ref.get(ran)).toBe(2);
-      expect(yield* backend.lastMutationIds({ clientGroupId: "g" })).toEqual({ c1: 2 });
+      expect(yield* backend.lastMutationIds({ clientGroupId: ClientGroupId.make("g") })).toEqual({
+        c1: 2,
+      });
     });
   });
 
@@ -488,7 +499,9 @@ describe.each([true, false])("SqlBackend applyMutations (transactional: %s)", (t
     return Effect.gen(function* () {
       const ran = yield* Ref.make(0);
       const backend = makeBackend(mock, ran);
-      const result = yield* backend.applyMutations({ clientGroupId: "g" }, [mutation(1)]);
+      const result = yield* backend.applyMutations({ clientGroupId: ClientGroupId.make("g") }, [
+        mutation(1),
+      ]);
       // The hint carries the current row value for predicate-level fan-out.
       expect(result.hints).toEqual([
         {
@@ -506,7 +519,7 @@ describe.each([true, false])("SqlBackend applyMutations (transactional: %s)", (t
       const ran = yield* Ref.make(0);
       const backend = makeBackend(mock, ran);
       const error = yield* backend
-        .applyMutations({ clientGroupId: "g" }, [mutation(3)])
+        .applyMutations({ clientGroupId: ClientGroupId.make("g") }, [mutation(3)])
         .pipe(Effect.flip);
       expect(error).toBeInstanceOf(BackendError);
     });
@@ -536,7 +549,7 @@ describe.each([true, false])("SqlBackend applyMutations (transactional: %s)", (t
         handlers: {
           "todo/set": () =>
             Effect.succeed<ReadonlyArray<Backend.ChangeHint>>([
-              { collection: "todos", ids: ["2"] },
+              { collection: "todos", ids: [RowId.make("2")] },
             ]),
           // Write, then reject permanently.
           "todo/reject": (_args, tx) =>
@@ -547,13 +560,15 @@ describe.each([true, false])("SqlBackend applyMutations (transactional: %s)", (t
       });
 
       return Effect.gen(function* () {
-        const result = yield* backend.applyMutations({ clientGroupId: "g" }, [
+        const result = yield* backend.applyMutations({ clientGroupId: ClientGroupId.make("g") }, [
           at(1, "todo/reject", { id: "poison" }),
           at(2, "todo/set", { id: "2" }),
         ]);
         // The rejected mutation and the one behind it are both acknowledged.
         expect(result.lastMutationIds).toEqual({ c1: 2 });
-        expect(result.rejected).toEqual([{ clientId: "c1", mutationId: 1, reason: "forbidden" }]);
+        expect(result.rejected).toEqual([
+          { clientId: "c1", mutationId: MutationId.make(1), reason: "forbidden" },
+        ]);
         // Only the applied mutation contributes a hint (values enriched
         // best-effort; the mock executor stores no row to read back).
         expect(result.hints).toEqual([{ collection: "todos", ids: ["2"], values: [] }]);
@@ -570,7 +585,7 @@ describe("TableMapping.fromCollection", () => {
     const todosCollection = Collection.make({
       name: "todos",
       schema: Schema.Unknown,
-      id: (value) => idOf(value),
+      id: (value) => RowId.make(idOf(value)),
       filterable: { done: { kind: "boolean", operators: ["eq"] } },
     });
     const mapping = SqlBackend.fromCollection(todosCollection, {
@@ -601,7 +616,7 @@ describe("TableMapping.fromCollection", () => {
       // mapping's: the boolean literal binds per dialect (0) and SQLite's
       // 0/1 decodes back to a boolean on the way out.
       const entries = yield* backend.evaluate(
-        { clientGroupId: "g" },
+        { clientGroupId: ClientGroupId.make("g") },
         Subset.make({ collection: "todos", where: Predicate.eq("done", false) })
       );
       expect(entries).toEqual([{ id: "2", version: "b" }]);
@@ -626,13 +641,15 @@ describe("TableMapping.readRelation", () => {
     });
     return Effect.gen(function* () {
       const entries = yield* backend.evaluate(
-        { clientGroupId: "g" },
+        { clientGroupId: ClientGroupId.make("g") },
         Subset.make({ collection: "todos" })
       );
       expect(entries).toEqual([{ id: "1", version: "a" }]);
       expect(defined(mock.queries.at(-1)).text).toBe(`SELECT * FROM "todos_view" WHERE 1 = 1`);
 
-      const rows = yield* backend.getRows({ clientGroupId: "g" }, "todos", ["1"]);
+      const rows = yield* backend.getRows({ clientGroupId: ClientGroupId.make("g") }, "todos", [
+        RowId.make("1"),
+      ]);
       expect(rows).toEqual([{ id: "1", version: "a", value: { id: "1", version: "a" } }]);
       expect(defined(mock.queries.at(-1)).text).toBe(
         `SELECT * FROM "todos_view" WHERE "id" IN (?)`
@@ -666,7 +683,7 @@ describe("tombstones and fail-closed relations across a pull", () => {
         const server = yield* Server.make({ backend, auth: { policy: allowTodos } });
 
         const first = yield* server.handler.handlePull({
-          clientGroupId: "g",
+          clientGroupId: ClientGroupId.make("g"),
           subscriptions: allTodos,
         });
         expect(first.patch).toEqual([
@@ -683,7 +700,7 @@ describe("tombstones and fail-closed relations across a pull", () => {
         // matches the tombstone predicate.
         mock.seed("todos", [{ id: "1", version: "b", deletedAt: "2024-01-01T00:00:00.000Z" }]);
         const second = yield* server.handler.handlePull({
-          clientGroupId: "g",
+          clientGroupId: ClientGroupId.make("g"),
           cookie: first.cookie,
           subscriptions: allTodos,
         });
@@ -709,7 +726,7 @@ describe("tombstones and fail-closed relations across a pull", () => {
         const server = yield* Server.make({ backend, auth: { policy: allowTodos } });
 
         const first = yield* server.handler.handlePull({
-          clientGroupId: "g",
+          clientGroupId: ClientGroupId.make("g"),
           subscriptions: allTodos,
         });
         expect(first.patch).toEqual([
@@ -736,7 +753,7 @@ describe("tombstones and fail-closed relations across a pull", () => {
         // outside that set diffs as a delete exactly like a tombstoned one.
         mock.seed("todos", [{ id: "1", version: "a" }]);
         const second = yield* server.handler.handlePull({
-          clientGroupId: "g",
+          clientGroupId: ClientGroupId.make("g"),
           cookie: first.cookie,
           subscriptions: allTodos,
         });
@@ -749,14 +766,14 @@ describe("tombstones and fail-closed relations across a pull", () => {
 // Single mutations for the READ COMMITTED model below.
 const setMutation = (mutationId: number) => ({
   clientId: "c1",
-  mutationId,
+  mutationId: MutationId.make(mutationId),
   mutator: "todo/set",
   args: { id: "1" },
   createdAt: 0,
 });
 const parkMutation = (mutationId: number) => ({
   clientId: "c1",
-  mutationId,
+  mutationId: MutationId.make(mutationId),
   mutator: "todo/park",
   args: { id: "1" },
   createdAt: 0,
@@ -810,15 +827,17 @@ describe("SqlBackend overlapping calls (READ COMMITTED model)", () => {
     const mock = makeMock();
     return Effect.gen(function* () {
       const { backend, ran, written, release } = yield* makeParkable(mock);
-      yield* backend.applyMutations({ clientGroupId: "g" }, [setMutation(1)]);
+      yield* backend.applyMutations({ clientGroupId: ClientGroupId.make("g") }, [setMutation(1)]);
 
       const first = yield* Effect.forkChild(
-        backend.applyMutations({ clientGroupId: "g" }, [parkMutation(2)])
+        backend.applyMutations({ clientGroupId: ClientGroupId.make("g") }, [parkMutation(2)])
       );
       yield* Deferred.await(written);
 
       // The copy runs while the first call is parked after its claim and writes.
-      const copy = yield* backend.applyMutations({ clientGroupId: "g" }, [parkMutation(2)]);
+      const copy = yield* backend.applyMutations({ clientGroupId: ClientGroupId.make("g") }, [
+        parkMutation(2),
+      ]);
       expect(copy.lastMutationIds).toEqual({ c1: 2 });
 
       yield* Deferred.succeed(release, undefined);
@@ -827,7 +846,9 @@ describe("SqlBackend overlapping calls (READ COMMITTED model)", () => {
       // set (1) and park (2) ran once each; the copy ran nothing.
       expect(yield* Ref.get(ran)).toBe(2);
       // The watermark after the parked call is 2, not a value the copy left behind.
-      expect(yield* backend.lastMutationIds({ clientGroupId: "g" })).toEqual({ c1: 2 });
+      expect(yield* backend.lastMutationIds({ clientGroupId: ClientGroupId.make("g") })).toEqual({
+        c1: 2,
+      });
     });
   });
 
@@ -837,23 +858,27 @@ describe("SqlBackend overlapping calls (READ COMMITTED model)", () => {
       const mock = makeMock();
       return Effect.gen(function* () {
         const { backend, written, release } = yield* makeParkable(mock);
-        yield* backend.applyMutations({ clientGroupId: "g" }, [setMutation(1)]);
+        yield* backend.applyMutations({ clientGroupId: ClientGroupId.make("g") }, [setMutation(1)]);
 
         const parked = yield* Effect.forkChild(
-          backend.applyMutations({ clientGroupId: "g" }, [parkMutation(2)])
+          backend.applyMutations({ clientGroupId: ClientGroupId.make("g") }, [parkMutation(2)])
         );
         yield* Deferred.await(written);
 
         // Mutations 2 (a copy) and 3 commit while mutation 2's first call is parked.
-        yield* backend.applyMutations({ clientGroupId: "g" }, [setMutation(2)]);
-        const later = yield* backend.applyMutations({ clientGroupId: "g" }, [setMutation(3)]);
+        yield* backend.applyMutations({ clientGroupId: ClientGroupId.make("g") }, [setMutation(2)]);
+        const later = yield* backend.applyMutations({ clientGroupId: ClientGroupId.make("g") }, [
+          setMutation(3),
+        ]);
         expect(later.lastMutationIds).toEqual({ c1: 3 });
 
         yield* Deferred.succeed(release, undefined);
         const applied = yield* Fiber.join(parked);
         // A stale bump of 2 would move the watermark from 3 back to 2.
         expect(applied.lastMutationIds).toEqual({ c1: 3 });
-        expect(yield* backend.lastMutationIds({ clientGroupId: "g" })).toEqual({ c1: 3 });
+        expect(yield* backend.lastMutationIds({ clientGroupId: ClientGroupId.make("g") })).toEqual({
+          c1: 3,
+        });
       });
     }
   );
@@ -877,7 +902,9 @@ const observeOrder = (transactional: boolean) =>
           ),
       },
     });
-    const result = yield* backend.applyMutations({ clientGroupId: "g" }, [setMutation(1)]);
+    const result = yield* backend.applyMutations({ clientGroupId: ClientGroupId.make("g") }, [
+      setMutation(1),
+    ]);
     return {
       seen: yield* Ref.get(seen),
       watermark: result.lastMutationIds,
@@ -920,15 +947,17 @@ describe("SqlBackend watermark without transactions", () => {
     const mock = makeMock({ transactional: false });
     return Effect.gen(function* () {
       const { backend, written, release } = yield* makeParkable(mock);
-      yield* backend.applyMutations({ clientGroupId: "g" }, [setMutation(1)]);
+      yield* backend.applyMutations({ clientGroupId: ClientGroupId.make("g") }, [setMutation(1)]);
 
       const parked = yield* Effect.forkChild(
-        backend.applyMutations({ clientGroupId: "g" }, [parkMutation(2)])
+        backend.applyMutations({ clientGroupId: ClientGroupId.make("g") }, [parkMutation(2)])
       );
       yield* Deferred.await(written);
 
-      yield* backend.applyMutations({ clientGroupId: "g" }, [setMutation(2)]);
-      const later = yield* backend.applyMutations({ clientGroupId: "g" }, [setMutation(3)]);
+      yield* backend.applyMutations({ clientGroupId: ClientGroupId.make("g") }, [setMutation(2)]);
+      const later = yield* backend.applyMutations({ clientGroupId: ClientGroupId.make("g") }, [
+        setMutation(3),
+      ]);
       expect(later.lastMutationIds).toEqual({ c1: 3 });
 
       yield* Deferred.succeed(release, undefined);
@@ -972,8 +1001,14 @@ const applyOnce = (dialect: Sql.Dialect, transactional: boolean) => {
     dialect,
   });
   return backend
-    .applyMutations({ clientGroupId: "g" }, [
-      { clientId: "c1", mutationId: 1, mutator: "todo/set", args: { id: "1" }, createdAt: 0 },
+    .applyMutations({ clientGroupId: ClientGroupId.make("g") }, [
+      {
+        clientId: "c1",
+        mutationId: MutationId.make(1),
+        mutator: "todo/set",
+        args: { id: "1" },
+        createdAt: 0,
+      },
     ])
     .pipe(Effect.as(statements));
 };
@@ -1007,21 +1042,21 @@ describe("SqlBackend isolation statement", () => {
 
 const rejectedAt = (mutationId: number) => ({
   clientId: "c1",
-  mutationId,
+  mutationId: MutationId.make(mutationId),
   mutator: "todo/reject",
   args: { id: String(mutationId) },
   createdAt: 0,
 });
 const setAt = (mutationId: number) => ({
   clientId: "c1",
-  mutationId,
+  mutationId: MutationId.make(mutationId),
   mutator: "todo/set",
   args: { id: String(mutationId) },
   createdAt: 0,
 });
 const rejection = (mutationId: number) => ({
   clientId: "c1",
-  mutationId,
+  mutationId: MutationId.make(mutationId),
   reason: `forbidden ${mutationId}`,
 });
 
@@ -1055,7 +1090,7 @@ describe("SqlBackend rejection memory over the mock ledger", () => {
       const mock = makeMock({ transactional });
       const backend = rejectingBackend(mock);
       return Effect.gen(function* () {
-        const group = { clientGroupId: "g" };
+        const group = { clientGroupId: ClientGroupId.make("g") };
         const first = yield* backend.applyMutations(group, [rejectedAt(1)]);
         expect(first.rejected).toEqual([rejection(1)]);
 
@@ -1069,7 +1104,7 @@ describe("SqlBackend rejection memory over the mock ledger", () => {
       const mock = makeMock({ transactional });
       const backend = rejectingBackend(mock);
       return Effect.gen(function* () {
-        const group = { clientGroupId: "g" };
+        const group = { clientGroupId: ClientGroupId.make("g") };
         yield* backend.applyMutations(group, [rejectedAt(1)]);
         yield* backend.applyMutations(group, [setAt(2)]);
 
@@ -1116,7 +1151,7 @@ describe("SqlBackend rejection memory over the mock ledger", () => {
         },
       });
       return Effect.gen(function* () {
-        const group = { clientGroupId: "g" };
+        const group = { clientGroupId: ClientGroupId.make("g") };
         const failed = yield* backend.applyMutations(group, [rejectedAt(1)]).pipe(Effect.flip);
         expect(failed).toBeInstanceOf(BackendError);
 

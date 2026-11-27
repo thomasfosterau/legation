@@ -11,7 +11,7 @@ import * as Ref from "effect/Ref";
 import * as Schema from "effect/Schema";
 import * as TestClock from "effect/testing/TestClock";
 import { Node } from "@thomasfosterau/legation";
-import { FanoutBroker, FanoutBus } from "@thomasfosterau/legation/internal";
+import { FanoutBroker, FanoutBus, Protocol } from "@thomasfosterau/legation/internal";
 import { TestFailure } from "./test-failure.js";
 
 const Product = Node.make("products", { attributes: { name: Schema.String } });
@@ -35,7 +35,7 @@ describe("FanoutBus broker bound", () => {
       const returned = yield* Ref.make(false);
       const publishing = yield* Effect.forkScoped(
         bus
-          .publish([{ collection: "products", ids: ["p-1"] }])
+          .publish([{ collection: "products", ids: [Protocol.RowId.make("p-1")] }])
           .pipe(Effect.andThen(Ref.set(returned, true))),
         { startImmediately: true }
       );

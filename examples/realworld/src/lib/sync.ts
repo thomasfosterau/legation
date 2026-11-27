@@ -200,8 +200,8 @@ const seed = (backend: Backend.Backend): Effect.Effect<void> =>
     const applyAs = (identity: string, mutator: string, args: unknown) =>
       Effect.gen(function* () {
         seq += 1;
-        yield* backend.applyMutations({ clientGroupId: "seed", identity }, [
-          { clientId: "seed", mutationId: seq, mutator, args, createdAt: Date.now() },
+        yield* backend.applyMutations({ clientGroupId: Client.ClientGroupId.make("seed"), identity }, [
+          { clientId: "seed", mutationId: Client.MutationId.make(seq), mutator, args, createdAt: Date.now() },
         ]);
       });
     for (const person of people) yield* applyAs(person.username, "user/register", person);

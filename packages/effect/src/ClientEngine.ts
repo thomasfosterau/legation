@@ -44,6 +44,7 @@ import * as Stream from "effect/Stream";
 import * as SubscriptionRef from "effect/SubscriptionRef";
 import * as Aggregate from "./Aggregate.js";
 import * as Background from "./internal/Background.js";
+import * as Ids from "./internal/Ids.js";
 import * as Coverage from "./Coverage.js";
 import type { RowId, RowVersion } from "./Collection.js";
 import { ClientStore, NO_COMPACTION, freezePending, type CompactionResult } from "./ClientStore.js";
@@ -62,7 +63,9 @@ import type { LocalWriter, MutatorRegistry } from "./Mutator.js";
 import * as MutationState from "./MutationState.js";
 import type * as PredicateModule from "./Predicate.js";
 import type {
+  ClientGroupId,
   Mutation,
+  MutationId,
   NamedSubscription,
   PatchOp,
   PullResponse,
@@ -181,7 +184,7 @@ export interface MutationHandle {
  */
 export interface FormClient {
   readonly clientId: string;
-  readonly mutationId: number;
+  readonly mutationId: MutationId;
 }
 
 /** A form mutation's args in both forms: `encoded` as persisted, `decoded` as its handler runs on. */
@@ -496,7 +499,7 @@ export interface SyncFailure {
  */
 export interface ClientEngineOptions {
   readonly clientId: string;
-  readonly clientGroupId: string;
+  readonly clientGroupId: ClientGroupId;
   readonly mutators: MutatorRegistry;
   /** Named queries: client-side subset factories for local rendering. */
   readonly queries?: Query.QueryRegistry;
@@ -1573,22 +1576,26 @@ export const make: (
     onPut?: (collection: string, id: RowId, value: unknown) => void,
     onDel?: (collection: string, id: RowId) => void
   ): LocalWriter => ({
-    put: (collection, id, value) =>
+    put: (collection, raw, value) =>
       ensureCollectionMap(view, collection).pipe(
         Effect.map((rows) => {
+          const id = Ids.rowId(raw);
           rows.set(id, { id, value });
           onPut?.(collection, id, value);
         })
       ),
-    del: (collection, id) =>
+    del: (collection, raw) =>
       ensureCollectionMap(view, collection).pipe(
         Effect.map((rows) => {
+          const id = Ids.rowId(raw);
           rows.delete(id);
           onDel?.(collection, id);
         })
       ),
-    get: (collection, id) =>
-      ensureCollectionMap(view, collection).pipe(Effect.map((rows) => rows.get(id)?.value)),
+    get: (collection, raw) =>
+      ensureCollectionMap(view, collection).pipe(
+        Effect.map((rows) => rows.get(Ids.rowId(raw))?.value)
+      ),
   });
 
   // Replay `mutations` (in journal order) onto `view`, mutating its

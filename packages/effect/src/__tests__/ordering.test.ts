@@ -15,6 +15,7 @@ import { describe, expect, it } from "@effect/vitest";
 import * as Predicate from "../Predicate.js";
 import * as Subset from "../Subset.js";
 import { defined } from "./defined.js";
+import { RowId } from "../Protocol.js";
 
 // ─── Reference ───────────────────────────────────────────────────────────────
 
@@ -154,12 +155,12 @@ describe("Predicate.compareText (ADR-0028 rule (c))", () => {
 
 describe("Subset.comparator (ADR-0028 section 4)", () => {
   const rows: ReadonlyArray<Subset.Row> = [
-    { id: "r1", value: { s: "b" } },
-    { id: "r2", value: { s: null } },
-    { id: "r3", value: { s: "a" } },
-    { id: "r4", value: {} },
-    { id: "r5", value: { s: "😀" } },
-    { id: "r6", value: { s: "￿" } },
+    { id: RowId.make("r1"), value: { s: "b" } },
+    { id: RowId.make("r2"), value: { s: null } },
+    { id: RowId.make("r3"), value: { s: "a" } },
+    { id: RowId.make("r4"), value: {} },
+    { id: RowId.make("r5"), value: { s: "😀" } },
+    { id: RowId.make("r6"), value: { s: "￿" } },
   ];
   const ids = (orderBy: ReadonlyArray<Subset.OrderBy>) =>
     rows.toSorted(Subset.comparator(orderBy)).map((row) => row.id);
@@ -171,9 +172,9 @@ describe("Subset.comparator (ADR-0028 section 4)", () => {
 
   it("orders booleans false < true and numbers numerically", () => {
     const mixed: ReadonlyArray<Subset.Row> = [
-      { id: "t", value: { b: true, n: 10 } },
-      { id: "f", value: { b: false, n: 9 } },
-      { id: "z", value: { n: null } },
+      { id: RowId.make("t"), value: { b: true, n: 10 } },
+      { id: RowId.make("f"), value: { b: false, n: 9 } },
+      { id: RowId.make("z"), value: { n: null } },
     ];
     expect(
       mixed.toSorted(Subset.comparator([{ field: "b", direction: "asc" }])).map((r) => r.id)
@@ -185,9 +186,9 @@ describe("Subset.comparator (ADR-0028 section 4)", () => {
 
   it("breaks ties by id in code-point order", () => {
     const tied: ReadonlyArray<Subset.Row> = [
-      { id: "😀", value: {} },
-      { id: "￿", value: {} },
-      { id: "a", value: {} },
+      { id: RowId.make("😀"), value: {} },
+      { id: RowId.make("￿"), value: {} },
+      { id: RowId.make("a"), value: {} },
     ];
     expect(tied.toSorted(Subset.comparator([])).map((r) => r.id)).toEqual(["a", "￿", "😀"]);
   });

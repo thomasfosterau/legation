@@ -48,8 +48,9 @@ const makeWorld = Effect.fnUntraced(function* () {
   return { sql, bind, handler: Context.get(context, Transport.ServerHandler) };
 });
 
-const makeClient = (handler: Transport.ServerHandler, clientId: string, clientGroupId: string) =>
+const makeClient = (handler: Transport.ServerHandler, clientId: string, group: string) =>
   Effect.gen(function* () {
+    const clientGroupId = Client.ClientGroupId.make(group);
     const store = yield* ClientStore.makeMemory;
     const transport = yield* Transport.makeInMemory(handler, clientGroupId);
     const engine = yield* ClientEngine.make({ clientId, clientGroupId, mutators }).pipe(

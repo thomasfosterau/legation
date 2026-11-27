@@ -75,6 +75,7 @@ import { Resource } from "@thomasfosterau/effect-jsonapi";
 import { Edge, type FilterPolicy, Node } from "@thomasfosterau/legation";
 import * as Arr from "effect/Array";
 import * as HashSet from "effect/HashSet";
+import * as P from "effect/Predicate";
 import * as R from "effect/Record";
 import * as Result from "effect/Result";
 import * as Option from "effect/Option";
@@ -354,7 +355,7 @@ const attributesOf = (
   edges: Record<string, Edge.Edge>
 ): Schema.Struct.Fields => {
   const keys = HashSet.fromIterable(
-    R.values(edges).flatMap((edge) => (edge.kind === "one" ? [edge.via] : []))
+    R.values(edges).flatMap((edge) => (P.isTagged(edge, "one") ? [edge.via] : []))
   );
   return R.filter(resource.fields.attributes.fields, (_, field) => !HashSet.has(keys, field));
 };
@@ -379,7 +380,7 @@ const declaredFilterable = (resource: Resource.Any, edges: Record<string, Edge.E
   const entries = R.toEntries(filterable);
   entries.forEach(([key, entry]) => {
     const edge = edges[key];
-    const viaRelationship = attributes[key] === undefined && edge?.kind === "one";
+    const viaRelationship = attributes[key] === undefined && P.isTagged(edge, "one");
     const field = viaRelationship ? edge.via : key;
     if (declared[field] !== undefined) {
       fail(

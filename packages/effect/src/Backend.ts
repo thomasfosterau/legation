@@ -69,15 +69,22 @@ import * as P from "effect/Predicate";
 import type * as Scope from "effect/Scope";
 import type { RowId, RowVersion } from "./Collection.js";
 import { BackendError, type MutationRejected } from "./Errors.js";
-import type { Mutation } from "./Protocol.js";
+import { ClientGroupId, type Mutation, MutationId } from "./Protocol.js";
 import * as RejectionMemory from "./RejectionMemory.js";
 import * as Subsets from "./Subset.js";
 import type { Subset } from "./Subset.js";
 import * as UnknownMutator from "./UnknownMutator.js";
 
+export {
+  /** A client group's id: a branded string (`ClientGroupId.make("…")`). */
+  ClientGroupId,
+  /** A mutation's per-client sequence number: a branded number (`MutationId.make(1)`). */
+  MutationId,
+};
+
 /** Request-scoped context for authorization decisions. */
 export interface SyncContext {
-  readonly clientGroupId: string;
+  readonly clientGroupId: ClientGroupId;
   /** App-defined identity (e.g. decoded token); never client-forgeable. */
   readonly identity?: unknown;
 }
@@ -126,7 +133,7 @@ export interface CountedEntries {
 /** A mutation the backend acknowledged but permanently rejected. */
 export interface RejectedMutation {
   readonly clientId: string;
-  readonly mutationId: number;
+  readonly mutationId: MutationId;
   readonly reason: string;
 }
 
@@ -135,7 +142,7 @@ export interface RejectedMutation {
  */
 export interface ApplyResult {
   /** Highest applied (or permanently rejected) mutation id per client. */
-  readonly lastMutationIds: Readonly<Record<string, number>>;
+  readonly lastMutationIds: Readonly<Record<string, MutationId>>;
   readonly hints: ReadonlyArray<ChangeHint>;
   /**
    * Mutations acknowledged but permanently rejected (`MutationRejected`): their
@@ -158,7 +165,7 @@ export interface Backend {
   /** Current per-client lastMutationIds for a group (used by pull). */
   readonly lastMutationIds: (
     context: SyncContext
-  ) => Effect.Effect<Readonly<Record<string, number>>, BackendError>;
+  ) => Effect.Effect<Readonly<Record<string, MutationId>>, BackendError>;
 
   /**
    * The permanent rejections the group's clients still remember, each with its
@@ -246,7 +253,8 @@ const wrongLength = (what: string, got: number, want: number) =>
  *
  * const program = Effect.gen(function* () {
  *   const backend = yield* MemoryBackend.make({});
- *   return yield* Backend.evaluateAll(backend, { clientGroupId: "g" }, [
+ *   const context = { clientGroupId: Backend.ClientGroupId.make("g") };
+ *   return yield* Backend.evaluateAll(backend, context, [
  *     Subset.make({ collection: "todos" }),
  *   ]);
  * });
@@ -520,7 +528,7 @@ const fromWatermark = <Staged>(
  * import * as Option from "effect/Option";
  *
  * // A ledger-only store: handlers stage nothing, commits bump an in-memory watermark.
- * const ledger = new Map<string, number>();
+ * const ledger = new Map<string, Backend.MutationId>();
  * const applyMutations = Backend.transaction({
  *   handlers: { "todo/noop": () => Effect.void },
  *   atomically: Backend.withoutTransaction,
@@ -545,8 +553,14 @@ const fromWatermark = <Staged>(
  * });
  *
  * const result = Effect.runSync(
- *   applyMutations({ clientGroupId: "g" }, [
- *     { clientId: "c", mutationId: 1, mutator: "todo/noop", args: {}, createdAt: 0 },
+ *   applyMutations({ clientGroupId: Backend.ClientGroupId.make("g") }, [
+ *     {
+ *       clientId: "c",
+ *       mutationId: Backend.MutationId.make(1),
+ *       mutator: "todo/noop",
+ *       args: {},
+ *       createdAt: 0,
+ *     },
  *   ])
  * );
  * console.log(result.lastMutationIds); // { c: 1 }
@@ -698,7 +712,7 @@ const acquisitions = new WeakMap<Backend, Effect.Effect<Backend, BackendError, S
  *       () => Effect.log("release")
  *     )
  *   );
- *   return yield* backend.lastMutationIds({ clientGroupId: "g" });
+ *   return yield* backend.lastMutationIds({ clientGroupId: Backend.ClientGroupId.make("g") });
  * });
  * ```
  */

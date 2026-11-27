@@ -23,6 +23,7 @@ import * as Socket from "effect/socket/Socket";
 import * as Authorization from "./Authorization.js";
 import { TransportError } from "./Errors.js";
 import {
+  ClientGroupId,
   Poke,
   PullRequest,
   PullResponse,
@@ -63,7 +64,7 @@ export const SyncRpcs = RpcGroup.make(
     error: SyncRpcError,
   }),
   Rpc.make("pokes", {
-    payload: { clientGroupId: Schema.String },
+    payload: { clientGroupId: ClientGroupId },
     success: Poke,
     stream: true,
   })
@@ -126,7 +127,7 @@ const asTransportError = (cause: { readonly message: string }): TransportError =
 
 /** Options for the RPC client transport. */
 export interface RpcTransportOptions {
-  readonly clientGroupId: string;
+  readonly clientGroupId: ClientGroupId;
 }
 
 /**
@@ -167,7 +168,7 @@ export const layer = (
 
 /** Options for {@link fromOrigin}. */
 export interface FromOriginOptions {
-  readonly clientGroupId: string;
+  readonly clientGroupId: ClientGroupId;
   /** The sync server's origin, e.g. `https://sync.example.com`. */
   readonly origin: string;
   /** The HTTP POST route (the fallback carrier). Default `/sync`. */

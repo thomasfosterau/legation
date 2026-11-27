@@ -29,27 +29,30 @@ import * as Subset from "../Subset.js";
 import * as SyncServer from "../SyncServer.js";
 import { ClientTransport, makeInMemory, type ServerHandler } from "../Transport.js";
 import { idOf } from "./shapes.js";
+import { ClientGroupId, MutationId, RowId } from "../Protocol.js";
 
 const groupId = "group-a";
 const clientId = "client-a";
 const allTodos = Subset.make({ collection: "todos" });
 
 const handlers = {
-  "todo/set": (args, writer) => Effect.asVoid(writer.put("todos", idOf(args), args)),
+  "todo/set": (args, writer) => Effect.asVoid(writer.put("todos", RowId.make(idOf(args)), args)),
   "todo/forbidden": (args, writer) =>
     writer
-      .put("todos", idOf(args), args)
+      .put("todos", RowId.make(idOf(args)), args)
       .pipe(Effect.andThen(Effect.fail(new MutationRejected({ reason: "permission revoked" })))),
 } satisfies Record<string, MemoryBackend.BackendHandler>;
 
 const mutators = Mutator.registry([
   {
     mutator: Mutator.make("todo/set", Schema.Unknown),
-    local: (args: { readonly id: string }, writer) => writer.put("todos", args.id, args),
+    local: (args: { readonly id: string }, writer) =>
+      writer.put("todos", RowId.make(args.id), args),
   },
   {
     mutator: Mutator.make("todo/forbidden", Schema.Unknown),
-    local: (args: { readonly id: string }, writer) => writer.put("todos", args.id, args),
+    local: (args: { readonly id: string }, writer) =>
+      writer.put("todos", RowId.make(args.id), args),
   },
 ]);
 
@@ -93,11 +96,11 @@ const makeLossyEngine = Effect.fn("makeLossyEngine")(function* () {
   const backend = yield* MemoryBackend.make(handlers);
   const handler = yield* serverFor(backend);
   const store = yield* ClientStoreModule.makeMemory;
-  const inner = yield* makeInMemory(handler, groupId);
+  const inner = yield* makeInMemory(handler, ClientGroupId.make(groupId));
   const lose = yield* Ref.make(false);
   const engine = yield* ClientEngineModule.make({
     clientId,
-    clientGroupId: groupId,
+    clientGroupId: ClientGroupId.make(groupId),
     mutators,
   }).pipe(
     Effect.provideService(ClientStore, store),
@@ -122,7 +125,9 @@ describe("ClientEngine settles a pull-carried rejection", () => {
       expect(Exit.isFailure(yield* Effect.exit(engine.push))).toBe(true);
       expect(yield* store.pendingMutations).toHaveLength(1);
       expect(yield* stateOf(engine, 1)).toMatchObject({ phase: "pending" });
-      expect(yield* backend.lastMutationIds({ clientGroupId: groupId })).toEqual({ [clientId]: 1 });
+      expect(
+        yield* backend.lastMutationIds({ clientGroupId: ClientGroupId.make(groupId) })
+      ).toEqual({ [clientId]: 1 });
 
       // The pull covers id 1, and carries its rejection.
       yield* Ref.set(lose, false);
@@ -165,7 +170,7 @@ describe("ClientEngine settles a pull-carried rejection", () => {
 });
 
 const push = (handler: ServerHandler, group: string, mutations: PushRequest["mutations"]) =>
-  handler.handlePush({ clientGroupId: group, mutations });
+  handler.handlePush({ clientGroupId: ClientGroupId.make(group), mutations });
 
 describe("SyncServer pull carries the rejections its watermark covers", () => {
   it.effect("lists each rejection the watermark covers, with its reason", () =>
@@ -173,16 +178,30 @@ describe("SyncServer pull carries the rejections its watermark covers", () => {
       const backend = yield* MemoryBackend.make(handlers);
       const handler = yield* serverFor(backend);
       yield* push(handler, groupId, [
-        { clientId, mutationId: 1, mutator: "todo/forbidden", args: { id: "x" }, createdAt: 0 },
-        { clientId, mutationId: 2, mutator: "todo/set", args: { id: "y" }, createdAt: 0 },
+        {
+          clientId,
+          mutationId: MutationId.make(1),
+          mutator: "todo/forbidden",
+          args: { id: "x" },
+          createdAt: 0,
+        },
+        {
+          clientId,
+          mutationId: MutationId.make(2),
+          mutator: "todo/set",
+          args: { id: "y" },
+          createdAt: 0,
+        },
       ]);
 
       const pulled: PullResponse = yield* handler.handlePull({
-        clientGroupId: groupId,
+        clientGroupId: ClientGroupId.make(groupId),
         subscriptions: [allTodos],
       });
       expect(pulled.lastMutationIds).toEqual({ [clientId]: 2 });
-      expect(pulled.rejected).toEqual([{ clientId, mutationId: 1, reason: "permission revoked" }]);
+      expect(pulled.rejected).toEqual([
+        { clientId, mutationId: MutationId.make(1), reason: "permission revoked" },
+      ]);
     })
   );
 
@@ -192,15 +211,22 @@ describe("SyncServer pull carries the rejections its watermark covers", () => {
       // The group remembers a rejection for id 5, which this pull's watermark (id 1) does not cover yet.
       const ahead: Backend = {
         ...backend,
-        rejections: () => Effect.succeed([{ clientId, mutationId: 5, reason: "not yet covered" }]),
+        rejections: () =>
+          Effect.succeed([{ clientId, mutationId: MutationId.make(5), reason: "not yet covered" }]),
       };
       const handler = yield* serverFor(ahead);
       yield* push(handler, groupId, [
-        { clientId, mutationId: 1, mutator: "todo/set", args: { id: "y" }, createdAt: 0 },
+        {
+          clientId,
+          mutationId: MutationId.make(1),
+          mutator: "todo/set",
+          args: { id: "y" },
+          createdAt: 0,
+        },
       ]);
 
       const pulled = yield* handler.handlePull({
-        clientGroupId: groupId,
+        clientGroupId: ClientGroupId.make(groupId),
         subscriptions: [allTodos],
       });
       expect(pulled.lastMutationIds).toEqual({ [clientId]: 1 });
@@ -213,11 +239,17 @@ describe("SyncServer pull carries the rejections its watermark covers", () => {
       const backend = yield* MemoryBackend.make(handlers);
       const handler = yield* serverFor(backend);
       yield* push(handler, groupId, [
-        { clientId, mutationId: 1, mutator: "todo/set", args: { id: "y" }, createdAt: 0 },
+        {
+          clientId,
+          mutationId: MutationId.make(1),
+          mutator: "todo/set",
+          args: { id: "y" },
+          createdAt: 0,
+        },
       ]);
 
       const pulled = yield* handler.handlePull({
-        clientGroupId: groupId,
+        clientGroupId: ClientGroupId.make(groupId),
         subscriptions: [allTodos],
       });
       expect(pulled.rejected).toBeUndefined();
@@ -231,7 +263,7 @@ describe("SyncServer pull carries the rejections its watermark covers", () => {
       yield* push(handler, "group-b", [
         {
           clientId: "client-b",
-          mutationId: 1,
+          mutationId: MutationId.make(1),
           mutator: "todo/forbidden",
           args: { id: "x" },
           createdAt: 0,
@@ -239,7 +271,7 @@ describe("SyncServer pull carries the rejections its watermark covers", () => {
       ]);
 
       const pulled = yield* handler.handlePull({
-        clientGroupId: groupId,
+        clientGroupId: ClientGroupId.make(groupId),
         subscriptions: [allTodos],
       });
       expect(pulled.rejected).toBeUndefined();
@@ -251,26 +283,40 @@ describe("SyncServer pull carries the rejections its watermark covers", () => {
       const backend = yield* MemoryBackend.make(handlers);
       const handler = yield* serverFor(backend);
       yield* push(handler, groupId, [
-        { clientId, mutationId: 1, mutator: "todo/forbidden", args: { id: "x" }, createdAt: 0 },
+        {
+          clientId,
+          mutationId: MutationId.make(1),
+          mutator: "todo/forbidden",
+          args: { id: "x" },
+          createdAt: 0,
+        },
       ]);
 
       const first = yield* handler.handlePull({
-        clientGroupId: groupId,
+        clientGroupId: ClientGroupId.make(groupId),
         subscriptions: [allTodos],
       });
       const again = yield* handler.handlePull({
-        clientGroupId: groupId,
+        clientGroupId: ClientGroupId.make(groupId),
         cookie: first.cookie,
         subscriptions: [allTodos],
       });
-      expect(again.rejected).toEqual([{ clientId, mutationId: 1, reason: "permission revoked" }]);
+      expect(again.rejected).toEqual([
+        { clientId, mutationId: MutationId.make(1), reason: "permission revoked" },
+      ]);
 
       // A push whose lowest id is 2 proves the client has seen the outcome of id 1.
       yield* push(handler, groupId, [
-        { clientId, mutationId: 2, mutator: "todo/set", args: { id: "y" }, createdAt: 0 },
+        {
+          clientId,
+          mutationId: MutationId.make(2),
+          mutator: "todo/set",
+          args: { id: "y" },
+          createdAt: 0,
+        },
       ]);
       const later = yield* handler.handlePull({
-        clientGroupId: groupId,
+        clientGroupId: ClientGroupId.make(groupId),
         subscriptions: [allTodos],
       });
       expect(later.rejected).toBeUndefined();
@@ -288,10 +334,10 @@ describe("a pull settles only its own client's rejections in a group", () => {
 
       // Client B's rejected push: its own response reports the rejection.
       const storeB = yield* ClientStoreModule.makeMemory;
-      const transportB = yield* makeInMemory(handler, groupId);
+      const transportB = yield* makeInMemory(handler, ClientGroupId.make(groupId));
       const engineB = yield* ClientEngineModule.make({
         clientId: otherClient,
-        clientGroupId: groupId,
+        clientGroupId: ClientGroupId.make(groupId),
         mutators,
       }).pipe(
         Effect.provideService(ClientStore, storeB),
@@ -309,10 +355,10 @@ describe("a pull settles only its own client's rejections in a group", () => {
       // Client A (id 1 is its own, applied) loses the push response, so it stays pending.
       const storeA = yield* ClientStoreModule.makeMemory;
       const lose = yield* Ref.make(false);
-      const transportA = yield* makeInMemory(handler, groupId);
+      const transportA = yield* makeInMemory(handler, ClientGroupId.make(groupId));
       const engineA = yield* ClientEngineModule.make({
         clientId,
-        clientGroupId: groupId,
+        clientGroupId: ClientGroupId.make(groupId),
         mutators,
       }).pipe(
         Effect.provideService(ClientStore, storeA),
@@ -330,11 +376,13 @@ describe("a pull settles only its own client's rejections in a group", () => {
 
       // The pull from A lists B's rejection, since the group's watermark covers it.
       const pulled = yield* handler.handlePull({
-        clientGroupId: groupId,
+        clientGroupId: ClientGroupId.make(groupId),
         subscriptions: [allTodos],
       });
       expect(pulled.lastMutationIds).toEqual({ [clientId]: 1, [otherClient]: 1 });
-      expect(pulled.rejected).toEqual([{ clientId: otherClient, mutationId: 1, reason }]);
+      expect(pulled.rejected).toEqual([
+        { clientId: otherClient, mutationId: MutationId.make(1), reason },
+      ]);
 
       // A settles its own id 1 as applied, and B's entry leaves A's states alone.
       yield* Ref.set(lose, false);

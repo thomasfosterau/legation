@@ -24,9 +24,12 @@ import * as P from "effect/Predicate";
 import * as R from "effect/Record";
 import * as Result from "effect/Result";
 import * as Schema from "effect/Schema";
-import { CrudMutation } from "@thomasfosterau/legation";
+import { Collection, CrudMutation } from "@thomasfosterau/legation";
 import type { Node } from "@thomasfosterau/legation";
+import { InvalidWriteArgs } from "./errors.js";
 import type { JsonApiBackendConfig, Write } from "./JsonApiBackend.js";
+
+export { InvalidWriteArgs };
 
 // ─── Prefer ──────────────────────────────────────────────────────────────────
 
@@ -107,7 +110,7 @@ const linkageOf = (
 ): Effect.Effect<Option.Option<string>, Refusal> => {
   const pointer = `/data/relationships/${name}`;
   const edge = node.edges[name];
-  if (edge === undefined || edge.kind !== "one") {
+  if (edge === undefined || !P.isTagged(edge, "one")) {
     return refuse({
       status: 422,
       code: "unsupported_relationship",
@@ -162,7 +165,7 @@ const clientIdRequired: Refusal = {
 const idOf = (
   target: Exclude<Target, { readonly operation: "delete" }>,
   data: Schema.JsonObject
-): Effect.Effect<string, Refusal> => {
+): Effect.Effect<Collection.RowId, Refusal> => {
   if (data["type"] !== target.type) {
     return refuse({
       status: 409,
@@ -177,11 +180,13 @@ const idOf = (
     return invalid('"data.id" must be a string', "/data/id");
   }
   if (target.operation === "create") {
-    return id === undefined || id === "" ? refuse(clientIdRequired) : Effect.succeed(id);
+    return id === undefined || id === ""
+      ? refuse(clientIdRequired)
+      : Effect.succeed(Collection.RowId.make(id));
   }
   if (id === undefined) return invalid("an update's data needs the id the path names", "/data/id");
   return id === target.id
-    ? Effect.succeed(id)
+    ? Effect.succeed(Collection.RowId.make(id))
     : refuse({
         status: 409,
         code: "id_mismatch",
@@ -215,7 +220,11 @@ export const decodeWrite = (
   body: Effect.Effect<string, unknown>
 ): Effect.Effect<Write, Refusal> => {
   if (target.operation === "delete") {
-    return Effect.succeed({ operation: "delete", type: target.type, id: target.id });
+    return Effect.succeed({
+      operation: "delete",
+      type: target.type,
+      id: Collection.RowId.make(target.id),
+    });
   }
   return Effect.gen(function* () {
     const data = yield* dataOf(body);
@@ -279,7 +288,7 @@ export const graphIntentOf =
     }
     const linked = Arr.map(R.toEntries(write.relationships ?? {}), ([name, related]) => {
       const edge = node.edges[name];
-      return edge?.kind === "one" ? Option.some([edge.via, related] as const) : Option.none();
+      return P.isTagged(edge, "one") ? Option.some([edge.via, related] as const) : Option.none();
     });
     return Option.map(Option.all(linked), (vias) => ({
       mutator,
@@ -293,8 +302,18 @@ export const graphIntentOf =
 
 // ─── The inverse mapping ─────────────────────────────────────────────────────
 
-const decodeWriteArgs = Schema.decodeUnknownSync(CrudMutation.WriteArgs);
-const decodeDeleteArgs = Schema.decodeUnknownSync(CrudMutation.DeleteArgs);
+/** Decode a derived mutation's args, refusing a shape that is not its own. */
+const decodeArgs = <S extends Schema.ConstraintDecoder<unknown>>(schema: S, mutator: string) =>
+  flow(
+    Schema.decodeUnknownResult(schema),
+    Result.mapError(
+      (cause) =>
+        new InvalidWriteArgs({
+          message: `"${mutator}" args do not decode: ${cause.message}`,
+          cause,
+        })
+    )
+  );
 
 /**
  * One graph-row write as a `JsonApiBackend` write: each `one` edge's `via` key
@@ -308,7 +327,7 @@ const writeOf = (
   args: CrudMutation.WriteArgs
 ): Write => {
   const oneEdges = R.toEntries(node.edges).flatMap(([name, edge]) =>
-    edge.kind === "one" ? [[name, edge] as const] : []
+    P.isTagged(edge, "one") ? [[name, edge] as const] : []
   );
   const vias = HashSet.fromIterable(oneEdges.map(([, edge]) => edge.via));
   const relationships = R.fromEntries(
@@ -346,22 +365,14 @@ const writeOf = (
  */
 const sameType =
   (type: string, mutator: string) =>
-  <A extends { readonly type: string }>(args: A): A => {
-    if (args.type !== type) {
-      throw new InvalidWriteArgs({
-        message: `"${mutator}" writes "${type}", but its args name "${args.type}"`,
-      });
-    }
-    return args;
-  };
-
-/** Graph-derived CRUD args that do not fit the mutation they were journaled under. */
-export class InvalidWriteArgs extends Schema.TaggedError<
-  InvalidWriteArgs,
-  { readonly brand: unique symbol }
->()("InvalidWriteArgs", {
-  message: Schema.String,
-}) {}
+  <A extends { readonly type: string }>(args: A): Result.Result<A, InvalidWriteArgs> =>
+    args.type === type
+      ? Result.succeed(args)
+      : Result.fail(
+          new InvalidWriteArgs({
+            message: `"${mutator}" writes "${type}", but its args name "${args.type}"`,
+          })
+        );
 
 /**
  * The inverse of {@link graphIntentOf} (ADR-0030 §5): for every graph-derived
@@ -371,7 +382,7 @@ export class InvalidWriteArgs extends Schema.TaggedError<
  * `{type}/update` and `{type}/delete` reach the server as `POST`, `PATCH` and
  * `DELETE` (or atomic operations), with each `one` edge's `via` key rebuilt as
  * the relationship's linkage. The write's `type` is always the mutation's own:
- * args naming another type are refused ({@link InvalidWriteArgs}).
+ * args naming another type are an {@link InvalidWriteArgs} failure.
  */
 export const writesOf = (
   nodes: Node.NodeRegistry,
@@ -383,18 +394,27 @@ export const writesOf = (
       if (node === undefined) return [];
       const name = entry.mutator.name;
       const operation = entry.operation;
+      const ownType = sameType(entry.type, name);
+      if (operation === "delete") {
+        return [
+          [
+            name,
+            flow(
+              decodeArgs(CrudMutation.DeleteArgs, name),
+              Result.flatMap(ownType),
+              Result.map((decoded): Write => ({ operation, type: entry.type, id: decoded.id }))
+            ),
+          ] as const,
+        ];
+      }
       return [
         [
           name,
-          operation === "delete"
-            ? flow(decodeDeleteArgs, sameType(entry.type, name), (args): Write => ({
-                operation,
-                type: entry.type,
-                id: args.id,
-              }))
-            : flow(decodeWriteArgs, sameType(entry.type, name), (args) =>
-                writeOf(node, operation, args)
-              ),
+          flow(
+            decodeArgs(CrudMutation.WriteArgs, name),
+            Result.flatMap(ownType),
+            Result.map((decoded) => writeOf(node, operation, decoded))
+          ),
         ] as const,
       ];
     })

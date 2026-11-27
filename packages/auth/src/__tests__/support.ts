@@ -6,6 +6,7 @@ import * as R from "effect/Record";
 import * as Result from "effect/Result";
 import * as Schema from "effect/Schema";
 import { Principal } from "@thomasfosterau/legation-auth";
+import { Protocol } from "@thomasfosterau/legation/internal";
 
 /** A deliberate crash, for the tests that make a store, a compile or a header lookup die. */
 export class Crash extends Schema.TaggedError<Crash, { readonly brand: unique symbol }>()("Crash", {
@@ -22,7 +23,7 @@ export const failureOf = <A, E>(result: Result.Result<A, E>): E | undefined =>
 
 /** A resolved identity as the principal it is: anything else reads as anonymous. */
 export const asPrincipal = (identity: unknown): Principal.Principal =>
-  Principal.fromContext({ clientGroupId: "test", identity });
+  Principal.fromContext({ clientGroupId: Protocol.ClientGroupId.make("test"), identity });
 
 /** Whether `needle` occurs in any string anywhere inside `value` (records and arrays, deeply). */
 export const mentions = (value: unknown, needle: string): boolean =>

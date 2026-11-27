@@ -37,8 +37,10 @@
 import * as Defined from "./Defined.js";
 import * as Arr from "effect/Array";
 import * as Option from "effect/Option";
+import * as P from "effect/Predicate";
 import * as Hash from "./Hash.js";
 import * as LiveView from "./LiveView.js";
+import * as Ids from "./internal/Ids.js";
 import * as RowDispatch from "./internal/RowDispatch.js";
 import * as Predicate from "./Predicate.js";
 import type { RowChange } from "./RowChange.js";
@@ -332,7 +334,7 @@ export const groupByFromScratch = <A>(
 /**
  * How a joined row's `C` value is assembled from a left `L` value and its
  * matching right `R` value: `Option.some(right)` for a match, `Option.none()`
- * for an unmatched left under `kind: "left"`.
+ * for an unmatched left under `_tag: "left"`.
  */
 export type JoinCombine<L, R, C> = (left: L, right: Option.Option<R>) => C;
 
@@ -357,7 +359,7 @@ export interface JoinOptions<L, R, K, C> {
   /** Extract the right row's join key. */
   readonly rightKey: (value: R) => K;
   /** `inner` drops unmatched left rows; `left` keeps them with an `Option.none()` right. */
-  readonly kind: "inner" | "left";
+  readonly _tag: "inner" | "left";
   /** Assemble the joined value; defaults to {@link Joined} (`{ left, right }`). */
   readonly combine?: JoinCombine<L, R, C>;
 }
@@ -409,6 +411,7 @@ export function makeJoin<L, R, K, C>(
   options: JoinOptions<L, R, K, C>
 ): JoinOperator<L, R, C | Joined<L, R>> {
   const combine: JoinCombine<L, R, C | Joined<L, R>> = options.combine ?? defaultCombine;
+  const isLeftJoin = P.isTagged(options, "left");
   const leftById = new Map<string, Row<L>>();
   const rightById = new Map<string, Row<R>>();
   // A bucket holds each right value already wrapped, so a reconcile passes it
@@ -428,7 +431,7 @@ export function makeJoin<L, R, K, C>(
         const id = `${leftId}${NUL}${rightId}`;
         out.set(id, { id, value: combine(left.value, right) });
       }
-    } else if (options.kind === "left") {
+    } else if (isLeftJoin) {
       const id = `${leftId}${NUL}`;
       out.set(id, { id, value: combine(left.value, Option.none()) });
     }
@@ -559,6 +562,7 @@ export function joinFromScratch<L, R, K, C>(
   options: JoinOptions<L, R, K, C>
 ): Map<string, Row<C | Joined<L, R>>> {
   const combine: JoinCombine<L, R, C | Joined<L, R>> = options.combine ?? defaultCombine;
+  const isLeftJoin = P.isTagged(options, "left");
   const rightByKey = new Map<string, Array<Row<R>>>();
   for (const row of right) {
     const key = joinKey(options.rightKey(row.value));
@@ -576,7 +580,7 @@ export function joinFromScratch<L, R, K, C>(
         const id = `${leftRow.id}${NUL}${rightRow.id}`;
         result.set(id, { id, value: combine(leftRow.value, Option.some(rightRow.value)) });
       }
-    } else if (options.kind === "left") {
+    } else if (isLeftJoin) {
       const id = `${leftRow.id}${NUL}`;
       result.set(id, { id, value: combine(leftRow.value, Option.none()) });
     }
@@ -614,8 +618,11 @@ export const makeOrderedWindow = <A>(
   let view = LiveView.make<A>(subset, []);
   return {
     step: (delta) => {
-      for (const row of delta.removed) view = LiveView.del(view, row.id);
-      for (const row of delta.added) view = LiveView.put(view, { id: row.id, value: row.value });
+      // A derived row's id keys the window like a row id does.
+      for (const row of delta.removed) view = LiveView.del(view, Ids.rowId(row.id));
+      for (const row of delta.added) {
+        view = LiveView.put(view, { id: Ids.rowId(row.id), value: row.value });
+      }
       return LiveView.result(view).map((row) => ({ id: row.id, value: row.value }));
     },
   };
@@ -627,4 +634,7 @@ export const orderedWindowFromScratch = <A>(
   orderBy: ReadonlyArray<Subset.OrderBy>,
   limit?: number
 ): ReadonlyArray<Row<A>> =>
-  Subset.apply(rows, windowSubset(orderBy, limit)).map((row) => ({ id: row.id, value: row.value }));
+  Subset.apply(
+    rows.map((row) => ({ id: Ids.rowId(row.id), value: row.value })),
+    windowSubset(orderBy, limit)
+  ).map((row) => ({ id: row.id, value: row.value }));

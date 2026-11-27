@@ -19,13 +19,16 @@ import {
   InvalidationBus,
   Subset,
   SyncServer,
+  Protocol,
 } from "@thomasfosterau/legation/internal";
 import { describe, expect, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
+import * as P from "effect/Predicate";
 import * as Schema from "effect/Schema";
 import { IDBKeyRange, indexedDB } from "fake-indexeddb";
 import * as IndexedDbClientStore from "../IndexedDbClientStore.js";
+import { awaitPromise } from "./await-promise.js";
 import { withLayer } from "./with-layer.js";
 
 const decodeIdentified = Schema.decodeUnknownSync(Schema.Struct({ id: Schema.String }));
@@ -55,13 +58,76 @@ const namespacedLayer = (database: string, identity: Identity.Fingerprint) =>
 const ALICE: Identity.Fingerprint = "sha256:alice";
 const BOB: Identity.Fingerprint = "sha256:bob";
 
+/** The fake `indexedDB` with its `open` replaced: every other member passes through. */
+const withOpen = (open: (name: string) => IDBOpenDBRequest): IDBFactory =>
+  new Proxy(indexedDB, {
+    get: (target, prop) => {
+      if (prop === "open") return open;
+      const value = P.hasProperty(target, prop) ? target[prop] : undefined;
+      return P.isFunction(value) ? value.bind(target) : value;
+    },
+  });
+
+/** An `open` the browser refuses outright, as it does when storage is unavailable. */
+const refusedOpen = (refusal: DOMException) => (): IDBOpenDBRequest => {
+  throw refusal;
+};
+
+/** An open-failing `IndexedDb` service: the store's layer is built over it. */
+const indexedDbOpening = (open: (name: string) => IDBOpenDBRequest) =>
+  Layer.succeed(IndexedDb.IndexedDb)(IndexedDb.make({ indexedDB: withOpen(open), IDBKeyRange }));
+
 describe("IndexedDbClientStore", () => {
+  it.effect("a database the browser refuses to open fails the layer with a StoreError", () =>
+    Effect.gen(function* () {
+      const refusal = new DOMException("storage is unavailable", "QuotaExceededError");
+      const error = yield* Layer.build(
+        IndexedDbClientStore.layer({ database: "refused" }).pipe(
+          Layer.provide(indexedDbOpening(refusedOpen(refusal)))
+        )
+      ).pipe(Effect.scoped, Effect.flip);
+      expect(error._tag).toBe("StoreError");
+      expect(error.cause).toBe(refusal);
+    })
+  );
+
+  it.effect("an open request that errors fails the layer with a StoreError", () =>
+    Effect.gen(function* () {
+      // fake-indexeddb fails an open below the database's version with an `error` event, so stand
+      // in an open that asks for a lower version than the database has.
+      const database = `errored-${crypto.randomUUID()}`;
+      yield* awaitPromise(
+        () =>
+          new Promise<void>((resolve) => {
+            const request = indexedDB.open(database, 2);
+            request.addEventListener("success", () => {
+              request.result.close();
+              resolve();
+            });
+          })
+      );
+      const error = yield* Layer.build(
+        IndexedDbClientStore.layer({ database }).pipe(
+          Layer.provide(indexedDbOpening((name) => indexedDB.open(name, 1)))
+        )
+      ).pipe(Effect.scoped, Effect.flip);
+      expect(error).toMatchObject({
+        _tag: "StoreError",
+        message: "Failed to open the IndexedDB store",
+      });
+    })
+  );
+
   it.effect("persists rows, journal, and cookie across store rebuilds", () =>
     Effect.gen(function* () {
       // First "service worker lifetime": write state.
       yield* Effect.gen(function* () {
         const store = yield* ClientStore.ClientStore;
-        yield* store.putRow("todos", { id: "1", version: 3, value: { title: "indexed" } });
+        yield* store.putRow("todos", {
+          id: Protocol.RowId.make("1"),
+          version: 3,
+          value: { title: "indexed" },
+        });
         yield* store.appendMutation({
           clientId: "c1",
           mutationId: yield* store.nextMutationId("c1"),
@@ -75,7 +141,7 @@ describe("IndexedDbClientStore", () => {
       // Second lifetime over the same database: everything rehydrates.
       yield* Effect.gen(function* () {
         const store = yield* ClientStore.ClientStore;
-        const row = yield* store.getRow("todos", "1");
+        const row = yield* store.getRow("todos", Protocol.RowId.make("1"));
         expect(row?.version).toBe(3);
         expect(row?.value).toEqual({ title: "indexed" });
         expect(yield* store.pendingMutations).toHaveLength(1);
@@ -89,7 +155,7 @@ describe("IndexedDbClientStore", () => {
     Effect.gen(function* () {
       yield* Effect.gen(function* () {
         const store = yield* ClientStore.ClientStore;
-        yield* store.putRow("todos", { id: "1", version: 1, value: {} });
+        yield* store.putRow("todos", { id: Protocol.RowId.make("1"), version: 1, value: {} });
       }).pipe(withLayer(storeLayer("db-a")));
 
       yield* Effect.gen(function* () {
@@ -106,7 +172,11 @@ describe("IndexedDbClientStore", () => {
     Effect.gen(function* () {
       yield* Effect.gen(function* () {
         const store = yield* ClientStore.ClientStore;
-        yield* store.putRow("todos", { id: "1", version: 1, value: { title: "alice's" } });
+        yield* store.putRow("todos", {
+          id: Protocol.RowId.make("1"),
+          version: 1,
+          value: { title: "alice's" },
+        });
         yield* store.setCookie("cvr-alice");
         yield* store.appendMutation({
           clientId: "c1",
@@ -132,13 +202,21 @@ describe("IndexedDbClientStore", () => {
     Effect.gen(function* () {
       yield* Effect.gen(function* () {
         const store = yield* ClientStore.ClientStore;
-        yield* store.putRow("todos", { id: "1", version: 1, value: { title: "alice's" } });
+        yield* store.putRow("todos", {
+          id: Protocol.RowId.make("1"),
+          version: 1,
+          value: { title: "alice's" },
+        });
       }).pipe(withLayer(namespacedLayer("two-users", ALICE)));
 
       yield* Effect.gen(function* () {
         const store = yield* ClientStore.ClientStore;
         expect(yield* store.listRows("todos")).toEqual([]);
-        yield* store.putRow("todos", { id: "2", version: 1, value: { title: "bob's" } });
+        yield* store.putRow("todos", {
+          id: Protocol.RowId.make("2"),
+          version: 1,
+          value: { title: "bob's" },
+        });
       }).pipe(withLayer(namespacedLayer("two-users", BOB)));
 
       // A switches back to a replica still warm — nothing was reset, because
@@ -155,14 +233,18 @@ describe("IndexedDbClientStore", () => {
 // A counter increment, as a mutator body and as the backend handler.
 const incrementCounter = <E>(
   writer: {
-    readonly get: (collection: string, id: string) => Effect.Effect<unknown, E>;
-    readonly put: (collection: string, id: string, value: unknown) => Effect.Effect<void, E>;
+    readonly get: (collection: string, id: Protocol.RowId) => Effect.Effect<unknown, E>;
+    readonly put: (
+      collection: string,
+      id: Protocol.RowId,
+      value: unknown
+    ) => Effect.Effect<void, E>;
   },
   id: string
 ): Effect.Effect<void, E> =>
   Effect.gen(function* () {
-    const current = decodeCounter(yield* writer.get("counters", id));
-    yield* writer.put("counters", id, { id, n: (current?.n ?? 0) + 1 });
+    const current = decodeCounter(yield* writer.get("counters", Protocol.RowId.make(id)));
+    yield* writer.put("counters", Protocol.RowId.make(id), { id, n: (current?.n ?? 0) + 1 });
   });
 
 // The acknowledged-but-unpulled tail is durable in IndexedDB, so a
@@ -193,10 +275,13 @@ describe("IndexedDbClientStore: the unpulled tail", () => {
   // A counter engine over `handler`, reading and writing the ClientStore in context.
   const makeEngine = (handler: Transport.ServerHandler) =>
     Effect.gen(function* () {
-      const transport = yield* Transport.makeInMemory(handler, "group-a");
+      const transport = yield* Transport.makeInMemory(
+        handler,
+        Protocol.ClientGroupId.make("group-a")
+      );
       return yield* ClientEngine.make({
         clientId: "client-a",
-        clientGroupId: "group-a",
+        clientGroupId: Protocol.ClientGroupId.make("group-a"),
         mutators: counterMutators,
       }).pipe(Effect.provideService(Transport.ClientTransport, transport));
     });

@@ -15,6 +15,7 @@ import * as TestClock from "effect/testing/TestClock";
 import { Node } from "../index.js";
 import { FanoutBroker, FanoutBus } from "../internal.js";
 import { TestFailure } from "./test-failure.js";
+import { RowId } from "../Protocol.js";
 
 const Product = Node.make("products", { attributes: { name: Schema.String } });
 const nodes = Node.registry([Product]);
@@ -40,7 +41,9 @@ describe("FanoutBus broker timeouts", () => {
         });
         // The region as the sync server holds it while it publishes.
         const publishing = yield* Effect.forkScoped(
-          Effect.uninterruptible(bus.publish([{ collection: "products", ids: ["p-1"] }])),
+          Effect.uninterruptible(
+            bus.publish([{ collection: "products", ids: [RowId.make("p-1")] }])
+          ),
           { startImmediately: true }
         );
         yield* TestClock.adjust("2 seconds");
@@ -69,7 +72,7 @@ describe("FanoutBus broker timeouts", () => {
       yield* Effect.forkScoped(
         Effect.uninterruptible(
           bus
-            .publish([{ collection: "products", ids: ["p-1"] }])
+            .publish([{ collection: "products", ids: [RowId.make("p-1")] }])
             .pipe(Effect.andThen(Ref.set(returned, true)))
         ),
         { startImmediately: true }

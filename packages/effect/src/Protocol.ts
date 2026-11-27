@@ -15,6 +15,46 @@ import * as Schema from "effect/Schema";
 import { ProtocolError } from "./Errors.js";
 import { Subset } from "./Subset.js";
 
+// ─── Ids ─────────────────────────────────────────────────────────────────────
+
+/**
+ * A mutation's per-client sequence number: a number on the wire, branded so
+ * it cannot be confused with a version, a count or a cookie. Build one from a
+ * literal with `MutationId.make(1)`.
+ */
+export const MutationId = Schema.Number.pipe(Schema.brand("legation/MutationId"));
+
+/** The type {@link MutationId} decodes to. */
+export type MutationId = typeof MutationId.Type;
+
+/**
+ * A client group's id: one replica shared by a browser profile's tabs, and
+ * the unit the server keys its CVRs and mutation ledgers by. A string on the
+ * wire, branded so it cannot be confused with a client id; build one with
+ * `ClientGroupId.make("…")`.
+ */
+export const ClientGroupId = Schema.String.pipe(Schema.brand("legation/ClientGroupId"));
+
+/** The type {@link ClientGroupId} decodes to. */
+export type ClientGroupId = typeof ClientGroupId.Type;
+
+/**
+ * The id of one row within a collection: a string on the wire and in CVR
+ * bookkeeping, branded so it cannot be confused with a collection name or a
+ * cookie. A node's branded id (`Node.Id`) is a `RowId` too; build one from a
+ * literal with `RowId.make("…")`.
+ */
+export const RowId = Schema.String.pipe(Schema.brand("legation/RowId"));
+
+/** The type {@link RowId} decodes to. */
+export type RowId = typeof RowId.Type;
+
+/** The highest applied {@link MutationId} per client id. */
+export const LastMutationIds = Schema.Record(Schema.String, MutationId);
+
+/** The type {@link LastMutationIds} decodes to. */
+export type LastMutationIds = typeof LastMutationIds.Type;
+
 // ─── Mutations (upstream) ────────────────────────────────────────────────────
 
 /**
@@ -24,7 +64,7 @@ import { Subset } from "./Subset.js";
  */
 export const Mutation = Schema.Struct({
   clientId: Schema.String,
-  mutationId: Schema.Number,
+  mutationId: MutationId,
   mutator: Schema.String,
   args: Schema.Unknown,
   /** Client wall-clock at creation; informational only. */
@@ -36,7 +76,7 @@ export type Mutation = typeof Mutation.Type;
 
 /** Push request: pending mutations in journal order. */
 export const PushRequest = Schema.Struct({
-  clientGroupId: Schema.String,
+  clientGroupId: ClientGroupId,
   mutations: Schema.Array(Mutation),
   /**
    * The client build's schema version. Additive and optional: an old
@@ -56,7 +96,7 @@ export type PushRequest = typeof PushRequest.Type;
  */
 export const RejectedMutation = Schema.Struct({
   clientId: Schema.String,
-  mutationId: Schema.Number,
+  mutationId: MutationId,
   reason: Schema.String,
 });
 
@@ -69,7 +109,7 @@ export type RejectedMutation = typeof RejectedMutation.Type;
  * via the next pull's patch, which is when the optimistic overlay drops.
  */
 export const PushResponse = Schema.Struct({
-  lastMutationIds: Schema.Record(Schema.String, Schema.Number),
+  lastMutationIds: LastMutationIds,
   /**
    * Mutations the backend permanently rejected: their `lastMutationId` is
    * bumped (so they are acknowledged and skipped, never poisoning the queue)
@@ -92,11 +132,11 @@ export const PatchOp = Schema.Union([
   Schema.Struct({
     _tag: Schema.tag("Put"),
     collection: Schema.String,
-    id: Schema.String,
+    id: RowId,
     version: Schema.Union([Schema.String, Schema.Number]),
     value: Schema.Unknown,
   }),
-  Schema.Struct({ _tag: Schema.tag("Del"), collection: Schema.String, id: Schema.String }),
+  Schema.Struct({ _tag: Schema.tag("Del"), collection: Schema.String, id: RowId }),
   Schema.Struct({ _tag: Schema.tag("Clear") }),
 ]);
 
@@ -114,7 +154,7 @@ export type NamedSubscription = typeof NamedSubscription.Type;
 
 /** Pull request: what the client has (cookie) and wants (subsets). */
 export const PullRequest = Schema.Struct({
-  clientGroupId: Schema.String,
+  clientGroupId: ClientGroupId,
   /** Cookie from the previous pull; absent on first sync. */
   cookie: Schema.optional(Schema.String),
   subscriptions: Schema.Array(Subset),
@@ -142,7 +182,7 @@ export type PullRequest = typeof PullRequest.Type;
 export const PullResponse = Schema.Struct({
   cookie: Schema.String,
   patch: Schema.Array(PatchOp),
-  lastMutationIds: Schema.Record(Schema.String, Schema.Number),
+  lastMutationIds: LastMutationIds,
   /**
    * The permanently rejected mutations of this client group that
    * `lastMutationIds` covers, each with its reason. Omitted when none.
@@ -171,7 +211,7 @@ export type PullResponse = typeof PullResponse.Type;
  * `lastMutationIds`.
  */
 export const ReadRequest = Schema.Struct({
-  clientGroupId: Schema.String,
+  clientGroupId: ClientGroupId,
   subsets: Schema.Array(Subset),
   /** {@inheritDoc PushRequest.schemaVersion} */
   schemaVersion: Schema.optional(Schema.String),
@@ -185,7 +225,7 @@ export const ReadResponse = Schema.Struct({
   rows: Schema.Array(
     Schema.Struct({
       collection: Schema.String,
-      id: Schema.String,
+      id: RowId,
       version: Schema.Union([Schema.String, Schema.Number]),
       value: Schema.Unknown,
     })
@@ -206,7 +246,7 @@ export type Poke = typeof Poke.Type;
 // ─── Decode helpers ──────────────────────────────────────────────────────────
 
 const decodeWith =
-  <A>(schema: Schema.Codec<A>, what: string) =>
+  <A, I>(schema: Schema.Codec<A, I>, what: string) =>
   (input: unknown): Effect.Effect<A, ProtocolError> =>
     Schema.decodeUnknownEffect(schema)(input).pipe(
       Effect.mapError((cause) => new ProtocolError({ message: `Invalid ${what}`, cause }))

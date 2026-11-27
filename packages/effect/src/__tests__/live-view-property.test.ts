@@ -18,6 +18,7 @@ import * as LiveView from "../LiveView.js";
 import * as Subset from "../Subset.js";
 import { defined } from "./defined.js";
 import * as Json from "../internal/Json.js";
+import { RowId } from "../Protocol.js";
 
 const makePrng = (seed: number) => {
   let state = seed | 0 || 1;
@@ -57,9 +58,12 @@ const step = (
   delta: Delta
 ): Stepped => {
   if (P.isTagged(delta, "del")) {
-    return { view: LiveView.del(view, delta.id), reference: HashMap.remove(reference, delta.id) };
+    return {
+      view: LiveView.del(view, RowId.make(delta.id)),
+      reference: HashMap.remove(reference, delta.id),
+    };
   }
-  const row: LiveView.Row = { id: delta.id, value: { rank: delta.rank } };
+  const row: LiveView.Row = { id: RowId.make(delta.id), value: { rank: delta.rank } };
   return { view: LiveView.put(view, row), reference: HashMap.set(reference, delta.id, row) };
 };
 

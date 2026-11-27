@@ -28,11 +28,12 @@ import * as Subset from "../Subset.js";
 import * as SyncServer from "../SyncServer.js";
 import { ClientTransport, makeInMemory, type ServerHandler } from "../Transport.js";
 import { idOf } from "./shapes.js";
+import { ClientGroupId, RowId } from "../Protocol.js";
 
 const put =
   (collection: string): MemoryBackend.BackendHandler =>
   (args, writer) =>
-    Effect.asVoid(writer.put(collection, idOf(args), args));
+    Effect.asVoid(writer.put(collection, RowId.make(idOf(args)), args));
 
 const backendHandlers = {
   "todo/set": put("todos"),
@@ -41,11 +42,11 @@ const backendHandlers = {
 const mutators = Mutator.registry([
   {
     mutator: Mutator.make("todo/set", Schema.Unknown),
-    local: (a: { id: string }, w) => w.put("todos", a.id, a),
+    local: (a: { id: string }, w) => w.put("todos", RowId.make(a.id), a),
   },
   {
     mutator: Mutator.make("user/set", Schema.Unknown),
-    local: (a: { id: string }, w) => w.put("users", a.id, a),
+    local: (a: { id: string }, w) => w.put("users", RowId.make(a.id), a),
   },
 ]);
 
@@ -75,10 +76,10 @@ const makeClient = (handler: ServerHandler, group: string) =>
       listRows: (collection) =>
         Ref.update(listRowsCount, (n) => n + 1).pipe(Effect.andThen(base.listRows(collection))),
     };
-    const transport = yield* makeInMemory(handler, group);
+    const transport = yield* makeInMemory(handler, ClientGroupId.make(group));
     const engine = yield* ClientEngineModule.make({
       clientId: group,
-      clientGroupId: group,
+      clientGroupId: ClientGroupId.make(group),
       mutators,
     }).pipe(
       Effect.provideService(ClientStore, store),
@@ -171,7 +172,7 @@ describe("write-path selective re-evaluation", () => {
   );
 });
 
-const row = (id: string, rank: number): LiveView.Row => ({ id, value: { rank } });
+const row = (id: string, rank: number): LiveView.Row => ({ id: RowId.make(id), value: { rank } });
 
 const ids = (rows: ReadonlyArray<LiveView.Row>) => rows.map((r) => r.id);
 
@@ -185,14 +186,14 @@ describe("LiveView id index", () => {
     let view = LiveView.make(ranked, [row("a", 1), row("b", 2), row("c", 3)]);
     view = LiveView.put(view, row("b", 5)); // reposition b to the end
     expect(ids(LiveView.result(view))).toEqual(["a", "c", "b"]);
-    view = LiveView.del(view, "a");
+    view = LiveView.del(view, RowId.make("a"));
     expect(ids(LiveView.result(view))).toEqual(["c", "b"]);
-    expect(LiveView.del(view, "missing")).toBe(view); // absent id: O(1) no-op, same ref
+    expect(LiveView.del(view, RowId.make("missing"))).toBe(view); // absent id: O(1) no-op, same ref
   });
 
   it("scans the equal-key run to locate an id on a shared sort key", () => {
     let view = LiveView.make(ranked, [row("a", 1), row("b", 1), row("c", 1)]);
-    view = LiveView.del(view, "b"); // b ties with a and c on rank 1
+    view = LiveView.del(view, RowId.make("b")); // b ties with a and c on rank 1
     expect(ids(LiveView.result(view)).toSorted()).toEqual(["a", "c"]);
     view = LiveView.put(view, row("a", 1)); // update within the tie run
     expect(ids(LiveView.result(view)).toSorted()).toEqual(["a", "c"]);

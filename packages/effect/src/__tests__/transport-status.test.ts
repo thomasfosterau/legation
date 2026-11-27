@@ -24,17 +24,18 @@ import type {
 import * as Transport from "../Transport.js";
 import { defined } from "./defined.js";
 import { TestFailure } from "./test-failure.js";
+import { ClientGroupId, RowId } from "../Protocol.js";
 
 const pullResponse: PullResponse = { cookie: "next", patch: [], lastMutationIds: {} };
 const pushResponse: PushResponse = { lastMutationIds: {} };
 const pullRequest: PullRequest = {
-  clientGroupId: "g",
+  clientGroupId: ClientGroupId.make("g"),
   subscriptions: [],
 };
-const pushRequest: PushRequest = { clientGroupId: "g", mutations: [] };
-const readRequest: ReadRequest = { clientGroupId: "g", subsets: [] };
+const pushRequest: PushRequest = { clientGroupId: ClientGroupId.make("g"), mutations: [] };
+const readRequest: ReadRequest = { clientGroupId: ClientGroupId.make("g"), subsets: [] };
 const readResponse = (from: string): ReadResponse => ({
-  rows: [{ collection: "todos", id: from, version: 1, value: {} }],
+  rows: [{ collection: "todos", id: RowId.make(from), version: 1, value: {} }],
 });
 
 interface Fake {

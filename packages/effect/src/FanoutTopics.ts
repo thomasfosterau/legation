@@ -49,7 +49,7 @@ export const derivableSets = (
   Arr.forEach(nodes.nodes, ([type, node]) => {
     const fields = new Set<string>(node.hintKeys);
     Arr.forEach(R.values(node.edges), (edge) => {
-      if (edge.kind === "one") fields.add(edge.via);
+      if (P.isTagged(edge, "one")) fields.add(edge.via);
     });
     map.set(type, fields);
   });

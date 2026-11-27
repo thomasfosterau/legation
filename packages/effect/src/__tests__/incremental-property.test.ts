@@ -25,6 +25,7 @@ import type { RowChange } from "../RowChange.js";
 import * as Subset from "../Subset.js";
 import { defined } from "./defined.js";
 import * as Json from "../internal/Json.js";
+import { RowId } from "../Protocol.js";
 
 type Row<A> = Incremental.Row<A>;
 
@@ -282,12 +283,12 @@ const makeRight = (rng: () => number): Right => ({
 type Left = ReturnType<typeof makeLeft>;
 const leftKey = (v: Left) => v.fk;
 const rightKey = (v: Right): string => v.k;
-const innerJoin = { leftKey, rightKey, kind: "inner" } as const;
-const leftJoin = { leftKey, rightKey, kind: "left" } as const;
+const innerJoin = { leftKey, rightKey, _tag: "inner" } as const;
+const leftJoin = { leftKey, rightKey, _tag: "left" } as const;
 const labelled = {
   leftKey,
   rightKey,
-  kind: "left",
+  _tag: "left",
   combine: (left: Left, right: Option.Option<Right>): string =>
     `${left.lbl}:${Option.match(right, { onNone: () => "-", onSome: (r) => `${r.rlbl}` })}`,
 } as const;
@@ -366,7 +367,7 @@ const changeBatchOf = <A>(delta: Incremental.Delta<A>): ReadonlyArray<RowChange<
     changes.push({ _tag: "enter", row });
   });
   Arr.forEach(delta.removed, (row) => {
-    changes.push({ _tag: "exit", id: row.id, previous: row });
+    changes.push({ _tag: "exit", id: RowId.make(row.id), previous: row });
   });
   return changes;
 };

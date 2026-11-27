@@ -13,7 +13,7 @@ import * as Console from "effect/Console";
 import * as Effect from "effect/Effect";
 import { KeyValueStore } from "effect/persistence";
 import * as ClientStoreModule from "../ClientStore.js";
-import type { PatchOp } from "../Protocol.js";
+import { type PatchOp, RowId } from "../Protocol.js";
 import { awaitPromise } from "./await-promise.js";
 
 /** An in-memory KVS that counts `set` calls per key. */
@@ -39,7 +39,7 @@ const putOps = (from: number, count: number): Array<PatchOp> =>
   Array.from({ length: count }, (_, i) => ({
     _tag: "Put" as const,
     collection: "todos",
-    id: `r${from + i}`,
+    id: RowId.make(`r${from + i}`),
     version: 1,
     value: { i: from + i },
   }));

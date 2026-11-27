@@ -19,6 +19,7 @@ import * as IndexedDbClientStore from "../IndexedDbClientStore.js";
 import { defined } from "./defined.js";
 import { withLayer } from "./with-layer.js";
 import * as Schema from "effect/Schema";
+import { Protocol } from "@thomasfosterau/legation/internal";
 
 const JsonText = Schema.fromJsonString(Schema.Unknown);
 const decodeJson = Schema.decodeSync(JsonText);
@@ -114,7 +115,7 @@ const put = (id: string, n: number) =>
   ({
     _tag: "Put" as const,
     collection: "counters",
-    id,
+    id: Protocol.RowId.make(id),
     version: 1,
     value: { id, n },
   }) as const;
@@ -225,7 +226,11 @@ describe("IndexedDbClientStore's atomic batch", () => {
             createdAt: 0,
           });
           yield* defined(store.commitAcknowledgement)([m1], { c: 1 });
-          yield* store.putRow("counters", { id: "a", version: 1, value: { id: "a", n: 0 } });
+          yield* store.putRow("counters", {
+            id: Protocol.RowId.make("a"),
+            version: 1,
+            value: { id: "a", n: 0 },
+          });
         }).pipe(withLayer(storeLayer(database)));
 
         // The pull's second row write fails mid-transaction: IndexedDB aborts the batch.
@@ -243,8 +248,10 @@ describe("IndexedDbClientStore's atomic batch", () => {
           failure.armed = false;
           expect(Exit.isFailure(pull)).toBe(true);
           // The first row write of the batch was rolled back with the rest.
-          expect(yield* store.getRow("counters", "a")).toMatchObject({ value: { id: "a", n: 0 } });
-          expect(yield* store.getRow("counters", "b")).toBeUndefined();
+          expect(yield* store.getRow("counters", Protocol.RowId.make("a"))).toMatchObject({
+            value: { id: "a", n: 0 },
+          });
+          expect(yield* store.getRow("counters", Protocol.RowId.make("b"))).toBeUndefined();
           expect(yield* store.getCookie).toBeUndefined();
         }).pipe(withLayer(storeLayer(database, failingIndexedDb)));
 
@@ -300,7 +307,9 @@ describe("IndexedDbClientStore's atomic batch", () => {
           cookie: "cookie-v2",
           patch: [put("a", 3)],
         });
-        expect(yield* store.getRow("counters", "a")).toMatchObject({ value: { n: 3 } });
+        expect(yield* store.getRow("counters", Protocol.RowId.make("a"))).toMatchObject({
+          value: { n: 3 },
+        });
         expect(yield* store.getCookie).toBe("cookie-v2");
       }).pipe(withLayer(storeLayer("atomic-v2")));
       // The store opened the database at the version it had: nothing was downgraded or upgraded.
@@ -396,7 +405,9 @@ describe("IndexedDbClientStore's atomic batch", () => {
         yield* Effect.gen(function* () {
           const store = yield* ClientStore.ClientStore;
           expect(store.commitPull).toBeDefined();
-          expect(yield* store.getRow("counters", "a")).toMatchObject({ value: { id: "a", n: 7 } });
+          expect(yield* store.getRow("counters", Protocol.RowId.make("a"))).toMatchObject({
+            value: { id: "a", n: 7 },
+          });
           expect(yield* store.getCookie).toBe("cookie-legacy");
           expect(yield* store.unpulled).toEqual([]);
           expect(yield* store.pendingMutations).toEqual([]);

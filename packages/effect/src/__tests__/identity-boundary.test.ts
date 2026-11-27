@@ -39,6 +39,7 @@ import {
 import { ClientEngine, ClientView, Cvr, InvalidationBus, Subset, SyncServer } from "../internal.js";
 import type { PushRequest } from "../Protocol.js";
 import { idOf, stringField } from "./shapes.js";
+import { ClientGroupId, MutationId, RowId } from "../Protocol.js";
 
 const bodyOf = stringField("body");
 
@@ -49,7 +50,7 @@ const secretSet = Mutator.make("secret/set", Schema.Unknown);
 const mutations = Mutator.registry([
   {
     mutator: secretSet,
-    local: (args: { id: string }, writer) => writer.put("secrets", args.id, args),
+    local: (args: { id: string }, writer) => writer.put("secrets", RowId.make(args.id), args),
   },
 ]);
 
@@ -58,7 +59,9 @@ const allSecrets = Subset.make({ collection: "secrets" });
 const makeHandler = Effect.fn("makeHandler")(function* () {
   const backend = yield* MemoryBackend.make(
     MemoryBackend.validatedHandlers([
-      MemoryBackend.handler(secretSet, (args, writer) => writer.put("secrets", idOf(args), args)),
+      MemoryBackend.handler(secretSet, (args, writer) =>
+        writer.put("secrets", RowId.make(idOf(args)), args)
+      ),
     ])
   );
   return yield* SyncServer.make.pipe(
@@ -75,7 +78,7 @@ const makeHandler = Effect.fn("makeHandler")(function* () {
 /** An in-memory transport that records every push request it carries. */
 const recordingTransport = Effect.fn("recordingTransport")(function* () {
   const handler = yield* makeHandler();
-  const inner = yield* Transport.makeInMemory(handler, "group-shared");
+  const inner = yield* Transport.makeInMemory(handler, ClientGroupId.make("group-shared"));
   const pushes = yield* Ref.make<ReadonlyArray<PushRequest>>([]);
   const transport: Transport.ClientTransport = {
     ...inner,
@@ -92,7 +95,7 @@ const recordingTransport = Effect.fn("recordingTransport")(function* () {
 const engineOver = (store: ClientStore.ClientStore, transport: Transport.ClientTransport) =>
   ClientEngine.make({
     clientId: "client-shared",
-    clientGroupId: "group-shared",
+    clientGroupId: ClientGroupId.make("group-shared"),
     mutators: mutations,
   }).pipe(
     Effect.provideService(ClientStore.ClientStore, store),
@@ -126,7 +129,11 @@ describe("the store's boot check", () => {
     scoped.effect("stamps the identity and leaves a matching replica alone", () =>
       Effect.gen(function* () {
         const first = yield* ClientStore.makeKeyValue({ identity: ALICE });
-        yield* first.putRow("secrets", { id: "s1", version: 1, value: { body: "alice's" } });
+        yield* first.putRow("secrets", {
+          id: RowId.make("s1"),
+          version: 1,
+          value: { body: "alice's" },
+        });
         yield* first.setCookie("cookie-alice");
         expect(yield* first.getIdentity).toBe(ALICE);
 
@@ -144,7 +151,11 @@ describe("the store's boot check", () => {
       () =>
         Effect.gen(function* () {
           const alice = yield* ClientStore.makeKeyValue({ identity: ALICE });
-          yield* alice.putRow("secrets", { id: "s1", version: 1, value: { body: "alice's" } });
+          yield* alice.putRow("secrets", {
+            id: RowId.make("s1"),
+            version: 1,
+            value: { body: "alice's" },
+          });
           yield* alice.setCookie("cookie-alice");
           yield* alice.appendMutation({
             clientId: "c1",
@@ -173,7 +184,11 @@ describe("the store's boot check", () => {
         // A store written by a build with no identity boundary: rows that could
         // belong to anyone.
         const legacy = yield* ClientStore.makeKeyValue();
-        yield* legacy.putRow("secrets", { id: "s1", version: 1, value: { body: "unknown owner" } });
+        yield* legacy.putRow("secrets", {
+          id: RowId.make("s1"),
+          version: 1,
+          value: { body: "unknown owner" },
+        });
         yield* legacy.setCookie("cookie-legacy");
         expect(yield* legacy.getIdentity).toBeUndefined();
 
@@ -193,7 +208,7 @@ describe("the store's boot check", () => {
           const alice = yield* ClientStore.makeKeyValue({ identity: ALICE });
           yield* alice.appendMutation({
             clientId: "c1",
-            mutationId: 1,
+            mutationId: MutationId.make(1),
             mutator: "secret/set",
             args: { id: "s2", body: "alice's draft" },
             createdAt: 0,
@@ -215,7 +230,7 @@ describe("the store's boot check", () => {
         const alice = yield* ClientStore.makeKeyValue({ identity: ALICE });
         yield* alice.appendMutation({
           clientId: "c1",
-          mutationId: 1,
+          mutationId: MutationId.make(1),
           mutator: "secret/set",
           args: { id: "s2", body: "alice's draft" },
           createdAt: 0,
@@ -240,11 +255,15 @@ describe("the store's boot check", () => {
     scoped.effect("anonymous → signed in keeps the warm replica and its journal", () =>
       Effect.gen(function* () {
         const anon = yield* ClientStore.makeKeyValue({ identity: Identity.anonymous });
-        yield* anon.putRow("secrets", { id: "s1", version: 1, value: { body: "public row" } });
+        yield* anon.putRow("secrets", {
+          id: RowId.make("s1"),
+          version: 1,
+          value: { body: "public row" },
+        });
         yield* anon.setCookie("cookie-anon");
         yield* anon.appendMutation({
           clientId: "c1",
-          mutationId: 1,
+          mutationId: MutationId.make(1),
           mutator: "secret/set",
           args: { id: "s2", body: "written before signing in" },
           createdAt: 0,
@@ -455,7 +474,7 @@ describe("switching identities on a shared device", () => {
             store,
             transport,
             clientId: "client-shared",
-            clientGroupId: "group-shared",
+            clientGroupId: ClientGroupId.make("group-shared"),
             identity: BOB,
             sync: false,
           });

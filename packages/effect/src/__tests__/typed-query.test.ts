@@ -38,6 +38,7 @@ import * as SyncRoom from "../SyncRoom.js";
 import * as SyncServer from "../SyncServer.js";
 import { ClientTransport, layerInMemory, makeInMemory, type ServerHandler } from "../Transport.js";
 import { idOf } from "./shapes.js";
+import { ClientGroupId, RowId } from "../Protocol.js";
 
 interface Todo {
   readonly id: string;
@@ -50,16 +51,16 @@ const Todo = Schema.Struct({
   title: Schema.String,
   isDone: Schema.Boolean,
 });
-const todos = Collection.make({ name: "todos", schema: Todo, id: (r) => r.id });
+const todos = Collection.make({ name: "todos", schema: Todo, id: (r) => RowId.make(r.id) });
 
 const mutators = Mutator.registry([
   {
     mutator: Mutator.make("todo/set", Schema.Unknown),
-    local: (args: Todo, writer) => writer.put("todos", args.id, args),
+    local: (args: Todo, writer) => writer.put("todos", RowId.make(args.id), args),
   },
 ]);
 const backendHandlers = {
-  "todo/set": (args, writer) => Effect.asVoid(writer.put("todos", idOf(args), args)),
+  "todo/set": (args, writer) => Effect.asVoid(writer.put("todos", RowId.make(idOf(args)), args)),
 } satisfies Record<string, MemoryBackend.BackendHandler>;
 
 const makeServer = Effect.fn("makeServer")(function* (): Effect.fn.Return<
@@ -82,10 +83,10 @@ const makeServer = Effect.fn("makeServer")(function* (): Effect.fn.Return<
 const makeEngine = Effect.fn("makeEngine")(function* () {
   const handler = yield* makeServer();
   const store = yield* ClientStoreModule.makeMemory;
-  const transport = yield* makeInMemory(handler, "group-a");
+  const transport = yield* makeInMemory(handler, ClientGroupId.make("group-a"));
   const engine = yield* ClientEngineModule.make({
     clientId: "client-a",
-    clientGroupId: "group-a",
+    clientGroupId: ClientGroupId.make("group-a"),
     mutators,
   }).pipe(
     Effect.provideService(ClientStore, store),
@@ -116,11 +117,11 @@ describe("canonical arg keys", () => {
     // which is decided by the canonical key before any mount.
     const engineLayer = ClientEngineModule.layer({
       clientId: "c1",
-      clientGroupId: "group-1",
+      clientGroupId: ClientGroupId.make("group-1"),
       mutators,
     }).pipe(
       Layer.provide(
-        layerInMemory("group-1").pipe(
+        layerInMemory(ClientGroupId.make("group-1")).pipe(
           Layer.provide(
             SyncRoom.layer.pipe(
               Layer.provide(MemoryBackend.layer(backendHandlers)),
@@ -172,7 +173,7 @@ describe("canonical arg keys", () => {
       const store = yield* ClientStoreModule.makeMemory;
       const engine = yield* ClientEngineModule.make({
         clientId: "client-a",
-        clientGroupId: "group-a",
+        clientGroupId: ClientGroupId.make("group-a"),
         mutators,
         queries,
       }).pipe(

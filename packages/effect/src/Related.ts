@@ -43,7 +43,7 @@ export type RelatedValue = LocalRow["value"] | ReadonlyArray<LocalRow["value"]> 
 
 /** A base row with its named relationships resolved against the mirror. */
 export interface RelatedRow {
-  readonly id: string;
+  readonly id: Collection.RowId;
   readonly value: unknown;
   readonly related: Record<string, RelatedValue>;
 }
@@ -379,9 +379,9 @@ interface TargetDiff {
 interface ForeignState {
   target: Target;
   /** Last-seen full snapshot, diffed against the next one to find the delta. */
-  rowsById: Map<string, LocalRow>;
+  rowsById: Map<Collection.RowId, LocalRow>;
   /** `fk value → (row id → row)`, updated for only the touched key(s). */
-  buckets: Map<Predicate.Literal, Map<string, LocalRow>>;
+  buckets: Map<Predicate.Literal, Map<Collection.RowId, LocalRow>>;
   /** `fk value → rows`: the {@link CollectionIndex} entry, cached from `buckets`. */
   results: Map<Predicate.Literal, ReadonlyArray<LocalRow>>;
 }
@@ -398,12 +398,15 @@ const rowKeysOf = (
 
 /** {@inheritDoc JoinEngine} */
 export const makeJoinEngine = (strategy: Strategy): JoinEngine => {
-  let baseOrder: ReadonlyArray<string> = [];
-  const baseRowsById = new Map<string, LocalRow>();
-  const baseKeysById = new Map<string, ReadonlyMap<string, ReadonlySet<Predicate.Literal>>>();
-  const resolvedById = new Map<string, RelatedRow>();
+  let baseOrder: ReadonlyArray<Collection.RowId> = [];
+  const baseRowsById = new Map<Collection.RowId, LocalRow>();
+  const baseKeysById = new Map<
+    Collection.RowId,
+    ReadonlyMap<string, ReadonlySet<Predicate.Literal>>
+  >();
+  const resolvedById = new Map<Collection.RowId, RelatedRow>();
   const foreignByCollection = new Map<string, ForeignState>();
-  const reverseIndex = new Map<string, Map<Predicate.Literal, Set<string>>>();
+  const reverseIndex = new Map<string, Map<Predicate.Literal, Set<Collection.RowId>>>();
   // Collections newly targeted whose first snapshot hasn't arrived yet: while
   // non-empty the join is incompletely primed, so `result` stays `undefined`.
   const pendingCollections = new Set<string>();
@@ -420,7 +423,7 @@ export const makeJoinEngine = (strategy: Strategy): JoinEngine => {
     related: strategy.resolveRow(indexView(), row),
   });
 
-  const rehydrateById = (id: string): void => {
+  const rehydrateById = (id: Collection.RowId): void => {
     const row = baseRowsById.get(id);
     if (row !== undefined) resolvedById.set(id, hydrateRow(row));
   };
@@ -431,7 +434,7 @@ export const makeJoinEngine = (strategy: Strategy): JoinEngine => {
   // the shared traversal.
   const forEachIndexed = (
     keys: ReadonlyMap<string, ReadonlySet<Predicate.Literal>>,
-    f: (byKey: Map<Predicate.Literal, Set<string>>, key: Predicate.Literal) => void
+    f: (byKey: Map<Predicate.Literal, Set<Collection.RowId>>, key: Predicate.Literal) => void
   ): void => {
     for (const [collection, ids] of keys) {
       const byKey = reverseIndex.get(collection);
@@ -440,15 +443,18 @@ export const makeJoinEngine = (strategy: Strategy): JoinEngine => {
     }
   };
 
-  const indexRow = (id: string, keys: ReadonlyMap<string, ReadonlySet<Predicate.Literal>>): void =>
+  const indexRow = (
+    id: Collection.RowId,
+    keys: ReadonlyMap<string, ReadonlySet<Predicate.Literal>>
+  ): void =>
     forEachIndexed(keys, (byKey, key) => {
-      const set = byKey.get(key) ?? new Set<string>();
+      const set = byKey.get(key) ?? new Set<Collection.RowId>();
       set.add(id);
       byKey.set(key, set);
     });
 
   const unindexRow = (
-    id: string,
+    id: Collection.RowId,
     keys: ReadonlyMap<string, ReadonlySet<Predicate.Literal>>
   ): void =>
     forEachIndexed(keys, (byKey, key) => {
@@ -563,13 +569,13 @@ export const makeJoinEngine = (strategy: Strategy): JoinEngine => {
     const keyOf = (row: LocalRow) =>
       Predicate.fieldValue(row.value, state.target.field) as Predicate.Literal;
     const putInto = (key: Predicate.Literal, row: LocalRow): void => {
-      const bucket = state.buckets.get(key) ?? new Map<string, LocalRow>();
+      const bucket = state.buckets.get(key) ?? new Map<Collection.RowId, LocalRow>();
       bucket.set(row.id, row);
       state.buckets.set(key, bucket);
       state.results.set(key, [...bucket.values()]);
       changedKeys.add(key);
     };
-    const removeFrom = (key: Predicate.Literal, id: string): void => {
+    const removeFrom = (key: Predicate.Literal, id: Collection.RowId): void => {
       const bucket = state.buckets.get(key);
       if (bucket === undefined) return;
       bucket.delete(id);
@@ -582,7 +588,7 @@ export const makeJoinEngine = (strategy: Strategy): JoinEngine => {
       changedKeys.add(key);
     };
 
-    const nextRowsById = new Map<string, LocalRow>();
+    const nextRowsById = new Map<Collection.RowId, LocalRow>();
     for (const row of rows) {
       nextRowsById.set(row.id, row);
       const prior = state.rowsById.get(row.id);
@@ -602,8 +608,8 @@ export const makeJoinEngine = (strategy: Strategy): JoinEngine => {
   const affectedByKeys = (
     collection: string,
     changedKeys: ReadonlySet<Predicate.Literal>
-  ): ReadonlySet<string> => {
-    const affected = new Set<string>();
+  ): ReadonlySet<Collection.RowId> => {
+    const affected = new Set<Collection.RowId>();
     const byKey = reverseIndex.get(collection);
     if (byKey === undefined) return affected;
     for (const key of changedKeys) {
@@ -919,7 +925,7 @@ export const relatedWith = (
 /** A row from an external source, tagged with its collection. */
 export interface SourcedRow {
   readonly collection: string;
-  readonly id: string;
+  readonly id: Collection.RowId;
   readonly value: unknown;
 }
 

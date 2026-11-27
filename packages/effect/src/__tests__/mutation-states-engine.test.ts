@@ -38,6 +38,7 @@ import { ClientTransport, makeInMemory, type ServerHandler } from "../Transport.
 import { defined } from "./defined.js";
 import * as Json from "../internal/Json.js";
 import { idOf } from "./shapes.js";
+import { ClientGroupId, MutationId, RowId } from "../Protocol.js";
 
 interface Todo {
   readonly id: string;
@@ -48,19 +49,19 @@ interface Todo {
 const mutators = Mutator.registry([
   {
     mutator: Mutator.make("todo/set", Schema.Unknown),
-    local: (args: Todo, writer) => writer.put("todos", args.id, args),
+    local: (args: Todo, writer) => writer.put("todos", RowId.make(args.id), args),
   },
   {
     mutator: Mutator.make("todo/forbidden", Schema.Unknown),
-    local: (args: Todo, writer) => writer.put("todos", args.id, args),
+    local: (args: Todo, writer) => writer.put("todos", RowId.make(args.id), args),
   },
 ]);
 
 const backendHandlers = {
-  "todo/set": (args, writer) => Effect.asVoid(writer.put("todos", idOf(args), args)),
+  "todo/set": (args, writer) => Effect.asVoid(writer.put("todos", RowId.make(idOf(args)), args)),
   "todo/forbidden": (args, writer) =>
     writer
-      .put("todos", idOf(args), args)
+      .put("todos", RowId.make(idOf(args)), args)
       .pipe(Effect.andThen(Effect.fail(new MutationRejected({ reason: "permission revoked" })))),
 } satisfies Record<string, MemoryBackend.BackendHandler>;
 
@@ -92,12 +93,15 @@ const makeEngine = (
 ) =>
   ClientEngineModule.make({
     clientId: "client-a",
-    clientGroupId: "group-a",
+    clientGroupId: ClientGroupId.make("group-a"),
     mutators,
     ...options,
   }).pipe(
     Effect.provideService(ClientStore, store),
-    Effect.provideServiceEffect(ClientTransport, makeInMemory(handler, "group-a"))
+    Effect.provideServiceEffect(
+      ClientTransport,
+      makeInMemory(handler, ClientGroupId.make("group-a"))
+    )
   );
 
 /** The current mutation-state map: `SubscriptionRef.changes` replays the
@@ -128,7 +132,7 @@ describe("ClientEngine.mutationStates", () => {
       // engine is constructed, as a durable journal would already hold.
       yield* store.appendMutation({
         clientId: "client-a",
-        mutationId: 1,
+        mutationId: MutationId.make(1),
         mutator: "todo/set",
         args: { id: "1", title: "left over", done: false },
         createdAt: 123,
@@ -138,7 +142,7 @@ describe("ClientEngine.mutationStates", () => {
       const states = yield* snapshot(engine);
       expect(HashMap.size(states)).toBe(1);
       expect(get(states, 1)).toEqual({
-        mutationId: 1,
+        mutationId: MutationId.make(1),
         mutator: "todo/set",
         args: { id: "1", title: "left over", done: false },
         phase: "pending",
@@ -358,7 +362,7 @@ const openEvents = (engine: ClientEngineModule.ClientEngine) =>
 /** A journal entry as a snapshot carries it: the client's own id, so the engine treats it as its own. */
 const hydratedEntry = (mutationId: number, mutator: string, args: Todo) => ({
   clientId: "client-a",
-  mutationId,
+  mutationId: MutationId.make(mutationId),
   mutator,
   args,
   createdAt: 456,
@@ -388,7 +392,7 @@ describe("hydrated journal entries in a running engine", () => {
           journal: [hydratedEntry(1, "todo/set", todo)],
         });
         expect(get(yield* snapshot(engine), 1)).toEqual({
-          mutationId: 1,
+          mutationId: MutationId.make(1),
           mutator: "todo/set",
           args: todo,
           phase: "pending",
@@ -437,7 +441,7 @@ describe("hydrated journal entries in a running engine", () => {
           {
             _tag: "MutationRejected",
             clientId: "client-a",
-            mutationId: 2,
+            mutationId: MutationId.make(2),
             reason: "permission revoked",
           },
         ]);
@@ -504,7 +508,7 @@ describe("hydrated journal entries in a running engine", () => {
         });
         yield* memory.appendMutation({
           clientId: "client-a",
-          mutationId: 1,
+          mutationId: MutationId.make(1),
           mutator: "todo/forbidden",
           args: todo,
           createdAt: 789,
@@ -618,7 +622,7 @@ describe("hydrated journal entries in a running engine", () => {
       return Effect.gen(function* () {
         const handler = yield* makeServer();
         const store = yield* ClientStoreModule.makeMemory;
-        const inner = yield* makeInMemory(handler, "group-a");
+        const inner = yield* makeInMemory(handler, ClientGroupId.make("group-a"));
         // Once `contradict` is set, every push reports id 1 as permanently rejected, though this
         // client already holds id 1 acknowledged.
         const contradict = yield* Ref.make(false);
@@ -629,14 +633,16 @@ describe("hydrated journal entries in a running engine", () => {
               on
                 ? {
                     ...response,
-                    rejected: [{ clientId: "client-a", mutationId: 1, reason: "late" }],
+                    rejected: [
+                      { clientId: "client-a", mutationId: MutationId.make(1), reason: "late" },
+                    ],
                   }
                 : response
             ),
         };
         const engine = yield* ClientEngineModule.make({
           clientId: "client-a",
-          clientGroupId: "group-a",
+          clientGroupId: ClientGroupId.make("group-a"),
           mutators,
         }).pipe(
           Effect.provideService(ClientStore, store),

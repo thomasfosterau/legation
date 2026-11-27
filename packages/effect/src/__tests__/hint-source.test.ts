@@ -16,6 +16,7 @@ import * as Stream from "effect/Stream";
 import type { ChangeHint } from "../Backend.js";
 import * as HintSource from "../HintSource.js";
 import * as InvalidationBus from "../InvalidationBus.js";
+import { RowId } from "../Protocol.js";
 
 describe("HintSource.fromStream", () => {
   it.effect("publishes each hint batch from the stream to the bus", () =>
@@ -24,7 +25,7 @@ describe("HintSource.fromStream", () => {
       // Subscribe before running so no batch is missed.
       const subscription = yield* bus.subscribe;
       const batches: ReadonlyArray<ReadonlyArray<ChangeHint>> = [
-        [{ collection: "todos", ids: ["1"] }],
+        [{ collection: "todos", ids: [RowId.make("1")] }],
         [{ collection: "lists", ids: [] }],
       ];
 
@@ -56,7 +57,7 @@ describe("HintSource.fromStream", () => {
           yield* HintSource.run(HintSource.fromStream(source)).pipe(
             Effect.provideService(InvalidationBus.InvalidationBus, bus)
           );
-          yield* Queue.offer(queue, [{ collection: "todos", ids: ["1"] }]);
+          yield* Queue.offer(queue, [{ collection: "todos", ids: [RowId.make("1")] }]);
           expect(yield* subscription.take).toEqual([{ collection: "todos", ids: ["1"] }]);
         })
       );
@@ -67,9 +68,11 @@ describe("HintSource.fromStream", () => {
       // part checks the effect: a later offer never reaches the bus. The yields
       // give a still-running consumer the chance to publish the offer before
       // the sentinel; without them the sentinel would win the race either way.
-      yield* Queue.offer(queue, [{ collection: "todos", ids: ["2"] }]);
+      yield* Queue.offer(queue, [{ collection: "todos", ids: [RowId.make("2")] }]);
       yield* Effect.replicateEffect(Effect.yieldNow, 20, { discard: true });
-      const sentinel: ReadonlyArray<ChangeHint> = [{ collection: "lists", ids: ["sentinel"] }];
+      const sentinel: ReadonlyArray<ChangeHint> = [
+        { collection: "lists", ids: [RowId.make("sentinel")] },
+      ];
       yield* bus.publish(sentinel);
       expect(yield* subscription.take).toEqual(sentinel);
     }).pipe(Effect.scoped)

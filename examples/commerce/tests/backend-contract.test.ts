@@ -10,13 +10,13 @@
  * the SQLite compiler exact against `Subset.apply` (ADR-0028) on the app's
  * own executor.
  */
-import { describe, expect, it } from "@effect/vitest";
+import { expect, layer } from "@effect/vitest";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import { SqlClient } from "effect/sql/SqlClient";
 import { SqliteClient } from "@effect/sql-sqlite-node";
-import { BackendError, MutationRejected, Mutator } from "@thomasfosterau/legation";
+import { BackendError, type Collection, MutationRejected, Mutator } from "@thomasfosterau/legation";
 import { BackendContract } from "@thomasfosterau/legation/internal";
 import { SqlBackend } from "@thomasfosterau/legation/sql";
 import { makeExecutor } from "../server/db.js";
@@ -53,12 +53,12 @@ const contractMutators = new Map<string, Mutator.AnyMutator>([
   [BackendContract.countUp.name, BackendContract.countUp],
 ]);
 
-const handlers: Record<string, SqlBackend.SqlHandler> = {
+const handlersWith = (gates: BackendContract.ParkGates): Record<string, SqlBackend.SqlHandler> => ({
   [BackendContract.putRow.name]: (raw, tx) =>
     Effect.gen(function* () {
       const args = raw as {
         collection: string;
-        id: string;
+        id: Collection.RowId;
         value: { n?: number; rank?: number; tag?: string };
       };
       const table = yield* tableFor(args.collection);
@@ -70,7 +70,7 @@ const handlers: Record<string, SqlBackend.SqlHandler> = {
     }),
   [BackendContract.delRow.name]: (raw, tx) =>
     Effect.gen(function* () {
-      const args = raw as { collection: string; id: string };
+      const args = raw as { collection: string; id: Collection.RowId };
       const table = yield* tableFor(args.collection);
       yield* tx.run({ text: `DELETE FROM ${table} WHERE id = ?`, params: [args.id] });
       return [{ collection: args.collection, ids: [args.id] }];
@@ -79,11 +79,11 @@ const handlers: Record<string, SqlBackend.SqlHandler> = {
     Effect.fail(new BackendError({ message: "contract/fail always fails" })),
   [BackendContract.countUp.name]: (raw, tx) =>
     Effect.gen(function* () {
-      const args = raw as { collection: string; id: string; gate: string };
+      const args = raw as { collection: string; id: Collection.RowId; gate: string };
       const table = yield* tableFor(args.collection);
       // Read, park between the read and the write (rule 11), then write the increment.
       const rows = yield* tx.query({ text: `SELECT n FROM ${table} WHERE id = ?`, params: [args.id] });
-      yield* BackendContract.park(args.gate);
+      yield* gates.park(args.gate);
       yield* tx.run({
         text: `UPDATE ${table} SET n = ? WHERE id = ?`,
         params: [Number(rows[0]?.n ?? 0) + 1, args.id],
@@ -92,7 +92,7 @@ const handlers: Record<string, SqlBackend.SqlHandler> = {
     }),
   [BackendContract.rejectAlways.name]: (raw, tx) =>
     Effect.gen(function* () {
-      const args = raw as { collection: string; id: string };
+      const args = raw as { collection: string; id: Collection.RowId };
       const table = yield* tableFor(args.collection);
       // Stage a write, then reject — the suite asserts it rolled back.
       yield* tx.run({
@@ -103,7 +103,7 @@ const handlers: Record<string, SqlBackend.SqlHandler> = {
     }),
   [BackendContract.writeThenFail.name]: (raw, tx) =>
     Effect.gen(function* () {
-      const args = raw as { collection: string; id: string };
+      const args = raw as { collection: string; id: Collection.RowId };
       const table = yield* tableFor(args.collection);
       // Overwrite a live row, then fail transiently — the transaction rolls the write back.
       yield* tx.run({
@@ -114,9 +114,9 @@ const handlers: Record<string, SqlBackend.SqlHandler> = {
         new BackendError({ message: "contract/write-then-fail fails after writing" })
       );
     }),
-};
+});
 
-describe("commerce SQL backend", () => {
+layer(BackendContract.layerParkGates)("commerce SQL backend", (it) => {
   it.effect("passes verifyBackendContract over the Effect SQL sqlite client", () =>
     Effect.scoped(
       Effect.gen(function* () {
@@ -132,7 +132,7 @@ describe("commerce SQL backend", () => {
             __contract_eval: { table: "__contract_eval" },
           },
           mutators: contractMutators,
-          handlers,
+          handlers: handlersWith(yield* BackendContract.ParkGates),
         });
         yield* BackendContract.verifyBackendContract(backend);
         expect(true).toBe(true);

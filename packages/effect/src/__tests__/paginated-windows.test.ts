@@ -27,6 +27,7 @@ import {
 import { ClientEngine, ClientView, EngineHost, MirrorChannel, Subset } from "../internal.js";
 import { TestFailure } from "./test-failure.js";
 import { idOf } from "./shapes.js";
+import { ClientGroupId, RowId } from "../Protocol.js";
 
 const Product = Node.make("products", {
   attributes: { name: Schema.String, featured: Schema.Boolean },
@@ -43,11 +44,11 @@ const reviewSet = Mutator.make("review/set", Schema.Unknown);
 const mutations = Mutator.registry([
   {
     mutator: productSet,
-    local: (args: { id: string }, writer) => writer.put("products", args.id, args),
+    local: (args: { id: string }, writer) => writer.put("products", RowId.make(args.id), args),
   },
   {
     mutator: reviewSet,
-    local: (args: { id: string }, writer) => writer.put("reviews", args.id, args),
+    local: (args: { id: string }, writer) => writer.put("reviews", RowId.make(args.id), args),
   },
 ]);
 
@@ -75,8 +76,12 @@ const eventually = <A>(
 const makeServer = Effect.fn("makeServer")(function* () {
   const backend = yield* MemoryBackend.make(
     MemoryBackend.validatedHandlers([
-      MemoryBackend.handler(productSet, (args, writer) => writer.put("products", idOf(args), args)),
-      MemoryBackend.handler(reviewSet, (args, writer) => writer.put("reviews", idOf(args), args)),
+      MemoryBackend.handler(productSet, (args, writer) =>
+        writer.put("products", RowId.make(idOf(args)), args)
+      ),
+      MemoryBackend.handler(reviewSet, (args, writer) =>
+        writer.put("reviews", RowId.make(idOf(args)), args)
+      ),
     ])
   );
   const server = yield* Server.make({
@@ -94,10 +99,10 @@ const makeServer = Effect.fn("makeServer")(function* () {
 const makeEngine = (handler: Transport.ServerHandler, group: string) =>
   Effect.gen(function* () {
     const store = yield* ClientStore.makeMemory;
-    const transport = yield* Transport.makeInMemory(handler, group);
+    const transport = yield* Transport.makeInMemory(handler, ClientGroupId.make(group));
     const engine = yield* ClientEngine.make({
       clientId: `client-${group}`,
-      clientGroupId: group,
+      clientGroupId: ClientGroupId.make(group),
       mutators: mutations,
     }).pipe(
       Effect.provideService(ClientStore.ClientStore, store),

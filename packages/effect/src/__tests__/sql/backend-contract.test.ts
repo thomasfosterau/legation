@@ -8,7 +8,7 @@
  * differential harness's generated corpus, so this run also proves the
  * SQLite compiler exact against `Subset.apply` (ADR-0028) on a real engine.
  */
-import { describe, expect, it } from "@effect/vitest";
+import { describe, expect, it, layer } from "@effect/vitest";
 import * as Arr from "effect/Array";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
@@ -48,6 +48,7 @@ import * as SqlBackend from "../../sql/SqlBackend.js";
 import * as Env from "../env.js";
 import { booleanField } from "../shapes.js";
 import { TestFailure } from "../test-failure.js";
+import { ClientGroupId, MutationId, RowId } from "../../Protocol.js";
 
 const asBackendError = (message: string) => (cause: unknown) =>
   new BackendError({ message, cause });
@@ -134,73 +135,75 @@ const contractMutators = new Map<string, Mutator.AnyMutator>([
  * `BackendContract.memoryHandlers` for `MemoryBackend`): each handler runs its
  * own SQL directly against the transactional `tx`, and reports its own
  * `ChangeHint`s since (unlike `MemoryBackend`) there is no shared writer to
- * derive them from.
+ * derive them from. The `countUp` handler parks at `gates`, the ones the
+ * contract opens.
  */
-const handlers = {
-  [BackendContract.putRow.name]: (raw, tx) =>
-    Effect.gen(function* () {
-      const args = decodePutRow(raw);
-      const value = decodeContractValue(args.value);
-      const table = yield* tableFor(args.collection);
-      yield* tx.run({
-        text: `INSERT OR REPLACE INTO ${table} (id, n, rank, tag) VALUES (?, ?, ?, ?)`,
-        params: [args.id, value?.n ?? null, value?.rank ?? null, value?.tag ?? null],
-      });
-      return [{ collection: args.collection, ids: [args.id] }];
-    }),
-  [BackendContract.delRow.name]: (raw, tx) =>
-    Effect.gen(function* () {
-      const args = decodeDelRow(raw);
-      const table = yield* tableFor(args.collection);
-      yield* tx.run({ text: `DELETE FROM ${table} WHERE id = ?`, params: [args.id] });
-      return [{ collection: args.collection, ids: [args.id] }];
-    }),
-  [BackendContract.failAlways.name]: () =>
-    Effect.fail(new BackendError({ message: "contract/fail always fails" })),
-  [BackendContract.writeThenFail.name]: (raw, tx) =>
-    Effect.gen(function* () {
-      const args = decodeWriteThenFail(raw);
-      const table = yield* tableFor(args.collection);
-      // Overwrite a live row, then fail transiently. The transaction rolls the
-      // write back, so the suite sees the row unchanged (rule 10).
-      yield* tx.run({
-        text: `INSERT OR REPLACE INTO ${table} (id, n) VALUES (?, 99)`,
-        params: [args.id],
-      });
-      return yield* new BackendError({ message: "contract/write-then-fail fails after writing" });
-    }),
-  [BackendContract.countUp.name]: (raw, tx) =>
-    Effect.gen(function* () {
-      const args = decodeCountUp(raw);
-      const table = yield* tableFor(args.collection);
-      // Read the counter, park between the read and the write (rule 11), then
-      // write the increment. The write is a plain UPDATE: the isolation under
-      // test is the executor's, not the statement's.
-      const rows = yield* tx.query({
-        text: `SELECT n FROM ${table} WHERE id = ?`,
-        params: [args.id],
-      });
-      yield* BackendContract.park(args.gate);
-      yield* tx.run({
-        text: `UPDATE ${table} SET n = ? WHERE id = ?`,
-        params: [Number(rows[0]?.n ?? 0) + 1, args.id],
-      });
-      return [{ collection: args.collection, ids: [args.id] }];
-    }),
-  [BackendContract.rejectAlways.name]: (raw, tx) =>
-    Effect.gen(function* () {
-      const args = decodeRejectAlways(raw);
-      const table = yield* tableFor(args.collection);
-      // Stage a write, then reject — the suite asserts it rolled back (rule 9),
-      // which only means something because `tx` is a real SAVEPOINT-backed
-      // transaction here, not the query stub's no-op `transaction`.
-      yield* tx.run({
-        text: `INSERT OR REPLACE INTO ${table} (id, n) VALUES (?, -1)`,
-        params: [args.id],
-      });
-      return yield* new MutationRejected({ reason: "contract/reject always rejects" });
-    }),
-} satisfies Record<string, SqlBackend.SqlHandler>;
+const contractHandlers = (gates: BackendContract.ParkGates) =>
+  ({
+    [BackendContract.putRow.name]: (raw, tx) =>
+      Effect.gen(function* () {
+        const args = decodePutRow(raw);
+        const value = decodeContractValue(args.value);
+        const table = yield* tableFor(args.collection);
+        yield* tx.run({
+          text: `INSERT OR REPLACE INTO ${table} (id, n, rank, tag) VALUES (?, ?, ?, ?)`,
+          params: [args.id, value?.n ?? null, value?.rank ?? null, value?.tag ?? null],
+        });
+        return [{ collection: args.collection, ids: [args.id] }];
+      }),
+    [BackendContract.delRow.name]: (raw, tx) =>
+      Effect.gen(function* () {
+        const args = decodeDelRow(raw);
+        const table = yield* tableFor(args.collection);
+        yield* tx.run({ text: `DELETE FROM ${table} WHERE id = ?`, params: [args.id] });
+        return [{ collection: args.collection, ids: [args.id] }];
+      }),
+    [BackendContract.failAlways.name]: () =>
+      Effect.fail(new BackendError({ message: "contract/fail always fails" })),
+    [BackendContract.writeThenFail.name]: (raw, tx) =>
+      Effect.gen(function* () {
+        const args = decodeWriteThenFail(raw);
+        const table = yield* tableFor(args.collection);
+        // Overwrite a live row, then fail transiently. The transaction rolls the
+        // write back, so the suite sees the row unchanged (rule 10).
+        yield* tx.run({
+          text: `INSERT OR REPLACE INTO ${table} (id, n) VALUES (?, 99)`,
+          params: [args.id],
+        });
+        return yield* new BackendError({ message: "contract/write-then-fail fails after writing" });
+      }),
+    [BackendContract.countUp.name]: (raw, tx) =>
+      Effect.gen(function* () {
+        const args = decodeCountUp(raw);
+        const table = yield* tableFor(args.collection);
+        // Read the counter, park between the read and the write (rule 11), then
+        // write the increment. The write is a plain UPDATE: the isolation under
+        // test is the executor's, not the statement's.
+        const rows = yield* tx.query({
+          text: `SELECT n FROM ${table} WHERE id = ?`,
+          params: [args.id],
+        });
+        yield* gates.park(args.gate);
+        yield* tx.run({
+          text: `UPDATE ${table} SET n = ? WHERE id = ?`,
+          params: [Number(rows[0]?.n ?? 0) + 1, args.id],
+        });
+        return [{ collection: args.collection, ids: [args.id] }];
+      }),
+    [BackendContract.rejectAlways.name]: (raw, tx) =>
+      Effect.gen(function* () {
+        const args = decodeRejectAlways(raw);
+        const table = yield* tableFor(args.collection);
+        // Stage a write, then reject — the suite asserts it rolled back (rule 9),
+        // which only means something because `tx` is a real SAVEPOINT-backed
+        // transaction here, not the query stub's no-op `transaction`.
+        yield* tx.run({
+          text: `INSERT OR REPLACE INTO ${table} (id, n) VALUES (?, -1)`,
+          params: [args.id],
+        });
+        return yield* new MutationRejected({ reason: "contract/reject always rejects" });
+      }),
+  }) satisfies Record<string, SqlBackend.SqlHandler>;
 
 /** A fresh SQLite database with the contract tables; needs a scope. */
 const makeContractDatabase = Effect.fn("makeContractDatabase")(function* () {
@@ -214,7 +217,7 @@ const makeContractDatabase = Effect.fn("makeContractDatabase")(function* () {
 });
 
 /** The contract SqlBackend over `executor`, with the contract mutators and handlers. */
-const contractBackendOver = (executor: SqlBackend.SqlExecutor) =>
+const contractBackendOver = (executor: SqlBackend.SqlExecutor, gates: BackendContract.ParkGates) =>
   SqlBackend.make({
     executor,
     tables: {
@@ -222,7 +225,7 @@ const contractBackendOver = (executor: SqlBackend.SqlExecutor) =>
       __contract_eval: { table: "__contract_eval" },
     },
     mutators: contractMutators,
-    handlers,
+    handlers: contractHandlers(gates),
   });
 
 /** A SqlBackend over a fresh SQLite database with the contract tables; needs a scope. */
@@ -243,18 +246,21 @@ const makeContractBackend = (
     });
   });
 
-describe("SqlBackend", () => {
-  it.effect("passes verifyBackendContract over a real SQLite executor", () =>
+layer(BackendContract.layerParkGates)("SqlBackend", (gated) => {
+  gated.effect("passes verifyBackendContract over a real SQLite executor", () =>
     Effect.scoped(
       Effect.gen(function* () {
-        const backend = yield* makeContractBackend(handlers, contractMutators);
+        const backend = yield* makeContractBackend(
+          contractHandlers(yield* BackendContract.ParkGates),
+          contractMutators
+        );
         yield* BackendContract.verifyBackendContract(backend);
         expect(true).toBe(true);
       })
     )
   );
 
-  it.effect("catches an unregistered write-then-fail mutator over a real SQLite executor", () =>
+  gated.effect("catches an unregistered write-then-fail mutator over a real SQLite executor", () =>
     Effect.scoped(
       Effect.gen(function* () {
         // Unregistered in both the handler and the mutator maps, as a backend that
@@ -262,7 +268,7 @@ describe("SqlBackend", () => {
         // not pass the write-then-fail rule.
         const name = BackendContract.writeThenFail.name;
         const backend = yield* makeContractBackend(
-          R.remove(handlers, name),
+          R.remove(contractHandlers(yield* BackendContract.ParkGates), name),
           new Map([...contractMutators].filter(([key]) => key !== name))
         );
         const failure = yield* Effect.flip(BackendContract.verifyBackendContract(backend));
@@ -294,13 +300,16 @@ const recordingExecutor = (
  */
 const makePerRequestContractBackend = Effect.fn("makePerRequestContractBackend")(function* () {
   const sql = yield* makeContractDatabase();
+  const gates = yield* BackendContract.ParkGates;
   const opened = yield* Ref.make(0);
   const released = yield* Ref.make(0);
   const log = yield* Ref.make<ReadonlyArray<readonly [number, string]>>([]);
   const backend = yield* Backend.perRequest(
     Effect.acquireRelease(
       Ref.updateAndGet(opened, (n) => n + 1).pipe(
-        Effect.map((acquisition) => contractBackendOver(recordingExecutor(sql, acquisition, log)))
+        Effect.map((acquisition) =>
+          contractBackendOver(recordingExecutor(sql, acquisition, log), gates)
+        )
       ),
       () => Ref.update(released, (n) => n + 1)
     )
@@ -311,14 +320,14 @@ const makePerRequestContractBackend = Effect.fn("makePerRequestContractBackend")
 /** Client c1's `mutationId`th mutation: a contract write of row `id`. */
 const putContractRow = (mutationId: number, id: string) => ({
   clientId: "c1",
-  mutationId,
+  mutationId: MutationId.make(mutationId),
   mutator: BackendContract.putRow.name,
   args: { collection: "__contract", id, value: { n: mutationId } },
   createdAt: 0,
 });
 
-describe("Backend.perRequest over SqlBackend", () => {
-  it.effect("passes verifyBackendContract over a real SQLite executor", () =>
+layer(BackendContract.layerParkGates)("Backend.perRequest over SqlBackend", (gated) => {
+  gated.effect("passes verifyBackendContract over a real SQLite executor", () =>
     Effect.scoped(
       Effect.gen(function* () {
         const { backend, opened, released } = yield* makePerRequestContractBackend();
@@ -328,7 +337,7 @@ describe("Backend.perRequest over SqlBackend", () => {
     )
   );
 
-  it.effect("runs one push's transaction and every statement in it on one acquisition", () =>
+  gated.effect("runs one push's transaction and every statement in it on one acquisition", () =>
     Effect.scoped(
       Effect.gen(function* () {
         const { backend, opened, released, log } = yield* makePerRequestContractBackend();
@@ -337,7 +346,7 @@ describe("Backend.perRequest over SqlBackend", () => {
           auth: { policy: Authorization.policy({ __contract: Authorization.allowAll }) },
         });
         const pushed = yield* server.handler.handlePush({
-          clientGroupId: "g",
+          clientGroupId: ClientGroupId.make("g"),
           mutations: [putContractRow(1, "a"), putContractRow(2, "b"), putContractRow(3, "c")],
         });
         expect(pushed.lastMutationIds).toEqual({ c1: 3 });
@@ -350,7 +359,7 @@ describe("Backend.perRequest over SqlBackend", () => {
         expect(pushLog.every(([acquisition]) => acquisition === 1)).toBe(true);
 
         const pulled = yield* server.handler.handlePull({
-          clientGroupId: "g",
+          clientGroupId: ClientGroupId.make("g"),
           subscriptions: [Subset.make({ collection: "__contract" })],
         });
         expect(pulled.patch).toHaveLength(3);
@@ -365,11 +374,11 @@ describe("Backend.perRequest over SqlBackend", () => {
 // A counter bump on the contract table: applying it twice would read `n: 2`.
 const formBump = Mutator.make("form/bump", Schema.Struct({ id: Schema.String }));
 
-describe("Server.mutate over SqlBackend", () => {
+layer(BackendContract.layerParkGates)("Server.mutate over SqlBackend", (gated) => {
   const makeServer = Effect.fn("makeServer")(function* () {
     const backend = yield* makeContractBackend(
       {
-        ...handlers,
+        ...contractHandlers(yield* BackendContract.ParkGates),
         [formBump.name]: (raw, tx) =>
           Effect.gen(function* () {
             const { id } = yield* Schema.decodeUnknownEffect(formBump.args)(raw).pipe(
@@ -379,7 +388,7 @@ describe("Server.mutate over SqlBackend", () => {
               text: `INSERT INTO __contract (id, n) VALUES (?, 1) ON CONFLICT(id) DO UPDATE SET n = n + 1`,
               params: [id],
             });
-            return [{ collection: "__contract", ids: [id] }];
+            return [{ collection: "__contract", ids: [RowId.make(id)] }];
           }),
       },
       new Map([...contractMutators, [formBump.name, formBump]])
@@ -391,29 +400,35 @@ describe("Server.mutate over SqlBackend", () => {
     return { backend, server };
   });
 
-  it.effect("the same form submitted twice applies once, and both answer one receipt", () =>
+  gated.effect("the same form submitted twice applies once, and both answer one receipt", () =>
     Effect.scoped(
       Effect.gen(function* () {
         const { backend, server } = yield* makeServer();
         const submission = {
-          clientGroupId: "group-1",
+          clientGroupId: ClientGroupId.make("group-1"),
           clientId: "form-a",
-          mutationId: 1,
+          mutationId: MutationId.make(1),
           mutation: formBump,
           args: { id: "c1" },
         } as const;
         const first = yield* server.mutate(submission);
         const second = yield* server.mutate(submission);
-        expect(first).toEqual({ clientId: "form-a", mutationId: 1, phase: "acknowledged" });
+        expect(first).toEqual({
+          clientId: "form-a",
+          mutationId: MutationId.make(1),
+          phase: "acknowledged",
+        });
         expect(second).toEqual(first);
         const rows = yield* backend
-          .getRows({ clientGroupId: "group-1" }, "__contract", ["c1"])
+          .getRows({ clientGroupId: ClientGroupId.make("group-1") }, "__contract", [
+            RowId.make("c1"),
+          ])
           .pipe(Effect.orDie);
         expect(rows).toEqual([
           expect.objectContaining({ value: expect.objectContaining({ n: 1 }) }),
         ]);
         const pull = yield* server.handler.handlePull({
-          clientGroupId: "group-1",
+          clientGroupId: ClientGroupId.make("group-1"),
           subscriptions: [Subset.make({ collection: "__contract" })],
         });
         expect(pull.lastMutationIds["form-a"]).toBe(1);
@@ -421,36 +436,40 @@ describe("Server.mutate over SqlBackend", () => {
     )
   );
 
-  it.effect("a permanent rejection answers its reason, bumped without effects, on replay too", () =>
-    Effect.scoped(
-      Effect.gen(function* () {
-        const { backend, server } = yield* makeServer();
-        const submission = {
-          clientGroupId: "group-1",
-          clientId: "form-b",
-          mutationId: 1,
-          mutation: BackendContract.rejectAlways,
-          args: { collection: "__contract", id: "c2" },
-        } as const;
-        const receipt = yield* server.mutate(submission);
-        expect(receipt).toEqual({
-          clientId: "form-b",
-          mutationId: 1,
-          phase: "rejected",
-          reason: "contract/reject always rejects",
-        });
-        expect(
-          yield* backend
-            .getRows({ clientGroupId: "group-1" }, "__contract", ["c2"])
-            .pipe(Effect.orDie)
-        ).toEqual([]);
-        const ledger = yield* backend
-          .lastMutationIds({ clientGroupId: "group-1" })
-          .pipe(Effect.orDie);
-        expect(ledger["form-b"]).toBe(1);
-        expect(yield* server.mutate(submission)).toEqual(receipt);
-      })
-    )
+  gated.effect(
+    "a permanent rejection answers its reason, bumped without effects, on replay too",
+    () =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const { backend, server } = yield* makeServer();
+          const submission = {
+            clientGroupId: ClientGroupId.make("group-1"),
+            clientId: "form-b",
+            mutationId: MutationId.make(1),
+            mutation: BackendContract.rejectAlways,
+            args: { collection: "__contract", id: RowId.make("c2") },
+          } as const;
+          const receipt = yield* server.mutate(submission);
+          expect(receipt).toEqual({
+            clientId: "form-b",
+            mutationId: MutationId.make(1),
+            phase: "rejected",
+            reason: "contract/reject always rejects",
+          });
+          expect(
+            yield* backend
+              .getRows({ clientGroupId: ClientGroupId.make("group-1") }, "__contract", [
+                RowId.make("c2"),
+              ])
+              .pipe(Effect.orDie)
+          ).toEqual([]);
+          const ledger = yield* backend
+            .lastMutationIds({ clientGroupId: ClientGroupId.make("group-1") })
+            .pipe(Effect.orDie);
+          expect(ledger["form-b"]).toBe(1);
+          expect(yield* server.mutate(submission)).toEqual(receipt);
+        })
+      )
   );
 });
 
@@ -469,7 +488,7 @@ const todoSet = Mutator.make("todo/set", Schema.Unknown);
 const todoMutators = Mutator.registry([
   {
     mutator: todoSet,
-    local: (args: Todo, writer) => writer.put("todos", args.id, args),
+    local: (args: Todo, writer) => writer.put("todos", RowId.make(args.id), args),
   },
 ]);
 
@@ -481,7 +500,7 @@ const todoHandlers = {
         text: `INSERT OR REPLACE INTO todos (id, title, done) VALUES (?, ?, ?)`,
         params: [args.id, args.title, doneOf(raw) ? 1 : 0],
       });
-      return [{ collection: "todos", ids: [args.id] }];
+      return [{ collection: "todos", ids: [RowId.make(args.id)] }];
     }),
 } satisfies Record<string, SqlBackend.SqlHandler>;
 
@@ -521,11 +540,11 @@ describe("paced compaction against SqlBackend", () => {
             yield* InvalidationBus.makeInProcess
           )
         );
-        const transport = yield* Transport.makeInMemory(handler, "group-sql");
+        const transport = yield* Transport.makeInMemory(handler, ClientGroupId.make("group-sql"));
         const store = yield* ClientStore.makeMemory;
         const engine = yield* ClientEngine.make({
           clientId: "client-sql",
-          clientGroupId: "group-sql",
+          clientGroupId: ClientGroupId.make("group-sql"),
           mutators: todoMutators,
         }).pipe(
           Effect.provideService(ClientStore.ClientStore, store),
@@ -554,7 +573,9 @@ describe("paced compaction against SqlBackend", () => {
           { id: "1", title: "e5" },
           { id: "2", title: "other" },
         ]);
-        expect(yield* backend.lastMutationIds({ clientGroupId: "group-sql" })).toEqual({
+        expect(
+          yield* backend.lastMutationIds({ clientGroupId: ClientGroupId.make("group-sql") })
+        ).toEqual({
           "client-sql": 2,
         });
       })
@@ -590,67 +611,74 @@ const PG_DDL: ReadonlyArray<string> = [
 /** The shipped PostgreSQL executor: real transactions, unprepared statements. */
 const pgExecutor = PgExecutor.make;
 
-/** The contract mutators, as PostgreSQL statements (`$n` placeholders, `ON CONFLICT` upserts). */
-const pgHandlers = {
-  [BackendContract.putRow.name]: (raw, tx) =>
-    Effect.gen(function* () {
-      const args = decodePutRow(raw);
-      const value = decodeContractValue(args.value);
-      const table = yield* tableFor(args.collection);
-      yield* tx.run({
-        text: `INSERT INTO ${table} (id, n, rank, tag) VALUES ($1, $2, $3, $4) ON CONFLICT (id) DO UPDATE SET n = EXCLUDED.n, rank = EXCLUDED.rank, tag = EXCLUDED.tag`,
-        params: [args.id, value?.n ?? null, value?.rank ?? null, value?.tag ?? null],
-      });
-      return [{ collection: args.collection, ids: [args.id] }];
-    }),
-  [BackendContract.delRow.name]: (raw, tx) =>
-    Effect.gen(function* () {
-      const args = decodeDelRow(raw);
-      const table = yield* tableFor(args.collection);
-      yield* tx.run({ text: `DELETE FROM ${table} WHERE id = $1`, params: [args.id] });
-      return [{ collection: args.collection, ids: [args.id] }];
-    }),
-  [BackendContract.failAlways.name]: () =>
-    Effect.fail(new BackendError({ message: "contract/fail always fails" })),
-  [BackendContract.countUp.name]: (raw, tx) =>
-    Effect.gen(function* () {
-      const args = decodeCountUp(raw);
-      const table = yield* tableFor(args.collection);
-      const rows = yield* tx.query({
-        text: `SELECT n FROM ${table} WHERE id = $1`,
-        params: [args.id],
-      });
-      yield* BackendContract.park(args.gate);
-      yield* tx.run({
-        text: `UPDATE ${table} SET n = $1 WHERE id = $2`,
-        params: [Number(rows[0]?.n ?? 0) + 1, args.id],
-      });
-      return [{ collection: args.collection, ids: [args.id] }];
-    }),
-  [BackendContract.rejectAlways.name]: (raw, tx) =>
-    Effect.gen(function* () {
-      const args = decodeRejectAlways(raw);
-      const table = yield* tableFor(args.collection);
-      yield* tx.run({
-        text: `INSERT INTO ${table} (id, n) VALUES ($1, -1) ON CONFLICT (id) DO UPDATE SET n = EXCLUDED.n`,
-        params: [args.id],
-      });
-      return yield* new MutationRejected({ reason: "contract/reject always rejects" });
-    }),
-  [BackendContract.writeThenFail.name]: (raw, tx) =>
-    Effect.gen(function* () {
-      const args = decodeWriteThenFail(raw);
-      const table = yield* tableFor(args.collection);
-      yield* tx.run({
-        text: `INSERT INTO ${table} (id, n) VALUES ($1, 99) ON CONFLICT (id) DO UPDATE SET n = EXCLUDED.n`,
-        params: [args.id],
-      });
-      return yield* new BackendError({ message: "contract/write-then-fail fails after writing" });
-    }),
-} satisfies Record<string, SqlBackend.SqlHandler>;
+/**
+ * The contract mutators, as PostgreSQL statements (`$n` placeholders, `ON CONFLICT` upserts),
+ * with `countUp` parking at `gates`.
+ */
+const pgHandlers = (gates: BackendContract.ParkGates) =>
+  ({
+    [BackendContract.putRow.name]: (raw, tx) =>
+      Effect.gen(function* () {
+        const args = decodePutRow(raw);
+        const value = decodeContractValue(args.value);
+        const table = yield* tableFor(args.collection);
+        yield* tx.run({
+          text: `INSERT INTO ${table} (id, n, rank, tag) VALUES ($1, $2, $3, $4) ON CONFLICT (id) DO UPDATE SET n = EXCLUDED.n, rank = EXCLUDED.rank, tag = EXCLUDED.tag`,
+          params: [args.id, value?.n ?? null, value?.rank ?? null, value?.tag ?? null],
+        });
+        return [{ collection: args.collection, ids: [args.id] }];
+      }),
+    [BackendContract.delRow.name]: (raw, tx) =>
+      Effect.gen(function* () {
+        const args = decodeDelRow(raw);
+        const table = yield* tableFor(args.collection);
+        yield* tx.run({ text: `DELETE FROM ${table} WHERE id = $1`, params: [args.id] });
+        return [{ collection: args.collection, ids: [args.id] }];
+      }),
+    [BackendContract.failAlways.name]: () =>
+      Effect.fail(new BackendError({ message: "contract/fail always fails" })),
+    [BackendContract.countUp.name]: (raw, tx) =>
+      Effect.gen(function* () {
+        const args = decodeCountUp(raw);
+        const table = yield* tableFor(args.collection);
+        const rows = yield* tx.query({
+          text: `SELECT n FROM ${table} WHERE id = $1`,
+          params: [args.id],
+        });
+        yield* gates.park(args.gate);
+        yield* tx.run({
+          text: `UPDATE ${table} SET n = $1 WHERE id = $2`,
+          params: [Number(rows[0]?.n ?? 0) + 1, args.id],
+        });
+        return [{ collection: args.collection, ids: [args.id] }];
+      }),
+    [BackendContract.rejectAlways.name]: (raw, tx) =>
+      Effect.gen(function* () {
+        const args = decodeRejectAlways(raw);
+        const table = yield* tableFor(args.collection);
+        yield* tx.run({
+          text: `INSERT INTO ${table} (id, n) VALUES ($1, -1) ON CONFLICT (id) DO UPDATE SET n = EXCLUDED.n`,
+          params: [args.id],
+        });
+        return yield* new MutationRejected({ reason: "contract/reject always rejects" });
+      }),
+    [BackendContract.writeThenFail.name]: (raw, tx) =>
+      Effect.gen(function* () {
+        const args = decodeWriteThenFail(raw);
+        const table = yield* tableFor(args.collection);
+        yield* tx.run({
+          text: `INSERT INTO ${table} (id, n) VALUES ($1, 99) ON CONFLICT (id) DO UPDATE SET n = EXCLUDED.n`,
+          params: [args.id],
+        });
+        return yield* new BackendError({ message: "contract/write-then-fail fails after writing" });
+      }),
+  }) satisfies Record<string, SqlBackend.SqlHandler>;
 
 /** Runs `use` on a pooled PostgreSQL client against a freshly created contract schema. */
-const withPgContract = <A, E>(url: string, use: (sql: SqlClient) => Effect.Effect<A, E>) =>
+const withPgContract = <A, E>(
+  url: string,
+  use: (sql: SqlClient) => Effect.Effect<A, E, BackendContract.ParkGates>
+) =>
   Effect.scoped(
     Effect.gen(function* () {
       // Two concurrent transactions (the parked call and its peer) plus a spare.
@@ -666,7 +694,10 @@ const withPgContract = <A, E>(url: string, use: (sql: SqlClient) => Effect.Effec
         Effect.ensuring(sql.unsafe(PG_TABLES).unprepared.pipe(Effect.ignore))
       );
     })
-  ).pipe(Effect.orDie);
+  ).pipe(
+    Effect.provideServiceEffect(BackendContract.ParkGates, BackendContract.makeParkGates),
+    Effect.orDie
+  );
 
 const describePostgres = databaseUrl === undefined ? describe.skip : describe;
 
@@ -746,28 +777,30 @@ const awaitPeerOn =
  * exactly as `pgHandlers`' `countUp` does, so rule 11 checks the same thing. It is
  * registered only in that test; the shared `countUp` above does not change.
  */
-const lockingCountUp: SqlBackend.SqlHandler = (raw, tx) =>
-  Effect.gen(function* () {
-    const args = decodeCountUp(raw);
-    const table = yield* tableFor(args.collection);
-    yield* tx.run({ text: `UPDATE ${table} SET n = n WHERE id = $1`, params: [args.id] });
-    const rows = yield* tx.query({
-      text: `SELECT n FROM ${table} WHERE id = $1`,
-      params: [args.id],
+const lockingCountUp =
+  (gates: BackendContract.ParkGates): SqlBackend.SqlHandler =>
+  (raw, tx) =>
+    Effect.gen(function* () {
+      const args = decodeCountUp(raw);
+      const table = yield* tableFor(args.collection);
+      yield* tx.run({ text: `UPDATE ${table} SET n = n WHERE id = $1`, params: [args.id] });
+      const rows = yield* tx.query({
+        text: `SELECT n FROM ${table} WHERE id = $1`,
+        params: [args.id],
+      });
+      yield* gates.park(args.gate);
+      yield* tx.run({
+        text: `UPDATE ${table} SET n = $1 WHERE id = $2`,
+        params: [Number(rows[0]?.n ?? 0) + 1, args.id],
+      });
+      return [{ collection: args.collection, ids: [args.id] }];
     });
-    yield* BackendContract.park(args.gate);
-    yield* tx.run({
-      text: `UPDATE ${table} SET n = $1 WHERE id = $2`,
-      params: [Number(rows[0]?.n ?? 0) + 1, args.id],
-    });
-    return [{ collection: args.collection, ids: [args.id] }];
-  });
 
-/** The PostgreSQL contract backend over `executor` and `dialect`, with `handlerMap` (default `pgHandlers`). */
+/** The PostgreSQL contract backend over `executor` and `dialect`, with `handlerMap`. */
 const backendOver = (
   executor: SqlBackend.SqlExecutor,
   dialect: Sql.Dialect,
-  handlerMap: Record<string, SqlBackend.SqlHandler> = pgHandlers
+  handlerMap: Record<string, SqlBackend.SqlHandler>
 ) =>
   SqlBackend.make({
     executor,
@@ -798,7 +831,11 @@ describePostgres("SqlBackend on PostgreSQL: verifyBackendContract", () => {
       withPgContract(databaseUrl ?? "", (sql) =>
         Effect.gen(function* () {
           const refusals = yield* Ref.make(0);
-          const backend = backendOver(countingRefusals(pgExecutor(sql), refusals), Sql.postgres);
+          const backend = backendOver(
+            countingRefusals(pgExecutor(sql), refusals),
+            Sql.postgres,
+            pgHandlers(yield* BackendContract.ParkGates)
+          );
           yield* BackendContract.verifyBackendContract(backend, { awaitPeer: awaitPeerOn(sql) });
           // Rule 11's parked call read before the peer committed, so its write is refused.
           expect(yield* Ref.get(refusals)).toBeGreaterThan(0);
@@ -815,10 +852,11 @@ describePostgres("SqlBackend on PostgreSQL: verifyBackendContract", () => {
     () =>
       withPgContract(databaseUrl ?? "", (sql) =>
         Effect.gen(function* () {
-          const backend = backendOver(pgExecutor(sql), {
-            ...Sql.postgres,
-            serializable: undefined,
-          });
+          const backend = backendOver(
+            pgExecutor(sql),
+            { ...Sql.postgres, serializable: undefined },
+            pgHandlers(yield* BackendContract.ParkGates)
+          );
           const failure = yield* Effect.flip(
             BackendContract.verifyBackendContract(backend, { awaitPeer: awaitPeerOn(sql) })
           );
@@ -842,9 +880,10 @@ describePostgres("SqlBackend on PostgreSQL: verifyBackendContract", () => {
         Effect.gen(function* () {
           const refusals = yield* Ref.make(0);
           const returnedOnLock = yield* Ref.make(false);
+          const gates = yield* BackendContract.ParkGates;
           const backend = backendOver(countingRefusals(pgExecutor(sql), refusals), Sql.postgres, {
-            ...pgHandlers,
-            [BackendContract.countUp.name]: lockingCountUp,
+            ...pgHandlers(gates),
+            [BackendContract.countUp.name]: lockingCountUp(gates),
           });
           yield* BackendContract.verifyBackendContract(backend, {
             awaitPeer: awaitPeerRecording(sql, returnedOnLock),

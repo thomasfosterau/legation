@@ -22,6 +22,7 @@ import * as Subset from "../Subset.js";
 import * as SyncServer from "../SyncServer.js";
 import { ClientTransport, makeInMemory, type ServerHandler } from "../Transport.js";
 import { idOf } from "./shapes.js";
+import { ClientGroupId, MutationId, RowId } from "../Protocol.js";
 
 interface Todo {
   readonly id: string;
@@ -38,7 +39,7 @@ const todos: ReadonlyArray<Todo> = [
 ];
 
 const handlers = {
-  "todo/set": (args, writer) => Effect.asVoid(writer.put("todos", idOf(args), args)),
+  "todo/set": (args, writer) => Effect.asVoid(writer.put("todos", RowId.make(idOf(args)), args)),
 } satisfies Record<string, MemoryBackend.BackendHandler>;
 
 const byRank = [{ field: "rank", direction: "asc" as const }];
@@ -49,10 +50,10 @@ const firstOpen = Subset.make({ collection: "todos", where: open, orderBy: byRan
 const seededBackend = Effect.fnUntraced(function* () {
   const backend = yield* MemoryBackend.make(handlers);
   yield* backend.applyMutations(
-    { clientGroupId: "seed" },
+    { clientGroupId: ClientGroupId.make("seed") },
     todos.map((todo, index) => ({
       clientId: "seed",
-      mutationId: index + 1,
+      mutationId: MutationId.make(index + 1),
       mutator: "todo/set",
       args: todo,
       createdAt: 0,
@@ -85,10 +86,10 @@ const makeServer = (
 const makeEngine = (handler: ServerHandler) =>
   Effect.gen(function* () {
     const store = yield* ClientStoreModule.makeMemory;
-    const transport = yield* makeInMemory(handler, "group-a");
+    const transport = yield* makeInMemory(handler, ClientGroupId.make("group-a"));
     return yield* ClientEngineModule.make({
       clientId: "client-a",
-      clientGroupId: "group-a",
+      clientGroupId: ClientGroupId.make("group-a"),
       mutators: Mutator.registry([]),
     }).pipe(
       Effect.provideService(ClientStore, store),
@@ -102,7 +103,7 @@ describe("subscription totals on the pull", () => {
       const handler = yield* makeServer(yield* seededBackend());
       const all = Subset.make({ collection: "todos" });
       const response = yield* handler.handlePull({
-        clientGroupId: "group-a",
+        clientGroupId: ClientGroupId.make("group-a"),
         subscriptions: [firstOpen, all],
       });
       // The window holds two rows; its where matches three. The unwindowed one holds all five.
@@ -116,7 +117,7 @@ describe("subscription totals on the pull", () => {
       const backend: Backend = { ...(yield* seededBackend()), evaluateCounted: undefined };
       const handler = yield* makeServer(backend);
       const response = yield* handler.handlePull({
-        clientGroupId: "group-a",
+        clientGroupId: ClientGroupId.make("group-a"),
         subscriptions: [firstOpen],
       });
       expect(response.totals).toBeUndefined();
@@ -137,7 +138,7 @@ describe("subscription totals on the pull", () => {
       };
       const handler = yield* makeServer(yield* seededBackend(), middleware);
       const response = yield* handler.handlePull({
-        clientGroupId: "group-a",
+        clientGroupId: ClientGroupId.make("group-a"),
         subscriptions: [firstOpen],
       });
       expect(response.totals).toBeUndefined();
@@ -182,10 +183,10 @@ describe("ClientEngine.totalOf", () => {
       yield* engine.pull;
       expect(yield* engine.totalOf(firstOpen)).toBe(3);
       // Outside the window (rank 9 sorts past the first two), but inside the filter.
-      yield* backend.applyMutations({ clientGroupId: "other" }, [
+      yield* backend.applyMutations({ clientGroupId: ClientGroupId.make("other") }, [
         {
           clientId: "other",
-          mutationId: 1,
+          mutationId: MutationId.make(1),
           mutator: "todo/set",
           args: { id: "t-9", done: false, rank: 9 },
           createdAt: 0,

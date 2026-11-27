@@ -25,6 +25,7 @@ import {
   SyncServer,
   Mirror,
   Related,
+  Protocol,
 } from "@thomasfosterau/legation/internal";
 import { describe, expect, it } from "@effect/vitest";
 import * as Arr from "effect/Array";
@@ -45,11 +46,13 @@ const userSet = Mutator.make("user/set", Schema.Unknown);
 const mutators = Mutator.registry([
   {
     mutator: todoSet,
-    local: (args, writer) => writer.put("todos", decodeIdentified(args).id, args),
+    local: (args, writer) =>
+      writer.put("todos", Protocol.RowId.make(decodeIdentified(args).id), args),
   },
   {
     mutator: userSet,
-    local: (args, writer) => writer.put("users", decodeIdentified(args).id, args),
+    local: (args, writer) =>
+      writer.put("users", Protocol.RowId.make(decodeIdentified(args).id), args),
   },
 ]);
 
@@ -57,12 +60,12 @@ const collections = Collection.registry([
   Collection.make({
     name: "users",
     schema: Schema.Unknown,
-    id: (value) => decodeIdentified(value).id,
+    id: (value) => Protocol.RowId.make(decodeIdentified(value).id),
   }),
   Collection.make({
     name: "todos",
     schema: Schema.Unknown,
-    id: (value) => decodeIdentified(value).id,
+    id: (value) => Protocol.RowId.make(decodeIdentified(value).id),
     relationships: [
       {
         name: "author",
@@ -111,10 +114,10 @@ const makeEngine = Effect.fn("makeEngine")(function* () {
   const backend = yield* MemoryBackend.make(
     MemoryBackend.validatedHandlers([
       MemoryBackend.handler(todoSet, (args, writer) =>
-        writer.put("todos", decodeIdentified(args).id, args)
+        writer.put("todos", Protocol.RowId.make(decodeIdentified(args).id), args)
       ),
       MemoryBackend.handler(userSet, (args, writer) =>
-        writer.put("users", decodeIdentified(args).id, args)
+        writer.put("users", Protocol.RowId.make(decodeIdentified(args).id), args)
       ),
     ])
   );
@@ -129,10 +132,10 @@ const makeEngine = Effect.fn("makeEngine")(function* () {
     Effect.provideService(Query.QueryResolver, resolver)
   );
   const store = yield* ClientStore.makeMemory;
-  const transport = yield* Transport.makeInMemory(handler, "group-a");
+  const transport = yield* Transport.makeInMemory(handler, Protocol.ClientGroupId.make("group-a"));
   const engine = yield* ClientEngine.make({
     clientId: "client-a",
-    clientGroupId: "group-a",
+    clientGroupId: Protocol.ClientGroupId.make("group-a"),
     mutators,
     queries,
   }).pipe(

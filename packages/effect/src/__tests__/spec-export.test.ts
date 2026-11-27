@@ -13,6 +13,7 @@ import * as Collection from "../Collection.js";
 import * as Mutator from "../Mutator.js";
 import * as Query from "../Query.js";
 import * as SpecExport from "../SpecExport.js";
+import { RowId } from "../Protocol.js";
 
 const Todo = Schema.Struct({
   id: Schema.String,
@@ -20,7 +21,7 @@ const Todo = Schema.Struct({
   isDone: Schema.Boolean,
 });
 
-const todos = Collection.make({ name: "todos", schema: Todo, id: (t) => t.id });
+const todos = Collection.make({ name: "todos", schema: Todo, id: (t) => RowId.make(t.id) });
 const setTodo = Mutator.make("todo/set", Todo);
 const removeTodo = Mutator.make("todo/remove", Schema.Struct({ id: Schema.String }));
 const byDone = Query.make("todos/byDone", Schema.Struct({ isDone: Schema.Boolean }));

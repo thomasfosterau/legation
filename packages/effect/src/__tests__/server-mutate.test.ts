@@ -25,6 +25,7 @@ import {
   type Backend,
 } from "../index.js";
 import { Subset } from "../internal.js";
+import { ClientGroupId, MutationId, RowId } from "../Protocol.js";
 
 // A counter bump: applying it twice would show as `n: 2`.
 const bump = Mutator.make("counter/bump", Schema.Struct({ id: Schema.String }));
@@ -45,18 +46,18 @@ const makeBackendSeeing = (seen: Ref.Ref<ReadonlyArray<unknown>>) =>
       MemoryBackend.handler(bump, (args, writer, context) =>
         Effect.gen(function* () {
           yield* Ref.update(seen, (all) => [...all, context.identity]);
-          const current = yield* writer.get("counters", args.id);
+          const current = yield* writer.get("counters", RowId.make(args.id));
           const n = P.hasProperty(current, "n") && P.isNumber(current.n) ? current.n : 0;
-          yield* writer.put("counters", args.id, { id: args.id, n: n + 1 });
+          yield* writer.put("counters", RowId.make(args.id), { id: args.id, n: n + 1 });
         })
       ),
       MemoryBackend.handler(refuse, (args, writer) =>
         writer
-          .put("counters", args.id, { id: args.id, n: -1 })
+          .put("counters", RowId.make(args.id), { id: args.id, n: -1 })
           .pipe(Effect.andThen(Effect.fail(new MutationRejected({ reason: "sold out" }))))
       ),
       MemoryBackend.handler(stamp, (args, writer) =>
-        writer.put("counters", args.id, { id: args.id, n: args.at })
+        writer.put("counters", RowId.make(args.id), { id: args.id, n: args.at })
       ),
     ])
   );
@@ -66,7 +67,9 @@ const makeBackend = Ref.make<ReadonlyArray<unknown>>([]).pipe(Effect.flatMap(mak
 const policy = Authorization.policy({ counters: Authorization.allowAll });
 
 const rowsOf = (backend: Backend.Backend, clientGroupId: string, id: string) =>
-  backend.getRows({ clientGroupId }, "counters", [id]).pipe(Effect.orDie);
+  backend
+    .getRows({ clientGroupId: ClientGroupId.make(clientGroupId) }, "counters", [RowId.make(id)])
+    .pipe(Effect.orDie);
 
 describe("Server.mutate", () => {
   it.effect("the same form submitted twice applies once, and both answer one receipt", () =>
@@ -75,9 +78,9 @@ describe("Server.mutate", () => {
         const backend = yield* makeBackend;
         const server = yield* Server.make({ backend, auth: { policy } });
         const submission = {
-          clientGroupId: "group-1",
+          clientGroupId: ClientGroupId.make("group-1"),
           clientId: "form-a",
-          mutationId: 1,
+          mutationId: MutationId.make(1),
           mutation: bump,
           args: { id: "c1" },
         } as const;
@@ -85,7 +88,11 @@ describe("Server.mutate", () => {
         const first = yield* server.mutate(submission);
         const second = yield* server.mutate(submission);
 
-        expect(first).toEqual({ clientId: "form-a", mutationId: 1, phase: "acknowledged" });
+        expect(first).toEqual({
+          clientId: "form-a",
+          mutationId: MutationId.make(1),
+          phase: "acknowledged",
+        });
         expect(second).toEqual(first);
         const rows = yield* rowsOf(backend, "group-1", "c1");
         expect(rows.map((row) => row.value)).toEqual([{ id: "c1", n: 1 }]);
@@ -99,9 +106,9 @@ describe("Server.mutate", () => {
         const backend = yield* makeBackend;
         const server = yield* Server.make({ backend, auth: { policy } });
         const submission = {
-          clientGroupId: "group-1",
+          clientGroupId: ClientGroupId.make("group-1"),
           clientId: "form-b",
-          mutationId: 1,
+          mutationId: MutationId.make(1),
           mutation: refuse,
           args: { id: "c2" },
         } as const;
@@ -109,13 +116,13 @@ describe("Server.mutate", () => {
         const receipt = yield* server.mutate(submission);
         expect(receipt).toEqual({
           clientId: "form-b",
-          mutationId: 1,
+          mutationId: MutationId.make(1),
           phase: "rejected",
           reason: "sold out",
         });
         expect(yield* rowsOf(backend, "group-1", "c2")).toEqual([]);
         const ledger = yield* backend
-          .lastMutationIds({ clientGroupId: "group-1" })
+          .lastMutationIds({ clientGroupId: ClientGroupId.make("group-1") })
           .pipe(Effect.orDie);
         expect(ledger["form-b"]).toBe(1);
 
@@ -131,15 +138,15 @@ describe("Server.mutate", () => {
         const backend = yield* makeBackend;
         const server = yield* Server.make({ backend, auth: { policy } });
         yield* server.mutate({
-          clientGroupId: "group-1",
+          clientGroupId: ClientGroupId.make("group-1"),
           clientId: "form-c",
-          mutationId: 1,
+          mutationId: MutationId.make(1),
           mutation: bump,
           args: { id: "c3" },
         });
 
         const pull = yield* server.handler.handlePull({
-          clientGroupId: "group-1",
+          clientGroupId: ClientGroupId.make("group-1"),
           subscriptions: [Subset.make({ collection: "counters" })],
         });
         expect(pull.lastMutationIds["form-c"]).toBe(1);
@@ -157,21 +164,22 @@ describe("Server.mutate", () => {
         const server = yield* Server.make({ backend, auth: { policy } });
         // Another group subscribes to the counters window with a first pull.
         yield* server.handler.handlePull({
-          clientGroupId: "group-2",
+          clientGroupId: ClientGroupId.make("group-2"),
           subscriptions: [Subset.make({ collection: "counters" })],
         });
         const poked = yield* Deferred.make<void>();
         yield* Effect.forkScoped(
-          Stream.runForEach(Stream.take(server.handler.pokes("group-2"), 1), () =>
-            Deferred.succeed(poked, undefined)
+          Stream.runForEach(
+            Stream.take(server.handler.pokes(ClientGroupId.make("group-2")), 1),
+            () => Deferred.succeed(poked, undefined)
           )
         );
         yield* Effect.yieldNow;
 
         yield* server.mutate({
-          clientGroupId: "group-1",
+          clientGroupId: ClientGroupId.make("group-1"),
           clientId: "form-d",
-          mutationId: 1,
+          mutationId: MutationId.make(1),
           mutation: bump,
           args: { id: "c4" },
         });
@@ -204,9 +212,9 @@ describe("Server.mutate", () => {
           },
         });
         yield* server.mutate({
-          clientGroupId: "group-1",
+          clientGroupId: ClientGroupId.make("group-1"),
           clientId: "form-e",
-          mutationId: 1,
+          mutationId: MutationId.make(1),
           mutation: bump,
           args: { id: "c5" },
         });
@@ -222,9 +230,9 @@ describe("Server.mutate", () => {
         const backend = yield* makeBackend;
         const server = yield* Server.make({ backend, auth: { policy } });
         const receipt = yield* server.mutate({
-          clientGroupId: "group-1",
+          clientGroupId: ClientGroupId.make("group-1"),
           clientId: "form-f",
-          mutationId: 1,
+          mutationId: MutationId.make(1),
           mutation: stamp,
           args: { id: "c6", at: 42 },
         });
@@ -242,16 +250,16 @@ describe("Server.mutate", () => {
         const server = yield* Server.make({ backend, auth: { policy } });
         const exit = yield* Effect.exit(
           server.mutate({
-            clientGroupId: "group-1",
+            clientGroupId: ClientGroupId.make("group-1"),
             clientId: "form-g",
-            mutationId: 1,
+            mutationId: MutationId.make(1),
             mutation: named,
             args: { id: "" },
           })
         );
         expect(Exit.hasDies(exit)).toBe(true);
         const ledger = yield* backend
-          .lastMutationIds({ clientGroupId: "group-1" })
+          .lastMutationIds({ clientGroupId: ClientGroupId.make("group-1") })
           .pipe(Effect.orDie);
         expect(ledger["form-g"]).toBeUndefined();
       })

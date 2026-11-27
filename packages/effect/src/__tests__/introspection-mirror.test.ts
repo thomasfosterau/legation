@@ -32,6 +32,7 @@ import * as Mutator from "../Mutator.js";
 import * as Subset from "../Subset.js";
 import * as SyncServer from "../SyncServer.js";
 import * as Transport from "../Transport.js";
+import { ClientGroupId, MutationId, RowId } from "../Protocol.js";
 
 const Todo = Schema.Struct({ id: Schema.String, title: Schema.String });
 const setTodo = Mutator.make("todo/set", Todo);
@@ -40,7 +41,7 @@ const mutators = Mutator.registry([
 ]);
 const backendHandlers = MemoryBackend.validatedHandlers([
   MemoryBackend.handler(setTodo, (args, writer) =>
-    Effect.asVoid(writer.put("todos", args.id, args))
+    Effect.asVoid(writer.put("todos", RowId.make(args.id), args))
   ),
 ]);
 const allTodos = Subset.make({ collection: "todos" });
@@ -62,10 +63,10 @@ const setup = (
       Effect.provideService(InvalidationBus.InvalidationBus, yield* InvalidationBus.makeInProcess)
     );
     const store = yield* ClientStore.makeMemory;
-    const transport = wrap(yield* Transport.makeInMemory(handler, "group-a"));
+    const transport = wrap(yield* Transport.makeInMemory(handler, ClientGroupId.make("group-a")));
     const engine = yield* ClientEngine.make({
       clientId: "host-a",
-      clientGroupId: "group-a",
+      clientGroupId: ClientGroupId.make("group-a"),
       mutators,
       retry: { pull: Schedule.recurs(0) },
       syncLoop: { pullInterval: Duration.millis(20) },
@@ -129,7 +130,9 @@ describe("Introspection.fromMirror", () => {
       yield* TestClock.adjust(Duration.millis(50));
       yield* engine.mutate(setTodo.name, { id: "1", title: "t" });
       const event = yield* Fiber.join(first);
-      expect(event).toMatchObject({ value: { _tag: "MutationJournaled", mutationId: 1 } });
+      expect(event).toMatchObject({
+        value: { _tag: "MutationJournaled", mutationId: MutationId.make(1) },
+      });
     })
   );
 
@@ -169,13 +172,13 @@ describe("Introspection.fromMirror", () => {
       );
       const engine = yield* ClientEngine.make({
         clientId: "host-a",
-        clientGroupId: "group-a",
+        clientGroupId: ClientGroupId.make("group-a"),
         mutators,
       }).pipe(
         Effect.provideService(ClientStore.ClientStore, yield* ClientStore.makeMemory),
         Effect.provideService(
           Transport.ClientTransport,
-          yield* Transport.makeInMemory(handler, "group-a")
+          yield* Transport.makeInMemory(handler, ClientGroupId.make("group-a"))
         )
       );
       const pair = yield* MirrorChannel.makeLoopbackPair;

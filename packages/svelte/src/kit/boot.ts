@@ -15,13 +15,24 @@
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as ManagedRuntime from "effect/ManagedRuntime";
-import { Client, ClientStore, Hydration, type Transport } from "@thomasfosterau/legation";
+import {
+  Client,
+  ClientStore,
+  Hydration,
+  type StoreError,
+  type Transport,
+} from "@thomasfosterau/legation";
 import type { ClientRuntime } from "../Runtime.js";
 
 /** Options for {@link clientRuntime}. */
 export interface ClientRuntimeOptions extends Omit<Client.MakeOptions, "store" | "transport"> {
-  /** Fully-provided client store layer (e.g. `IndexedDbClientStore.layerWindow()`). */
-  readonly store: Layer.Layer<ClientStore.ClientStore>;
+  /**
+   * Fully-provided client store layer (e.g. `IndexedDbClientStore.layerWindow()`).
+   * A store that fails to open is a boot defect, like a failed hydration: to
+   * recover from the `StoreError` instead, catch it on the layer, as in
+   * `IndexedDbClientStore.layerWindow().pipe(Layer.catch(() => ClientStore.layerMemory))`.
+   */
+  readonly store: Layer.Layer<ClientStore.ClientStore, StoreError>;
   /** Fully-provided transport layer (RPC client, or an in-memory pair in tests). */
   readonly transport: Layer.Layer<Transport.ClientTransport>;
   /** The page's SSR snapshot, hydrated into an empty store before the Client boots. */
@@ -31,9 +42,9 @@ export interface ClientRuntimeOptions extends Omit<Client.MakeOptions, "store" |
 }
 
 const hydrated = (
-  store: Layer.Layer<ClientStore.ClientStore>,
+  store: Layer.Layer<ClientStore.ClientStore, StoreError>,
   snapshot?: Hydration.Snapshot
-): Layer.Layer<ClientStore.ClientStore> =>
+): Layer.Layer<ClientStore.ClientStore, StoreError> =>
   snapshot === undefined
     ? store
     : Layer.effect(ClientStore.ClientStore)(
@@ -65,6 +76,10 @@ export const clientRuntime = (options: ClientRuntimeOptions): ClientRuntime => {
         }
         return built;
       })
-    ).pipe(Layer.provide(transport), Layer.provide(hydrated(store, snapshot)))
+    ).pipe(
+      Layer.provide(transport),
+      // A store the app left uncaught is a boot defect (see `ClientRuntimeOptions.store`).
+      Layer.provide(hydrated(store, snapshot).pipe(Layer.orDie))
+    )
   );
 };

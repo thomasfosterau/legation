@@ -28,6 +28,7 @@ import * as Subset from "../Subset.js";
 import * as SyncServer from "../SyncServer.js";
 import { ClientTransport, makeInMemory } from "../Transport.js";
 import { idOf, optionalCountOf } from "./shapes.js";
+import { ClientGroupId, RowId } from "../Protocol.js";
 
 // The ids from `from` to `to`, comma-separated, as a log line shows them.
 const range = (from: number, to: number): string =>
@@ -36,14 +37,14 @@ const range = (from: number, to: number): string =>
 // A non-idempotent counter: a double application shows as an extra count.
 const counterWrite = <E>(
   writer: {
-    readonly get: (collection: string, id: string) => Effect.Effect<unknown, E>;
-    readonly put: (collection: string, id: string, value: unknown) => Effect.Effect<void, E>;
+    readonly get: (collection: string, id: RowId) => Effect.Effect<unknown, E>;
+    readonly put: (collection: string, id: RowId, value: unknown) => Effect.Effect<void, E>;
   },
   id: string
 ): Effect.Effect<void, E> =>
   Effect.gen(function* () {
-    const current = optionalCountOf(yield* writer.get("counters", id));
-    yield* writer.put("counters", id, { id, n: (current ?? 0) + 1 });
+    const current = optionalCountOf(yield* writer.get("counters", RowId.make(id)));
+    yield* writer.put("counters", RowId.make(id), { id, n: (current ?? 0) + 1 });
   });
 
 const counterMutators = Mutator.registry([
@@ -124,7 +125,7 @@ const engineOver = (
 ) =>
   ClientEngineModule.make({
     clientId: "client-a",
-    clientGroupId: "group-a",
+    clientGroupId: ClientGroupId.make("group-a"),
     mutators: counterMutators,
     ...Defined.fields({ unpulledLimit: options.unpulledLimit, retry: options.retry }),
   }).pipe(
@@ -149,7 +150,7 @@ const journaled = (count: number, unpulledLimit?: number) =>
     const server = yield* serverOver(yield* MemoryBackend.make(backendHandlers));
     const store = yield* ClientStoreModule.makeMemory;
     const log: Array<string> = [];
-    const inner = yield* makeInMemory(server, "group-a");
+    const inner = yield* makeInMemory(server, ClientGroupId.make("group-a"));
     const engine = yield* engineOver(logged(inner, store, log), store, { unpulledLimit });
     yield* engine.subscribe(countersSubset);
     yield* Effect.replicateEffect(engine.mutate("counter/inc", { id: "c" }), count, {
@@ -230,7 +231,7 @@ describe("a push larger than the pull-ahead threshold", () => {
     Effect.gen(function* () {
       const server = yield* serverOver(yield* MemoryBackend.make(backendHandlers));
       const store = yield* ClientStoreModule.makeMemory;
-      const inner = yield* makeInMemory(server, "group-a");
+      const inner = yield* makeInMemory(server, ClientGroupId.make("group-a"));
       const pushes = yield* Ref.make(0);
       const failSecond: ClientTransport = {
         ...inner,
@@ -272,7 +273,7 @@ describe("a push larger than the pull-ahead threshold", () => {
       const server = yield* serverOver(yield* MemoryBackend.make(backendHandlers));
       const store = yield* ClientStoreModule.makeMemory;
       const log: Array<string> = [];
-      const inner = yield* makeInMemory(server, "group-a");
+      const inner = yield* makeInMemory(server, ClientGroupId.make("group-a"));
       const pullsDown = yield* Ref.make(true);
       const flakyPulls: ClientTransport = {
         ...inner,
@@ -317,7 +318,7 @@ describe("a push larger than the pull-ahead threshold", () => {
       // 5. The second push then has 4 entries of room, not a whole chunk of 5.
       const server = yield* serverOver(yield* MemoryBackend.make(backendHandlers));
       const store = yield* ClientStoreModule.makeMemory;
-      const inner = yield* makeInMemory(server, "group-a");
+      const inner = yield* makeInMemory(server, ClientGroupId.make("group-a"));
       const pullsRefused = yield* Ref.make(true);
       const refusedCalled = yield* Deferred.make<void>();
       const refusedPulls: ClientTransport = {
@@ -375,7 +376,7 @@ describe("a push larger than the pull-ahead threshold", () => {
     Effect.gen(function* () {
       const server = yield* serverOver(yield* MemoryBackend.make(backendHandlers));
       const store = yield* ClientStoreModule.makeMemory;
-      const inner = yield* makeInMemory(server, "group-a");
+      const inner = yield* makeInMemory(server, ClientGroupId.make("group-a"));
       const pullsDown = yield* Ref.make(true);
       const downPulls: ClientTransport = {
         ...inner,
@@ -430,7 +431,7 @@ describe("a push larger than the pull-ahead threshold", () => {
     Effect.gen(function* () {
       const server = yield* serverOver(yield* MemoryBackend.make(backendHandlers));
       const store = yield* ClientStoreModule.makeMemory;
-      const inner = yield* makeInMemory(server, "group-a");
+      const inner = yield* makeInMemory(server, ClientGroupId.make("group-a"));
       // While `silent`, pulls succeed but acknowledge nothing, so no pull releases the tail.
       const silent = yield* Ref.make(false);
       const releasesNothing: ClientTransport = {
@@ -471,7 +472,7 @@ describe("a push larger than the pull-ahead threshold", () => {
       Effect.gen(function* () {
         const server = yield* serverOver(yield* MemoryBackend.make(backendHandlers));
         const store = yield* ClientStoreModule.makeMemory;
-        const inner = yield* makeInMemory(server, "group-a");
+        const inner = yield* makeInMemory(server, ClientGroupId.make("group-a"));
         const reached = yield* Deferred.make<void>();
         const parkNextPull = yield* Ref.make(true);
         // The first pull, the one between the two chunks, never returns.
@@ -516,7 +517,7 @@ describe("a push larger than the pull-ahead threshold", () => {
       Effect.gen(function* () {
         const server = yield* serverOver(yield* MemoryBackend.make(backendHandlers));
         const store = yield* ClientStoreModule.makeMemory;
-        const inner = yield* makeInMemory(server, "group-a");
+        const inner = yield* makeInMemory(server, ClientGroupId.make("group-a"));
         // The first two requests are each a push's first chunk, and both are lost.
         const requests = yield* Ref.make(0);
         const lostFirstTwo: ClientTransport = {
@@ -565,7 +566,7 @@ describe("a push larger than the pull-ahead threshold", () => {
       Effect.gen(function* () {
         const server = yield* serverOver(yield* MemoryBackend.make(backendHandlers));
         const store = yield* ClientStoreModule.makeMemory;
-        const inner = yield* makeInMemory(server, "group-a");
+        const inner = yield* makeInMemory(server, ClientGroupId.make("group-a"));
         // Until `healthy` is set, a push's round trip never returns. The second one to park signals.
         const healthy = yield* Ref.make(false);
         const parked = yield* Ref.make(0);
@@ -621,7 +622,7 @@ describe("a push larger than the pull-ahead threshold", () => {
       Effect.gen(function* () {
         const server = yield* serverOver(yield* MemoryBackend.make(backendHandlers));
         const store = yield* ClientStoreModule.makeMemory;
-        const inner = yield* makeInMemory(server, "group-a");
+        const inner = yield* makeInMemory(server, ClientGroupId.make("group-a"));
         // Pulls are refused, so nothing releases the tail: the bound is only what the pushes leave.
         const refusing = yield* Ref.make(true);
         // Mutations in requests that have not returned yet, and the widest the tail could grow to: the tail
@@ -676,7 +677,7 @@ describe("a push larger than the pull-ahead threshold", () => {
       Effect.gen(function* () {
         const server = yield* serverOver(yield* MemoryBackend.make(backendHandlers));
         const store = yield* ClientStoreModule.makeMemory;
-        const inner = yield* makeInMemory(server, "group-a");
+        const inner = yield* makeInMemory(server, ClientGroupId.make("group-a"));
         const refusing = yield* Ref.make(true);
         // Written under a bound of 16: eight pushed and acknowledged, then four more, the tail at 12.
         const wide = yield* engineOver(refusingPulls(inner, refusing), store, {

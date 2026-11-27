@@ -36,6 +36,7 @@ import * as SyncServer from "../SyncServer.js";
 import { ClientTransport, makeInMemory, type ServerHandler } from "../Transport.js";
 import { TestFailure } from "./test-failure.js";
 import { idOf, titleOf } from "./shapes.js";
+import { ClientGroupId, RowId } from "../Protocol.js";
 
 interface Todo {
   readonly id: string;
@@ -46,12 +47,12 @@ interface Todo {
 const setTodo = Mutator.registry([
   {
     mutator: Mutator.make("todo/set", Schema.Unknown),
-    local: (todo: Todo, writer) => writer.put("todos", todo.id, todo),
+    local: (todo: Todo, writer) => writer.put("todos", RowId.make(todo.id), todo),
   },
 ]);
 
 const backendHandlers = {
-  "todo/set": (args, writer) => Effect.asVoid(writer.put("todos", idOf(args), args)),
+  "todo/set": (args, writer) => Effect.asVoid(writer.put("todos", RowId.make(idOf(args)), args)),
 } satisfies Record<string, MemoryBackend.BackendHandler>;
 
 const authPolicy = Authorization.policy({ todos: Authorization.allowAll });
@@ -92,7 +93,7 @@ const makeClient = (
 ) =>
   Effect.gen(function* () {
     const store = yield* ClientStoreModule.makeMemory;
-    const base = yield* makeInMemory(handler, `group-${name}`);
+    const base = yield* makeInMemory(handler, ClientGroupId.make(`group-${name}`));
     const transport: ClientTransport = {
       push: (request) => base.push(request).pipe(Effect.tap(() => count(opts?.counters?.push))),
       pull: (request) => base.pull(request).pipe(Effect.tap(() => count(opts?.counters?.pull))),
@@ -102,7 +103,7 @@ const makeClient = (
     };
     const engine = yield* ClientEngineModule.make({
       clientId: `client-${name}`,
-      clientGroupId: `group-${name}`,
+      clientGroupId: ClientGroupId.make(`group-${name}`),
       mutators: setTodo,
       ...Defined.fields({ syncLoop }),
     }).pipe(

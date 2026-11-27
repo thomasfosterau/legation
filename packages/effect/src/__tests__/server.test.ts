@@ -34,6 +34,7 @@ import { InvalidationBus } from "../internal.js";
 import { defined } from "./defined.js";
 import { TestFailure } from "./test-failure.js";
 import { idOf, stringField } from "./shapes.js";
+import { ClientGroupId, MutationId, RowId } from "../Protocol.js";
 
 const nameOf = stringField("name");
 
@@ -47,7 +48,7 @@ const productSet = Mutator.make("product/set", Schema.Unknown);
 const mutations = Mutator.registry([
   {
     mutator: productSet,
-    local: (args: { id: string }, writer) => writer.put("products", args.id, args),
+    local: (args: { id: string }, writer) => writer.put("products", RowId.make(args.id), args),
   },
 ]);
 
@@ -79,15 +80,21 @@ describe("Server", () => {
         const backend = yield* MemoryBackend.make(
           MemoryBackend.validatedHandlers([
             MemoryBackend.handler(productSet, (args, writer) =>
-              writer.put("products", idOf(args), args)
+              writer.put("products", RowId.make(idOf(args)), args)
             ),
           ])
         );
         // An out-of-band writer: straight into the backend, no push, no hints.
         const writeBypassingPush = (mutationId: number, args: { id: string; name: string }) =>
           backend
-            .applyMutations({ clientGroupId: "out-of-band" }, [
-              { clientId: "cron", mutationId, mutator: "product/set", args, createdAt: 0 },
+            .applyMutations({ clientGroupId: ClientGroupId.make("out-of-band") }, [
+              {
+                clientId: "cron",
+                mutationId: MutationId.make(mutationId),
+                mutator: "product/set",
+                args,
+                createdAt: 0,
+              },
             ])
             .pipe(Effect.orDie);
 
@@ -115,7 +122,10 @@ describe("Server", () => {
         // poke or a (re)connect makes it pull. It starts disconnected so its
         // one connect pull runs after the subscription is registered.
         const store = yield* ClientStore.makeMemory;
-        const inMemory = yield* Transport.makeInMemory(server.handler, "group-oob");
+        const inMemory = yield* Transport.makeInMemory(
+          server.handler,
+          ClientGroupId.make("group-oob")
+        );
         // Counts the pulls that reach the server, so the test can check the
         // Client pulled only when it was told to.
         const pulls = yield* Ref.make(0);
@@ -129,7 +139,7 @@ describe("Server", () => {
           nodes,
           mutations,
           clientId: "client-oob",
-          clientGroupId: "group-oob",
+          clientGroupId: ClientGroupId.make("group-oob"),
         }).pipe(
           Effect.provideService(ClientStore.ClientStore, store),
           Effect.provideService(Transport.ClientTransport, transport)
@@ -158,7 +168,7 @@ describe("Server", () => {
         expect(yield* Ref.get(latest)).toHaveLength(1);
 
         // The one verb: broadcast → poke → pull → the row arrives.
-        yield* server.broadcast({ collection: "products", ids: ["p-oob"] });
+        yield* server.broadcast({ collection: "products", ids: [RowId.make("p-oob")] });
         expect(yield* Ref.get(hintBatches)).toBe(1);
         const rows = yield* advanceUntil(Ref.get(latest), (current) => current.length === 2);
         expect(
@@ -180,7 +190,7 @@ describe("Server", () => {
         const backend = yield* MemoryBackend.make(
           MemoryBackend.validatedHandlers([
             MemoryBackend.handler(productSet, (args, writer) =>
-              writer.put("products", idOf(args), args)
+              writer.put("products", RowId.make(idOf(args)), args)
             ),
           ])
         );
@@ -203,7 +213,10 @@ describe("Server", () => {
         ) =>
           Effect.gen(function* () {
             const store = yield* ClientStore.makeMemory;
-            const inMemory = yield* Transport.makeInMemory(server.handler, group);
+            const inMemory = yield* Transport.makeInMemory(
+              server.handler,
+              ClientGroupId.make(group)
+            );
             const pushes = yield* Ref.make(0);
             const pulls = yield* Ref.make(0);
             const transport: typeof inMemory = {
@@ -218,7 +231,7 @@ describe("Server", () => {
               nodes,
               mutations,
               clientId,
-              clientGroupId: group,
+              clientGroupId: ClientGroupId.make(group),
               ...Defined.fields({ syncLoop: options.autoPush ? { pushDebounce } : undefined }),
             }).pipe(
               Effect.provideService(ClientStore.ClientStore, store),

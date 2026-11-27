@@ -21,6 +21,7 @@ import {
   InvalidationBus,
   PushPoke as Marker,
   SyncServer,
+  Protocol,
 } from "@thomasfosterau/legation/internal";
 import { describe, expect, it } from "@effect/vitest";
 import * as Arr from "effect/Array";
@@ -82,10 +83,13 @@ const makeEngine = (stamp: Identity.Fingerprint) =>
       Effect.provideService(Cvr.CvrStore, yield* Cvr.makeMemoryStore),
       Effect.provideService(InvalidationBus.InvalidationBus, yield* InvalidationBus.makeInProcess)
     );
-    const transport = yield* Transport.makeInMemory(handler, "group-push");
+    const transport = yield* Transport.makeInMemory(
+      handler,
+      Protocol.ClientGroupId.make("group-push")
+    );
     const engine = yield* ClientEngine.make({
       clientId: "client-push",
-      clientGroupId: "group-push",
+      clientGroupId: Protocol.ClientGroupId.make("group-push"),
       mutators,
     }).pipe(
       Effect.provideService(ClientStore.ClientStore, yield* ClientStore.makeMemory),

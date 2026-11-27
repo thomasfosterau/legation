@@ -22,7 +22,7 @@ import type { Cvr } from "@thomasfosterau/legation/internal";
 const KEY_PREFIX = "legation:cvr:";
 
 /** The stored form of one CVR: its nested row map. */
-type StoredRows = ReadonlyMap<string, ReadonlyMap<string, string | number>>;
+type StoredRows = Cvr.Cvr["rows"];
 
 /** Build the store over the room's `state.storage`, in the room's runtime context. */
 export const make = (

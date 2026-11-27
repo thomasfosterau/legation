@@ -28,6 +28,7 @@ import {
 import { ClientEngine, Cvr, InvalidationBus, Related, Subset, SyncServer } from "../internal.js";
 import { defined } from "./defined.js";
 import { idOf, stringField } from "./shapes.js";
+import { ClientGroupId, RowId } from "../Protocol.js";
 
 const bioOf = stringField("bio");
 const decodeSlugs = Schema.decodeUnknownSync(Schema.Array(Schema.Struct({ slug: Schema.String })));
@@ -270,19 +271,23 @@ const reviewSet = Mutator.make("review/set", Schema.Unknown);
 const mutators = Mutator.registry([
   {
     mutator: productSet,
-    local: (args: { id: string }, writer) => writer.put("products", args.id, args),
+    local: (args: { id: string }, writer) => writer.put("products", RowId.make(args.id), args),
   },
   {
     mutator: reviewSet,
-    local: (args: { id: string }, writer) => writer.put("reviews", args.id, args),
+    local: (args: { id: string }, writer) => writer.put("reviews", RowId.make(args.id), args),
   },
 ]);
 
 const makeEngine = Effect.fn("makeEngine")(function* () {
   const backend = yield* MemoryBackend.make(
     MemoryBackend.validatedHandlers([
-      MemoryBackend.handler(productSet, (args, writer) => writer.put("products", idOf(args), args)),
-      MemoryBackend.handler(reviewSet, (args, writer) => writer.put("reviews", idOf(args), args)),
+      MemoryBackend.handler(productSet, (args, writer) =>
+        writer.put("products", RowId.make(idOf(args)), args)
+      ),
+      MemoryBackend.handler(reviewSet, (args, writer) =>
+        writer.put("reviews", RowId.make(idOf(args)), args)
+      ),
     ])
   );
   const handler = yield* SyncServer.make.pipe(
@@ -299,10 +304,10 @@ const makeEngine = Effect.fn("makeEngine")(function* () {
     Effect.provideService(InvalidationBus.InvalidationBus, yield* InvalidationBus.makeInProcess)
   );
   const store = yield* ClientStore.makeMemory;
-  const transport = yield* Transport.makeInMemory(handler, "group-node");
+  const transport = yield* Transport.makeInMemory(handler, ClientGroupId.make("group-node"));
   return yield* ClientEngine.make({
     clientId: "client-node",
-    clientGroupId: "group-node",
+    clientGroupId: ClientGroupId.make("group-node"),
     mutators,
   }).pipe(
     Effect.provideService(ClientStore.ClientStore, store),
@@ -320,11 +325,12 @@ const postSet = Mutator.make("post/set", Schema.Unknown);
 const naturalKeyMutators = Mutator.registry([
   {
     mutator: authorSet,
-    local: (args: { username: string }, writer) => writer.put("authors", args.username, args),
+    local: (args: { username: string }, writer) =>
+      writer.put("authors", RowId.make(args.username), args),
   },
   {
     mutator: postSet,
-    local: (args: { slug: string }, writer) => writer.put("posts", args.slug, args),
+    local: (args: { slug: string }, writer) => writer.put("posts", RowId.make(args.slug), args),
   },
 ]);
 
@@ -332,9 +338,11 @@ const makeNaturalKeyEngine = Effect.fn("makeNaturalKeyEngine")(function* () {
   const backend = yield* MemoryBackend.make(
     MemoryBackend.validatedHandlers([
       MemoryBackend.handler(authorSet, (args, writer) =>
-        writer.put("authors", usernameOf(args), args)
+        writer.put("authors", RowId.make(usernameOf(args)), args)
       ),
-      MemoryBackend.handler(postSet, (args, writer) => writer.put("posts", slugOf(args), args)),
+      MemoryBackend.handler(postSet, (args, writer) =>
+        writer.put("posts", RowId.make(slugOf(args)), args)
+      ),
     ])
   );
   const handler = yield* SyncServer.make.pipe(
@@ -353,10 +361,10 @@ const makeNaturalKeyEngine = Effect.fn("makeNaturalKeyEngine")(function* () {
     Effect.provideService(InvalidationBus.InvalidationBus, yield* InvalidationBus.makeInProcess)
   );
   const store = yield* ClientStore.makeMemory;
-  const transport = yield* Transport.makeInMemory(handler, "group-natural");
+  const transport = yield* Transport.makeInMemory(handler, ClientGroupId.make("group-natural"));
   return yield* ClientEngine.make({
     clientId: "client-natural",
-    clientGroupId: "group-natural",
+    clientGroupId: ClientGroupId.make("group-natural"),
     mutators: naturalKeyMutators,
   }).pipe(
     Effect.provideService(ClientStore.ClientStore, store),

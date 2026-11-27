@@ -28,7 +28,14 @@ import * as HttpClient from "effect/http/HttpClient";
 import type * as HttpApi from "effect/http-api/HttpApi";
 import type * as HttpApiGroup from "effect/http-api/HttpApiGroup";
 import { KeyValueStore } from "effect/persistence";
-import { Authorization, Backend, ClientStore, Transport } from "@thomasfosterau/legation";
+import {
+  Authorization,
+  Backend,
+  type Client,
+  ClientStore,
+  type StoreError,
+  Transport,
+} from "@thomasfosterau/legation";
 import { ClientEngine, SyncRoom } from "@thomasfosterau/legation/internal";
 import {
   reflectAtomic,
@@ -56,7 +63,7 @@ export interface JsonApiSyncOptions {
   /** This client's id (stable per device/tab). */
   readonly clientId: string;
   /** The client group this client belongs to (shared journal scope). */
-  readonly clientGroupId: string;
+  readonly clientGroupId: Client.ClientGroupId;
   /** Override the Subset → JSON:API query encoding (e.g. your own package). */
   readonly queryEncoder?: QueryEncoder;
   /**
@@ -114,9 +121,10 @@ export interface JsonApiSyncOptions {
    * a durable ledger too: pass `keyValueStore` (the key/value store it is built
    * over) or `ledger`. With the in-memory ledger, a reload forgets the
    * acknowledged ids, and the backend refuses every later push with a
-   * mutation-id gap.
+   * mutation-id gap. A store that fails to open fails {@link layer} with its
+   * `StoreError`.
    */
-  readonly store?: Layer.Layer<ClientStore.ClientStore>;
+  readonly store?: Layer.Layer<ClientStore.ClientStore, StoreError>;
 }
 
 /**
@@ -141,12 +149,13 @@ const authPolicy = (resources: ResourceMap): Authorization.AuthPolicy =>
  * ready `ClientEngine`. CVR store and invalidation bus are in-process; the
  * client store defaults to in-memory, or to the durable store over
  * `keyValueStore` (pass it for offline persistence and a durable ledger across
- * reloads, or pass `store` and `ledger` for another durable store).
+ * reloads, or pass `store` and `ledger` for another durable store). Fails with
+ * the `StoreError` of a `store` that cannot open.
  */
 export const layer = <Id extends string, Groups extends HttpApiGroup.Constraint>(
   api: HttpApi.HttpApi<Id, Groups>,
   options: JsonApiSyncOptions
-): Layer.Layer<ClientEngine.ClientEngine, never, HttpClient.HttpClient> => {
+): Layer.Layer<ClientEngine.ClientEngine, StoreError, HttpClient.HttpClient> => {
   const { resources, registry, operations, atomic } = inspect(api);
   // Atomic pushes when the api advertises the extension, unless opted out;
   // an explicit path overrides what reflection found.

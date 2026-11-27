@@ -32,6 +32,7 @@ import { ClientTransport, makeInMemory, type ServerHandler } from "../Transport.
 import { defined } from "./defined.js";
 import { TestFailure } from "./test-failure.js";
 import { countOf, idOf, optionalCountOf, titleOf as titleOfValue } from "./shapes.js";
+import { ClientGroupId, MutationId, RowId } from "../Protocol.js";
 
 interface Todo {
   readonly id: string;
@@ -44,16 +45,16 @@ interface Todo {
 const setTodo = Mutator.registry([
   {
     mutator: Mutator.make("todo/set", Schema.Unknown),
-    local: (todo: Todo, writer) => writer.put("todos", todo.id, todo),
+    local: (todo: Todo, writer) => writer.put("todos", RowId.make(todo.id), todo),
   },
   {
     mutator: Mutator.make("todo/remove", Schema.Unknown),
-    local: (args: { id: string }, writer) => writer.del("todos", args.id),
+    local: (args: { id: string }, writer) => writer.del("todos", RowId.make(args.id)),
   },
   {
     // Applies optimistically; the backend always refuses it.
     mutator: Mutator.make("todo/reject", Schema.Unknown),
-    local: (args: Todo, writer) => writer.put("todos", args.id, args),
+    local: (args: Todo, writer) => writer.put("todos", RowId.make(args.id), args),
   },
 ]);
 
@@ -61,14 +62,14 @@ const setTodo = Mutator.registry([
 // shows as an extra count. The put-by-id mutators above cannot show it.
 const incrementCounter = <E>(
   writer: {
-    readonly get: (collection: string, id: string) => Effect.Effect<unknown, E>;
-    readonly put: (collection: string, id: string, value: unknown) => Effect.Effect<void, E>;
+    readonly get: (collection: string, id: RowId) => Effect.Effect<unknown, E>;
+    readonly put: (collection: string, id: RowId, value: unknown) => Effect.Effect<void, E>;
   },
   id: string
 ): Effect.Effect<void, E> =>
   Effect.gen(function* () {
-    const current = optionalCountOf(yield* writer.get("counters", id));
-    yield* writer.put("counters", id, { id, n: (current ?? 0) + 1 });
+    const current = optionalCountOf(yield* writer.get("counters", RowId.make(id)));
+    yield* writer.put("counters", RowId.make(id), { id, n: (current ?? 0) + 1 });
   });
 
 const counterMutators = Mutator.registry([
@@ -80,8 +81,8 @@ const counterMutators = Mutator.registry([
 
 const backendHandlers = {
   "counter/inc": (args, writer) => incrementCounter(writer, idOf(args)),
-  "todo/set": (args, writer) => Effect.asVoid(writer.put("todos", idOf(args), args)),
-  "todo/remove": (args, writer) => Effect.asVoid(writer.del("todos", idOf(args))),
+  "todo/set": (args, writer) => Effect.asVoid(writer.put("todos", RowId.make(idOf(args)), args)),
+  "todo/remove": (args, writer) => Effect.asVoid(writer.del("todos", RowId.make(idOf(args)))),
   "todo/reject": () => Effect.fail(new MutationRejected({ reason: "refused by the backend" })),
 } satisfies Record<string, MemoryBackend.BackendHandler>;
 
@@ -109,10 +110,10 @@ const makeServer = Effect.fn("makeServer")(function* (): Effect.fn.Return<
 const makeClient = (handler: ServerHandler, name: string) =>
   Effect.gen(function* () {
     const store = yield* ClientStoreModule.makeMemory;
-    const transport = yield* makeInMemory(handler, `group-${name}`);
+    const transport = yield* makeInMemory(handler, ClientGroupId.make(`group-${name}`));
     const engine = yield* ClientEngineModule.make({
       clientId: `client-${name}`,
-      clientGroupId: `group-${name}`,
+      clientGroupId: ClientGroupId.make(`group-${name}`),
       mutators: setTodo,
     }).pipe(
       Effect.provideService(ClientStore, store),
@@ -231,7 +232,10 @@ describe("mutator args validation", () => {
     {
       mutator: Mutator.make("todo/schedule", TodoArgs),
       local: (todo: typeof TodoArgs.Type, writer) => {
-        return writer.put("todos", todo.id, { id: todo.id, dueYear: todo.due.getFullYear() });
+        return writer.put("todos", RowId.make(todo.id), {
+          id: todo.id,
+          dueYear: todo.due.getFullYear(),
+        });
       },
     },
   ]);
@@ -239,10 +243,10 @@ describe("mutator args validation", () => {
   const makeTypedClient = Effect.fn("makeTypedClient")(function* () {
     const handler = yield* makeServer();
     const store = yield* ClientStoreModule.makeMemory;
-    const transport = yield* makeInMemory(handler, "group-a");
+    const transport = yield* makeInMemory(handler, ClientGroupId.make("group-a"));
     const engine = yield* ClientEngineModule.make({
       clientId: "client-a",
-      clientGroupId: "group-a",
+      clientGroupId: ClientGroupId.make("group-a"),
       mutators: typedMutators,
     }).pipe(
       Effect.provideService(ClientStore, store),
@@ -455,10 +459,10 @@ const serverOver = (backend: Backend) =>
 // The counter client "client-a" in group "group-a", over `handler` and `store`.
 const makeCounterEngine = (handler: ServerHandler, store: ClientStore) =>
   Effect.gen(function* () {
-    const transport = yield* makeInMemory(handler, "group-a");
+    const transport = yield* makeInMemory(handler, ClientGroupId.make("group-a"));
     return yield* ClientEngineModule.make({
       clientId: "client-a",
-      clientGroupId: "group-a",
+      clientGroupId: ClientGroupId.make("group-a"),
       mutators: counterMutators,
     }).pipe(
       Effect.provideService(ClientStore, store),
@@ -471,9 +475,15 @@ const makeCounterEngine = (handler: ServerHandler, store: ClientStore) =>
 // until that engine pulls.
 const otherCommit = (handler: ServerHandler, mutationId: number) =>
   handler.handlePush({
-    clientGroupId: "group-a",
+    clientGroupId: ClientGroupId.make("group-a"),
     mutations: [
-      { clientId: "other", mutationId, mutator: "counter/inc", args: { id: "c" }, createdAt: 0 },
+      {
+        clientId: "other",
+        mutationId: MutationId.make(mutationId),
+        mutator: "counter/inc",
+        args: { id: "c" },
+        createdAt: 0,
+      },
     ],
   });
 
@@ -670,10 +680,10 @@ describe("a pull's watermark and rows are one snapshot", () => {
       // disturbed and the pull stops retrying at its bound.
       const landAfterRead = Ref.updateAndGet(landings, (n) => n + 1).pipe(
         Effect.flatMap((mutationId) =>
-          inner.applyMutations({ clientGroupId: "group-a" }, [
+          inner.applyMutations({ clientGroupId: ClientGroupId.make("group-a") }, [
             {
               clientId: "client-a",
-              mutationId,
+              mutationId: MutationId.make(mutationId),
               mutator: "counter/inc",
               args: { id: "c" },
               createdAt: 0,
@@ -698,7 +708,7 @@ describe("a pull's watermark and rows are one snapshot", () => {
       yield* otherCommit(server, 1);
 
       const response = yield* server.handlePull({
-        clientGroupId: "group-a",
+        clientGroupId: ClientGroupId.make("group-a"),
         subscriptions: [countersSubset],
       });
       const reported = R.values(response.lastMutationIds).reduce((sum, upTo) => sum + upTo, 0);
@@ -733,10 +743,10 @@ describe("a pull's watermark and rows are one snapshot", () => {
               already
                 ? Effect.void
                 : inner
-                    .applyMutations({ clientGroupId: "group-a" }, [
+                    .applyMutations({ clientGroupId: ClientGroupId.make("group-a") }, [
                       {
                         clientId: "client-a",
-                        mutationId: 1,
+                        mutationId: MutationId.make(1),
                         mutator: "counter/inc",
                         args: { id: "c" },
                         createdAt: 0,
@@ -768,7 +778,7 @@ describe("a pull's watermark and rows are one snapshot", () => {
           yield* otherCommit(server, 1);
 
           const response = yield* server.handlePull({
-            clientGroupId: "group-a",
+            clientGroupId: ClientGroupId.make("group-a"),
             subscriptions: [countersSubset],
           });
           expect(yield* Ref.get(landed)).toBe(true);

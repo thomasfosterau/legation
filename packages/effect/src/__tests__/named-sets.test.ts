@@ -30,6 +30,7 @@ import * as Predicate from "../Predicate.js";
 import type { PatchOp, PullResponse } from "../Protocol.js";
 import * as Subset from "../Subset.js";
 import * as SyncServer from "../SyncServer.js";
+import { ClientGroupId, MutationId, RowId } from "../Protocol.js";
 
 interface Post {
   readonly id: string;
@@ -133,7 +134,7 @@ const put = (collection: string, value: Put["value"]): Put => ({ collection, val
 
 const handlers = MemoryBackend.validatedHandlers([
   MemoryBackend.handler(putRow, ({ collection, value }, writer) =>
-    writer.put(collection, value.id, value)
+    writer.put(collection, RowId.make(value.id), value)
   ),
 ]);
 
@@ -167,11 +168,11 @@ const setupWith = (
     let mutationId = 0;
     const write = (value: Put) =>
       server.handlePush({
-        clientGroupId: "group-writer",
+        clientGroupId: ClientGroupId.make("group-writer"),
         mutations: [
           {
             clientId: "writer",
-            mutationId: ++mutationId,
+            mutationId: MutationId.make(++mutationId),
             mutator: "put",
             args: value,
             createdAt: 0,
@@ -181,7 +182,7 @@ const setupWith = (
     yield* Effect.forEach(seed, write, { concurrency: 1, discard: true });
     const pull = (clientGroupId: string, cookie?: string, ...collections: Array<string>) => {
       const request = {
-        clientGroupId,
+        clientGroupId: ClientGroupId.make(clientGroupId),
         subscriptions: (Arr.isReadonlyArrayEmpty(collections) ? ["posts"] : collections).map(
           (collection) => Subset.make({ collection })
         ),
@@ -329,7 +330,7 @@ describe("session-resolved read scopes", () => {
       const scope = Authorization.filter(Predicate.inSet("ownerId", "undeclared"));
       const authorized = yield* Authorization.authorize(
         Authorization.policy({ posts: () => Effect.succeed(scope) }),
-        { clientGroupId: "g" },
+        { clientGroupId: ClientGroupId.make("g") },
         Subset.make({ collection: "posts" }),
         "server"
       );

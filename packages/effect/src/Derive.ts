@@ -229,7 +229,7 @@ export type CombinedJoinOptions<L, R, K, C> = Incremental.CombinedJoinOptions<L,
  * the two page streams, feeding each side's delta to the shared join operator,
  * which re-derives only the left rows a change touches. A joined row's value is
  * a {@link Joined} `{ left, right }` by default (`right` is an `Option`:
- * `Option.none()` for an unmatched left row under `kind: "left"`); pass
+ * `Option.none()` for an unmatched left row under `_tag: "left"`); pass
  * `combine` to shape it
  * otherwise. Both key extractors return one key type, so the two sides' keys
  * are checked against each other.

@@ -164,8 +164,8 @@ const seedBackend = (backend: Backend.Backend): Effect.Effect<void> =>
     const apply = (mutator: string, args: unknown) =>
       Effect.gen(function* () {
         seq += 1;
-        yield* backend.applyMutations({ clientGroupId: "seed" }, [
-          { clientId: "seed", mutationId: seq, mutator, args, createdAt: Date.now() },
+        yield* backend.applyMutations({ clientGroupId: Client.ClientGroupId.make("seed") }, [
+          { clientId: "seed", mutationId: Client.MutationId.make(seq), mutator, args, createdAt: Date.now() },
         ]);
       });
     for (const row of seed.categories) yield* apply("category/create", Schema.encodeSync(Category)(row));

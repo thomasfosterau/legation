@@ -37,7 +37,12 @@ import {
   Server,
   Transport,
 } from "@thomasfosterau/legation";
-import { ClientEngine, ClientView, MutationState } from "@thomasfosterau/legation/internal";
+import {
+  ClientEngine,
+  ClientView,
+  MutationState,
+  Protocol,
+} from "@thomasfosterau/legation/internal";
 import * as JsonApiFacade from "../JsonApiFacade.js";
 import * as JsonApiQuery from "../JsonApiQuery.js";
 
@@ -109,12 +114,15 @@ const makeFixture = (
         ),
       },
     });
-    const transport = yield* Transport.makeInMemory(server.handler, GROUP);
+    const transport = yield* Transport.makeInMemory(
+      server.handler,
+      Protocol.ClientGroupId.make(GROUP)
+    );
     const store = yield* ClientStore.makeMemory;
     const boot = Effect.gen(function* () {
       const engine = yield* ClientEngine.make({
         clientId: "client-s",
-        clientGroupId: GROUP,
+        clientGroupId: Protocol.ClientGroupId.make(GROUP),
         mutators: Mutation.registry(crud),
         mutationStateRetention: {
           maxTerminal: options.maxTerminal ?? MutationState.DEFAULT_MAX_TERMINAL,

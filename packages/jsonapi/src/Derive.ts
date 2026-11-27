@@ -70,7 +70,7 @@ export const collectionFor = (type: string): Collection.Collection<JsonApiRow> =
   Collection.make({
     name: type,
     schema: RowSchema,
-    id: (value) => value.id,
+    id: (value) => Collection.RowId.make(value.id),
   });
 
 /** The mutator name for a (type, operation): `"{type}/{operation}"`. */
@@ -81,7 +81,7 @@ export const mutatorName = (type: string, operation: Operation): string => `${ty
 /** Create: the full resource to insert (client supplies the id). */
 export const CreateArgs = Schema.Struct({
   type: Schema.String,
-  id: Schema.String,
+  id: Collection.RowId,
   attributes: Schema.Record(Schema.String, Schema.Unknown),
   relationships: Schema.optional(Schema.Record(Schema.String, Schema.Unknown)),
 });
@@ -92,7 +92,7 @@ export type CreateArgs = typeof CreateArgs.Type;
 /** Update: a partial attribute patch, merged over the current row. */
 export const UpdateArgs = Schema.Struct({
   type: Schema.String,
-  id: Schema.String,
+  id: Collection.RowId,
   attributes: Schema.Record(Schema.String, Schema.Unknown),
 });
 
@@ -102,7 +102,7 @@ export type UpdateArgs = typeof UpdateArgs.Type;
 /** Delete: address one row. */
 export const DeleteArgs = Schema.Struct({
   type: Schema.String,
-  id: Schema.String,
+  id: Collection.RowId,
 });
 
 /** The type {@link DeleteArgs} decodes to. */

@@ -74,7 +74,7 @@ export type PageSignal =
   | { readonly type: "legation:push-completed"; readonly mutations: number };
 
 export interface HostOptions {
-  readonly clientGroupId: string;
+  readonly clientGroupId: Client.ClientGroupId;
   /** e.g. `https://sync.example.com` — defaults to the page's own origin. */
   readonly syncOrigin: string;
   readonly clientId: string;
@@ -91,7 +91,7 @@ export interface HostOptions {
  * `transport: { url }` builds), plus browser connectivity awareness.
  */
 const transportLayer = (options: {
-  readonly clientGroupId: string;
+  readonly clientGroupId: Client.ClientGroupId;
   readonly syncOrigin: string;
   readonly onSignal?: ((signal: PageSignal) => void) | undefined;
 }): Layer.Layer<Transport.ClientTransport> =>
@@ -175,11 +175,14 @@ const pacedEngineLayer = (
   );
 
 /** The durable store, kept in context beside the engine: the façade reads its cookie. */
-const storeLayer = (options: HostOptions): Layer.Layer<ClientStore.ClientStore> =>
+const storeLayer = (options: HostOptions): Layer.Layer<ClientStore.ClientStore, StoreError> =>
   IndexedDbClientStore.layer().pipe(Layer.provide(options.indexedDb));
 
-/** Serve mirrors + run the sync loop until the scope closes, telling `onStart` what the façade needs. */
-export const runHost = (options: HostOptions): Effect.Effect<never> =>
+/**
+ * Serve mirrors + run the sync loop until the scope closes, telling `onStart` what the façade needs.
+ * Fails with the `StoreError` of a store that cannot open, so the worker can report it and retry.
+ */
+export const runHost = (options: HostOptions): Effect.Effect<never, StoreError> =>
   Effect.gen(function* () {
     const engine = yield* ClientEngine.ClientEngine;
     const store = yield* ClientStore.ClientStore;
@@ -234,7 +237,7 @@ export const runHost = (options: HostOptions): Effect.Effect<never> =>
   );
 
 export interface ElectedBootOptions {
-  readonly clientGroupId: string;
+  readonly clientGroupId: Client.ClientGroupId;
   readonly syncOrigin: string;
   readonly userId: string | undefined;
 }
@@ -264,13 +267,14 @@ export const bootElected = (
   const runtime = ManagedRuntime.make(
     Layer.effect(Client.Client)(
       Effect.gen(function* () {
+        // A store that cannot open is a boot failure for this dev toggle: the runtime dies with it.
         const elected = yield* ElectedHost.run({
           clientGroupId: options.clientGroupId,
           nodes,
           mutations: mutators,
           registry,
           dependencies: Layer.merge(transportLayer(options), IndexedDbClientStore.layerWindow()),
-        });
+        }).pipe(Effect.orDie);
         resolveRole(elected.role);
         yield* Effect.forEach(
           shellReads(options.userId),

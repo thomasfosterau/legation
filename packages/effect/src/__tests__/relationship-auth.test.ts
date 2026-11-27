@@ -22,6 +22,7 @@ import * as Subset from "../Subset.js";
 import * as SyncServer from "../SyncServer.js";
 import { ClientTransport, makeInMemory, type ServerHandler } from "../Transport.js";
 import { idOf } from "./shapes.js";
+import { ClientGroupId, RowId } from "../Protocol.js";
 
 interface Issue {
   readonly id: string;
@@ -30,10 +31,13 @@ interface Issue {
 
 const setIssue = Mutator.make("issue/set", Schema.Unknown);
 const mutators = Mutator.registry([
-  { mutator: setIssue, local: (args: Issue, writer) => writer.put("issues", args.id, args) },
+  {
+    mutator: setIssue,
+    local: (args: Issue, writer) => writer.put("issues", RowId.make(args.id), args),
+  },
 ]);
 const handlers = {
-  "issue/set": (args, writer) => Effect.asVoid(writer.put("issues", idOf(args), args)),
+  "issue/set": (args, writer) => Effect.asVoid(writer.put("issues", RowId.make(idOf(args)), args)),
 } satisfies Record<string, MemoryBackend.BackendHandler>;
 
 interface Lookup<A> {
@@ -75,10 +79,10 @@ const handler = Effect.fn("handler")(function* () {
 const makeClient = (server: ServerHandler, user: string) =>
   Effect.gen(function* () {
     const store = yield* ClientStoreModule.makeMemory;
-    const transport = yield* makeInMemory(server, `group-${user}`);
+    const transport = yield* makeInMemory(server, ClientGroupId.make(`group-${user}`));
     return yield* ClientEngineModule.make({
       clientId: `client-${user}`,
-      clientGroupId: `group-${user}`,
+      clientGroupId: ClientGroupId.make(`group-${user}`),
       mutators,
     }).pipe(
       Effect.provideService(ClientStore, store),

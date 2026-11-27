@@ -21,6 +21,7 @@ import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
 import * as P from "effect/Predicate";
 import * as Queue from "effect/Queue";
+import * as Schedule from "effect/Schedule";
 import * as Schema from "effect/Schema";
 import * as Scope from "effect/Scope";
 import { Redis } from "effect/persistence";
@@ -107,14 +108,37 @@ class XReadTimeout extends Schema.TaggedError<XReadTimeout, { readonly brand: un
 ) {}
 
 /** The reader's first back-off after a failed step; it doubles on each consecutive failure. */
-const RETRY_BASE_MS = 200;
+const RETRY_BASE = Duration.millis(200);
 
 /** The cap on the reader's back-off. */
-const RETRY_CAP_MS = 5_000;
+const RETRY_CAP = Duration.seconds(5);
 
-/** Back-off before the next attempt, after `failures` consecutive failed steps (`failures >= 1`). */
-const backoffMs = (failures: number): number =>
-  Math.min(RETRY_CAP_MS, RETRY_BASE_MS * 2 ** (failures - 1));
+/**
+ * The reader's retry policy for one step: exponential back-off from {@link RETRY_BASE}, capped at
+ * {@link RETRY_CAP}, forever. The first failure of an outage logs a warning and each further retry
+ * logs at debug. A step builds a fresh schedule each run, so the next outage starts over.
+ */
+const readerRetry = Schedule.exponential(RETRY_BASE).pipe(
+  Schedule.modifyDelay(({ duration }) => Effect.succeed(Duration.min(duration, RETRY_CAP))),
+  Schedule.tap(({ attempt, duration, input }) =>
+    attempt === 1
+      ? Effect.logWarning("Redis broker: reader step failed; retrying with back-off", input)
+      : Effect.logDebug(
+          `Redis broker: reader step failed again; retrying in ${Duration.toMillis(duration)} millis`,
+          input
+        )
+  )
+);
+
+/**
+ * Logs the reader's recovery at info, on the first Redis reply after one or more failed steps.
+ * Inside `Effect.retry`, `Schedule.CurrentMetadata.attempt` is the number of failures so far.
+ */
+const answered = Effect.flatMap(Schedule.CurrentMetadata, ({ attempt }) =>
+  attempt === 0
+    ? Effect.void
+    : Effect.logInfo(`Redis broker: reader recovered after ${attempt} failed step(s)`)
+);
 
 /**
  * A BusBroker over Redis Streams. Captures the `Redis` service; each
@@ -202,65 +226,45 @@ export const makeRedisBroker: (
           Effect.orElseSucceed(() => Option.none<string>())
         );
       }
-      // Per-subscription outage state: consecutive failed steps. The first failure
-      // of an outage logs a warning, each further retry logs at debug, and the
-      // first successful Redis reply after an outage logs at info.
-      const outage = { failures: 0 };
-      const answered = Effect.suspend(() => {
-        const failures = outage.failures;
-        if (failures === 0) return Effect.void;
-        outage.failures = 0;
-        return Effect.logInfo(`Redis broker: reader recovered after ${failures} failed step(s)`);
-      });
-      const failed = (error: unknown) =>
-        Effect.suspend(() => {
-          outage.failures += 1;
-          const delay = backoffMs(outage.failures);
-          const log =
-            outage.failures === 1
-              ? Effect.logWarning("Redis broker: reader step failed; retrying with back-off", error)
-              : Effect.logDebug(
-                  `Redis broker: reader step failed again; retrying in ${delay} millis`,
-                  error
-                );
-          return log.pipe(Effect.andThen(Effect.sleep(Duration.millis(delay))));
-        });
-      const readOnce = Effect.gen(function* () {
-        const position = Option.isSome(cursor)
-          ? cursor.value
-          : yield* lastId.pipe(
-              Effect.timeoutOrElse({
-                duration: START_LOOKUP_BOUND,
-                orElse: () => Effect.fail(new StartLookupTimeout()),
-              }),
-              Effect.tap(() => answered)
-            );
-        cursor = Option.some(position);
-        const reply = yield* boundRead(
-          redis.send<XReadReply>("XREAD", "BLOCK", blockMs, "STREAMS", stream, position)
-        ).pipe(Effect.tap(() => answered));
-        if (reply === null) return;
-        yield* Effect.forEach(
-          reply,
-          ([, entries]) =>
-            Effect.forEach(
-              entries,
-              ([id, fields]) =>
-                Effect.gen(function* () {
-                  cursor = Option.some(id);
-                  const payload = payloadOf(fields);
-                  if (Option.isSome(payload)) yield* Queue.offer(queue, payload.value);
-                }),
-              { concurrency: 1, discard: true }
-            ),
-          { concurrency: 1, discard: true }
-        );
-      }).pipe(
-        // A transient Redis error, a read with no reply (XReadTimeout), or an
-        // unresolved start position must not kill the subscription: log it, back
-        // off, and run the step again from the last ID seen.
-        Effect.catch(failed)
+      // A transient Redis error, a read with no reply (XReadTimeout), or an
+      // unresolved start position must not kill the subscription: each step is
+      // retried on `readerRetry` from the last ID seen, so no entry is skipped.
+      // The start lookup is its own step, so its reply ends an outage too.
+      const resolveStart = lastId.pipe(
+        Effect.timeoutOrElse({
+          duration: START_LOOKUP_BOUND,
+          orElse: () => Effect.fail(new StartLookupTimeout()),
+        }),
+        Effect.tap(() => answered),
+        Effect.retry(readerRetry)
       );
+      const readFrom = (position: string) =>
+        Effect.gen(function* () {
+          const reply = yield* boundRead(
+            redis.send<XReadReply>("XREAD", "BLOCK", blockMs, "STREAMS", stream, position)
+          ).pipe(Effect.tap(() => answered));
+          if (reply === null) return;
+          yield* Effect.forEach(
+            reply,
+            ([, entries]) =>
+              Effect.forEach(
+                entries,
+                ([id, fields]) =>
+                  Effect.gen(function* () {
+                    cursor = Option.some(id);
+                    const payload = payloadOf(fields);
+                    if (Option.isSome(payload)) yield* Queue.offer(queue, payload.value);
+                  }),
+                { concurrency: 1, discard: true }
+              ),
+            { concurrency: 1, discard: true }
+          );
+        }).pipe(Effect.retry(readerRetry));
+      const readOnce = Effect.gen(function* () {
+        const position = Option.isSome(cursor) ? cursor.value : yield* resolveStart;
+        cursor = Option.some(position);
+        yield* readFrom(position);
+      });
       yield* Effect.forkScoped(Effect.forever(readOnce));
       return { take: Queue.take(queue) };
     }),

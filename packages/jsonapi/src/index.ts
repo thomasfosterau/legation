@@ -30,7 +30,14 @@ export type {
 export * as JsonApiSchema from "./schema.js";
 
 // Errors
-export { SyncError, NetworkError, ParseError, ApiError, ConflictError } from "./errors.js";
+export {
+  SyncError,
+  NetworkError,
+  ParseError,
+  ApiError,
+  ConflictError,
+  InvalidWriteArgs,
+} from "./errors.js";
 
 // Collection loaders: documents → engine rows, and read-side fetching.
 export * as CollectionLoader from "./CollectionLoader.js";

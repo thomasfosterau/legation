@@ -41,7 +41,7 @@ import {
   Subset,
   SyncServer,
 } from "@thomasfosterau/legation/internal";
-import type { Protocol } from "@thomasfosterau/legation/internal";
+import { Protocol } from "@thomasfosterau/legation/internal";
 import { describe, describeWrapped, expect, layer } from "@effect/vitest";
 import * as Arr from "effect/Array";
 import * as Context from "effect/Context";
@@ -69,16 +69,19 @@ const decodeTitled = Schema.decodeUnknownSync(Schema.Struct({ title: Schema.Stri
 const mutators = Mutator.registry([
   {
     mutator: Mutator.make("todo/set", Schema.Unknown),
-    local: (args, writer) => writer.put("todos", decodeIdentified(args).id, args),
+    local: (args, writer) =>
+      writer.put("todos", Protocol.RowId.make(decodeIdentified(args).id), args),
   },
   {
     mutator: Mutator.make("todo/refused", Schema.Unknown),
-    local: (args, writer) => writer.put("todos", decodeIdentified(args).id, args),
+    local: (args, writer) =>
+      writer.put("todos", Protocol.RowId.make(decodeIdentified(args).id), args),
   },
 ]);
 
 const backendHandlers = {
-  "todo/set": (args, writer) => Effect.asVoid(writer.put("todos", decodeIdentified(args).id, args)),
+  "todo/set": (args, writer) =>
+    Effect.asVoid(writer.put("todos", Protocol.RowId.make(decodeIdentified(args).id), args)),
   // A write the backend can never accept: the permanent-rejection path.
   "todo/refused": () => Effect.fail(new MutationRejected({ reason: "not allowed" })),
 } satisfies Record<string, MemoryBackend.BackendHandler>;
@@ -191,7 +194,7 @@ const makeEngine = (
 ) =>
   Effect.gen(function* () {
     const handler = yield* makeServer();
-    const inner = yield* Transport.makeInMemory(handler, "group-bg");
+    const inner = yield* Transport.makeInMemory(handler, Protocol.ClientGroupId.make("group-bg"));
     yield* inner.setStatus("disconnected");
     const pushes = yield* Ref.make<ReadonlyArray<Protocol.PushRequest>>([]);
     const failure = yield* Ref.make<Failure>("none");
@@ -219,7 +222,7 @@ const makeEngine = (
     };
     const engine = yield* ClientEngine.make({
       clientId: "client-bg",
-      clientGroupId: "group-bg",
+      clientGroupId: Protocol.ClientGroupId.make("group-bg"),
       mutators,
       ...options,
     }).pipe(

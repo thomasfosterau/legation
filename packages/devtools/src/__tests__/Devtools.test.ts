@@ -26,6 +26,7 @@ import {
   InvalidationBus,
   Subset,
   SyncServer,
+  Protocol,
 } from "@thomasfosterau/legation/internal";
 import * as Devtools from "../Devtools.js";
 
@@ -34,12 +35,14 @@ const decodeIdentified = Schema.decodeUnknownSync(Schema.Struct({ id: Schema.Str
 const mutators = Mutator.registry([
   {
     mutator: Mutator.make("todo/set", Schema.Unknown),
-    local: (args, writer) => writer.put("todos", decodeIdentified(args).id, args),
+    local: (args, writer) =>
+      writer.put("todos", Protocol.RowId.make(decodeIdentified(args).id), args),
   },
 ]);
 
 const backendHandlers = {
-  "todo/set": (args, writer) => Effect.asVoid(writer.put("todos", decodeIdentified(args).id, args)),
+  "todo/set": (args, writer) =>
+    Effect.asVoid(writer.put("todos", Protocol.RowId.make(decodeIdentified(args).id), args)),
 } satisfies Record<string, MemoryBackend.BackendHandler>;
 
 const allTodos = Subset.make({ collection: "todos" });
@@ -58,11 +61,11 @@ const setup = Effect.fn("setup")(function* () {
     Effect.provideService(Cvr.CvrStore, cvr),
     Effect.provideService(InvalidationBus.InvalidationBus, bus)
   );
-  const transport = yield* Transport.makeInMemory(handler, "group-a");
+  const transport = yield* Transport.makeInMemory(handler, Protocol.ClientGroupId.make("group-a"));
   const store = yield* ClientStore.makeMemory;
   const engine = yield* ClientEngine.make({
     clientId: "client-a",
-    clientGroupId: "group-a",
+    clientGroupId: Protocol.ClientGroupId.make("group-a"),
     mutators,
   }).pipe(
     Effect.provideService(ClientStore.ClientStore, store),
@@ -189,7 +192,11 @@ describe("Devtools.make", () => {
 
       const events = yield* Fiber.join(collected).pipe(Effect.timeout(Duration.seconds(2)));
       expect([...events]).toEqual([
-        { _tag: "MutationJournaled", clientId: "client-a", mutationId: 1 },
+        {
+          _tag: "MutationJournaled",
+          clientId: "client-a",
+          mutationId: Protocol.MutationId.make(1),
+        },
       ]);
     }).pipe(Effect.scoped)
   );

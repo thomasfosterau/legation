@@ -36,7 +36,7 @@
 
 import { Defined } from "@thomasfosterau/legation/internal";
 import { IndexedDb } from "@effect/platform-browser";
-import { ClientStore, Identity } from "@thomasfosterau/legation";
+import { ClientStore, Identity, type StoreError } from "@thomasfosterau/legation";
 import * as Layer from "effect/Layer";
 import { atomicKeyValueLayer, keyValueLayer } from "./internal/IndexedDbKeyValue.js";
 
@@ -69,20 +69,27 @@ const keyValueOptions = (options?: IndexedDbClientStoreOptions): ClientStore.Key
  *
  * A pull and a push acknowledgement commit as one IndexedDB transaction,
  * so a durable pull writes its rows once and writes no release record.
+ *
+ * Building the layer fails with a `StoreError` when the database cannot be
+ * opened (the browser refuses it, or storage is unavailable), so an app can
+ * recover: fall back with `Layer.catch(() => ClientStore.layerMemory)`, say.
  */
 export const layer = (
   options?: IndexedDbClientStoreOptions
-): Layer.Layer<ClientStore.ClientStore, never, IndexedDb.IndexedDb> =>
+): Layer.Layer<ClientStore.ClientStore, StoreError, IndexedDb.IndexedDb> =>
   ClientStore.layerKeyValue(keyValueOptions(options)).pipe(
     Layer.provide(
       Layer.merge(keyValueLayer(options?.database), atomicKeyValueLayer(options?.database))
     )
   );
 
-/** Self-contained layer using the browser's global `indexedDB`. */
+/**
+ * Self-contained layer using the browser's global `indexedDB`. Fails with a
+ * `StoreError` when the database cannot be opened, as {@link layer} does.
+ */
 export const layerWindow = (
   options?: IndexedDbClientStoreOptions
-): Layer.Layer<ClientStore.ClientStore> =>
+): Layer.Layer<ClientStore.ClientStore, StoreError> =>
   layer(options).pipe(Layer.provide(IndexedDb.layerWindow));
 
 /**
@@ -115,7 +122,7 @@ export const namespacedPrefix = (identity: Identity.Fingerprint): string =>
 export const layerNamespaced = (
   identity: Identity.Fingerprint,
   options?: Omit<IndexedDbClientStoreOptions, "identity" | "prefix">
-): Layer.Layer<ClientStore.ClientStore> =>
+): Layer.Layer<ClientStore.ClientStore, StoreError> =>
   layerWindow({
     ...Defined.fields({ database: options?.database }),
     prefix: namespacedPrefix(identity),

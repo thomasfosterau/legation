@@ -25,7 +25,7 @@
  */
 
 import * as Schema from "effect/Schema";
-import { Edge, Mutation, Node, type Query } from "@thomasfosterau/legation";
+import { Client, Edge, Mutation, Node, type Query } from "@thomasfosterau/legation";
 
 // ─── Row schemas ─────────────────────────────────────────────────────────────
 
@@ -297,4 +297,4 @@ export const createOrderDetail = Mutation.make("orderDetail/create", OrderDetail
 export const orderDetailId = (orderId: string, productId: string): string => `${orderId}:${productId}`;
 
 export const CLIENT_ID = "northwind-tab";
-export const CLIENT_GROUP_ID = "northwind";
+export const CLIENT_GROUP_ID = Client.ClientGroupId.make("northwind");

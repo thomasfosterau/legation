@@ -21,6 +21,7 @@ import * as Schema from "effect/Schema";
 import type { ServerHandler } from "../Transport.js";
 import type { PatchOp } from "../Protocol.js";
 import { defined } from "./defined.js";
+import { ClientGroupId, MutationId, RowId } from "../Protocol.js";
 
 describe("Cvr.makeKeyValueStore", () => {
   layer(KeyValueStore.layerMemory)((scoped) => {
@@ -28,9 +29,9 @@ describe("Cvr.makeKeyValueStore", () => {
       Effect.gen(function* () {
         const writer = yield* Cvr.makeKeyValueStore();
         const cvr: Cvr.Cvr = {
-          rows: new Map<string, Map<string, string | number>>([
-            ["todos", new Map([["1", 7]])],
-            ["notes", new Map([["n1", "v-abc"]])],
+          rows: new Map<string, Map<RowId, string | number>>([
+            ["todos", new Map([[RowId.make("1"), 7]])],
+            ["notes", new Map([[RowId.make("n1"), "v-abc"]])],
           ]),
         };
         yield* writer.set("cookie-1", cvr);
@@ -39,8 +40,8 @@ describe("Cvr.makeKeyValueStore", () => {
         const reader = yield* Cvr.makeKeyValueStore();
         const read = yield* reader.get("cookie-1");
         expect(read).toBeDefined();
-        expect(defined(read).rows.get("todos")?.get("1")).toBe(7);
-        expect(defined(read).rows.get("notes")?.get("n1")).toBe("v-abc");
+        expect(defined(read).rows.get("todos")?.get(RowId.make("1"))).toBe(7);
+        expect(defined(read).rows.get("notes")?.get(RowId.make("n1"))).toBe("v-abc");
 
         yield* writer.remove("cookie-1");
         expect(yield* reader.get("cookie-1")).toBeUndefined();
@@ -68,7 +69,9 @@ describe("shared CVR store across instances", () => {
         // One backend and one CVR store, shared by two SyncServer instances.
         const backend = yield* MemoryBackend.make(
           MemoryBackend.validatedHandlers([
-            MemoryBackend.handler(todoSet, (args, w) => w.put("todos", args.id, { id: args.id })),
+            MemoryBackend.handler(todoSet, (args, w) =>
+              w.put("todos", RowId.make(args.id), { id: args.id })
+            ),
           ])
         );
         const cvrStore = yield* Cvr.makeKeyValueStore();
@@ -88,15 +91,21 @@ describe("shared CVR store across instances", () => {
 
         // Commit a row through A.
         yield* instanceA.handlePush({
-          clientGroupId: "g",
+          clientGroupId: ClientGroupId.make("g"),
           mutations: [
-            { clientId: "c", mutationId: 1, mutator: "todo/set", args: { id: "1" }, createdAt: 0 },
+            {
+              clientId: "c",
+              mutationId: MutationId.make(1),
+              mutator: "todo/set",
+              args: { id: "1" },
+              createdAt: 0,
+            },
           ],
         });
 
         // Pull from A: full patch + cookie stored in the shared CVR store.
         const first = yield* instanceA.handlePull({
-          clientGroupId: "g",
+          clientGroupId: ClientGroupId.make("g"),
           cookie: undefined,
           subscriptions: [allTodos],
         });
@@ -105,7 +114,7 @@ describe("shared CVR store across instances", () => {
         // Pull from B presenting A's cookie: B finds the CVR in shared storage,
         // so the view is unchanged — no reset (no Clear), no redundant puts.
         const second = yield* instanceB.handlePull({
-          clientGroupId: "g",
+          clientGroupId: ClientGroupId.make("g"),
           cookie: first.cookie,
           subscriptions: [allTodos],
         });

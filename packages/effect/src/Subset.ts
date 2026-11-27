@@ -13,7 +13,7 @@
 
 import * as Defined from "./Defined.js";
 import * as Schema from "effect/Schema";
-import type { AnyCollection, RowOf } from "./Collection.js";
+import type { AnyCollection, RowId, RowOf } from "./Collection.js";
 import * as Index from "./CollectionIndex.js";
 import * as Json from "./internal/Json.js";
 import * as Predicate from "./Predicate.js";
@@ -190,7 +190,7 @@ export { forCollection as for };
 
 /** A `(id, value)` row — the unit subsets and live views operate over. */
 export interface Row {
-  readonly id: string;
+  readonly id: RowId;
   readonly value: unknown;
 }
 
@@ -312,7 +312,7 @@ export const unwindowed = (subset: Subset): Subset => ({
 // `Predicate.evaluate`, never changes its answer.
 
 const fullScan = <R extends Row>(
-  rowsById: ReadonlyMap<string, R>,
+  rowsById: ReadonlyMap<RowId, R>,
   where: Predicate.Predicate
 ): Array<R> => {
   const result: Array<R> = [];
@@ -324,7 +324,7 @@ const fullScan = <R extends Row>(
 
 /** {@link sortFiltered}, but reading rows from an id-keyed map with optional index acceleration. */
 export const sortFilteredIndexed = <R extends Row>(
-  rowsById: ReadonlyMap<string, R>,
+  rowsById: ReadonlyMap<RowId, R>,
   subset: Subset,
   index?: Index.CollectionIndex
 ): ReadonlyArray<R> => {
@@ -336,7 +336,7 @@ export const sortFilteredIndexed = <R extends Row>(
 
 /** {@link apply}, but reading rows from an id-keyed map with optional index acceleration. */
 export const applyIndexed = <R extends Row>(
-  rowsById: ReadonlyMap<string, R>,
+  rowsById: ReadonlyMap<RowId, R>,
   subset: Subset,
   index?: Index.CollectionIndex
 ): ReadonlyArray<R> => window(sortFilteredIndexed(rowsById, subset, index), subset);

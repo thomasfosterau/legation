@@ -10,9 +10,10 @@ import * as LiveView from "../LiveView.js";
 import * as Predicate from "../Predicate.js";
 import * as Subset from "../Subset.js";
 import { defined } from "./defined.js";
+import { RowId } from "../Protocol.js";
 
 const row = (id: string, rank: number, open = true): LiveView.Row => ({
-  id,
+  id: RowId.make(id),
   value: { rank, open },
 });
 const ids = (rows: ReadonlyArray<LiveView.Row>) => rows.map((r) => r.id);
@@ -53,7 +54,7 @@ describe("LiveView", () => {
     expect(ids(LiveView.result(view))).toEqual(["a", "b"]);
 
     // Delete from the page pulls the next row in from beyond the limit.
-    view = LiveView.del(view, "a");
+    view = LiveView.del(view, RowId.make("a"));
     expect(ids(LiveView.result(view))).toEqual(["b", "c"]);
   });
 
@@ -78,7 +79,7 @@ describe("LiveView", () => {
 
   it("returns the same reference on a no-op", () => {
     const view = LiveView.make(ranked, [row("a", 1)]);
-    expect(LiveView.del(view, "missing")).toBe(view);
+    expect(LiveView.del(view, RowId.make("missing"))).toBe(view);
   });
 
   it("windows by cursor", () => {
@@ -101,7 +102,7 @@ describe("LiveView", () => {
 
     it("locates and deletes a row without a full scan degrading to wrong results", () => {
       let view = LiveView.make(unordered, [row("a", 0), row("b", 0), row("c", 0), row("d", 0)]);
-      view = LiveView.del(view, "b");
+      view = LiveView.del(view, RowId.make("b"));
       expect(ids(LiveView.result(view))).toEqual(["a", "c", "d"]);
       view = LiveView.put(view, row("e", 0));
       expect(ids(LiveView.result(view))).toEqual(["a", "c", "d", "e"]);

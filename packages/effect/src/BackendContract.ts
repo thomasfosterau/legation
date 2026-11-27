@@ -10,8 +10,8 @@
  * ContractViolation naming the broken rule.
  *
  * The backend under test must register the contract mutators (the
- * definitions below; `memoryHandlers` is the ready-made registration for
- * MemoryBackend-style backends). Verification writes rows into the
+ * definitions below; `makeMemoryHandlers` builds the ready-made registration
+ * for MemoryBackend-style backends). Verification writes rows into the
  * configured contract collections, so run it against disposable instances.
  *
  * Visibility before the bump (guarantee 1) is not a rule here. The rules make
@@ -30,9 +30,11 @@
  * Serialisability across client groups (guarantee 1) is a rule: rule 11
  * parks a handler after its read, lets another group commit a write to the same
  * row, then resumes the handler and checks that no write was lost. Its handler
- * parks through {@link park}, the one seam a backend's own counter handler needs
- * to expose the read-then-write window. The gate is named by a string in the
- * mutator's args, so the mutation stays serialisable like any other.
+ * parks through the {@link ParkGates} service, the one seam a backend's own
+ * counter handler needs to expose the read-then-write window. The backend under
+ * test provides that service to its handlers, and the harness opens its gates on
+ * the same instance. The gate is named by a string in the mutator's args, so the
+ * mutation stays serialisable like any other.
  *
  * A backend that caches the rows a listing returns must keep that cache in line
  * with its own writes: rule 12 lists a collection, applies an update and a delete
@@ -62,21 +64,25 @@
 import * as P from "effect/Predicate";
 import * as Defined from "./Defined.js";
 import * as Arr from "effect/Array";
+import * as Context from "effect/Context";
 import * as DateTime from "effect/DateTime";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
 import * as Fiber from "effect/Fiber";
+import * as Layer from "effect/Layer";
 import * as MutableHashMap from "effect/MutableHashMap";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
+import * as Scope from "effect/Scope";
 import type { Backend, SubsetEntry, SyncContext } from "./Backend.js";
 import { BackendError, MutationRejected } from "./Errors.js";
 import * as FilterCorpus from "./FilterCorpus.js";
 import * as MemoryBackend from "./MemoryBackend.js";
 import * as Mutator from "./Mutator.js";
 import * as Predicate from "./Predicate.js";
-import type { Mutation } from "./Protocol.js";
+import * as Ids from "./internal/Ids.js";
+import { ClientGroupId, type Mutation, RowId } from "./Protocol.js";
 import * as Subset from "./Subset.js";
 import * as Json from "./internal/Json.js";
 import * as UnknownMutator from "./UnknownMutator.js";
@@ -92,43 +98,101 @@ export class ContractViolation extends Schema.TaggedError<
 
 // ─── Park gates (rule 11) ────────────────────────────────────────────────────
 
-/** A park gate the harness holds: `entered` once the handler is parked, `release` lets it resume. */
-interface ParkGate {
-  readonly entered: Deferred.Deferred<void>;
-  readonly release: Deferred.Deferred<void>;
+/** A gate the harness has opened (see {@link ParkGates}). */
+export interface OpenGate {
+  /** The name the harness passes in a `contract/count-up` mutation's `gate` arg. */
+  readonly name: string;
+  /** Completes once a handler has parked at this gate. */
+  readonly entered: Effect.Effect<void>;
+  /** Lets every handler parked at this gate resume, and any later park pass through. */
+  readonly release: Effect.Effect<void>;
 }
 
-/** The gates the harness has registered, by name. Args carry the name, never the gate. */
-const parkGates = MutableHashMap.empty<string, ParkGate>();
-
 /**
- * The park a `contract/count-up` handler takes between its read and its write.
- * When the harness has registered `gate`, it signals that the handler is parked
- * and waits until the harness releases it; for any other name it does nothing.
- * Only the contract's `countUp` handler calls it, so no production handler should.
+ * The park gates rule 11 holds a `contract/count-up` handler at, between its read and its write.
+ * The backend under test provides this service to its handlers, and `verifyBackendContract`
+ * opens gates on the same instance, so the two must share it: {@link layerParkGates} for a backend
+ * whose handlers run in the harness's process, or an implementation that reaches the harness from
+ * wherever the handlers run (a Worker, a remote room).
  */
-export const park = (gate: string): Effect.Effect<void> => {
-  return Option.match(MutableHashMap.get(parkGates, gate), {
-    onNone: () => Effect.void,
-    onSome: (registered) =>
-      Deferred.succeed(registered.entered, undefined).pipe(
-        Effect.andThen(Deferred.await(registered.release))
+export interface ParkGates {
+  /**
+   * Opens a gate with a fresh name starting with `prefix`, for the life of the scope. Closing the
+   * scope closes the gate and releases any handler parked at it.
+   */
+  readonly open: (prefix: string) => Effect.Effect<OpenGate, never, Scope.Scope>;
+  /**
+   * The park a `contract/count-up` handler takes between its read and its write. At an open gate it
+   * signals that the handler has parked and waits until the harness releases it; at any other name
+   * it returns at once. Only a `contract/count-up` handler calls it, so no production handler should.
+   */
+  readonly park: (gate: string) => Effect.Effect<void>;
+}
+
+/** The {@link ParkGates} service. */
+export const ParkGates = Context.Service<ParkGates>(
+  "@thomasfosterau/legation/BackendContract/ParkGates"
+);
+
+/** In-memory {@link ParkGates}: one process's gates, for a backend whose handlers run beside the harness. */
+export const makeParkGates: Effect.Effect<ParkGates> = Effect.sync(() => {
+  const gates = MutableHashMap.empty<
+    string,
+    { readonly entered: Deferred.Deferred<void>; readonly release: Deferred.Deferred<void> }
+  >();
+  let opened = 0;
+  return ParkGates.of({
+    open: (prefix) =>
+      Effect.acquireRelease(
+        Effect.gen(function* () {
+          opened += 1;
+          const name = `${prefix}-${opened}`;
+          const gate = {
+            entered: yield* Deferred.make<void>(),
+            release: yield* Deferred.make<void>(),
+          };
+          MutableHashMap.set(gates, name, gate);
+          return { name, gate };
+        }),
+        ({ gate, name }) =>
+          Effect.sync(() => MutableHashMap.remove(gates, name)).pipe(
+            Effect.andThen(Deferred.succeed(gate.release, undefined))
+          )
+      ).pipe(
+        Effect.map(({ gate, name }): OpenGate => ({
+          name,
+          entered: Deferred.await(gate.entered),
+          release: Deferred.succeed(gate.release, undefined).pipe(Effect.asVoid),
+        }))
+      ),
+    park: (gate) =>
+      Effect.suspend(() =>
+        Option.match(MutableHashMap.get(gates, gate), {
+          onNone: () => Effect.void,
+          onSome: (open) =>
+            Deferred.succeed(open.entered, undefined).pipe(
+              Effect.andThen(Deferred.await(open.release))
+            ),
+        })
       ),
   });
-};
+});
+
+/** A layer of in-memory {@link ParkGates} (see {@link makeParkGates}). */
+export const layerParkGates: Layer.Layer<ParkGates> = Layer.effect(ParkGates)(makeParkGates);
 
 // ─── Contract mutators ───────────────────────────────────────────────────────
 
 /** Write one row. */
 export const putRow = Mutator.make(
   "contract/put",
-  Schema.Struct({ collection: Schema.String, id: Schema.String, value: Schema.Unknown })
+  Schema.Struct({ collection: Schema.String, id: RowId, value: Schema.Unknown })
 );
 
 /** Delete one row. */
 export const delRow = Mutator.make(
   "contract/del",
-  Schema.Struct({ collection: Schema.String, id: Schema.String })
+  Schema.Struct({ collection: Schema.String, id: RowId })
 );
 
 /**
@@ -155,7 +219,7 @@ const counterOf = (value: Option.Option<{ readonly n?: number | undefined }>) =>
  */
 export const rejectAlways = Mutator.make(
   "contract/reject",
-  Schema.Struct({ collection: Schema.String, id: Schema.String })
+  Schema.Struct({ collection: Schema.String, id: RowId })
 );
 
 /**
@@ -170,26 +234,33 @@ export const rejectAlways = Mutator.make(
  */
 export const writeThenFail = Mutator.make(
   "contract/write-then-fail",
-  Schema.Struct({ collection: Schema.String, id: Schema.String })
+  Schema.Struct({ collection: Schema.String, id: RowId })
 );
 
 /**
- * Reads a counter row, parks after the read (see {@link park}), then writes the
+ * Reads a counter row, parks after the read (see {@link ParkGates}), then writes the
  * counter plus one. Two client groups running it on one row must both count
- * (rule 11). `gate` names a park gate the harness registered, or matches none.
+ * (rule 11). `gate` names a park gate the harness opened, or matches none.
  *
  * A third-party backend registers its handler for this mutator under
  * `BackendContract.countUp.name` (`contract/count-up`), passes `gate` unchanged
- * to `park` between its read and its write, and writes the counter plus one. A
- * handler that omits `park` fails rule 11 with "finished without reaching park()".
+ * to `ParkGates.park` between its read and its write, and writes the counter plus
+ * one. A handler that omits the park fails rule 11 with "finished without reaching park()".
  */
 export const countUp = Mutator.make(
   "contract/count-up",
-  Schema.Struct({ collection: Schema.String, id: Schema.String, gate: Schema.String })
+  Schema.Struct({ collection: Schema.String, id: RowId, gate: Schema.String })
 );
 
-/** Ready-made authoritative handlers for MemoryBackend-style registration. */
-export const memoryHandlers: Record<string, MemoryBackend.BackendHandler> =
+/**
+ * Ready-made authoritative handlers for MemoryBackend-style registration. The `contract/count-up`
+ * handler parks at the {@link ParkGates} in context when they are built.
+ */
+export const makeMemoryHandlers: Effect.Effect<
+  Record<string, MemoryBackend.BackendHandler>,
+  never,
+  ParkGates
+> = Effect.map(ParkGates, (gates) =>
   MemoryBackend.validatedHandlers([
     MemoryBackend.handler(putRow, (args, writer) =>
       writer.put(args.collection, args.id, args.value)
@@ -217,11 +288,12 @@ export const memoryHandlers: Record<string, MemoryBackend.BackendHandler> =
     MemoryBackend.handler(countUp, (args, writer) =>
       Effect.gen(function* () {
         const current = counterOf(decodeCounter(yield* writer.get(args.collection, args.id)));
-        yield* park(args.gate);
+        yield* gates.park(args.gate);
         yield* writer.put(args.collection, args.id, { n: (current ?? 0) + 1 });
       })
     ),
-  ]);
+  ])
+);
 
 // ─── Verification harness ────────────────────────────────────────────────────
 
@@ -238,7 +310,7 @@ export type PeerSettle = (peerSettled: Effect.Effect<boolean>) => Effect.Effect<
 export interface VerifyOptions {
   /** Base name for the collections written during verification. */
   readonly collection?: string;
-  readonly clientGroupId?: string;
+  readonly clientGroupId?: ClientGroupId;
   /**
    * How rule 11 waits for the peer while the parked call is held. Absent, the
    * harness gives the peer a bounded number of scheduler turns, which suits a backend
@@ -277,6 +349,8 @@ interface EvalRow {
  */
 interface Harness {
   readonly backend: Backend;
+  /** The gates rule 11 opens: the instance the backend's handlers park at. */
+  readonly gates: ParkGates;
   readonly context: SyncContext;
   readonly clientId: string;
   /**
@@ -338,6 +412,12 @@ const isUnregisteredFailure = (error: BackendError, mutator: string): boolean =>
 
 /** The client id every contract mutation is sent under. */
 const CONTRACT_CLIENT = "contract-client";
+
+/** The client group the contract runs in when {@link VerifyOptions.clientGroupId} is absent. */
+const CONTRACT_GROUP = ClientGroupId.make("__contract-group");
+
+/** The row ids the contract names, as literals. */
+const rowIds = (...ids: ReadonlyArray<string>): ReadonlyArray<RowId> => ids.map(Ids.rowId);
 
 /**
  * The rule that checks, before any other rule runs, that the backend reports the
@@ -402,17 +482,18 @@ const harnessExpectRegisteredFailure: Harness["expectRegisteredFailure"] = (
 
 const makeHarness = (
   backend: Backend,
+  gates: ParkGates,
   options: VerifyOptions,
   start: number,
   peerStart: number
 ): Harness => {
   const rows = options.collection ?? "__contract";
-  const context: SyncContext = { clientGroupId: options.clientGroupId ?? "__contract-group" };
+  const context: SyncContext = { clientGroupId: options.clientGroupId ?? CONTRACT_GROUP };
   const clientId = CONTRACT_CLIENT;
 
   const mutation: Harness["mutation"] = (mutationId, mutator, args) => ({
     clientId,
-    mutationId,
+    mutationId: Ids.mutationId(mutationId),
     mutator,
     args,
     createdAt: DateTime.toEpochMillis(DateTime.nowUnsafe()),
@@ -420,6 +501,7 @@ const makeHarness = (
 
   return {
     backend,
+    gates,
     context,
     clientId,
     start,
@@ -464,7 +546,7 @@ const rule1InOrderApplication: Rule = Effect.fn("legation/BackendContract.rule1I
       result.lastMutationIds[clientId] === start + 2,
       `Expected lastMutationIds["${clientId}"] = ${start + 2}, got ${result.lastMutationIds[clientId]}`
     );
-    const fetched = yield* expectOk(rule, backend.getRows(context, rows, ["a", "b"]));
+    const fetched = yield* expectOk(rule, backend.getRows(context, rows, rowIds("a", "b")));
     yield* check(rule, fetched.length === 2, `Expected 2 rows back, got ${fetched.length}`);
     yield* check(
       rule,
@@ -487,7 +569,7 @@ const rule2IdempotentSkip: Rule = Effect.fn("legation/BackendContract.rule2Idemp
       result.lastMutationIds[clientId] === start + 2,
       `Replaying mutation ${start + 2} must keep lastMutationId at ${start + 2}, got ${result.lastMutationIds[clientId]}`
     );
-    const [b] = yield* expectOk(rule, backend.getRows(context, rows, ["b"]));
+    const [b] = yield* expectOk(rule, backend.getRows(context, rows, rowIds("b")));
     // Field-level check, not exact value equality: how a backend encodes a
     // row (extra columns, an id echoed into the value) is its own business
     // (ADR-0014 keeps values opaque); the contract only demands the replay
@@ -523,7 +605,7 @@ const rule3GapRejection: Rule = Effect.fn("legation/BackendContract.rule3GapReje
     (yield* lastIdOf(rule)) === start + 2,
     "A rejected gap must not bump lastMutationId"
   );
-  const fetched = yield* expectOk(rule, backend.getRows(context, rows, ["c"]));
+  const fetched = yield* expectOk(rule, backend.getRows(context, rows, rowIds("c")));
   yield* check(rule, Arr.isReadonlyArrayEmpty(fetched), "A rejected gap must not apply effects");
 });
 
@@ -562,9 +644,9 @@ const rule5VersionBump: Rule = Effect.fn("legation/BackendContract.rule5VersionB
   put,
 }) {
   const rule = "changes the row version on every authoritative write";
-  const [before] = yield* expectOk(rule, backend.getRows(context, rows, ["a"]));
+  const [before] = yield* expectOk(rule, backend.getRows(context, rows, rowIds("a")));
   yield* expectOk(rule, backend.applyMutations(context, [put(start + 3, rows, "a", { n: 3 })]));
-  const [after] = yield* expectOk(rule, backend.getRows(context, rows, ["a"]));
+  const [after] = yield* expectOk(rule, backend.getRows(context, rows, rowIds("a")));
   yield* check(
     rule,
     before !== undefined && after !== undefined && before.version !== after.version,
@@ -661,7 +743,7 @@ const generatedCorpus = Effect.fnUntraced(function* (
   nextMutationId: number
 ) {
   const corpus = yield* contractCorpus;
-  const corpusRows = corpus.rows.map((row) => ({ id: `c-${row.id}`, value: row.value }));
+  const corpusRows = corpus.rows.map((row) => ({ id: Ids.rowId(`c-${row.id}`), value: row.value }));
   yield* h.expectOk(
     rule,
     h.backend.applyMutations(
@@ -699,7 +781,7 @@ const rule6ReferenceSemantics: Rule = Effect.fn("legation/BackendContract.rule6R
         evalSeed.map(([id, value], index) => h.put(h.start + 4 + index, h.evalRows, id, value))
       )
     );
-    const reference = evalSeed.map(([id, value]) => ({ id, value }));
+    const reference = evalSeed.map(([id, value]) => ({ id: Ids.rowId(id), value }));
 
     const limited = Subset.make({
       collection: h.evalRows,
@@ -740,7 +822,10 @@ const rule6ReferenceSemantics: Rule = Effect.fn("legation/BackendContract.rule6R
 const rule7OmitsMissingIds: Rule = Effect.fn("legation/BackendContract.rule7OmitsMissingIds")(
   function* ({ backend, context, rows, check, expectOk }) {
     const rule = "omits missing ids from getRows";
-    const fetched = yield* expectOk(rule, backend.getRows(context, rows, ["a", "does-not-exist"]));
+    const fetched = yield* expectOk(
+      rule,
+      backend.getRows(context, rows, rowIds("a", "does-not-exist"))
+    );
     yield* check(
       rule,
       fetched.length === 1 && fetched[0]?.id === "a",
@@ -754,7 +839,7 @@ const rule8ClientGroupIsolation: Rule = Effect.fn(
   "legation/BackendContract.rule8ClientGroupIsolation"
 )(function* ({ backend, context, clientId, check, expectOk }) {
   const rule = "isolates lastMutationIds between client groups";
-  const other: SyncContext = { clientGroupId: `${context.clientGroupId}-other` };
+  const other: SyncContext = { clientGroupId: Ids.clientGroupId(`${context.clientGroupId}-other`) };
   const ids = yield* expectOk(rule, backend.lastMutationIds(other));
   yield* check(
     rule,
@@ -791,13 +876,13 @@ const rule9PermanentRejection: Rule = Effect.fn("legation/BackendContract.rule9P
       ),
       "The rejected mutation must appear in the result's `rejected` list"
     );
-    const poison = yield* expectOk(rule, backend.getRows(context, rows, ["poison"]));
+    const poison = yield* expectOk(rule, backend.getRows(context, rows, rowIds("poison")));
     yield* check(
       rule,
       Arr.isReadonlyArrayEmpty(poison),
       "A rejected mutation must leave no effects (its staged write must roll back)"
     );
-    const behind = yield* expectOk(rule, backend.getRows(context, rows, ["behind"]));
+    const behind = yield* expectOk(rule, backend.getRows(context, rows, rowIds("behind")));
     yield* check(
       rule,
       behind.length === 1,
@@ -816,7 +901,7 @@ const rule10WriteThenFail: Rule = Effect.fn("legation/BackendContract.rule10Writ
     const { backend, context, rows, check, expectOk } = h;
     const rule = "discards a transiently failed mutation's writes and does not bump";
     const startId = yield* h.lastIdOf(rule);
-    const [before] = yield* expectOk(rule, backend.getRows(context, rows, ["a"]));
+    const [before] = yield* expectOk(rule, backend.getRows(context, rows, rowIds("a")));
     yield* check(rule, before !== undefined, 'Row "a" must exist before the probe');
 
     const attempt = (id: string) =>
@@ -829,7 +914,7 @@ const rule10WriteThenFail: Rule = Effect.fn("legation/BackendContract.rule10Writ
     // reports that case as a missing registration.
     yield* h.expectRegisteredFailure(rule, attempt("a"), writeThenFail.name, "writeThenFail");
 
-    const [after] = yield* expectOk(rule, backend.getRows(context, rows, ["a"]));
+    const [after] = yield* expectOk(rule, backend.getRows(context, rows, rowIds("a")));
     yield* check(
       rule,
       after?.version === before?.version && Json.show(after?.value) === Json.show(before?.value),
@@ -837,7 +922,7 @@ const rule10WriteThenFail: Rule = Effect.fn("legation/BackendContract.rule10Writ
     );
 
     yield* Effect.exit(attempt("ghost"));
-    const ghost = yield* expectOk(rule, backend.getRows(context, rows, ["ghost"]));
+    const ghost = yield* expectOk(rule, backend.getRows(context, rows, rowIds("ghost")));
     yield* check(rule, Arr.isReadonlyArrayEmpty(ghost), "A failed write must not create a row");
 
     yield* check(
@@ -862,9 +947,6 @@ const TRANSIENT_RETRIES = 3;
  * `awaitPeer` instead.
  */
 const PEER_TURNS = 1000;
-
-/** The rule's own gate names are unique per run, so two verifications in one process cannot collide. */
-let gateRuns = 0;
 
 /** The gate name for a mutation that parks at nothing: no registered gate has this name. */
 const NO_GATE = "";
@@ -915,7 +997,7 @@ const rule11CrossGroupLostUpdate: Rule = Effect.fn(
 
   // The peer group has its own ledger. A restarted run expects the one it left, and
   // the check runs before the gate is registered, so a failure leaves no parked handler behind.
-  const peer: SyncContext = { clientGroupId: `${h.context.clientGroupId}-peer` };
+  const peer: SyncContext = { clientGroupId: Ids.clientGroupId(`${h.context.clientGroupId}-peer`) };
   const peerLedger = (yield* h.expectOk(rule, h.backend.lastMutationIds(peer)))[h.clientId] ?? 0;
   yield* h.check(
     rule,
@@ -923,23 +1005,17 @@ const rule11CrossGroupLostUpdate: Rule = Effect.fn(
     ledgerMismatch("peer group", h.clientId, h.peerStart, peerLedger)
   );
 
-  gateRuns += 1;
-  const gate = `${h.context.clientGroupId}/race-${gateRuns}`;
-  const parked: ParkGate = {
-    entered: yield* Deferred.make<void>(),
-    release: yield* Deferred.make<void>(),
-  };
-  MutableHashMap.set(parkGates, gate, parked);
+  const parked = yield* h.gates.open(`${h.context.clientGroupId}/race`);
   const increment = (mutationId: number, gateName: string) =>
     h.mutation(mutationId, countUp.name, { collection: h.rows, id: row, gate: gateName });
 
   const run = Effect.fnUntraced(function* () {
     const first = yield* Effect.forkChild(
-      retryTransient(h.backend.applyMutations(h.context, [increment(startId + 2, gate)]))
+      retryTransient(h.backend.applyMutations(h.context, [increment(startId + 2, parked.name)]))
     );
     // Either X has parked after its read, or X finished without parking.
     const firstEarly = yield* Effect.raceFirst(
-      Deferred.await(parked.entered).pipe(Effect.as(undefined)),
+      parked.entered.pipe(Effect.as(undefined)),
       Effect.exit(Fiber.join(first))
     );
     if (firstEarly !== undefined) {
@@ -956,7 +1032,7 @@ const rule11CrossGroupLostUpdate: Rule = Effect.fn(
         false,
         Option.isSome(failure)
           ? `Backend failed unexpectedly: ${failure.value.message}`
-          : `${countUp.name} finished without reaching park(): its handler must call BackendContract.park between its read and its write`
+          : `${countUp.name} finished without reaching park(): its handler must call ParkGates.park between its read and its write`
       );
     }
 
@@ -968,7 +1044,7 @@ const rule11CrossGroupLostUpdate: Rule = Effect.fn(
     );
     const peerSettled = Deferred.isDone(peerDone);
     yield* Option.getOrElse(h.awaitPeer, () => settleByTurns)(peerSettled);
-    yield* Deferred.succeed(parked.release, undefined);
+    yield* parked.release;
     const firstExit = yield* Effect.exit(Fiber.join(first));
     const peerExit = yield* Effect.exit(Fiber.join(second));
     const failed = Arr.findFirst(
@@ -986,7 +1062,7 @@ const rule11CrossGroupLostUpdate: Rule = Effect.fn(
       );
     }
 
-    const [stored] = yield* h.expectOk(rule, h.backend.getRows(h.context, h.rows, [row]));
+    const [stored] = yield* h.expectOk(rule, h.backend.getRows(h.context, h.rows, rowIds(row)));
     const count = counterOf(decodeCounter(stored?.value));
     return yield* h.check(
       rule,
@@ -995,14 +1071,8 @@ const rule11CrossGroupLostUpdate: Rule = Effect.fn(
     );
   });
 
-  yield* run().pipe(
-    Effect.ensuring(
-      Effect.sync(() => MutableHashMap.remove(parkGates, gate)).pipe(
-        Effect.andThen(Deferred.succeed(parked.release, undefined))
-      )
-    )
-  );
-});
+  yield* run();
+}, Effect.scoped);
 
 /**
  * 12. Own writes reach getRows. A listing (`evaluate`) may cache a row, and a
@@ -1017,8 +1087,8 @@ const rule12OwnWritesReachGetRows: Rule = Effect.fn(
   const { backend, context, check, expectOk, put } = h;
   const rule = "getRows reflects this backend's own writes to rows a listing has cached";
   const collection = h.evalRows;
-  const kept = "cached-kept";
-  const gone = "cached-gone";
+  const kept = RowId.make("cached-kept");
+  const gone = RowId.make("cached-gone");
   const startId = yield* h.lastIdOf(rule);
   yield* expectOk(
     rule,
@@ -1041,7 +1111,7 @@ const rule12OwnWritesReachGetRows: Rule = Effect.fn(
     rule,
     backend.applyMutations(context, [put(startId + 3, collection, kept, { n: 2 })])
   );
-  const [updated] = yield* expectOk(rule, backend.getRows(context, collection, [kept]));
+  const [updated] = yield* expectOk(rule, backend.getRows(context, collection, rowIds(kept)));
   yield* check(
     rule,
     counterOf(decodeCounter(updated?.value)) === 2,
@@ -1054,7 +1124,7 @@ const rule12OwnWritesReachGetRows: Rule = Effect.fn(
       h.mutation(startId + 4, delRow.name, { collection, id: gone }),
     ])
   );
-  const removed = yield* expectOk(rule, backend.getRows(context, collection, [gone]));
+  const removed = yield* expectOk(rule, backend.getRows(context, collection, rowIds(gone)));
   yield* check(
     rule,
     Arr.isReadonlyArrayEmpty(removed),
@@ -1269,10 +1339,15 @@ const rules: ReadonlyArray<Rule> = [
  * contract first checks the backend reports exactly that, failing a backend that
  * forgot its ledger, and then numbers its mutations from it.
  *
- * It needs no services and no live clock, so it runs as is under
- * `@effect/vitest`, with the backend from a layer:
+ * It needs {@link ParkGates}, the same instance the backend's handlers park at,
+ * and no live clock, so it runs as is under `@effect/vitest`, with the backend
+ * and its gates from a layer:
  *
  * ```ts
+ * const MyBackendLayer = Layer.effect(Backend)(
+ *   Effect.map(ParkGates, (gates) => makeMyBackend(myHandlers(gates)))
+ * ).pipe(Layer.provideMerge(layerParkGates));
+ *
  * layer(MyBackendLayer)("MyBackend", (provided) => {
  *   provided.effect("passes the Backend contract", () =>
  *     Backend.use((backend) => verifyBackendContract(backend))
@@ -1283,8 +1358,8 @@ const rules: ReadonlyArray<Rule> = [
 export const verifyBackendContract = (
   backend: Backend,
   options?: VerifyOptions
-): Effect.Effect<void, ContractViolation> => {
-  const context: SyncContext = { clientGroupId: options?.clientGroupId ?? "__contract-group" };
+): Effect.Effect<void, ContractViolation, ParkGates> => {
+  const context: SyncContext = { clientGroupId: options?.clientGroupId ?? CONTRACT_GROUP };
   const expected = options?.restoredLedger ?? 0;
   return backend.lastMutationIds(context).pipe(
     Effect.mapError(
@@ -1304,13 +1379,16 @@ export const verifyBackendContract = (
           })
         );
       }
-      const harness = makeHarness(
-        backend,
-        options ?? {},
-        expected,
-        options?.restoredPeerLedger ?? 0
-      );
-      return Effect.forEach(rules, (rule) => rule(harness), { concurrency: 1, discard: true });
+      return Effect.flatMap(ParkGates, (gates) => {
+        const harness = makeHarness(
+          backend,
+          gates,
+          options ?? {},
+          expected,
+          options?.restoredPeerLedger ?? 0
+        );
+        return Effect.forEach(rules, (rule) => rule(harness), { concurrency: 1, discard: true });
+      });
     })
   );
 };

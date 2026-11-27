@@ -21,6 +21,7 @@ import * as Predicate from "../Predicate.js";
 import * as Subset from "../Subset.js";
 import { defined } from "./defined.js";
 import * as Json from "../internal/Json.js";
+import { RowId } from "../Protocol.js";
 
 // ─── Deterministic PRNG (mulberry32) ─────────────────────────────────────────
 
@@ -51,7 +52,7 @@ const chance = (rng: Rng, p: number): boolean => rng() < p;
 // bucket, which only `IsNull` may return.
 
 interface TestRow {
-  readonly id: string;
+  readonly id: RowId;
   readonly value: Record<string, Predicate.Literal>;
 }
 
@@ -66,7 +67,7 @@ const makeRows = (rng: Rng, count: number): ReadonlyArray<TestRow> =>
     value.flag = chance(rng, 0.2) ? null : chance(rng, 0.5);
     if (chance(rng, 0.5)) value.mixed = int(rng, 5);
     else value.mixed = pick(rng, ["p", "q", "r"]);
-    return { id: `r${i}`, value };
+    return { id: RowId.make(`r${i}`), value };
   });
 
 // ─── Predicate generation ────────────────────────────────────────────────────
@@ -177,11 +178,11 @@ describe("CollectionIndex evaluation ≡ full-scan Subset.apply (property)", () 
 
   it("matches for absent/null fields and cross-type range comparisons specifically", () => {
     const rows: ReadonlyArray<TestRow> = [
-      { id: "absent", value: { rank: 0 } }, // `a` entirely missing
-      { id: "null-a", value: { rank: 1, a: null } },
-      { id: "num-1", value: { rank: 2, a: 1 } },
-      { id: "num-2", value: { rank: 3, a: 2 } },
-      { id: "str-a", value: { rank: 4, a: "1" } }, // same-looking value, different type
+      { id: RowId.make("absent"), value: { rank: 0 } }, // `a` entirely missing
+      { id: RowId.make("null-a"), value: { rank: 1, a: null } },
+      { id: RowId.make("num-1"), value: { rank: 2, a: 1 } },
+      { id: RowId.make("num-2"), value: { rank: 3, a: 2 } },
+      { id: RowId.make("str-a"), value: { rank: 4, a: "1" } }, // same-looking value, different type
     ];
     const rowsById = new Map(rows.map((r) => [r.id, r]));
     const index = CollectionIndex.empty(["a"]);
@@ -266,8 +267,8 @@ describe("CollectionIndex evaluation ≡ full-scan Subset.apply (property)", () 
       // Incremental maintenance agrees with the rebuild: move every row through
       // a NULL and back, then re-check a slice of the predicates.
       Arr.forEach(corpus.rows, (row) => {
-        CollectionIndex.upsertRow(index, row.id, {});
-        CollectionIndex.upsertRow(index, row.id, row.value);
+        CollectionIndex.upsertRow(index, RowId.make(row.id), {});
+        CollectionIndex.upsertRow(index, RowId.make(row.id), row.value);
       });
       expect(disagreements(corpus.predicates.slice(0, 100))).toEqual([]);
     })

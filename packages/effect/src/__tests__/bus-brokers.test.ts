@@ -24,8 +24,9 @@ import * as InvalidationBus from "../InvalidationBus.js";
 import { defined } from "./defined.js";
 import { TestFailure } from "./test-failure.js";
 import * as Json from "../internal/Json.js";
+import { RowId } from "../Protocol.js";
 
-const hint: ChangeHint = { collection: "todos", ids: ["1"] };
+const hint: ChangeHint = { collection: "todos", ids: [RowId.make("1")] };
 
 // ─── WebSocket (Durable Object) broker ───────────────────────────────────────
 

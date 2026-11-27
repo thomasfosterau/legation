@@ -30,6 +30,7 @@
 
 import type * as ClientEngine from "./ClientEngine.js";
 import type * as Coverage from "./Coverage.js";
+import { MutationId, RowId } from "./Protocol.js";
 import * as Hash from "./Hash.js";
 import type * as MutationState from "./MutationState.js";
 import type * as Related from "./Related.js";
@@ -53,7 +54,7 @@ export type EdgeSelect = typeof EdgeSelect.Type;
 
 /** Wire codec for one {@link MutationState.MutationState} entry. */
 export const MutationStateEntry = Schema.Struct({
-  mutationId: Schema.Number,
+  mutationId: MutationId,
   mutator: Schema.String,
   args: Schema.Unknown,
   phase: Schema.Literals(["pending", "acknowledged", "rejected", "dropped"]),
@@ -117,7 +118,7 @@ export const FORM_MUTATION_MUTATOR = "@thomasfosterau/legation/beginFormMutation
  */
 export const FormMutationBegin = Schema.Struct({
   mirrorId: Schema.String,
-  form: Schema.Struct({ clientId: Schema.String, mutationId: Schema.Number }),
+  form: Schema.Struct({ clientId: Schema.String, mutationId: MutationId }),
   mutator: Schema.String,
   args: Schema.Unknown,
 });
@@ -329,13 +330,13 @@ export const MirrorMessageSchema: Schema.Codec<MirrorMessage> = Schema.Union([
 
 /** A row as the host sends it to a mirror. */
 export interface MirrorRow {
-  readonly id: string;
+  readonly id: RowId;
   readonly value: unknown;
 }
 
 /** A resolved relational row on the wire: base row + its resolved names. */
 export interface MirrorRelatedRow {
-  readonly id: string;
+  readonly id: RowId;
   readonly value: unknown;
   readonly related: Readonly<Record<string, unknown>>;
 }
@@ -411,7 +412,7 @@ export type HostMessage =
       readonly mirrorId?: string;
       readonly rows: ReadonlyArray<{
         readonly collection: string;
-        readonly id: string;
+        readonly id: RowId;
         readonly value: unknown;
       }>;
       /** Set instead of rows when the host could not serve the read. */
@@ -550,14 +551,14 @@ export const HostMessageSchema: Schema.Codec<HostMessage> = Schema.Union([
   Schema.Struct({
     _tag: Schema.tag("MirrorUpdate"),
     key: Schema.String,
-    rows: Schema.Array(Schema.Struct({ id: Schema.String, value: Schema.Unknown })),
+    rows: Schema.Array(Schema.Struct({ id: RowId, value: Schema.Unknown })),
   }),
   Schema.Struct({
     _tag: Schema.tag("RelatedUpdate"),
     key: Schema.String,
     rows: Schema.Array(
       Schema.Struct({
-        id: Schema.String,
+        id: RowId,
         value: Schema.Unknown,
         related: Schema.Record(Schema.String, Schema.Unknown),
       })
@@ -570,7 +571,7 @@ export const HostMessageSchema: Schema.Codec<HostMessage> = Schema.Union([
     rows: Schema.Array(
       Schema.Struct({
         collection: Schema.String,
-        id: Schema.String,
+        id: RowId,
         value: Schema.Unknown,
       })
     ),

@@ -29,8 +29,9 @@ import { BackendError, Mutator } from "@thomasfosterau/legation";
 import { Subset } from "@thomasfosterau/legation/internal";
 import * as SqlBackend from "../../sql/SqlBackend.js";
 import { TestFailure } from "../test-failure.js";
+import { ClientGroupId, MutationId, RowId } from "../../Protocol.js";
 
-const context = { clientGroupId: "visibility-group" };
+const context = { clientGroupId: ClientGroupId.make("visibility-group") };
 const clientId = "visibility-client";
 
 /** A pushed mutation that parks after its write (the handler below). */
@@ -95,7 +96,7 @@ const parkingHandler =
       yield* tx.run({ text: `INSERT INTO rows (id, n) VALUES (?, ?)`, params: [args.id, args.n] });
       yield* Deferred.succeed(parked, undefined);
       yield* Deferred.await(release);
-      return [{ collection: "rows", ids: [args.id] }];
+      return [{ collection: "rows", ids: [RowId.make(args.id)] }];
     });
 
 /** What a concurrent reader sees: the rows, the evaluated subset and the ledger. */
@@ -107,7 +108,9 @@ interface View {
 
 const readView = (reader: ReturnType<typeof SqlBackend.make>) =>
   Effect.gen(function* () {
-    const rows = (yield* reader.getRows(context, "rows", ["a"])).map((row) => row.value);
+    const rows = (yield* reader.getRows(context, "rows", [RowId.make("a")])).map(
+      (row) => row.value
+    );
     const entries = yield* reader.evaluate(context, Subset.make({ collection: "rows" }));
     const ledger = yield* reader.lastMutationIds(context);
     return { rows, entries, ledger } satisfies View;
@@ -166,7 +169,7 @@ const probe = (executorOf: (sql: SqlClient) => SqlBackend.SqlExecutor) =>
         writer.applyMutations(context, [
           {
             clientId,
-            mutationId: 1,
+            mutationId: MutationId.make(1),
             mutator: park.name,
             args: { id: "a", n: 1 },
             createdAt: 0,

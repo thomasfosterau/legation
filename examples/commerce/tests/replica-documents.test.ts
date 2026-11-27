@@ -125,7 +125,7 @@ const derivedLive = (rest: RestHandlers.RestHandlers) =>
 type Json = any;
 
 const USER = "u1";
-const GROUP = "group-u1";
+const GROUP = Client.ClientGroupId.make("group-u1");
 
 /** Every table's rows as the sync tier ships them, read back off the migrated database. */
 const seedRows = Effect.gen(function* () {
@@ -164,7 +164,7 @@ const makeRest = Effect.gen(function* () {
     context: (request) => {
       const user = request.headers["x-commerce-user"];
       return Effect.succeed({
-        clientGroupId: "http",
+        clientGroupId: Client.ClientGroupId.make("http"),
         ...(typeof user === "string" && user.length > 0 ? { identity: user } : {}),
       });
     },
@@ -224,10 +224,10 @@ const makeReplica = (rows: ReadonlyArray<{ readonly collection: string; readonly
       },
     });
     yield* backend.applyMutations(
-      { clientGroupId: "seed" },
+      { clientGroupId: Client.ClientGroupId.make("seed") },
       rows.map((args, index) => ({
         clientId: "seed",
-        mutationId: index + 1,
+        mutationId: Client.MutationId.make(index + 1),
         mutator: "seed/put",
         args,
         createdAt: 0,

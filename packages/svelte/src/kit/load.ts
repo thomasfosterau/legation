@@ -23,7 +23,7 @@
  */
 import type { Cookies } from "@sveltejs/kit";
 import * as Effect from "effect/Effect";
-import { Hydration, type Transport } from "@thomasfosterau/legation";
+import { type Client, Hydration, type Transport } from "@thomasfosterau/legation";
 import type {
   MutatorError,
   StoreError,
@@ -46,7 +46,7 @@ export interface RemoteLoadSnapshotOptions extends LoadSnapshotOptions {
 /** What {@link loadSnapshot} returns — put both in the page data. */
 export interface LoadedSnapshot {
   readonly snapshot: Hydration.Snapshot;
-  readonly clientGroupId: string;
+  readonly clientGroupId: Client.ClientGroupId;
 }
 
 type LoadSnapshotError = StoreError | TransportError | MutatorError | VersionNotSupportedError;

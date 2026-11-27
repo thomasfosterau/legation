@@ -35,6 +35,7 @@ import {
   InvalidationBus,
   Subset,
   SyncServer,
+  Protocol,
 } from "@thomasfosterau/legation/internal";
 import type { SubmitFunction } from "$app/forms";
 import {
@@ -58,14 +59,16 @@ const decodeIdentified = Schema.decodeUnknownSync(Schema.Struct({ id: Schema.Str
 const mutations = Mutation.registry([
   {
     mutator: Mutation.make("todo/set", Schema.Unknown),
-    local: (args, writer) => writer.put("todos", decodeIdentified(args).id, args),
+    local: (args, writer) =>
+      writer.put("todos", Protocol.RowId.make(decodeIdentified(args).id), args),
   },
 ]);
 
 const nodes = Node.registry([Node.make("todos", { attributes: { title: Schema.String } })]);
 
 const handlers = {
-  "todo/set": (args, writer) => Effect.asVoid(writer.put("todos", decodeIdentified(args).id, args)),
+  "todo/set": (args, writer) =>
+    Effect.asVoid(writer.put("todos", Protocol.RowId.make(decodeIdentified(args).id), args)),
 } satisfies Record<string, MemoryBackend.BackendHandler>;
 
 const makeServer = Effect.fn("makeServer")(function* (): Effect.fn.Return<
@@ -136,10 +139,13 @@ describe("loadSnapshot + clientRuntime", () => {
 
       // Authoritative rows exist server-side.
       const writerStore = yield* ClientStore.makeMemory;
-      const writerTransport = yield* Transport.makeInMemory(handler, "group-writer");
+      const writerTransport = yield* Transport.makeInMemory(
+        handler,
+        Protocol.ClientGroupId.make("group-writer")
+      );
       const writer = yield* ClientEngine.make({
         clientId: "writer",
-        clientGroupId: "group-writer",
+        clientGroupId: Protocol.ClientGroupId.make("group-writer"),
         mutators: mutations,
       }).pipe(
         Effect.provideService(ClientStore.ClientStore, writerStore),
@@ -210,10 +216,13 @@ describe("loadSnapshot + clientRuntime", () => {
       // effect — `ServerHandler` never enters the load's context.
       const handler = yield* makeServer();
       const writerStore = yield* ClientStore.makeMemory;
-      const writerTransport = yield* Transport.makeInMemory(handler, "group-writer");
+      const writerTransport = yield* Transport.makeInMemory(
+        handler,
+        Protocol.ClientGroupId.make("group-writer")
+      );
       const writer = yield* ClientEngine.make({
         clientId: "writer",
-        clientGroupId: "group-writer",
+        clientGroupId: Protocol.ClientGroupId.make("group-writer"),
         mutators: mutations,
       }).pipe(
         Effect.provideService(ClientStore.ClientStore, writerStore),
@@ -226,7 +235,7 @@ describe("loadSnapshot + clientRuntime", () => {
       const { cookies } = fakeCookies();
       const remote: Transport.ClientTransport = yield* Transport.makeInMemory(
         handler,
-        "group-remote"
+        Protocol.ClientGroupId.make("group-remote")
       );
       const loaded = yield* loadSnapshot(cookies, {
         nodes,
@@ -266,10 +275,21 @@ describe("loadSnapshot + clientRuntime", () => {
   it.effect("hydrateIfEmpty leaves a populated durable store untouched", () =>
     Effect.gen(function* () {
       const store = yield* ClientStore.makeMemory;
-      yield* store.putRow("todos", { id: "9", version: 9, value: { id: "9", title: "newer" } });
+      yield* store.putRow("todos", {
+        id: Protocol.RowId.make("9"),
+        version: 9,
+        value: { id: "9", title: "newer" },
+      });
       yield* store.setCookie("newer-cookie");
       const stale: Hydration.Snapshot = {
-        rows: [{ collection: "todos", id: "1", version: 1, value: { id: "1", title: "stale" } }],
+        rows: [
+          {
+            collection: "todos",
+            id: Protocol.RowId.make("1"),
+            version: 1,
+            value: { id: "1", title: "stale" },
+          },
+        ],
         cookie: "stale-cookie",
         journal: [],
       };
@@ -312,8 +332,8 @@ const makeTallyServer = Effect.fn("makeTallyServer")(function* () {
   const backend = yield* MemoryBackend.make(
     MemoryBackend.validatedHandlers([
       MemoryBackend.handler(tallyUp, (args, writer) =>
-        Effect.flatMap(writer.get("tallies", args.id), (row) =>
-          writer.put("tallies", args.id, nextTally(args.id, asTally(row)))
+        Effect.flatMap(writer.get("tallies", Protocol.RowId.make(args.id)), (row) =>
+          writer.put("tallies", Protocol.RowId.make(args.id), nextTally(args.id, asTally(row)))
         )
       ),
       MemoryBackend.handler(tallyLocked, () =>
@@ -352,7 +372,10 @@ describe("form-action Mutations", () => {
 
         // The page's `load` mints a form client and renders it in hidden fields.
         const form = mintFormClient(() => "rendered");
-        expect(form).toEqual({ clientId: "form-rendered", mutationId: 1 });
+        expect(form).toEqual({
+          clientId: "form-rendered",
+          mutationId: Protocol.MutationId.make(1),
+        });
 
         // The action, run once per POST of the same rendered form.
         const action = (data: FormData) =>
@@ -367,7 +390,9 @@ describe("form-action Mutations", () => {
         const second = yield* action(postedForm(form, "t1"));
         expect(first[RECEIPT_KEY]).toEqual({ ...form, phase: "acknowledged" });
         expect(second).toEqual(first);
-        const rows = yield* backend.getRows({ clientGroupId: group }, "tallies", ["t1"]);
+        const rows = yield* backend.getRows({ clientGroupId: group }, "tallies", [
+          Protocol.RowId.make("t1"),
+        ]);
         expect(rows.map((row) => row.value)).toEqual([{ id: "t1", n: 1 }]);
       })
     )
@@ -376,16 +401,27 @@ describe("form-action Mutations", () => {
   it("an action that cannot name the group or the form is not routed", () => {
     const { cookies } = fakeCookies();
     expect(
-      formMutationTarget(cookies, postedForm({ clientId: "form-x", mutationId: 1 }, "t"))
+      formMutationTarget(
+        cookies,
+        postedForm({ clientId: "form-x", mutationId: Protocol.MutationId.make(1) }, "t")
+      )
     ).toBe(undefined);
     clientGroupId(cookies);
     expect(formMutationTarget(cookies, new FormData())).toBe(undefined);
-    const malformed = postedForm({ clientId: "form-x", mutationId: 0 }, "t");
+    const malformed = postedForm(
+      { clientId: "form-x", mutationId: Protocol.MutationId.make(0) },
+      "t"
+    );
     expect(formMutationTarget(cookies, malformed)).toBe(undefined);
   });
 
   it("reads a receipt off an action result, and nothing off one without it", () => {
-    const receipt = { clientId: "form-a", mutationId: 1, phase: "rejected", reason: "no" };
+    const receipt = {
+      clientId: "form-a",
+      mutationId: Protocol.MutationId.make(1),
+      phase: "rejected",
+      reason: "no",
+    };
     expect(receiptOf({ type: "failure", data: { [RECEIPT_KEY]: receipt } })).toEqual(receipt);
     expect(receiptOf({ type: "success", data: {} })).toBe(undefined);
     expect(receiptOf({ type: "redirect" })).toBe(undefined);
@@ -452,7 +488,11 @@ describe("form-action Mutations", () => {
           })
         );
         expect(receipts).toEqual([
-          { clientId: "form-enhanced", mutationId: 1, phase: "acknowledged" },
+          {
+            clientId: "form-enhanced",
+            mutationId: Protocol.MutationId.make(1),
+            phase: "acknowledged",
+          },
         ]);
         expect(updates).toEqual([{ refreshAll: false }]);
         // Shown from the tail, then from the confirmed rows: applied once.
@@ -484,13 +524,15 @@ describe("form-action Mutations", () => {
           mutation: tallyLocked,
           args: tallyArgsOf,
           onReceipt: (receipt) => void receipts.push(receipt),
-        })({ formData: postedForm({ clientId: "", mutationId: 1 }, "t3") });
+        })({
+          formData: postedForm({ clientId: "", mutationId: Protocol.MutationId.make(1) }, "t3"),
+        });
         const query = awaitPromise(() =>
           runtime.runPromise(Effect.flatMap(Client.Client, (client) => client.query(allTallies)))
         );
         const target = formMutationTarget(
           cookies,
-          postedForm({ clientId: "form-z", mutationId: 1 }, "t3")
+          postedForm({ clientId: "form-z", mutationId: Protocol.MutationId.make(1) }, "t3")
         );
         if (target === undefined) return yield* Effect.die("unroutable");
         const receipt = yield* runFormMutation(server, target, tallyLocked, { id: "t3" });
@@ -517,7 +559,7 @@ describe("request credentials (ADR-0035)", () => {
     const backend = yield* MemoryBackend.make(
       MemoryBackend.validatedHandlers([
         MemoryBackend.handler(tallyUp, (args, writer) =>
-          writer.put("tallies", args.id, nextTally(args.id, Option.none()))
+          writer.put("tallies", Protocol.RowId.make(args.id), nextTally(args.id, Option.none()))
         ),
       ])
     );
@@ -561,7 +603,11 @@ describe("request credentials (ADR-0035)", () => {
     Effect.scoped(
       Effect.gen(function* () {
         const { server, seen } = yield* makeRecordingServer();
-        const target = { clientGroupId: "group-form", clientId: "form-1", mutationId: 1 };
+        const target = {
+          clientGroupId: Protocol.ClientGroupId.make("group-form"),
+          clientId: "form-1",
+          mutationId: Protocol.MutationId.make(1),
+        };
         const receipt = yield* runFormMutation(
           server,
           target,

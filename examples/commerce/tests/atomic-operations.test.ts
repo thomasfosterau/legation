@@ -33,7 +33,7 @@ import * as HttpRouter from "effect/http/HttpRouter";
 import * as HttpServer from "effect/http/HttpServer";
 import { SqlClient } from "effect/sql/SqlClient";
 import { Atomic } from "@thomasfosterau/effect-jsonapi";
-import type { Backend } from "@thomasfosterau/legation";
+import { Backend } from "@thomasfosterau/legation";
 import { JsonApiBackend, JsonApiSync } from "@thomasfosterau/legation-jsonapi";
 import { clientLayer, migrate } from "../server/db.js";
 import { api, jsonApiLive } from "../server/jsonapi.js";
@@ -385,10 +385,10 @@ describe("atomic operations endpoint", () => {
 
 // ─── JsonApiBackend in atomic mode against this endpoint ──────────────
 
-const pushContext: Backend.SyncContext = { clientGroupId: "group-u1" };
+const pushContext: Backend.SyncContext = { clientGroupId: Backend.ClientGroupId.make("group-u1") };
 const mutation = (mutationId: number, mutator: string, args: unknown) => ({
   clientId: "c-u1",
-  mutationId,
+  mutationId: Backend.MutationId.make(mutationId),
   mutator,
   args,
   createdAt: 0,

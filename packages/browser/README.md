@@ -210,7 +210,7 @@ For apps without a service worker. `ElectedHost.run` elects exactly one tab per 
 
 ```ts
 // elected.ts
-import { ClientStore, Transport } from "@thomasfosterau/legation";
+import { ClientStore, type StoreError, Transport } from "@thomasfosterau/legation";
 import { RpcTransport } from "@thomasfosterau/legation/internal";
 import {
   BrowserConnectivity,
@@ -224,7 +224,7 @@ const clientGroupId = "todo-group";
 
 // Only built once this tab wins the election: nothing connects, and nothing
 // opens IndexedDB, in a tab that is still mirroring.
-const dependencies: Layer.Layer<ClientStore.ClientStore | Transport.ClientTransport> =
+const dependencies: Layer.Layer<ClientStore.ClientStore | Transport.ClientTransport, StoreError> =
   Layer.mergeAll(
     IndexedDbClientStore.layerWindow({ database: "todo-app" }),
     Layer.effect(Transport.ClientTransport)(
@@ -255,7 +255,7 @@ const program = Effect.gen(function* () {
 Effect.runFork(Effect.scoped(program));
 ```
 
-`ElectedHost.run` returns one `Client` for the tab's lifetime: reads and writes go through the mirror until this tab is elected, and through the engine from then on. Live `observe` streams re-subscribe on the switch, and `subscribe` pins are replayed. The lock name is `clientGroupId`, and the host's sync-protocol identity defaults to `host-${clientGroupId}`, so whichever tab wins resumes the same journal. Without `navigator.locks` (some embedded webviews), `ElectedHost.run` logs a warning and becomes the host at once. That is correct only when a single tab is ever open.
+`ElectedHost.run` returns one `Client` for the tab's lifetime: reads and writes go through the mirror until this tab is elected, and through the engine from then on. Live `observe` streams re-subscribe on the switch, and `subscribe` pins are replayed. The lock name is `clientGroupId`, and the host's sync-protocol identity defaults to `host-${clientGroupId}`, so whichever tab wins resumes the same journal. Without `navigator.locks` (some embedded webviews), `ElectedHost.run` logs a warning and becomes the host at once. That is correct only when a single tab is ever open. There, a `dependencies` layer that fails (a store that cannot open) fails `ElectedHost.run` with its `StoreError`; an elected tab logs the failure and keeps mirroring.
 
 The elected tab's host serves the same request kinds as `ServiceWorkerHost`: the introspection and `hydrate` kinds over the engine's store from `dependencies`, plus any `requests` you pass. `hydrationWindow` holds a newly elected host's first pull over an empty store for another tab's snapshot. The elected tab's own Client does not offer a snapshot: it is the host, so seed its hooks from the snapshot (`initial`) and let its first pull fill the store.
 
@@ -281,6 +281,14 @@ export const perUserReplica = (fingerprint: Identity.Fingerprint) =>
 Choose by how sign-ins behave on the device. Namespace when a few regular users switch back and forth, since each keeps a warm replica on disk. Reset when sign-ins are one-off or unbounded, such as a kiosk or a shared library machine, where a replica per visitor is the worse trade. Layers that take an `identity` (`layer`, `layerWindow`) turn the identity boundary on. `layerWindow` expects the page's own `indexedDB`. In a worker, provide `IndexedDb` yourself, as the service worker example does.
 
 The store opens its database without a version, so a database a later app build already upgraded still opens. If another connection later upgrades the database, or deletes it, this store's connections close, since they would block that change. Every call after that fails with "the IndexedDB database was upgraded by another connection; reload to continue". The store does not reopen itself, so the app should reload to pick up the new schema. Writes that were committed before the upgrade are kept.
+
+A database that cannot be opened at all (the browser refuses it, or storage is unavailable) fails the layer with a `StoreError`. Catch it on the layer to recover, for example by falling back to an in-memory replica:
+
+```ts
+IndexedDbClientStore.layerWindow({ database: "todo-app" }).pipe(
+  Layer.catch(() => ClientStore.layerMemory)
+);
+```
 
 ### HTTP cache
 

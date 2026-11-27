@@ -11,7 +11,7 @@
  * for a paginated node edge under either declaration, and never for a
  * collection the resource does not declare.
  */
-import { Defined } from "@thomasfosterau/legation/internal";
+import { Defined, Protocol } from "@thomasfosterau/legation/internal";
 import { describe, expect, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
@@ -275,7 +275,9 @@ const byHeader: IdentitySeam = {
   context: (request) => {
     const user = request.headers["x-user"];
     return Effect.succeed(
-      P.isString(user) ? { clientGroupId: "http", identity: user } : { clientGroupId: "http" }
+      P.isString(user)
+        ? { clientGroupId: Protocol.ClientGroupId.make("http"), identity: user }
+        : { clientGroupId: Protocol.ClientGroupId.make("http") }
     );
   },
 };
@@ -285,14 +287,14 @@ const makeWorld = (policy: Authorization.AuthPolicy = fullPolicy, seam: Identity
     const memory = yield* MemoryBackend.make({
       "seed/put": (args, writer) => {
         const seed = decodeSeed(args);
-        return writer.put(seed.collection, seed.id, seed.value);
+        return writer.put(seed.collection, Protocol.RowId.make(seed.id), seed.value);
       },
     });
     yield* memory.applyMutations(
-      { clientGroupId: "seed" },
+      { clientGroupId: Protocol.ClientGroupId.make("seed") },
       seeds.map((seed, index) => ({
         clientId: "seed",
-        mutationId: index + 1,
+        mutationId: Protocol.MutationId.make(index + 1),
         mutator: "seed/put",
         args: seed,
         createdAt: 0,
@@ -782,7 +784,7 @@ describe("RestHandlers identity through the IdentityResolver", () => {
         const seen = yield* Ref.make<ReadonlyArray<Authorization.IdentityRequest>>([]);
         const named = yield* makeWorld(fullPolicy, {
           identity: cookieResolver(seen),
-          clientGroupId: "rest",
+          clientGroupId: Protocol.ClientGroupId.make("rest"),
         });
         yield* named.getDocument("/api/cartItems", undefined, { cookie: "session=u2" });
         expect((yield* Ref.get(seen)).map((request) => request.clientGroupId)).toEqual(["rest"]);

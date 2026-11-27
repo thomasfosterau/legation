@@ -28,6 +28,7 @@ import * as SyncServer from "../SyncServer.js";
 import { ClientTransport, makeInMemory, ServerHandler } from "../Transport.js";
 import * as Json from "../internal/Json.js";
 import { idOf } from "./shapes.js";
+import { ClientGroupId, RowId } from "../Protocol.js";
 
 interface Todo {
   readonly id: string;
@@ -38,12 +39,12 @@ interface Todo {
 const setTodo = Mutator.registry([
   {
     mutator: Mutator.make("todo/set", Schema.Unknown),
-    local: (todo: Todo, writer) => writer.put("todos", todo.id, todo),
+    local: (todo: Todo, writer) => writer.put("todos", RowId.make(todo.id), todo),
   },
 ]);
 
 const backendHandlers = {
-  "todo/set": (args, writer) => Effect.asVoid(writer.put("todos", idOf(args), args)),
+  "todo/set": (args, writer) => Effect.asVoid(writer.put("todos", RowId.make(idOf(args)), args)),
 } satisfies Record<string, MemoryBackend.BackendHandler>;
 
 const authPolicy = Authorization.policy({ todos: Authorization.allowAll });
@@ -78,7 +79,7 @@ const makeClient = (
 ) =>
   Effect.gen(function* () {
     const store = yield* ClientStoreModule.makeMemory;
-    const base = yield* makeInMemory(handler, clientGroupId);
+    const base = yield* makeInMemory(handler, ClientGroupId.make(clientGroupId));
     const transport: ClientTransport = {
       push: base.push,
       pull: (request) =>
@@ -99,7 +100,7 @@ const makeClient = (
     };
     const engine = yield* ClientEngineModule.make({
       clientId,
-      clientGroupId,
+      clientGroupId: ClientGroupId.make(clientGroupId),
       mutators: setTodo,
     }).pipe(
       Effect.provideService(ClientStore, store),
@@ -214,11 +215,14 @@ describe("Hydration.dehydrate/hydrate", () => {
       yield* Hydration.hydrate(store, parsed);
       const engine = yield* ClientEngineModule.make({
         clientId: "a",
-        clientGroupId: "group-a",
+        clientGroupId: ClientGroupId.make("group-a"),
         mutators: setTodo,
       }).pipe(
         Effect.provideService(ClientStore, store),
-        Effect.provideService(ClientTransport, yield* makeInMemory(handler, "group-a"))
+        Effect.provideService(
+          ClientTransport,
+          yield* makeInMemory(handler, ClientGroupId.make("group-a"))
+        )
       );
       yield* engine.mutate("todo/set", { id: "3", title: "after hydrate", done: false });
       expect((yield* store.pendingMutations).map((m) => m.mutationId)).toEqual([3]);
@@ -309,7 +313,7 @@ describe("Hydration.snapshot (SSR)", () => {
         // The SSR render: a request-scoped engine under the BROWSER's group id,
         // so the produced cookie continues that group's CVR conversation.
         const snapshot = yield* Hydration.snapshot({
-          clientGroupId: "group-browser",
+          clientGroupId: ClientGroupId.make("group-browser"),
           nodes: testNodes,
           reads: [{ collection: "todos" }],
         }).pipe(Effect.provideService(ServerHandler, handler));
@@ -351,10 +355,25 @@ describe("Hydration.snapshot (SSR)", () => {
 describe("Hydration.rowsFor", () => {
   const snapshot: Hydration.Snapshot = {
     rows: [
-      { collection: "todos", id: "2", version: 1, value: { id: "2", title: "beta", done: false } },
-      { collection: "todos", id: "1", version: 1, value: { id: "1", title: "alpha", done: true } },
-      { collection: "todos", id: "3", version: 1, value: { id: "3", title: "gamma", done: false } },
-      { collection: "users", id: "u1", version: 1, value: { id: "u1" } },
+      {
+        collection: "todos",
+        id: RowId.make("2"),
+        version: 1,
+        value: { id: "2", title: "beta", done: false },
+      },
+      {
+        collection: "todos",
+        id: RowId.make("1"),
+        version: 1,
+        value: { id: "1", title: "alpha", done: true },
+      },
+      {
+        collection: "todos",
+        id: RowId.make("3"),
+        version: 1,
+        value: { id: "3", title: "gamma", done: false },
+      },
+      { collection: "users", id: RowId.make("u1"), version: 1, value: { id: "u1" } },
     ],
     journal: [],
   };

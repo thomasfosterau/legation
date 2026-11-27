@@ -25,9 +25,10 @@ import * as Sql from "../../sql/Sql.js";
 import * as SqlBackend from "../../sql/SqlBackend.js";
 import { defined } from "../defined.js";
 import * as Env from "../env.js";
+import { ClientGroupId, MutationId, RowId } from "../../Protocol.js";
 
 const databaseUrl = Env.databaseUrl;
-const context = { clientGroupId: "g" };
+const context = { clientGroupId: ClientGroupId.make("g") };
 
 const DROP_TABLES = `DROP TABLE IF EXISTS pgx_projects, pgx_todos, pgx_big, pgx_sync_mutations`;
 
@@ -88,7 +89,7 @@ const backendOver = (executor: SqlBackend.SqlExecutor) =>
         Effect.gen(function* () {
           const { id } = yield* Schema.decodeUnknownEffect(setDone.args)(raw).pipe(Effect.orDie);
           yield* tx.run({ text: `UPDATE pgx_todos SET done = true WHERE id = $1`, params: [id] });
-          return [{ collection: "todos", ids: [id] }];
+          return [{ collection: "todos", ids: [RowId.make(id)] }];
         }),
     },
     mutationsTable: "pgx_sync_mutations",
@@ -251,7 +252,7 @@ describePostgres("PgExecutor round trips", () => {
       Effect.gen(function* () {
         const batch = ["t1", "t3"].map((id, index) => ({
           clientId: "c1",
-          mutationId: index + 1,
+          mutationId: MutationId.make(index + 1),
           mutator: setDone.name,
           args: { id },
           createdAt: 0,

@@ -31,6 +31,7 @@ import { ClientTransport } from "../Transport.js";
 import { defined } from "./defined.js";
 import { TestFailure } from "./test-failure.js";
 import { titleOf } from "./shapes.js";
+import { ClientGroupId, RowId } from "../Protocol.js";
 
 /** Pulls the fake transport will serve; a test that issues more than this fails loudly. */
 const PULLS = 3;
@@ -62,7 +63,7 @@ const todoPatch = (title: string) => [
   {
     _tag: "Put" as const,
     collection: "todos",
-    id: "t1",
+    id: RowId.make("t1"),
     version: 1,
     value: { id: "t1", title, done: false },
   },
@@ -154,7 +155,7 @@ const makeClient = Effect.fn("makeClient")(function* (): Effect.fn.Return<
   const store = yield* ClientStoreModule.makeMemory;
   const engine = yield* ClientEngineModule.make({
     clientId: "client-412",
-    clientGroupId: "group-412",
+    clientGroupId: ClientGroupId.make("group-412"),
     mutators: Mutator.registry([]),
   }).pipe(
     Effect.provideService(ClientStore, store),

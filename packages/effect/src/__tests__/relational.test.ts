@@ -12,15 +12,17 @@ import * as Predicate from "../Predicate.js";
 import * as Subset from "../Subset.js";
 import type { Mutation } from "../Protocol.js";
 import { idOf } from "./shapes.js";
+import { ClientGroupId, MutationId, RowId } from "../Protocol.js";
 
 const handlers = {
-  "issue/set": (args, writer) => Effect.asVoid(writer.put("issues", idOf(args), args)),
-  "membership/set": (args, writer) => Effect.asVoid(writer.put("memberships", idOf(args), args)),
+  "issue/set": (args, writer) => Effect.asVoid(writer.put("issues", RowId.make(idOf(args)), args)),
+  "membership/set": (args, writer) =>
+    Effect.asVoid(writer.put("memberships", RowId.make(idOf(args)), args)),
 } satisfies Record<string, MemoryBackend.BackendHandler>;
 
 const mutation = (mutationId: number, mutator: string, args: unknown): Mutation => ({
   clientId: "seed",
-  mutationId,
+  mutationId: MutationId.make(mutationId),
   mutator,
   args,
   createdAt: 0,
@@ -52,17 +54,23 @@ describe("Exists predicate (MemoryBackend)", () => {
   it.effect("resolves a correlated join to relationship-scoped visibility", () =>
     Effect.gen(function* () {
       const backend = yield* MemoryBackend.make(handlers);
-      yield* backend.applyMutations({ clientGroupId: "g" }, seed);
+      yield* backend.applyMutations({ clientGroupId: ClientGroupId.make("g") }, seed);
 
       // Each user sees only issues in a project they're a member of — without
       // any membership key denormalized onto the issue row.
-      expect(ids(yield* backend.evaluate({ clientGroupId: "g" }, visibleToUser("alice")))).toEqual([
-        "i1",
-        "i3",
-      ]);
-      expect(ids(yield* backend.evaluate({ clientGroupId: "g" }, visibleToUser("bob")))).toEqual([
-        "i2",
-      ]);
+      expect(
+        ids(
+          yield* backend.evaluate(
+            { clientGroupId: ClientGroupId.make("g") },
+            visibleToUser("alice")
+          )
+        )
+      ).toEqual(["i1", "i3"]);
+      expect(
+        ids(
+          yield* backend.evaluate({ clientGroupId: ClientGroupId.make("g") }, visibleToUser("bob"))
+        )
+      ).toEqual(["i2"]);
     })
   );
 });
