@@ -5,7 +5,8 @@
  * and fallthrough reads travel as stateless HTTP POSTs (any room instance
  * can answer one, a freshly constructed one included), while a single
  * WebSocket carries the room's contentless poke frames. The socket
- * reconnects with backoff; sync stays correct over HTTP alone (a dead socket
+ * reconnects with backoff, and `status` follows it, so a UI can show live
+ * updates as degraded; sync stays correct over HTTP alone (a dead socket
  * only delays pokes — the pull interval remains the safety net).
  *
  * Runs on Effect's Fetch `HttpClient` and `effect/socket` over the standard
@@ -20,6 +21,7 @@ import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
 import * as Schedule from "effect/Schedule";
 import * as Stream from "effect/Stream";
+import * as SubscriptionRef from "effect/SubscriptionRef";
 import * as Socket from "effect/socket/Socket";
 import { TransportError, type Transport } from "@thomasfosterau/legation";
 import { Protocol } from "@thomasfosterau/legation/internal";
@@ -65,8 +67,11 @@ export const defaultReconnect = (
 /**
  * Build the transport. The poke socket dials lazily on first subscription
  * and re-dials on the `reconnect` schedule; each frame becomes one
- * contentless poke. `status` reports the HTTP tier and stays
- * `"connected"` while the socket is down, since sync stays correct without it.
+ * contentless poke. `status` follows the socket: `"connecting"` until it
+ * opens and while it re-dials, `"connected"` while it is open, and
+ * `"disconnected"` once the `reconnect` schedule ends. Push, pull and read
+ * never wait on it, so a socket outage only delays pokes; each re-open emits
+ * `"connected"`, which starts the sync loop's push and pull.
  */
 export const make = (options: MakeOptions): Transport.ClientTransport => {
   const target = { base: options.url, headers: options.headers ?? {}, label: "room" };
@@ -75,10 +80,27 @@ export const make = (options: MakeOptions): Transport.ClientTransport => {
     options.reconnect ??
     defaultReconnect(Duration.millis(options.maxReconnectDelayMillis ?? 10_000));
 
+  // The socket's status, made on first use so `make` stays a plain function. The first
+  // `SubscriptionRef` made wins, so every reader and the socket share one.
+  let made = Option.none<SubscriptionRef.SubscriptionRef<Transport.ConnectionStatus>>();
+  const statusRef = Effect.suspend(() =>
+    Option.match(made, {
+      onSome: Effect.succeed,
+      onNone: () =>
+        Effect.map(SubscriptionRef.make<Transport.ConnectionStatus>("connecting"), (ref) => {
+          if (Option.isNone(made)) made = Option.some(ref);
+          return Option.getOrElse(made, () => ref);
+        }),
+    })
+  );
+  const setStatus = (next: Transport.ConnectionStatus) =>
+    Effect.flatMap(statusRef, (ref) => SubscriptionRef.set(ref, next));
+
   // One connection per run of the stream: the socket opens when the stream
-  // starts and closes with its scope. A close or a failed open fails the run,
-  // and `Stream.retry` dials again on the schedule. A `WebSocketConstructor` in
-  // the context (a test's fake) replaces the global one.
+  // starts (acquiring its reader waits for `open`) and closes with its scope.
+  // A close or a failed open fails the run, and `Stream.retry` dials again on
+  // the schedule. A `WebSocketConstructor` in the context (a test's fake)
+  // replaces the global one.
   const connection = Stream.unwrap(
     Effect.gen(function* () {
       const construct = yield* Effect.serviceOption(Socket.WebSocketConstructor);
@@ -88,13 +110,16 @@ export const make = (options: MakeOptions): Transport.ClientTransport => {
           onSome: (constructor) => Effect.provideService(Socket.WebSocketConstructor, constructor),
         })
       );
-      return Socket.toStream(socket);
+      const reader = yield* socket.reader;
+      yield* setStatus("connected");
+      return Stream.fromPull(Effect.succeed(reader.pull));
     })
-  );
+  ).pipe(Stream.ensuring(setStatus("connecting")));
 
   const pokes: Stream.Stream<Protocol.Poke, TransportError> = connection.pipe(
     Stream.map((): Protocol.Poke => ({})),
     Stream.retry(reconnect),
+    Stream.tapError(() => setStatus("disconnected")),
     Stream.mapError((cause) => new TransportError({ message: "room poke socket failed", cause }))
   );
 
@@ -103,9 +128,9 @@ export const make = (options: MakeOptions): Transport.ClientTransport => {
     pull: post(target, routes.pull, Protocol.PullResponse),
     read: post(target, routes.read, Protocol.ReadResponse),
     pokes,
-    // Reports the HTTP tier only: pokes are hints, and the pull interval
-    // recovers any a dead socket misses, so a socket outage is not degraded sync.
-    status: Effect.succeed("connected"),
-    statusChanges: Stream.succeed("connected"),
+    status: Effect.flatMap(statusRef, SubscriptionRef.get),
+    statusChanges: Stream.unwrap(Effect.map(statusRef, SubscriptionRef.changes)).pipe(
+      Stream.changesWith((a, b) => a === b)
+    ),
   };
 };
