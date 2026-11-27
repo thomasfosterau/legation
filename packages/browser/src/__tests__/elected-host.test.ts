@@ -26,6 +26,7 @@ import {
   Protocol,
 } from "@thomasfosterau/legation/internal";
 import { describe, expect, it } from "@effect/vitest";
+import { vi } from "vite-plus/test";
 import * as Arr from "effect/Array";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
@@ -190,6 +191,13 @@ const dependenciesOf = (
     Layer.succeed(ClientStoreModule.ClientStore)(store),
     Layer.effect(Transport.ClientTransport)(Transport.makeInMemory(handler, clientGroupId))
   );
+
+// A runtime without the Web Locks API (Node before 24 has none; Node 24 and
+// browsers do). Restored when the enclosing scope closes.
+const withoutAmbientLocks = Effect.acquireRelease(
+  Effect.sync(() => vi.stubGlobal("navigator", undefined)),
+  () => Effect.sync(() => vi.unstubAllGlobals())
+);
 
 describe("ElectedHost", () => {
   // Real clock: the periodic pull runs on `Schedule.spaced`, which the
@@ -430,8 +438,8 @@ describe("ElectedHost", () => {
           const channelName = `legation-elected-nolocks-${crypto.randomUUID()}`;
           const handler = yield* makeServer();
           const store = yield* ClientStoreModule.makeMemory;
-          // No `locks` option: falls back to the ambient `navigator.locks`,
-          // which this Node test environment doesn't have.
+          yield* withoutAmbientLocks;
+          // No `locks` option, and no ambient `navigator.locks` to fall back to.
           const tab = yield* ElectedHost.run({
             clientGroupId: clientGroupId,
             nodes,
@@ -456,6 +464,7 @@ describe("ElectedHost", () => {
           );
           const handler = yield* makeServer();
           const failure = new StoreError({ message: "Failed to open the IndexedDB store" });
+          yield* withoutAmbientLocks;
           const error = yield* ElectedHost.run({
             clientGroupId,
             nodes,
