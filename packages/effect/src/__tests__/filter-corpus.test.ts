@@ -1,12 +1,12 @@
 /**
- * FilterCorpus generator tests: the corpus is deterministic per
- * seed, covers every operator in the ADR-0028 core and every literal kind of
- * rule (e) at the default seed, never crosses types (rule (d)), never emits
- * `Exists`, and the minimiser shrinks a disagreement to its smallest
- * reproducing predicate/row pair.
+ * FilterCorpus generator tests: over generated seeds the corpus is
+ * deterministic, never crosses types (rule (d)), never emits `Exists` and
+ * honours its options; at the default seed it covers every operator in the
+ * ADR-0028 core and every literal kind of rule (e); the minimiser shrinks a
+ * disagreement to a case no single shrink still reproduces.
  */
 import * as Result from "effect/Result";
-import { expect, layer } from "@effect/vitest";
+import { expect, it as base, layer } from "@effect/vitest";
 import * as Context from "effect/Context";
 import * as Layer from "effect/Layer";
 import * as Arr from "effect/Array";
@@ -17,6 +17,7 @@ import * as Option from "effect/Option";
 import * as Match from "effect/Match";
 import * as P from "effect/Predicate";
 import * as R from "effect/Record";
+import * as Schema from "effect/Schema";
 import * as FilterCorpus from "../FilterCorpus.js";
 import * as Predicate from "../Predicate.js";
 import { defined } from "./defined.js";
@@ -59,6 +60,16 @@ const leaves = (
 
 const generate = (options: FilterCorpus.GenerateOptions) => FilterCorpus.generateCorpus(options);
 
+/** Any seed `LEGATION_CORPUS_SEED` can name. */
+const Seed = Schema.Int.check(Schema.isInt32());
+
+/** A corpus small enough to build once per generated seed. */
+const small = (seed: number, options?: FilterCorpus.CorpusOptions) =>
+  generate({ seed, predicates: 40, orderBys: 20, ...options });
+
+/** Runs per seed property: each builds at least one corpus. */
+const seedRuns = { arbitrary: { runs: 25 } };
+
 /** The corpus at the default seed, built once for the suite. */
 class DefaultCorpus extends Context.Service<DefaultCorpus, FilterCorpus.Corpus>()(
   "test/FilterCorpus/DefaultCorpus"
@@ -79,14 +90,114 @@ const disagrees = (candidate: FilterCorpus.Case) =>
     return hasNe && candidate.rows.some((row) => row.value.s === null);
   });
 
+base.describe("FilterCorpus over generated seeds", () => {
+  base.effect.prop(
+    "is deterministic for a seed, and another seed draws other predicates",
+    [Seed],
+    ([seed]) =>
+      Effect.gen(function* () {
+        const corpus = yield* small(seed);
+        expect(yield* small(seed)).toEqual(corpus);
+        const other = yield* small(seed === 0 ? 1 : -seed);
+        expect(other.predicates).not.toEqual(corpus.predicates);
+      }),
+    seedRuns
+  );
+
+  base.effect.prop(
+    "never compares a column against a literal of another kind (rule d)",
+    [Seed, Schema.Boolean, Schema.Boolean],
+    ([seed, nulls, astral]) =>
+      Effect.gen(function* () {
+        const corpus = yield* small(seed, { nulls, astral });
+        const columns = HashMap.fromIterable(corpus.columns.map((column) => [column.name, column]));
+        // `leaves` throws on `Exists` and `InSet`, so this also checks neither is generated.
+        const allLeaves = corpus.predicates.flatMap(leaves);
+        expect(allLeaves.length).toBeGreaterThan(0);
+        expect(allLeaves.filter((leaf) => !HashMap.has(columns, leaf.field))).toEqual([]);
+        const crossTyped = allLeaves.filter(
+          (leaf) =>
+            leaf.literal !== null &&
+            !kindOf(leaf.literal, defined(Option.getOrUndefined(HashMap.get(columns, leaf.field))))
+        );
+        expect(crossTyped).toEqual([]);
+      }),
+    seedRuns
+  );
+
+  base.effect.prop(
+    "honours { nulls: false, astral: false }",
+    [Seed],
+    ([seed]) =>
+      Effect.gen(function* () {
+        const restricted = yield* small(seed, { nulls: false, astral: false });
+        Arr.forEach(restricted.rows, (row) => {
+          Arr.forEach(restricted.columns, (column) => {
+            expect(row.value[column.name]).not.toBeNull();
+            expect(row.value[column.name]).not.toBeUndefined();
+          });
+        });
+        const astral = restricted.rows.filter(
+          (row) => P.isString(row.value.s) && /[\u{10000}-\u{10FFFF}]/u.test(row.value.s)
+        );
+        expect(astral).toEqual([]);
+        // `isnull` over rows with no NULL/absent field is a constant predicate,
+        // so it is not generated.
+        expect(restricted.coverage.isnull).toBe(0);
+      }),
+    seedRuns
+  );
+
+  base.effect.prop(
+    "generates 1–2 orderBy terms over distinct columns",
+    [Seed],
+    ([seed]) =>
+      Effect.gen(function* () {
+        const corpus = yield* small(seed);
+        Arr.forEach(corpus.orderBys, (orderBy) => {
+          expect(orderBy.length).toBeGreaterThanOrEqual(1);
+          expect(orderBy.length).toBeLessThanOrEqual(2);
+          expect(Arr.dedupe(orderBy.map((term) => term.field)).length).toBe(orderBy.length);
+        });
+      }),
+    seedRuns
+  );
+
+  base.effect.prop(
+    "minimises a disagreement to a case no single shrink still reproduces",
+    [Seed],
+    ([seed]) =>
+      Effect.gen(function* () {
+        const corpus = yield* small(seed);
+        const failing = yield* Effect.findFirst(
+          corpus.predicates.map((predicate) => ({ predicate, rows: corpus.rows })),
+          disagrees
+        );
+        if (Option.isNone(failing)) return;
+        const minimal = yield* FilterCorpus.minimise(failing.value, disagrees);
+        expect(yield* disagrees(minimal)).toBe(true);
+        const further = [
+          ...FilterCorpus.shrinkPredicate(minimal.predicate).map((predicate) => ({
+            predicate,
+            rows: minimal.rows,
+          })),
+          ...minimal.rows.map((_, i) => ({
+            predicate: minimal.predicate,
+            rows: minimal.rows.filter((__, j) => j !== i),
+          })),
+        ];
+        const reproducing = yield* Effect.filter(further, disagrees);
+        expect(reproducing).toEqual([]);
+      }),
+    seedRuns
+  );
+});
+
 layer(DefaultCorpus.layer)("FilterCorpus", (it) => {
-  it.effect("is deterministic for a seed", () =>
+  it.effect("is deterministic for the default seed", () =>
     Effect.gen(function* () {
       const corpus = yield* DefaultCorpus;
-      const again = yield* generate({ seed: FilterCorpus.DEFAULT_SEED });
-      expect(again).toEqual(corpus);
-      const other = yield* generate({ seed: FilterCorpus.DEFAULT_SEED + 1 });
-      expect(other.predicates).not.toEqual(corpus.predicates);
+      expect(yield* generate({ seed: FilterCorpus.DEFAULT_SEED })).toEqual(corpus);
     })
   );
 
@@ -147,43 +258,10 @@ layer(DefaultCorpus.layer)("FilterCorpus", (it) => {
     })
   );
 
-  it.effect("never compares a column against a literal of another kind (rule d)", () =>
+  it.effect("covers isnull only with nulls on", () =>
     Effect.gen(function* () {
       const corpus = yield* DefaultCorpus;
-      const columns = HashMap.fromIterable(corpus.columns.map((column) => [column.name, column]));
-      const allLeaves = corpus.predicates.flatMap(leaves);
-      expect(allLeaves.length).toBeGreaterThan(0);
-      const unknownFields = allLeaves.filter((leaf) => !HashMap.has(columns, leaf.field));
-      expect(unknownFields).toEqual([]);
-      const crossTyped = allLeaves.filter(
-        (leaf) =>
-          leaf.literal !== null &&
-          !kindOf(leaf.literal, defined(Option.getOrUndefined(HashMap.get(columns, leaf.field))))
-      );
-      expect(crossTyped).toEqual([]);
-    })
-  );
-
-  it.effect("honours { nulls: false, astral: false }", () =>
-    Effect.gen(function* () {
-      const corpus = yield* DefaultCorpus;
-      const restricted = yield* generate({
-        seed: FilterCorpus.DEFAULT_SEED,
-        nulls: false,
-        astral: false,
-      });
-      Arr.forEach(restricted.rows, (row) => {
-        Arr.forEach(restricted.columns, (column) => {
-          expect(row.value[column.name]).not.toBeNull();
-          expect(row.value[column.name]).not.toBeUndefined();
-        });
-      });
-      const astral = restricted.rows.filter(
-        (row) => P.isString(row.value.s) && /[\u{10000}-\u{10FFFF}]/u.test(row.value.s)
-      );
-      expect(astral).toEqual([]);
-      // `isnull` over rows with no NULL/absent field is a constant predicate;
-      // it is not generated, so its coverage requires `nulls`.
+      const restricted = yield* generate({ seed: FilterCorpus.DEFAULT_SEED, nulls: false });
       expect(restricted.coverage.isnull).toBe(0);
       expect(corpus.coverage.isnull).toBeGreaterThan(0);
     })
@@ -217,17 +295,6 @@ layer(DefaultCorpus.layer)("FilterCorpus", (it) => {
     expect(report).toContain('predicate: {"_tag":"Compare","op":"eq","field":"d","value":"-0"}');
     expect(report).toContain('  r0 {"d":"-0"}');
   });
-
-  it.effect("generates 1–2 orderBy terms over distinct columns", () =>
-    Effect.gen(function* () {
-      const corpus = yield* DefaultCorpus;
-      Arr.forEach(corpus.orderBys, (orderBy) => {
-        expect(orderBy.length).toBeGreaterThanOrEqual(1);
-        expect(orderBy.length).toBeLessThanOrEqual(2);
-        expect(Arr.dedupe(orderBy.map((term) => term.field)).length).toBe(orderBy.length);
-      });
-    })
-  );
 
   it.effect("minimises a disagreement to the smallest reproducing predicate and rows", () =>
     Effect.gen(function* () {

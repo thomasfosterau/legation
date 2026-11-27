@@ -25,6 +25,10 @@ const ROWS = 10_000;
 const MUTATIONS = 30;
 const OBSERVERS = 20;
 
+// One iteration takes about a second, so the default sample (16 warmup, then
+// at least 64 runs) would outlast the test timeout: a fixed small sample instead.
+const SAMPLE = { warmupIterations: 1, warmupTime: 0, iterations: 5, time: 0 };
+
 const mutators = Mutator.registry([
   {
     mutator: Mutator.make("todo/set", Schema.Unknown),
@@ -92,7 +96,7 @@ layer(transportLayer, { excludeTestServices: true })("write-path IVM", (it) => {
       yield* awaitPromise(() =>
         bench(`${MUTATIONS} mutates over ${ROWS} rows with ${OBSERVERS} observers`, async () => {
           await run(scenario().pipe(Effect.scoped));
-        }).run({ time: 1000 })
+        }).run(SAMPLE)
       ).pipe(Effect.orDie);
     })
   );

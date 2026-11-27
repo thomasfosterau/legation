@@ -25,6 +25,7 @@ import * as Ref from "effect/Ref";
 import * as Schema from "effect/Schema";
 import * as Scope from "effect/Scope";
 import * as Stream from "effect/Stream";
+import * as TestClock from "effect/testing/TestClock";
 import * as Authorization from "../Authorization.js";
 import { Backend } from "../Backend.js";
 import * as ClientEngineModule from "../ClientEngine.js";
@@ -272,10 +273,9 @@ describe("optimistic overlay delta-maintenance property", () => {
       )
   );
 
-  // Real clock: `observe`'s changes flow through the change PubSub on a
-  // background fibre, so this needs `it.live` + a settle window, mirroring
-  // `write-ivm.test.ts`.
-  it.live(
+  // `observe`'s changes flow through the change PubSub on a background fibre,
+  // so the test clock is advanced past a settle window before each check.
+  it.effect(
     "an observer's incrementally-folded LiveView matches the from-scratch materialization after a randomized run",
     () =>
       Effect.forEach(
@@ -292,7 +292,7 @@ describe("optimistic overlay delta-maintenance property", () => {
             yield* Effect.forkScoped(
               Stream.runForEach(engine.observe(allTodos), (rows) => Ref.set(latest, rows))
             );
-            yield* Effect.sleep(Duration.millis(20));
+            yield* TestClock.adjust(Duration.millis(20));
 
             const tail = yield* Ref.make<ReadonlyArray<Mutation>>([]);
             yield* Effect.forEach(
@@ -300,7 +300,7 @@ describe("optimistic overlay delta-maintenance property", () => {
               () => runTracked(engine, store, tail, randomStep(rng, IDS)),
               { concurrency: 1, discard: true }
             );
-            yield* Effect.sleep(Duration.millis(80));
+            yield* TestClock.adjust(Duration.millis(80));
 
             const observed = sortRows(yield* Ref.get(latest));
             const queried = sortRows(yield* engine.query(allTodos));

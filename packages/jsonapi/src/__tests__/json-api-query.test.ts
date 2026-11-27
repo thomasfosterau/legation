@@ -410,6 +410,79 @@ describe("JsonApiQuery.defaultEncoder", () => {
 
 // ─── The encoder reaches a server ────────────────────────────────────────────
 
+/** The `QueryError` a Result twin fails with; a success fails the test. */
+const failureOf = <A>(result: Result.Result<A, QueryError>): QueryError =>
+  Result.match(result, {
+    onSuccess: (value) => assert.fail(`expected a QueryError, got ${String(value)}`),
+    onFailure: (error) => error,
+  });
+
+const subsetWhere = (where: Predicate.Predicate) => Subset.make({ collection: "t", where });
+
+describe("JsonApiQuery's Result twins", () => {
+  const mixed = Filter.and(Filter.eq("a", 1), Filter.eq("a", "x"));
+
+  it("flatFilterResult fails with the QueryError flatFilter throws", () => {
+    expect(JsonApiQuery.flatFilterResult(Filter.eq("a", 1))).toEqual(
+      Result.succeed({ "filter[a]": "1" })
+    );
+    expect(failureOf(JsonApiQuery.flatFilterResult(mixed))).toMatchObject({
+      _tag: "QueryError",
+      parameter: "filter[a]",
+    });
+    expect(() => JsonApiQuery.flatFilter(mixed)).toThrow(QueryError);
+  });
+
+  it("buildQueryStringResult fails on a filter it cannot encode, and keeps the empty string", () => {
+    expect(JsonApiQuery.buildQueryStringResult()).toEqual(Result.succeed(""));
+    expect(JsonApiQuery.buildQueryStringResult({ filter: Filter.eq("a", 1) })).toEqual(
+      Result.succeed("?filter[a]=1")
+    );
+    expect(failureOf(JsonApiQuery.buildQueryStringResult({ filter: mixed }))).toMatchObject({
+      _tag: "QueryError",
+      parameter: "filter[a]",
+    });
+    expect(() => JsonApiQuery.buildQueryString({ filter: mixed })).toThrow(QueryError);
+  });
+
+  it("toRequestOptionsResult fails on a predicate with no URL form, and is None when it folds to false", () => {
+    expect(JsonApiQuery.toRequestOptionsResult(subsetWhere(Predicate.isIn("id", [])))).toEqual(
+      Result.succeed(Option.none())
+    );
+    const exists = subsetWhere(
+      Predicate.exists({ collection: "r", localField: "id", foreignField: "tId" })
+    );
+    expect(failureOf(JsonApiQuery.toRequestOptionsResult(exists)).message).toMatch(/no URL form/);
+    expect(() => JsonApiQuery.toRequestOptions(exists)).toThrow(/no URL form/);
+  });
+
+  it("canonicalResult fails with what canonical throws", () => {
+    expect(JsonApiQuery.canonicalResult(nodes, { collection: "categories" })).toEqual(
+      Result.succeed("/categories")
+    );
+    expect(failureOf(JsonApiQuery.canonicalResult(nodes, { collection: "nope" }))).toBeInstanceOf(
+      QueryError
+    );
+    expect(
+      failureOf(
+        JsonApiQuery.canonicalResult(nodes, {
+          collection: "products",
+          include: { reviews: { first: 5 } },
+        })
+      ).message
+    ).toMatch(/no URL form/);
+    expect(
+      failureOf(
+        JsonApiQuery.canonicalResult(
+          nodes,
+          { collection: "products", include: { variants: true } },
+          { orders: ["id"] }
+        )
+      ).message
+    ).toMatch(/fields\[orders\]/);
+  });
+});
+
 const idParam = { params: Schema.Struct({ id: Schema.String }) };
 const body = { payload: Schema.Unknown, success: Schema.Unknown };
 const api = HttpApi.make("app").add(

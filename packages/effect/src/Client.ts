@@ -296,8 +296,9 @@ export interface Client<Graph extends Node.NodeRegistry = Node.NodeRegistry> {
    * Client's {@link UrlReads}; `subscribe(url)` and `subscribe(read)` of
    * one query share one ledger entry. Pins are counted: release one per
    * subscribe. Fails with a `QueryError` for a URL the Client cannot
-   * parse, or any URL when it was built without `urls`; nothing is
-   * registered then.
+   * parse, or any URL when it was built without `urls`, and with the
+   * view's error when the view refuses the registration; nothing is
+   * registered or counted then, so a later subscribe registers afresh.
    */
   readonly subscribe: (
     read: QueryModule.Read | string
@@ -513,6 +514,38 @@ const oneFewerOn = (current: Interest, kind: Kind): Interest => {
 };
 
 /**
+ * The ledger with one unit of `kind` fewer on a registration's entry, and
+ * the entry's key when that was its last unit (the entry is gone).
+ */
+const oneFewerIn = (
+  map: Map<string, Interest>,
+  registration: Coverage.Registration,
+  kind: Kind
+): readonly [Option.Option<string>, Map<string, Interest>] => {
+  const key = keyOf(registration);
+  const current = map.get(key);
+  if (current === undefined) return [Option.none(), map];
+  const updated = oneFewerOn(current, kind);
+  const next = new Map(map);
+  if (unheld(updated)) {
+    next.delete(key);
+    return [Option.some(key), next];
+  }
+  next.set(key, updated);
+  return [Option.none(), next];
+};
+
+/** A root-window count with one hold on `root` fewer, dropping the window at zero. */
+const oneFewerRoot = (
+  map: HashMap.HashMap<string, number>,
+  root: Subset.Subset
+): HashMap.HashMap<string, number> => {
+  const key = Subset.hash(root);
+  const count = Option.getOrElse(HashMap.get(map, key), () => 0);
+  return count <= 1 ? HashMap.remove(map, key) : HashMap.set(map, key, count - 1);
+};
+
+/**
  * The ledger key of a registration: the root window's hash alone, or with
  * its edge selects — the same key the mirror protocol gives a relational
  * registration — so a read with `include` is its own entry beside the
@@ -592,23 +625,27 @@ export const fromView = <Graph extends Node.NodeRegistry>(
 
   // ─── Root windows: one voice per window across every registration ────────
 
-  const holdRoot = (root: Subset.Subset): Effect.Effect<void> =>
+  // A failed registration hands its count back, so the next interest in
+  // the window registers it afresh.
+  const holdRoot = (root: Subset.Subset): Effect.Effect<void, ClientView.ClientViewError> =>
     Ref.modify(roots, (map) => {
       const key = Subset.hash(root);
       const count = Option.getOrElse(HashMap.get(map, key), () => 0);
       return [count === 0, HashMap.set(map, key, count + 1)] as const;
     }).pipe(
-      // The ledger already counts this window, so a failed registration
-      // cannot be handed back without unwinding it: a defect for now.
-      Effect.flatMap((first) => (first ? view.subscribe(root).pipe(Effect.orDie) : Effect.void))
+      Effect.flatMap((first) =>
+        first
+          ? view
+              .subscribe(root)
+              .pipe(Effect.tapError(() => Ref.update(roots, (map) => oneFewerRoot(map, root))))
+          : Effect.void
+      )
     );
 
   const dropRoot = (root: Subset.Subset): Effect.Effect<void> =>
     Ref.modify(roots, (map) => {
-      const key = Subset.hash(root);
-      const count = Option.getOrElse(HashMap.get(map, key), () => 0);
-      const next = count <= 1 ? HashMap.remove(map, key) : HashMap.set(map, key, count - 1);
-      return [count === 1, next] as const;
+      const count = Option.getOrElse(HashMap.get(map, Subset.hash(root)), () => 0);
+      return [count === 1, oneFewerRoot(map, root)] as const;
     }).pipe(
       Effect.flatMap((last) => (last ? view.unsubscribe(root).pipe(Effect.ignore) : Effect.void))
     );
@@ -643,7 +680,10 @@ export const fromView = <Graph extends Node.NodeRegistry>(
 
   // ─── The ledger ──────────────────────────────────────────────────────────
 
-  const register = (key: string, registration: Coverage.Registration): Effect.Effect<void> =>
+  const register = (
+    key: string,
+    registration: Coverage.Registration
+  ): Effect.Effect<void, ClientView.ClientViewError> =>
     holdRoot(registration.root).pipe(
       Effect.andThen(
         Arr.isReadonlyArrayEmpty(registration.edges) ? Effect.void : openEdges(key, registration)
@@ -653,18 +693,22 @@ export const fromView = <Graph extends Node.NodeRegistry>(
   const unregister = (key: string, registration: Coverage.Registration): Effect.Effect<void> =>
     closeEdges(key).pipe(Effect.andThen(dropRoot(registration.root)));
 
-  /** Add one unit of interest; registers with the view when it is the first. */
+  /**
+   * Add one unit of interest; registers with the view when it is the first.
+   * A registration the view refuses leaves the ledger as it found it.
+   */
   const acquire = (
     registration: Coverage.Registration,
     kind: Kind,
     url: Option.Option<string> = Option.none()
-  ): Effect.Effect<void> => Semaphore.withPermit(lock, acquireUnlocked(registration, kind, url));
+  ): Effect.Effect<void, ClientView.ClientViewError> =>
+    Semaphore.withPermit(lock, acquireUnlocked(registration, kind, url));
 
   const acquireUnlocked = (
     registration: Coverage.Registration,
     kind: Kind,
     url: Option.Option<string>
-  ): Effect.Effect<void> =>
+  ): Effect.Effect<void, ClientView.ClientViewError> =>
     Ref.modify(ledger, (map) => {
       const key = keyOf(registration);
       const current = map.get(key);
@@ -678,7 +722,17 @@ export const fromView = <Graph extends Node.NodeRegistry>(
       });
       return [current === undefined ? key : undefined, next] as const;
     }).pipe(
-      Effect.flatMap((key) => (key === undefined ? Effect.void : register(key, registration)))
+      Effect.flatMap((key) =>
+        key === undefined
+          ? Effect.void
+          : register(key, registration).pipe(
+              // The entry is this acquire's own (it was absent, and the lock
+              // is held), so taking its one unit back removes it whole.
+              Effect.tapError(() =>
+                Ref.update(ledger, (map) => oneFewerIn(map, registration, kind)[1])
+              )
+            )
+      )
     );
 
   /** Drop one unit of interest; releases from the view when it was the last. */
@@ -686,20 +740,10 @@ export const fromView = <Graph extends Node.NodeRegistry>(
     Semaphore.withPermit(lock, releaseUnlocked(registration, kind));
 
   const releaseUnlocked = (registration: Coverage.Registration, kind: Kind): Effect.Effect<void> =>
-    Ref.modify(ledger, (map) => {
-      const key = keyOf(registration);
-      const current = map.get(key);
-      if (current === undefined) return [undefined, map] as const;
-      const updated = oneFewerOn(current, kind);
-      const next = new Map(map);
-      if (unheld(updated)) {
-        next.delete(key);
-        return [key, next] as const;
-      }
-      next.set(key, updated);
-      return [undefined, next] as const;
-    }).pipe(
-      Effect.flatMap((key) => (key === undefined ? Effect.void : unregister(key, registration)))
+    Ref.modify(ledger, (map) => oneFewerIn(map, registration, kind)).pipe(
+      Effect.flatMap(
+        Option.match({ onNone: () => Effect.void, onSome: (key) => unregister(key, registration) })
+      )
     );
 
   // ─── The identity boundary ───────────────────────────────────────────────
@@ -974,8 +1018,11 @@ export const fromView = <Graph extends Node.NodeRegistry>(
     if (Arr.isReadonlyArrayEmpty(compiled.edges)) {
       const registration = Coverage.ofPlan(compiled);
       return Stream.unwrap(
-        Effect.acquireRelease(acquire(registration, "observer"), () =>
-          release(registration, "observer")
+        Effect.acquireRelease(
+          // Observed reads carry no typed error: a refused registration ends
+          // the stream with a defect, the ledger already rolled back.
+          acquire(registration, "observer").pipe(Effect.orDie),
+          () => release(registration, "observer")
         ).pipe(
           Effect.as(
             finish(

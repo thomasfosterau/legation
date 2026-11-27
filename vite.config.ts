@@ -656,6 +656,17 @@ export default defineConfig({
             "packages/auth/src/__tests__/**",
             "packages/jsonapi/src/__tests__/**",
           ],
+          // A bench runs in its package's project only, not once per project.
+          benchmark: {
+            include: ["packages/*/src/**/*.bench.ts"],
+            exclude: [
+              "**/node_modules/**",
+              "packages/svelte/**",
+              "packages/alchemy-cloudflare/**",
+              "packages/auth/**",
+              "packages/jsonapi/**",
+            ],
+          },
         },
       },
       {
@@ -677,6 +688,7 @@ export default defineConfig({
             "examples/commerce/tests/facade-browser.test.ts",
             "examples/commerce/tests/snapshot-browser.test.ts",
           ],
+          benchmark: { include: ["packages/jsonapi/src/**/*.bench.ts"] },
         },
       },
       {
@@ -689,6 +701,7 @@ export default defineConfig({
           name: "alchemy-cloudflare",
           environment: "node",
           include: ["packages/alchemy-cloudflare/src/**/*.test.ts"],
+          benchmark: { include: ["packages/alchemy-cloudflare/src/**/*.bench.ts"] },
         },
       },
       {
@@ -702,6 +715,7 @@ export default defineConfig({
           name: "auth",
           environment: "node",
           include: ["packages/auth/src/**/*.test.ts", "examples/audience/tests/**/*.test.ts"],
+          benchmark: { include: ["packages/auth/src/**/*.bench.ts"] },
         },
       },
       {
@@ -723,6 +737,7 @@ export default defineConfig({
             "examples/commerce/tests/facade-browser.test.ts",
             "examples/commerce/tests/snapshot-browser.test.ts",
           ],
+          benchmark: { include: [] },
           server: {
             deps: {
               // The test's `beforeAll` imports the app's built server
@@ -753,6 +768,7 @@ export default defineConfig({
           name: "svelte",
           environment: "jsdom",
           include: ["packages/svelte/src/__tests__/**/*.test.ts"],
+          benchmark: { include: ["packages/svelte/src/**/*.bench.ts"] },
           server: {
             deps: {
               // Vitest externalizes node_modules by default — even a package

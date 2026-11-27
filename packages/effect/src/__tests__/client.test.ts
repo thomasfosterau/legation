@@ -11,6 +11,7 @@ import * as Defined from "../Defined.js";
 import { describe, expect, it } from "@effect/vitest";
 import * as Arr from "effect/Array";
 import * as Deferred from "effect/Deferred";
+import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
 import * as Option from "effect/Option";
@@ -20,6 +21,7 @@ import * as Ref from "effect/Ref";
 import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
 import * as Str from "effect/String";
+import * as TestClock from "effect/testing/TestClock";
 import {
   Authorization,
   Backend,
@@ -32,6 +34,7 @@ import {
   Predicate,
   Query,
   QueryError,
+  StoreError,
   Transport,
 } from "../index.js";
 import {
@@ -73,18 +76,15 @@ const mutations = Mutator.registry([
   },
 ]);
 
-const sleepReal = (millis: number) =>
-  Effect.callback<void>((resume) => {
-    const timer = setTimeout(() => resume(Effect.void), millis);
-    return Effect.sync(() => clearTimeout(timer));
-  });
+/** Advances the test clock, letting forked fibers (and the sync loop's timers) run first. */
+const settle = (millis: number) => TestClock.adjust(Duration.millis(millis));
 
 const eventually = <A>(read: Effect.Effect<A>, until: (value: A) => boolean) => {
   const poll = (remaining: number): Effect.Effect<A> =>
     Effect.gen(function* () {
       const value = yield* read;
       if (until(value)) return value;
-      yield* sleepReal(10);
+      yield* settle(10);
       if (remaining > 1) return yield* poll(remaining - 1);
       return yield* Effect.die(new TestFailure({ message: "eventually: condition never held" }));
     });
@@ -153,7 +153,7 @@ describe("Client over an owned engine", () => {
           })
         );
         // Inner observer ended: the outer one still holds the window.
-        yield* sleepReal(50);
+        yield* settle(50);
         expect(yield* engine.activeSubscriptions).toHaveLength(1);
         yield* eventually(Ref.get(seen), (count) => count >= 1);
       })
@@ -176,7 +176,7 @@ describe("Client over an owned engine", () => {
             yield* eventually(engine.activeSubscriptions, (subs) => subs.length === 1);
           })
         );
-        yield* sleepReal(50);
+        yield* settle(50);
         expect(yield* engine.activeSubscriptions).toHaveLength(1);
         yield* client.unsubscribe(read);
         yield* eventually(engine.activeSubscriptions, (subs) => Arr.isReadonlyArrayEmpty(subs));
@@ -352,7 +352,7 @@ describe("Client.query coverage (ADR-0029: conjunct subsumption with strict wind
         yield* Effect.forkScoped(
           Stream.runForEach(client.observe(whole), () => Effect.void).pipe(Effect.ignore)
         );
-        yield* sleepReal(50);
+        yield* settle(50);
         expect(yield* rootHashes(engine)).toEqual([Subset.hash(root)]);
         // The observer outlives the pin's release; it does not add a second voice.
         yield* client.unsubscribe(whole);
@@ -509,9 +509,9 @@ describe("Client.query coverage (ADR-0029: conjunct subsumption with strict wind
         const pinned: Query.Read = { collection: "products", include: { reviews: true } };
 
         const subscribing = yield* Effect.forkScoped(client.subscribe(pinned));
-        yield* sleepReal(20);
+        yield* settle(20);
         const unsubscribing = yield* Effect.forkScoped(client.unsubscribe(pinned));
-        yield* sleepReal(20);
+        yield* settle(20);
         // The unsubscribe must wait for the registration rather than run
         // ahead of it: otherwise it releases nothing and the registration
         // then lands with nobody holding it.
@@ -521,6 +521,42 @@ describe("Client.query coverage (ADR-0029: conjunct subsumption with strict wind
 
         expect((yield* client.coverageOf(pinned))._tag).toBe("Uncovered");
         expect(yield* client.subscriptions).toEqual([]);
+        yield* eventually(rootHashes(engine), (hashes) => Arr.isReadonlyArrayEmpty(hashes));
+      })
+    )
+  );
+
+  it.effect("a subscribe the view refuses fails typed and leaves the ledger clean", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const { engine } = yield* makeCountingEngine();
+        const view = ClientView.fromEngine(engine);
+        const refusals = yield* Ref.make(1);
+        const flaky: ClientView.ClientView = {
+          ...view,
+          subscribe: (subset) =>
+            Ref.getAndUpdate(refusals, (n) => n - 1).pipe(
+              Effect.flatMap((n) =>
+                n > 0
+                  ? Effect.fail(new StoreError({ message: "store unavailable" }))
+                  : view.subscribe(subset)
+              )
+            ),
+        };
+        const client = Client.fromView(nodes, flaky);
+        const pinned = { collection: "products" };
+
+        const error = yield* Effect.flip(client.subscribe(pinned));
+        expect(error).toBeInstanceOf(StoreError);
+        expect((yield* client.coverageOf(pinned))._tag).toBe("Uncovered");
+        expect(yield* rootHashes(engine)).toEqual([]);
+
+        // The refused pin was not counted: the next subscribe registers the
+        // window, and one unsubscribe releases it.
+        yield* client.subscribe(pinned);
+        expect(yield* rootHashes(engine)).toEqual([Subset.hash(Query.plan(nodes, pinned).root)]);
+        yield* client.unsubscribe(pinned);
+        expect((yield* client.coverageOf(pinned))._tag).toBe("Uncovered");
         yield* eventually(rootHashes(engine), (hashes) => Arr.isReadonlyArrayEmpty(hashes));
       })
     )
