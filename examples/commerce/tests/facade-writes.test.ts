@@ -36,7 +36,7 @@ import { makeHandlers } from "../server/handlers.js";
 import { bindClientGroup, syncLayer } from "../server/runtime.js";
 
 const USER = "u1";
-const GROUP = "group-u1";
+const GROUP = Client.ClientGroupId.make("group-u1");
 const MEDIA = "application/vnd.api+json";
 
 const makeWorld = Effect.gen(function* () {

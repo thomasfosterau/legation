@@ -25,7 +25,7 @@ import * as Option from "effect/Option";
 import * as Random from "effect/Random";
 import { Entity, Policy, ReadScope as AuthScope } from "@thomasfosterau/effect-auth";
 import { fixtureUser } from "@thomasfosterau/effect-auth/testing";
-import { Authorization, type Backend } from "@thomasfosterau/legation";
+import { Authorization, Backend } from "@thomasfosterau/legation";
 import { Principal } from "@thomasfosterau/legation-auth";
 import {
   feed,
@@ -106,7 +106,7 @@ const oracles = (
 ) =>
   Effect.gen(function* () {
     const request = yield* readRequest(principal, {
-      clientGroupId: "corpus",
+      clientGroupId: Backend.ClientGroupId.make("corpus"),
       identity: principal,
     }).pipe(Effect.orDie);
     const viewer = request.principal.id;
@@ -157,7 +157,7 @@ const oracles = (
 const principalOf = (world: World, session: Session | undefined) =>
   world.audience.identity
     .resolve({
-      clientGroupId: "oracle",
+      clientGroupId: Backend.ClientGroupId.make("oracle"),
       credentials:
         session === undefined
           ? Authorization.noCredentials
@@ -165,7 +165,7 @@ const principalOf = (world: World, session: Session | undefined) =>
     })
     .pipe(
       Effect.map((identity) =>
-        Principal.fromContext({ clientGroupId: "oracle", identity } satisfies Backend.SyncContext)
+        Principal.fromContext({ clientGroupId: Backend.ClientGroupId.make("oracle"), identity } satisfies Backend.SyncContext)
       ),
       Effect.orDie
     );

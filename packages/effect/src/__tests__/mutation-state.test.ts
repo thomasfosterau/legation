@@ -12,10 +12,11 @@ import * as HashMap from "effect/HashMap";
 import * as Option from "effect/Option";
 import * as MutationState from "../MutationState.js";
 import type { Mutation } from "../Protocol.js";
+import { MutationId } from "../Protocol.js";
 
 const mutation = (mutationId: number, mutator = "todo/set"): Mutation => ({
   clientId: "c1",
-  mutationId,
+  mutationId: MutationId.make(mutationId),
   mutator,
   args: { id: String(mutationId) },
   createdAt: 1000 + mutationId,
@@ -38,7 +39,7 @@ describe("MutationState", () => {
     const map = MutationState.seed([mutation(1), mutation(2, "todo/remove")]);
     expect(HashMap.size(map)).toBe(2);
     expect(get(map, 1)).toEqual({
-      mutationId: 1,
+      mutationId: MutationId.make(1),
       mutator: "todo/set",
       args: { id: "1" },
       phase: "pending",
@@ -50,13 +51,13 @@ describe("MutationState", () => {
 
   it("journaled adds a fresh pending entry", () => {
     const map = MutationState.journaled(HashMap.empty(), {
-      mutationId: 5,
+      mutationId: MutationId.make(5),
       mutator: "todo/set",
       args: { id: "5" },
       journaledAt: 42,
     });
     expect(get(map, 5)).toEqual({
-      mutationId: 5,
+      mutationId: MutationId.make(5),
       mutator: "todo/set",
       args: { id: "5" },
       phase: "pending",
@@ -68,7 +69,7 @@ describe("MutationState", () => {
     const seeded = MutationState.seed([mutation(1)]);
     const next = MutationState.acknowledged(seeded, 1, 2000);
     expect(get(next, 1)).toEqual({
-      mutationId: 1,
+      mutationId: MutationId.make(1),
       mutator: "todo/set",
       args: { id: "1" },
       phase: "acknowledged",
@@ -171,7 +172,7 @@ describe("MutationState", () => {
     // A later, distinctly-timestamped settle evicts across the earlier
     // batch's survivors — genuinely oldest-settled, not a same-timestamp tie.
     const fresh = MutationState.journaled(next, {
-      mutationId: 11,
+      mutationId: MutationId.make(11),
       mutator: "todo/set",
       args: {},
       journaledAt: 101,

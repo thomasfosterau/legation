@@ -125,10 +125,10 @@ const seed = (backend: Backend.Backend): Effect.Effect<void> => {
   return Effect.forEach(
     seeds,
     (todo, index) =>
-      backend.applyMutations({ clientGroupId: "seed" }, [
+      backend.applyMutations({ clientGroupId: Client.ClientGroupId.make("seed") }, [
         {
           clientId: "seed",
-          mutationId: index + 1,
+          mutationId: Client.MutationId.make(index + 1),
           mutator: "todo/set",
           args: Schema.encodeSync(Todo)(todo),
           createdAt: Date.now(),
@@ -223,10 +223,10 @@ const rigLayer = Layer.effect(Rig)(
           done: false,
           createdAt: Date.now(),
         };
-        yield* backend.applyMutations({ clientGroupId: "remote-agent" }, [
+        yield* backend.applyMutations({ clientGroupId: Client.ClientGroupId.make("remote-agent") }, [
           {
             clientId: "remote-agent",
-            mutationId: remoteSeq,
+            mutationId: Client.MutationId.make(remoteSeq),
             mutator: "todo/set",
             args: Schema.encodeSync(Todo)(todo),
             createdAt: Date.now(),

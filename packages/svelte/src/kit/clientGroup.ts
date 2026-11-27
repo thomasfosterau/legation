@@ -10,6 +10,7 @@
  * `clientGroupId(cookies)` reads it, minting and setting it on first contact.
  */
 import type { Cookies } from "@sveltejs/kit";
+import { Client } from "@thomasfosterau/legation";
 
 /** Options for {@link clientGroupId}. */
 export interface ClientGroupOptions {
@@ -37,10 +38,13 @@ const ONE_YEAR = 60 * 60 * 24 * 365;
  * same group id. It carries no authority: identity is resolved server-side
  * through the `IdentityResolver` seam, never from this value.
  */
-export const clientGroupId = (cookies: Cookies, options?: ClientGroupOptions): string => {
+export const clientGroupId = (
+  cookies: Cookies,
+  options?: ClientGroupOptions
+): Client.ClientGroupId => {
   const name = options?.name ?? CLIENT_GROUP_COOKIE;
   const existing = cookies.get(name);
-  if (existing !== undefined && existing !== "") return existing;
+  if (existing !== undefined && existing !== "") return Client.ClientGroupId.make(existing);
   const id = (options?.generate ?? (() => crypto.randomUUID()))();
   cookies.set(name, id, {
     path: options?.path ?? "/",
@@ -48,5 +52,5 @@ export const clientGroupId = (cookies: Cookies, options?: ClientGroupOptions): s
     sameSite: "lax",
     maxAge: options?.maxAge ?? ONE_YEAR,
   });
-  return id;
+  return Client.ClientGroupId.make(id);
 };

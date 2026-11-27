@@ -24,7 +24,7 @@ import {
 } from "@thomasfosterau/effect-auth";
 import { fixtureUser } from "@thomasfosterau/effect-auth/testing";
 import { Authorization, Edge, Node, Predicate } from "@thomasfosterau/legation";
-import { Subset } from "@thomasfosterau/legation/internal";
+import { Subset, Protocol } from "@thomasfosterau/legation/internal";
 import { Principal, ReadScopes } from "@thomasfosterau/legation-auth";
 import { failureOf, orFail } from "./support.js";
 
@@ -61,7 +61,10 @@ const apiKeyOf = (userId: string): Principal.Principal => ({
   permissions: Option.none(),
 });
 
-const contextOf = (principal: Principal.Principal) => ({ clientGroupId: "g", identity: principal });
+const contextOf = (principal: Principal.Principal) => ({
+  clientGroupId: Protocol.ClientGroupId.make("g"),
+  identity: principal,
+});
 
 const resource = (name: string) => Condition.attr("resource", name);
 

@@ -39,7 +39,7 @@ import {
   Server,
   Transport,
 } from "@thomasfosterau/legation";
-import { ClientEngine, ClientView, Subset } from "@thomasfosterau/legation/internal";
+import { ClientEngine, ClientView, Subset, Protocol } from "@thomasfosterau/legation/internal";
 import * as JsonApiFacade from "../JsonApiFacade.js";
 import * as JsonApiQuery from "../JsonApiQuery.js";
 import * as ReplicaDocuments from "../ReplicaDocuments.js";
@@ -154,17 +154,17 @@ const makeReplica = Effect.fn("makeReplica")(function* () {
   const backend = yield* MemoryBackend.make({
     "seed/put": (args, writer) => {
       const { collection, value } = decodeSeedPut(args);
-      return writer.put(collection, decodeSeedRow(value).id, value);
+      return writer.put(collection, Protocol.RowId.make(decodeSeedRow(value).id), value);
     },
   });
   const puts = R.toEntries(seed).flatMap(([collection, rows]) =>
     rows.map((value) => ({ collection, value }))
   );
   yield* backend.applyMutations(
-    { clientGroupId: "seed" },
+    { clientGroupId: Protocol.ClientGroupId.make("seed") },
     puts.map((args, index) => ({
       clientId: "seed",
-      mutationId: index + 1,
+      mutationId: Protocol.MutationId.make(index + 1),
       mutator: "seed/put",
       args,
       createdAt: 0,
@@ -176,11 +176,14 @@ const makeReplica = Effect.fn("makeReplica")(function* () {
       policy: allowEverything,
     },
   });
-  const transport = yield* Transport.makeInMemory(server.handler, GROUP);
+  const transport = yield* Transport.makeInMemory(
+    server.handler,
+    Protocol.ClientGroupId.make(GROUP)
+  );
   const store = yield* ClientStore.makeMemory;
   const engine = yield* ClientEngine.make({
     clientId: "client-a",
-    clientGroupId: GROUP,
+    clientGroupId: Protocol.ClientGroupId.make(GROUP),
     mutators,
   }).pipe(
     Effect.provideService(ClientStore.ClientStore, store),
@@ -212,11 +215,13 @@ const makeReplica = Effect.fn("makeReplica")(function* () {
     Effect.andThen(Ref.set(rootReads, 0), Ref.set(armed, Option.some({ race, seen: 0 })));
   const racePut = (collection: string, value: SeedRow): Effect.Effect<void> =>
     Effect.gen(function* () {
-      yield* backend.applyMutations({ clientGroupId: "seed" }, [
+      yield* backend.applyMutations({ clientGroupId: Protocol.ClientGroupId.make("seed") }, [
         {
           clientId: "seed",
           // The next id in the seed's contiguous run (the backend refuses a gap).
-          mutationId: R.values(seed).reduce((count, rows) => count + rows.length, 0) + 1,
+          mutationId: Protocol.MutationId.make(
+            R.values(seed).reduce((count, rows) => count + rows.length, 0) + 1
+          ),
           mutator: "seed/put",
           args: { collection, value },
           createdAt: 0,
@@ -536,7 +541,7 @@ describe("JsonApiFacade", () => {
             nodes,
             backend,
             policy: allowEverything,
-            context: () => Effect.succeed({ clientGroupId: "http" }),
+            context: () => Effect.succeed({ clientGroupId: Protocol.ClientGroupId.make("http") }),
             prefix: "/jsonapi",
           });
           const served = yield* rest.list(defined(JsonApiQuery.resourcesOf(nodes).get("products")))(

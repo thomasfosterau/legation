@@ -31,7 +31,7 @@
  */
 
 import * as Schema from "effect/Schema";
-import { Edge, Mutation, Node, type Query } from "@thomasfosterau/legation";
+import { Client, Edge, Mutation, Node, type Query } from "@thomasfosterau/legation";
 
 // ─── Row schemas ─────────────────────────────────────────────────────────────
 
@@ -354,4 +354,4 @@ export const slugify = (title: string): string =>
 
 /** The client's group identity (per-client mutation sequencing). */
 export const CLIENT_ID = "realworld-tab";
-export const CLIENT_GROUP_ID = "realworld";
+export const CLIENT_GROUP_ID = Client.ClientGroupId.make("realworld");

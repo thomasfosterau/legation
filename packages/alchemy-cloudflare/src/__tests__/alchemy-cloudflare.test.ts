@@ -101,10 +101,12 @@ describe("DurableCvrStore", () => {
   it.effect("round-trips CVRs through DO storage", () =>
     Effect.gen(function* () {
       const store = yield* inRuntime(DurableCvrStore.make(makeStorage()));
-      const cvr: Cvr.Cvr = { rows: new Map([["products", new Map([["p-1", 3]])]]) };
+      const cvr: Cvr.Cvr = {
+        rows: new Map([["products", new Map([[Protocol.RowId.make("p-1"), 3]])]]),
+      };
       yield* inRuntime(store.set("cookie-1", cvr));
       const loaded = yield* inRuntime(store.get("cookie-1"));
-      expect(loaded?.rows.get("products")?.get("p-1")).toBe(3);
+      expect(loaded?.rows.get("products")?.get(Protocol.RowId.make("p-1"))).toBe(3);
       yield* inRuntime(store.remove("cookie-1"));
       expect(yield* inRuntime(store.get("cookie-1"))).toBeUndefined();
     })
@@ -409,7 +411,8 @@ const reviewSet = Mutation.make("review/set", Schema.Unknown);
 const mutations = Mutation.registry([
   {
     mutator: reviewSet,
-    local: (args, writer) => writer.put("reviews", decodeIdentified(args).id, args),
+    local: (args, writer) =>
+      writer.put("reviews", Protocol.RowId.make(decodeIdentified(args).id), args),
   },
 ]);
 
@@ -463,7 +466,7 @@ const roomTransport = (
   send: (request: Request) => Effect.Effect<Response>
 ): Transport.ClientTransport => {
   const post =
-    <A>(route: string, schema: Schema.Codec<A>) =>
+    <A, I>(route: string, schema: Schema.Codec<A, I>) =>
     (body: unknown) =>
       send(
         new Request(`https://room${route}`, {
@@ -497,7 +500,7 @@ const backendOf = () =>
   MemoryBackend.make(
     MemoryBackend.validatedHandlers([
       MemoryBackend.handler(reviewSet, (args, writer) =>
-        writer.put("reviews", decodeIdentified(args).id, args)
+        writer.put("reviews", Protocol.RowId.make(decodeIdentified(args).id), args)
       ),
     ])
   );
@@ -564,7 +567,11 @@ const makeClient = (
 ) =>
   Effect.gen(function* () {
     const store = yield* ClientStore.makeMemory;
-    const options = { clientId, clientGroupId, mutators: mutations };
+    const options = {
+      clientId,
+      clientGroupId: Protocol.ClientGroupId.make(clientGroupId),
+      mutators: mutations,
+    };
     return yield* ClientEngine.make(
       syncLoop === undefined ? options : { ...options, syncLoop }
     ).pipe(
@@ -912,7 +919,10 @@ describe("Room backend lifetime", () => {
         const pull = send(
           new Request(`https://room/sync${routes.pull}`, {
             method: "POST",
-            body: encodeBody({ clientGroupId: "group-pool", subscriptions: [] }),
+            body: encodeBody({
+              clientGroupId: Protocol.ClientGroupId.make("group-pool"),
+              subscriptions: [],
+            }),
             headers: { "content-type": "application/json" },
           })
         );
@@ -961,11 +971,11 @@ describe("Room per-request backend", () => {
         post(
           routes.push,
           encodeBody({
-            clientGroupId: "group-request",
+            clientGroupId: Protocol.ClientGroupId.make("group-request"),
             mutations: [
               {
                 clientId: "c1",
-                mutationId: 1,
+                mutationId: Protocol.MutationId.make(1),
                 mutator: reviewSet.name,
                 args: { id: "r-1", body: "per request", createdAt: "2026-01-01", productId: "p-1" },
                 createdAt: 0,
@@ -982,7 +992,7 @@ describe("Room per-request backend", () => {
       const pulled = yield* post(
         routes.pull,
         encodeBody({
-          clientGroupId: "group-request",
+          clientGroupId: Protocol.ClientGroupId.make("group-request"),
           subscriptions: [Subset.make({ collection: "reviews" })],
         })
       );
@@ -991,7 +1001,9 @@ describe("Room per-request backend", () => {
       expect(runtimes).toEqual([runtimeContext.id, runtimeContext.id]);
       // The write went through the acquired backend.
       expect(
-        yield* backend.lastMutationIds({ clientGroupId: "group-request" }).pipe(Effect.orDie)
+        yield* backend
+          .lastMutationIds({ clientGroupId: Protocol.ClientGroupId.make("group-request") })
+          .pipe(Effect.orDie)
       ).toEqual({ c1: 1 });
     })
   );
@@ -1051,13 +1063,25 @@ describe("Room HTTP routes", () => {
         );
       const session = Option.some("sid=room-session");
       expect(
-        (yield* post(routes.push, { clientGroupId: "group-c", mutations: [] }, session)).status
+        (yield* post(
+          routes.push,
+          { clientGroupId: Protocol.ClientGroupId.make("group-c"), mutations: [] },
+          session
+        )).status
       ).toBe(200);
       expect(
-        (yield* post(routes.pull, { clientGroupId: "group-c", subscriptions: [] }, session)).status
+        (yield* post(
+          routes.pull,
+          { clientGroupId: Protocol.ClientGroupId.make("group-c"), subscriptions: [] },
+          session
+        )).status
       ).toBe(200);
       expect(
-        (yield* post(routes.read, { clientGroupId: "group-c", subsets: [] }, Option.none())).status
+        (yield* post(
+          routes.read,
+          { clientGroupId: Protocol.ClientGroupId.make("group-c"), subsets: [] },
+          Option.none()
+        )).status
       ).toBe(200);
       expect(seen).toEqual([session, session, Option.none()]);
     }).pipe(Effect.scoped)
@@ -1128,14 +1152,24 @@ describe("out-of-band writes", () => {
 
         // The cron job writes straight to the backend, then publishes the write's hint.
         yield* Effect.orDie(
-          backend.applyMutations({ clientGroupId: "cron" }, [
-            { clientId: "cron", mutationId: 1, mutator: "review/set", args: review, createdAt: 0 },
+          backend.applyMutations({ clientGroupId: Protocol.ClientGroupId.make("cron") }, [
+            {
+              clientId: "cron",
+              mutationId: Protocol.MutationId.make(1),
+              mutator: "review/set",
+              args: review,
+              createdAt: 0,
+            },
           ])
         );
         expect(socket.sent).toEqual([]);
         const publish = DurableFanoutBroker.publishOutOfBand({ shards, rooms: namespace, nodes });
         yield* publish([
-          { collection: "reviews", ids: [review.id], values: [{ id: review.id, value: review }] },
+          {
+            collection: "reviews",
+            ids: [Protocol.RowId.make(review.id)],
+            values: [{ id: Protocol.RowId.make(review.id), value: review }],
+          },
         ]).pipe(
           Effect.provideService(RuntimeContext, runtimeContext),
           // The harness runs a stub's call on its caller's fiber, so the shard reads the lease
@@ -1197,12 +1231,22 @@ describe("out-of-band writes", () => {
         yield* calls.next((call) => call.method === "register" && call.roomId === "room-a");
 
         yield* Effect.orDie(
-          backend.applyMutations({ clientGroupId: "cdc" }, [
-            { clientId: "cdc", mutationId: 1, mutator: "review/set", args: review, createdAt: 0 },
+          backend.applyMutations({ clientGroupId: Protocol.ClientGroupId.make("cdc") }, [
+            {
+              clientId: "cdc",
+              mutationId: Protocol.MutationId.make(1),
+              mutator: "review/set",
+              args: review,
+              createdAt: 0,
+            },
           ])
         );
         yield* Queue.offer(feed, [
-          { collection: "reviews", ids: [review.id], values: [{ id: review.id, value: review }] },
+          {
+            collection: "reviews",
+            ids: [Protocol.RowId.make(review.id)],
+            values: [{ id: Protocol.RowId.make(review.id), value: review }],
+          },
         ]);
         yield* Deferred.await(framed);
         yield* Effect.orDie(reader.pull);

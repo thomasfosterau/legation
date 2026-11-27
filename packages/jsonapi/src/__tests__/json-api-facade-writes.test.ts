@@ -38,7 +38,7 @@ import {
   Transport,
 } from "@thomasfosterau/legation";
 import type { MutationState } from "@thomasfosterau/legation/internal";
-import { ClientEngine, ClientView } from "@thomasfosterau/legation/internal";
+import { ClientEngine, ClientView, Protocol } from "@thomasfosterau/legation/internal";
 import * as JsonApiFacade from "../JsonApiFacade.js";
 import * as JsonApiQuery from "../JsonApiQuery.js";
 
@@ -90,7 +90,7 @@ const serverHandlers = R.fromEntries([
     "seed/put",
     (args: unknown, writer: MemoryBackend.BackendWriter) =>
       Effect.flatMap(Effect.orDie(Schema.decodeUnknownEffect(SeedPut)(args)), (seed) =>
-        writer.put(seed.collection, seed.value.id, seed.value)
+        writer.put(seed.collection, Protocol.RowId.make(seed.value.id), seed.value)
       ),
   ],
   ...Arr.map(
@@ -119,17 +119,17 @@ const makeFixture = (
 ): Effect.Effect<Fixture, never, Scope.Scope> =>
   Effect.gen(function* () {
     const backend = yield* MemoryBackend.make(serverHandlers);
-    yield* backend.applyMutations({ clientGroupId: "seed" }, [
+    yield* backend.applyMutations({ clientGroupId: Protocol.ClientGroupId.make("seed") }, [
       {
         clientId: "seed",
-        mutationId: 1,
+        mutationId: Protocol.MutationId.make(1),
         mutator: "seed/put",
         args: { collection: "categories", value: { id: "c-1", name: "Work" } },
         createdAt: 0,
       },
       {
         clientId: "seed",
-        mutationId: 2,
+        mutationId: Protocol.MutationId.make(2),
         mutator: "seed/put",
         args: {
           collection: "notes",
@@ -147,11 +147,14 @@ const makeFixture = (
         ),
       },
     });
-    const transport = yield* Transport.makeInMemory(server.handler, GROUP);
+    const transport = yield* Transport.makeInMemory(
+      server.handler,
+      Protocol.ClientGroupId.make(GROUP)
+    );
     const store = yield* ClientStore.makeMemory;
     const engine = yield* ClientEngine.make({
       clientId: "client-w",
-      clientGroupId: GROUP,
+      clientGroupId: Protocol.ClientGroupId.make(GROUP),
       mutators: Mutation.registry(crud),
     }).pipe(
       Effect.provideService(ClientStore.ClientStore, store),
@@ -416,7 +419,11 @@ describe("JsonApiFacade writes: the 202 receipt", () => {
           yield* engine.pull;
           yield* engine.pull;
           expect(yield* listed(handler)).toEqual(["n-2"]);
-          const rows = yield* backend.getRows({ clientGroupId: GROUP }, "notes", ["n-1", "n-2"]);
+          const rows = yield* backend.getRows(
+            { clientGroupId: Protocol.ClientGroupId.make(GROUP) },
+            "notes",
+            [Protocol.RowId.make("n-1"), Protocol.RowId.make("n-2")]
+          );
           expect(Arr.map(rows, (row) => row.id)).toEqual(["n-2"]);
           const phases = Arr.map([...HashMap.values(yield* states)], (state) => state.phase);
           expect(phases).toEqual(["acknowledged", "acknowledged", "acknowledged"]);

@@ -14,7 +14,6 @@
 import * as Arr from "effect/Array";
 import type * as Effect from "effect/Effect";
 import type * as Schema from "effect/Schema";
-import type { RowId } from "./Collection.js";
 import { DuplicateNameError, type MutatorError, type StoreError } from "./Errors.js";
 
 /** A mutator definition: the shared, serializable contract. */
@@ -39,10 +38,11 @@ export const make = <const Name extends string, Args, ArgsEncoded>(
  * and again on every rebase.
  */
 export interface LocalWriter {
-  readonly put: (collection: string, id: RowId, value: unknown) => Effect.Effect<void, StoreError>;
-  readonly del: (collection: string, id: RowId) => Effect.Effect<void, StoreError>;
+  /** Write a row; `id` takes a plain string, since handlers mint ids from their args. */
+  readonly put: (collection: string, id: string, value: unknown) => Effect.Effect<void, StoreError>;
+  readonly del: (collection: string, id: string) => Effect.Effect<void, StoreError>;
   /** Read through confirmed rows + overlay (current local view). */
-  readonly get: (collection: string, id: RowId) => Effect.Effect<unknown | undefined, StoreError>;
+  readonly get: (collection: string, id: string) => Effect.Effect<unknown | undefined, StoreError>;
 }
 
 /** A client-side handler for one mutator. */

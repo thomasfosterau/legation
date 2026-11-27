@@ -38,7 +38,7 @@ import { createAuthClient } from "@thomasfosterau/effect-auth/client";
 import { makeSessionAtoms } from "@thomasfosterau/effect-auth/client/atoms";
 import { makeCookieJarFetch, makeServerFixture } from "@thomasfosterau/effect-auth/client/testing";
 import { SignOut } from "@thomasfosterau/legation-auth/client";
-import type { Protocol } from "@thomasfosterau/legation/internal";
+import { Protocol } from "@thomasfosterau/legation/internal";
 
 const Note = Node.make("notes", { attributes: { body: Schema.String } });
 const nodes = Node.registry([Note]);
@@ -55,7 +55,9 @@ const bob = { user: { id: "user-bob" } };
 const recordingTransport = Effect.fn("recordingTransport")(function* () {
   const backend = yield* MemoryBackend.make(
     MemoryBackend.validatedHandlers([
-      MemoryBackend.handler(noteSet, (args, writer) => writer.put("notes", args.id, args)),
+      MemoryBackend.handler(noteSet, (args, writer) =>
+        writer.put("notes", Protocol.RowId.make(args.id), args)
+      ),
     ])
   );
   const handler = yield* SyncServer.make.pipe(
@@ -67,7 +69,7 @@ const recordingTransport = Effect.fn("recordingTransport")(function* () {
     Effect.provideService(Cvr.CvrStore, yield* Cvr.makeMemoryStore),
     Effect.provideService(InvalidationBus.InvalidationBus, yield* InvalidationBus.makeInProcess)
   );
-  const inner = yield* Transport.makeInMemory(handler, "group-shared");
+  const inner = yield* Transport.makeInMemory(handler, Protocol.ClientGroupId.make("group-shared"));
   const pushes = yield* Ref.make<ReadonlyArray<Protocol.PushRequest>>([]);
   const transport: Transport.ClientTransport = {
     ...inner,
@@ -84,7 +86,7 @@ const clientFor = (identity: Identity.Fingerprint) =>
     const store = yield* ClientStore.makeKeyValue({ identity });
     const engine = yield* ClientEngine.make({
       clientId: "client-shared",
-      clientGroupId: "group-shared",
+      clientGroupId: Protocol.ClientGroupId.make("group-shared"),
       mutators: mutations,
     }).pipe(
       Effect.provideService(ClientStore.ClientStore, store),

@@ -5,13 +5,14 @@
  * (the contract over `SqlBackend`, and a push's statements on one acquisition)
  * is in `src/__tests__/sql/backend-contract.test.ts`.
  */
-import { describe, expect, it } from "@effect/vitest";
+import { expect, layer } from "@effect/vitest";
 import * as Context from "effect/Context";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Ref from "effect/Ref";
 import { Authorization, Backend, BackendError, MemoryBackend, Server } from "../index.js";
 import { BackendContract, Subset } from "../internal.js";
+import { ClientGroupId, MutationId } from "../Protocol.js";
 
 /** How many acquisitions were opened and how many released. */
 interface Ledger {
@@ -42,7 +43,7 @@ const policy = Authorization.policy({ __contract: Authorization.allowAll });
 
 const put = (mutationId: number, id: string) => ({
   clientId: "c1",
-  mutationId,
+  mutationId: MutationId.make(mutationId),
   mutator: BackendContract.putRow.name,
   args: { collection: "__contract", id, value: { id, n: mutationId } },
   createdAt: 0,
@@ -50,11 +51,11 @@ const put = (mutationId: number, id: string) => ({
 
 const everything = Subset.make({ collection: "__contract" });
 
-describe("Backend.perRequest", () => {
+layer(BackendContract.layerParkGates)("Backend.perRequest", (it) => {
   it.effect("passes verifyBackendContract over the memory backend", () =>
     Effect.gen(function* () {
       const ledger = yield* makeLedger;
-      const shared = yield* MemoryBackend.make(BackendContract.memoryHandlers);
+      const shared = yield* MemoryBackend.make(yield* BackendContract.makeMemoryHandlers);
       const backend = yield* countedOver(shared, ledger);
       yield* BackendContract.verifyBackendContract(backend);
       const [opened, released] = yield* counts(ledger);
@@ -68,13 +69,13 @@ describe("Backend.perRequest", () => {
     Effect.scoped(
       Effect.gen(function* () {
         const ledger = yield* makeLedger;
-        const shared = yield* MemoryBackend.make(BackendContract.memoryHandlers);
+        const shared = yield* MemoryBackend.make(yield* BackendContract.makeMemoryHandlers);
         const backend = yield* countedOver(shared, ledger);
         const server = yield* Server.make({ backend, auth: { policy } });
 
         // Two mutations, one push: one acquisition.
         const pushed = yield* server.handler.handlePush({
-          clientGroupId: "g",
+          clientGroupId: ClientGroupId.make("g"),
           mutations: [put(1, "a"), put(2, "b")],
         });
         expect(pushed.lastMutationIds).toEqual({ c1: 2 });
@@ -83,14 +84,14 @@ describe("Backend.perRequest", () => {
         // A pull reads the watermark twice, evaluates, fetches rows and reads the
         // rejections: one acquisition.
         const pulled = yield* server.handler.handlePull({
-          clientGroupId: "g",
+          clientGroupId: ClientGroupId.make("g"),
           subscriptions: [everything],
         });
         expect(pulled.patch).toHaveLength(2);
         expect(yield* counts(ledger)).toEqual([2, 2]);
 
         const read = yield* server.handler.handleRead({
-          clientGroupId: "g",
+          clientGroupId: ClientGroupId.make("g"),
           subsets: [everything],
         });
         expect(read.rows.map((row) => row.id)).toEqual(["a", "b"]);
@@ -102,7 +103,7 @@ describe("Backend.perRequest", () => {
   it.effect("concurrent requests get separate acquisitions", () =>
     Effect.scoped(
       Effect.gen(function* () {
-        const shared = yield* MemoryBackend.make(BackendContract.memoryHandlers);
+        const shared = yield* MemoryBackend.make(yield* BackendContract.makeMemoryHandlers);
         const opened = yield* Ref.make(0);
         const live = yield* Ref.make(0);
         const bothOpen = yield* Deferred.make<void>();
@@ -123,7 +124,10 @@ describe("Backend.perRequest", () => {
         );
         const server = yield* Server.make({ backend, auth: { policy } });
         const pull = (clientGroupId: string) =>
-          server.handler.handlePull({ clientGroupId, subscriptions: [everything] });
+          server.handler.handlePull({
+            clientGroupId: ClientGroupId.make(clientGroupId),
+            subscriptions: [everything],
+          });
         const [first, second] = yield* Effect.all([pull("g1"), pull("g2")], {
           concurrency: "unbounded",
         });
@@ -138,27 +142,34 @@ describe("Backend.perRequest", () => {
   it.effect("a failed acquisition fails the push, which applies nothing", () =>
     Effect.scoped(
       Effect.gen(function* () {
-        const shared = yield* MemoryBackend.make(BackendContract.memoryHandlers);
+        const shared = yield* MemoryBackend.make(yield* BackendContract.makeMemoryHandlers);
         const backend = yield* Backend.perRequest(
           Effect.fail(new BackendError({ message: "no connection" }))
         );
         const server = yield* Server.make({ backend, auth: { policy } });
         const failure = yield* Effect.flip(
-          server.handler.handlePush({ clientGroupId: "g", mutations: [put(1, "a")] })
+          server.handler.handlePush({
+            clientGroupId: ClientGroupId.make("g"),
+            mutations: [put(1, "a")],
+          })
         );
         expect(failure.message).toBe("no connection");
-        expect(yield* shared.lastMutationIds({ clientGroupId: "g" })).toEqual({});
+        expect(yield* shared.lastMutationIds({ clientGroupId: ClientGroupId.make("g") })).toEqual(
+          {}
+        );
       })
     )
   );
 
   it.effect("captures the services its acquisition needs where it is built", () =>
     Effect.gen(function* () {
-      const shared = yield* MemoryBackend.make(BackendContract.memoryHandlers);
+      const shared = yield* MemoryBackend.make(yield* BackendContract.makeMemoryHandlers);
       const backend = yield* Backend.perRequest(Effect.service(Store)).pipe(
         Effect.provideService(Store, shared)
       );
-      expect(yield* backend.lastMutationIds({ clientGroupId: "g" })).toEqual({});
+      expect(yield* backend.lastMutationIds({ clientGroupId: ClientGroupId.make("g") })).toEqual(
+        {}
+      );
     })
   );
 
@@ -166,7 +177,7 @@ describe("Backend.perRequest", () => {
     Effect.scoped(
       Effect.gen(function* () {
         const ledger = yield* makeLedger;
-        const shared = yield* MemoryBackend.make(BackendContract.memoryHandlers);
+        const shared = yield* MemoryBackend.make(yield* BackendContract.makeMemoryHandlers);
         expect(yield* Backend.forRequest(shared)).toBe(shared);
         const backend = yield* countedOver(shared, ledger);
         const copy: Backend.Backend = { ...backend };

@@ -41,6 +41,7 @@ import * as Effect from "effect/Effect";
 import * as HashMap from "effect/HashMap";
 import * as MutableHashMap from "effect/MutableHashMap";
 import * as Option from "effect/Option";
+import * as P from "effect/Predicate";
 import * as R from "effect/Record";
 import type { Relationship, Resource } from "@thomasfosterau/effect-jsonapi";
 import { Collection, type Node, Predicate, Query } from "@thomasfosterau/legation";
@@ -99,9 +100,9 @@ const checkDeclaration = (
     });
   }
   const toMany = descriptor.kind === "many" || descriptor.kind === "paginated";
-  if (toMany === (edge.kind === "one")) {
+  if (toMany === P.isTagged(edge, "one")) {
     throw new LinkageMismatch({
-      message: `${declared(resource, name)} is "${descriptor.kind}" but the node edge is "${edge.kind}"`,
+      message: `${declared(resource, name)} is "${descriptor.kind}" but the node edge is "${edge._tag}"`,
     });
   }
   if (descriptor.ref().type !== edge.target) {

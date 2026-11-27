@@ -18,6 +18,7 @@ import {
 import { BackendError, MutationRejected } from "../Errors.js";
 import type { Mutation } from "../Protocol.js";
 import * as UnknownMutator from "../UnknownMutator.js";
+import { ClientGroupId, MutationId } from "../Protocol.js";
 
 type Handler = (mutation: Mutation) => Effect.Effect<string, BackendError | MutationRejected>;
 
@@ -28,7 +29,7 @@ const scriptedStore = (options: {
   readonly commitResults: Array<Commit>;
   readonly refuseNext: boolean;
 }) => {
-  const watermarks: Record<string, number> = {};
+  const watermarks: Record<string, MutationId> = {};
   const steps: Array<string> = [];
   const commits: Array<Outcome<string>> = [];
   const config: TransactionSteps<Handler, null, Mutation, string> = {
@@ -73,13 +74,13 @@ const scriptedStore = (options: {
 
 const mutation = (mutationId: number, mutator = "ok"): Mutation => ({
   clientId: "c",
-  mutationId,
+  mutationId: MutationId.make(mutationId),
   mutator,
   args: {},
   createdAt: 0,
 });
 
-const context = { clientGroupId: "g" };
+const context = { clientGroupId: ClientGroupId.make("g") };
 const defaults = { rejections: {}, commitResults: [], refuseNext: false };
 const ok: Handler = () => Effect.succeed("staged");
 const reject: Handler = () => Effect.fail(new MutationRejected({ reason: "no" }));
@@ -117,7 +118,9 @@ describe("Backend.transaction", () => {
       });
       const result = yield* store.applyMutations(context, [mutation(1, "reject"), mutation(2)]);
       expect(store.commits[0]).toEqual({ _tag: "Rejected", reason: "no" });
-      expect(result.rejected).toEqual([{ clientId: "c", mutationId: 1, reason: "no" }]);
+      expect(result.rejected).toEqual([
+        { clientId: "c", mutationId: MutationId.make(1), reason: "no" },
+      ]);
       expect(result.hints).toHaveLength(1);
       expect(result.lastMutationIds).toEqual({ c: 2 });
     })
@@ -130,9 +133,11 @@ describe("Backend.transaction", () => {
         handlers: { ok },
         rejections: { "c:1": "earlier" },
       });
-      store.watermarks["c"] = 1;
+      store.watermarks["c"] = MutationId.make(1);
       const result = yield* store.applyMutations(context, [mutation(1), mutation(2)]);
-      expect(result.rejected).toEqual([{ clientId: "c", mutationId: 1, reason: "earlier" }]);
+      expect(result.rejected).toEqual([
+        { clientId: "c", mutationId: MutationId.make(1), reason: "earlier" },
+      ]);
       expect(store.steps).not.toContain("commit 1 Applied");
       expect(result.lastMutationIds).toEqual({ c: 2 });
     })
@@ -193,7 +198,9 @@ describe("Backend.transaction", () => {
         commitResults: [{ _tag: "Replayed", rejection: Option.some("raced") }],
       });
       const result = yield* store.applyMutations(context, [mutation(1)]);
-      expect(result.rejected).toEqual([{ clientId: "c", mutationId: 1, reason: "raced" }]);
+      expect(result.rejected).toEqual([
+        { clientId: "c", mutationId: MutationId.make(1), reason: "raced" },
+      ]);
       expect(result.hints).toEqual([]);
     })
   );

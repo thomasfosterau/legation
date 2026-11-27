@@ -23,6 +23,7 @@ import * as Predicate from "../Predicate.js";
 import { defined } from "./defined.js";
 import { TestFailure } from "./test-failure.js";
 import * as Json from "../internal/Json.js";
+import { RowId } from "../Protocol.js";
 
 const kindOf = (literal: Predicate.Literal, column: FilterCorpus.Column): boolean =>
   Match.value(column.kind).pipe(
@@ -289,7 +290,7 @@ layer(DefaultCorpus.layer)("FilterCorpus", (it) => {
       seed: 1,
       subject: "js disagrees with postgres",
       predicate: Predicate.eq("d", -0),
-      rows: [{ id: "r0", value: { d: -0 } }],
+      rows: [{ id: RowId.make("r0"), value: { d: -0 } }],
       results: { postgres: ["r0"], js: [] },
     });
     expect(report).toContain('predicate: {"_tag":"Compare","op":"eq","field":"d","value":"-0"}');
@@ -304,9 +305,9 @@ layer(DefaultCorpus.layer)("FilterCorpus", (it) => {
           Predicate.not(Predicate.isIn("t", ["x", "y"]))
         ),
         rows: [
-          { id: "r0", value: { s: "a" } },
-          { id: "r1", value: { s: null } },
-          { id: "r2", value: {} },
+          { id: RowId.make("r0"), value: { s: "a" } },
+          { id: RowId.make("r1"), value: { s: null } },
+          { id: RowId.make("r2"), value: {} },
         ],
       };
       const minimal = yield* FilterCorpus.minimise(failing, disagrees);

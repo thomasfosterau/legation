@@ -28,6 +28,7 @@ import {
 import { Subset } from "../internal.js";
 import { defined } from "./defined.js";
 import { idOf } from "./shapes.js";
+import { ClientGroupId, MutationId, RowId } from "../Protocol.js";
 
 const Category = Node.make("categories", { attributes: { name: Schema.String } });
 
@@ -153,7 +154,7 @@ describe("FilterPolicy: declaration", () => {
     const comments = Collection.make({
       name: "comments",
       schema: Schema.Unknown,
-      id: (value) => idOf(value),
+      id: (value) => RowId.make(idOf(value)),
       relationships: [
         {
           name: "issue",
@@ -183,7 +184,7 @@ describe("FilterPolicy: declaration", () => {
     const comments = Collection.make({
       name: "comments",
       schema: Schema.Unknown,
-      id: (value) => idOf(value),
+      id: (value) => RowId.make(idOf(value)),
       relationships: [
         {
           name: "issue",
@@ -203,7 +204,7 @@ describe("FilterPolicy: declaration", () => {
 
 // ─── Enforcement ─────────────────────────────────────────────────────────────
 
-const context = { clientGroupId: "g" };
+const context = { clientGroupId: ClientGroupId.make("g") };
 
 const policy = (
   filters: Readonly<Record<string, Authorization.AuthFilter>> = {
@@ -520,7 +521,7 @@ describe("FilterPolicy: on SyncServer", () => {
         const server = yield* Server.make({ backend, auth: { policy: policy() } });
         const pull = (where: Predicate.Predicate, orderBy: ReadonlyArray<Subset.OrderBy> = []) =>
           server.handler.handlePull({
-            clientGroupId: "g",
+            clientGroupId: ClientGroupId.make("g"),
             subscriptions: [
               products({ where: Predicate.eq("id", "p-1") }),
               products({ where, orderBy }),
@@ -558,7 +559,7 @@ describe("FilterPolicy: on SyncServer", () => {
 
         // The admissible subscription alone is evaluated.
         const response = yield* server.handler.handlePull({
-          clientGroupId: "g",
+          clientGroupId: ClientGroupId.make("g"),
           subscriptions: [products({ where: Predicate.eq("id", "p-1") })],
         });
         expect(response.patch).toEqual([]);
@@ -574,7 +575,7 @@ describe("FilterPolicy: on SyncServer", () => {
         const server = yield* Server.make({ backend, auth: { policy: policy() } });
         const error = yield* Effect.flip(
           server.handler.handleRead({
-            clientGroupId: "g",
+            clientGroupId: ClientGroupId.make("g"),
             subsets: [products({ where: Predicate.eq("rating", 5) })],
           })
         );
@@ -582,7 +583,7 @@ describe("FilterPolicy: on SyncServer", () => {
         expect(yield* Ref.get(evaluations)).toBe(0);
 
         const response = yield* server.handler.handleRead({
-          clientGroupId: "g",
+          clientGroupId: ClientGroupId.make("g"),
           subsets: [products({ where: Predicate.eq("categoryId", "c-1") })],
         });
         expect(response.rows).toEqual([]);
@@ -621,7 +622,7 @@ describe("FilterPolicy: on SyncServer", () => {
           ]),
         });
         yield* server.handler.handlePull({
-          clientGroupId: "g",
+          clientGroupId: ClientGroupId.make("g"),
           subscriptions: [products({ where: Predicate.eq("id", "p-1") })],
           namedSubscriptions: [{ name: "products/topRated", args: { min: 4 } }],
         });
@@ -664,11 +665,11 @@ describe("FilterPolicy: on SyncServer", () => {
         const server = yield* Server.make({ backend, auth: { policy: policy() }, middleware });
 
         yield* server.handler.handlePull({
-          clientGroupId: "g",
+          clientGroupId: ClientGroupId.make("g"),
           subscriptions: [products({ where: Predicate.eq("categoryId", "c-1") })],
         });
         yield* server.handler.handleRead({
-          clientGroupId: "g",
+          clientGroupId: ClientGroupId.make("g"),
           subsets: [products({ where: Predicate.eq("categoryId", "c-1") })],
         });
         expect(yield* Ref.get(evaluations)).toBe(2);
@@ -676,7 +677,7 @@ describe("FilterPolicy: on SyncServer", () => {
         // The client's own text is still checked.
         const error = yield* Effect.flip(
           server.handler.handlePull({
-            clientGroupId: "g",
+            clientGroupId: ClientGroupId.make("g"),
             subscriptions: [products({ where: Predicate.eq("rating", 5) })],
           })
         );
@@ -693,24 +694,24 @@ describe("FilterPolicy: on SyncServer", () => {
         const backend = yield* MemoryBackend.make(
           MemoryBackend.validatedHandlers([
             MemoryBackend.handler(productSet, (args, writer) =>
-              writer.put("products", idOf(args), args)
+              writer.put("products", RowId.make(idOf(args)), args)
             ),
           ])
         );
         const server = yield* Server.make({ backend, auth: { policy: policy() } });
         yield* server.handler.handlePush({
-          clientGroupId: "writer",
+          clientGroupId: ClientGroupId.make("writer"),
           mutations: [
             {
               clientId: "w",
-              mutationId: 1,
+              mutationId: MutationId.make(1),
               mutator: "product/set",
               args: { id: "p-1", name: "Amp", categoryId: "c-1", priceCents: 100 },
               createdAt: 0,
             },
             {
               clientId: "w",
-              mutationId: 2,
+              mutationId: MutationId.make(2),
               mutator: "product/set",
               args: { id: "p-2", name: "Cable", categoryId: "c-2", priceCents: 5 },
               createdAt: 0,
@@ -718,7 +719,7 @@ describe("FilterPolicy: on SyncServer", () => {
           ],
         });
         const response = yield* server.handler.handlePull({
-          clientGroupId: "reader",
+          clientGroupId: ClientGroupId.make("reader"),
           subscriptions: [
             products({
               where: Predicate.and(

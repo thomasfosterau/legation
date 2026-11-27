@@ -66,7 +66,7 @@ import {
 import {
   Authorization,
   AuthorizationError,
-  type Backend,
+  Backend,
   BackendError,
   type Node,
   Query,
@@ -113,7 +113,7 @@ export interface IdentityOptions extends BaseOptions {
    */
   readonly identity?: Authorization.IdentityResolver;
   /** The client group the resolver and the auth filters see; default `"http"`. */
-  readonly clientGroupId?: string;
+  readonly clientGroupId?: Backend.ClientGroupId;
   /** Excluded: the context is built from `identity`. */
   readonly context?: never;
 }
@@ -284,6 +284,9 @@ const respondToFailures = <A, E>(
 
 // ─── The handlers ────────────────────────────────────────────────────────────
 
+/** The client group a REST request runs in when the options name none. */
+const HTTP_GROUP = Backend.ClientGroupId.make("http");
+
 /**
  * How a request becomes its `SyncContext`: the app's own `context`, or the
  * request's headers through the identity resolver (ADR-0035), as every sync
@@ -294,7 +297,7 @@ const requestContext = (
 ): ((request: HttpServerRequest) => Effect.Effect<Backend.SyncContext, AuthorizationError>) => {
   if (options.context !== undefined) return options.context;
   const resolver = Option.fromUndefinedOr(options.identity);
-  const clientGroupId = options.clientGroupId ?? "http";
+  const clientGroupId = options.clientGroupId ?? HTTP_GROUP;
   return (request) =>
     Authorization.resolveContext(resolver, {
       clientGroupId,

@@ -21,6 +21,7 @@ import * as Mutator from "../Mutator.js";
 import * as Server from "../Server.js";
 import * as Subset from "../Subset.js";
 import { ClientTransport, makeInMemory } from "../Transport.js";
+import { ClientGroupId, MutationId, RowId } from "../Protocol.js";
 
 const counterArgs = Schema.Struct({ id: Schema.String });
 // A non-idempotent counter: a double application shows as `n: 2`.
@@ -61,10 +62,10 @@ const makeServer = Effect.fn("makeServer")(function* () {
     MemoryBackend.validatedHandlers([
       MemoryBackend.handler(increment, (args, writer) =>
         writer
-          .get("counters", args.id)
+          .get("counters", RowId.make(args.id))
           .pipe(
             Effect.flatMap((row) =>
-              writer.put("counters", args.id, incremented(args.id, asCounter(row)))
+              writer.put("counters", RowId.make(args.id), incremented(args.id, asCounter(row)))
             )
           )
       ),
@@ -85,7 +86,7 @@ const makeServer = Effect.fn("makeServer")(function* () {
 const makeEngine = (server: Server.Server, refusing: Ref.Ref<boolean>, unpulledLimit = 1024) =>
   Effect.gen(function* () {
     const store = yield* ClientStoreModule.makeMemory;
-    const inner = yield* makeInMemory(server.handler, "group-a");
+    const inner = yield* makeInMemory(server.handler, ClientGroupId.make("group-a"));
     const transport: ClientTransport = {
       ...inner,
       pull: (request) =>
@@ -99,7 +100,7 @@ const makeEngine = (server: Server.Server, refusing: Ref.Ref<boolean>, unpulledL
     };
     const engine = yield* ClientEngineModule.make({
       clientId: "client-a",
-      clientGroupId: "group-a",
+      clientGroupId: ClientGroupId.make("group-a"),
       mutators,
       unpulledLimit,
     }).pipe(
@@ -113,7 +114,7 @@ const makeEngine = (server: Server.Server, refusing: Ref.Ref<boolean>, unpulledL
 const countsOf = (engine: ClientEngineModule.ClientEngine) =>
   engine.query(countersSubset).pipe(Effect.map((rows) => rows.map((row) => row.value)));
 
-const form = { clientId: "form-1", mutationId: 1 } as const;
+const form = { clientId: "form-1", mutationId: MutationId.make(1) } as const;
 
 describe("enhanced form submit", () => {
   it.effect("is dropped on acknowledgement (the covering pull), not on the action's response", () =>
@@ -130,7 +131,7 @@ describe("enhanced form submit", () => {
 
         // The form action runs it on the server and answers the receipt.
         const receipt = yield* server.mutate({
-          clientGroupId: "group-a",
+          clientGroupId: ClientGroupId.make("group-a"),
           ...form,
           mutation: increment,
           args: { id: "c1" },
@@ -166,7 +167,7 @@ describe("enhanced form submit", () => {
         const submission = yield* engine.beginFormMutation(form, refuse.name, { id: "c2" });
         expect(yield* countsOf(engine)).toEqual([{ id: "c2", n: 1 }]);
         const receipt = yield* server.mutate({
-          clientGroupId: "group-a",
+          clientGroupId: ClientGroupId.make("group-a"),
           ...form,
           mutation: refuse,
           args: { id: "c2" },

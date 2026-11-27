@@ -16,6 +16,7 @@ import type { Related } from "@thomasfosterau/legation/internal";
 import * as DocumentWriter from "../DocumentWriter.js";
 import * as JsonApiQuery from "../JsonApiQuery.js";
 import { defined } from "./defined.js";
+import { Protocol } from "@thomasfosterau/legation/internal";
 
 /** A link that must be a plain URL string, not a link object. */
 const decodeLink = Schema.decodeUnknownSync(Schema.String);
@@ -59,7 +60,7 @@ const row = (
   value: { readonly id: string; readonly [field: string]: Schema.Json },
   related: Related.RelatedRow["related"] = {}
 ): Related.RelatedRow => ({
-  id: value.id,
+  id: Protocol.RowId.make(value.id),
   value,
   related,
 });

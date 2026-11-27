@@ -20,6 +20,7 @@ import * as TestClock from "effect/testing/TestClock";
 import { TransportError } from "@thomasfosterau/legation";
 import * as RoomTransport from "../RoomTransport.js";
 import { defined } from "./defined.js";
+import { Protocol } from "@thomasfosterau/legation/internal";
 
 interface Sent {
   readonly url: string;
@@ -48,7 +49,7 @@ describe("RoomTransport HTTP", () => {
     Effect.gen(function* () {
       const sent: Array<Sent> = [];
       const fetch = recordingFetch(sent, () => Response.json({ lastMutationIds: { c1: 3 } }));
-      const request = { clientGroupId: "g1", mutations: [] };
+      const request = { clientGroupId: Protocol.ClientGroupId.make("g1"), mutations: [] };
       const response = yield* transport
         .push(request)
         .pipe(Effect.provideService(FetchHttpClient.Fetch, fetch), Effect.withSpan("caller"));
@@ -72,7 +73,7 @@ describe("RoomTransport HTTP", () => {
         Response.json({ error: "bad cookie" }, { status: 400 })
       );
       const exit = yield* transport
-        .pull({ clientGroupId: "g1", subscriptions: [] })
+        .pull({ clientGroupId: Protocol.ClientGroupId.make("g1"), subscriptions: [] })
         .pipe(Effect.provideService(FetchHttpClient.Fetch, fetch), Effect.exit);
       expect(exit).toEqual(Exit.fail(new TransportError({ message: "bad cookie" })));
     })
@@ -82,10 +83,10 @@ describe("RoomTransport HTTP", () => {
     Effect.gen(function* () {
       const sent: Array<Sent> = [];
       const fetch = recordingFetch(sent, () => new Response("down", { status: 503 }));
-      const exit = yield* defined(transport.read)({ clientGroupId: "g1", subsets: [] }).pipe(
-        Effect.provideService(FetchHttpClient.Fetch, fetch),
-        Effect.exit
-      );
+      const exit = yield* defined(transport.read)({
+        clientGroupId: Protocol.ClientGroupId.make("g1"),
+        subsets: [],
+      }).pipe(Effect.provideService(FetchHttpClient.Fetch, fetch), Effect.exit);
       expect(exit).toEqual(Exit.fail(new TransportError({ message: "room /read answered 503" })));
     })
   );
@@ -94,10 +95,10 @@ describe("RoomTransport HTTP", () => {
     Effect.gen(function* () {
       const sent: Array<Sent> = [];
       const fetch = recordingFetch(sent, () => Response.json({ rows: "nope" }));
-      const error = yield* defined(transport.read)({ clientGroupId: "g1", subsets: [] }).pipe(
-        Effect.provideService(FetchHttpClient.Fetch, fetch),
-        Effect.flip
-      );
+      const error = yield* defined(transport.read)({
+        clientGroupId: Protocol.ClientGroupId.make("g1"),
+        subsets: [],
+      }).pipe(Effect.provideService(FetchHttpClient.Fetch, fetch), Effect.flip);
       expect(error).toBeInstanceOf(TransportError);
       expect(error.message).toBe("room /read answer is invalid");
     })

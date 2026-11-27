@@ -495,7 +495,7 @@ const engine =
   yield *
   ClientEngine.make({
     clientId: "c1",
-    clientGroupId: "g1",
+    clientGroupId: Client.ClientGroupId.make("g1"),
     mutators,
     retry: {
       push: Schedule.exponential(Duration.seconds(1)),

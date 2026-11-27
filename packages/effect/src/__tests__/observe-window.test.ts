@@ -34,6 +34,7 @@ import { ClientTransport, makeInMemory, type ServerHandler } from "../Transport.
 import { defined } from "./defined.js";
 import { TestFailure } from "./test-failure.js";
 import { idOf } from "./shapes.js";
+import { ClientGroupId, RowId } from "../Protocol.js";
 
 interface Item {
   readonly id: string;
@@ -43,12 +44,12 @@ interface Item {
 const mutators = Mutator.registry([
   {
     mutator: Mutator.make("item/set", Schema.Unknown),
-    local: (args: Item, writer) => writer.put("items", args.id, args),
+    local: (args: Item, writer) => writer.put("items", RowId.make(args.id), args),
   },
 ]);
 
 const handlers = {
-  "item/set": (args, writer) => Effect.asVoid(writer.put("items", idOf(args), args)),
+  "item/set": (args, writer) => Effect.asVoid(writer.put("items", RowId.make(idOf(args)), args)),
 } satisfies Record<string, MemoryBackend.BackendHandler>;
 
 const makeServer = Effect.fn("makeServer")(function* () {
@@ -67,10 +68,10 @@ const makeServer = Effect.fn("makeServer")(function* () {
 const makeClient = (handler: ServerHandler, group: string) =>
   Effect.gen(function* () {
     const store = yield* ClientStoreModule.makeMemory;
-    const transport = yield* makeInMemory(handler, group);
+    const transport = yield* makeInMemory(handler, ClientGroupId.make(group));
     return yield* ClientEngineModule.make({
       clientId: group,
-      clientGroupId: group,
+      clientGroupId: ClientGroupId.make(group),
       mutators,
     }).pipe(
       Effect.provideService(ClientStore, store),

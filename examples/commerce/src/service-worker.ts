@@ -41,6 +41,7 @@ import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import { IndexedDb } from "@effect/platform-browser";
+import { Client } from "@thomasfosterau/legation";
 import { ClientView, Coverage } from "@thomasfosterau/legation/internal";
 import { CacheApiHttpCache, type HttpCache } from "@thomasfosterau/legation-browser/http-cache";
 import type { JsonApiFacade } from "@thomasfosterau/legation-jsonapi";
@@ -174,7 +175,7 @@ config.addEventListener("message", (event) => {
   void reportToClients(`engine host starting (group ${clientGroupId})`);
   void Effect.runPromise(
     runHost({
-      clientGroupId,
+      clientGroupId: Client.ClientGroupId.make(clientGroupId),
       clientId: `sw-${clientGroupId}`,
       syncOrigin: self.location.origin,
       indexedDb: indexedDbLayer,

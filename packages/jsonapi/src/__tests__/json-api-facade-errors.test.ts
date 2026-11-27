@@ -35,7 +35,7 @@ import {
   Server,
   Transport,
 } from "@thomasfosterau/legation";
-import { ClientEngine, ClientView } from "@thomasfosterau/legation/internal";
+import { ClientEngine, ClientView, Protocol } from "@thomasfosterau/legation/internal";
 import type * as FacadeWrites from "../FacadeWrites.js";
 import * as JsonApiFacade from "../JsonApiFacade.js";
 import * as JsonApiQuery from "../JsonApiQuery.js";
@@ -113,11 +113,14 @@ const makeFixture = (
         ),
       },
     });
-    const transport = yield* Transport.makeInMemory(server.handler, GROUP);
+    const transport = yield* Transport.makeInMemory(
+      server.handler,
+      Protocol.ClientGroupId.make(GROUP)
+    );
     const store = yield* ClientStore.makeMemory;
     const engine = yield* ClientEngine.make({
       clientId: "client-e",
-      clientGroupId: GROUP,
+      clientGroupId: Protocol.ClientGroupId.make(GROUP),
       mutators: Mutation.registry(crud),
     }).pipe(
       Effect.provideService(ClientStore.ClientStore, store),

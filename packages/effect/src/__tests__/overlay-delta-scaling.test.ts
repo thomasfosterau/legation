@@ -21,6 +21,7 @@ import { ClientStore } from "../ClientStore.js";
 import * as Mutator from "../Mutator.js";
 import * as Subset from "../Subset.js";
 import { ClientTransport, makeInMemory, type ServerHandler } from "../Transport.js";
+import { ClientGroupId, RowId } from "../Protocol.js";
 
 const ROWS = 10_000;
 const MUTATIONS = 30;
@@ -29,7 +30,7 @@ const LIVE_QUERIES = 5;
 const mutators = Mutator.registry([
   {
     mutator: Mutator.make("todo/set", Schema.Unknown),
-    local: (a: { id: string }, w) => w.put("todos", a.id, a),
+    local: (a: { id: string }, w) => w.put("todos", RowId.make(a.id), a),
   },
 ]);
 
@@ -57,10 +58,10 @@ const makeCountedClient = () =>
       listRows: (collection) =>
         Ref.update(listRowsCount, (n) => n + 1).pipe(Effect.andThen(base.listRows(collection))),
     };
-    const transport = yield* makeInMemory(noopHandler, "scaling");
+    const transport = yield* makeInMemory(noopHandler, ClientGroupId.make("scaling"));
     const engine = yield* ClientEngineModule.make({
       clientId: "scaling",
-      clientGroupId: "scaling",
+      clientGroupId: ClientGroupId.make("scaling"),
       mutators,
     }).pipe(
       Effect.provideService(ClientStore, store),

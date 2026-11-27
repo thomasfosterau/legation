@@ -6,7 +6,7 @@
  * are the exception: they drive the host's sweep and the mirror's heartbeat
  * on the TestClock.
  */
-import { Defined } from "@thomasfosterau/legation/internal";
+import { Defined, Protocol } from "@thomasfosterau/legation/internal";
 import {
   Authorization,
   Backend,
@@ -75,7 +75,8 @@ const todoSet = Mutator.make("todo/set", TodoArgs);
 const mutators = Mutator.registry([
   {
     mutator: todoSet,
-    local: (args, writer) => writer.put("todos", decodeIdentified(args).id, args),
+    local: (args, writer) =>
+      writer.put("todos", Protocol.RowId.make(decodeIdentified(args).id), args),
   },
 ]);
 
@@ -142,7 +143,9 @@ const is = (counter: Ref.Ref<number>, n: number) =>
 const makeEngine = Effect.fn("makeEngine")(function* () {
   const backend = yield* MemoryBackend.make(
     MemoryBackend.validatedHandlers([
-      MemoryBackend.handler(todoSet, (args, writer) => writer.put("todos", args.id, args)),
+      MemoryBackend.handler(todoSet, (args, writer) =>
+        writer.put("todos", Protocol.RowId.make(args.id), args)
+      ),
     ])
   );
   const handler = yield* SyncServer.make.pipe(
@@ -155,10 +158,10 @@ const makeEngine = Effect.fn("makeEngine")(function* () {
     Effect.provideService(InvalidationBus.InvalidationBus, yield* InvalidationBus.makeInProcess)
   );
   const store = yield* ClientStore.makeMemory;
-  const transport = yield* Transport.makeInMemory(handler, "group-a");
+  const transport = yield* Transport.makeInMemory(handler, Protocol.ClientGroupId.make("group-a"));
   const engine = yield* ClientEngine.make({
     clientId: "client-a",
-    clientGroupId: "group-a",
+    clientGroupId: Protocol.ClientGroupId.make("group-a"),
     mutators,
   }).pipe(
     Effect.provideService(ClientStore.ClientStore, store),
@@ -856,7 +859,9 @@ describe("EngineHost.Host.registrations", () => {
 const makeEnginePair = Effect.fn("makeEnginePair")(function* () {
   const backend = yield* MemoryBackend.make(
     MemoryBackend.validatedHandlers([
-      MemoryBackend.handler(todoSet, (args, writer) => writer.put("todos", args.id, args)),
+      MemoryBackend.handler(todoSet, (args, writer) =>
+        writer.put("todos", Protocol.RowId.make(args.id), args)
+      ),
     ])
   );
   const handler = yield* SyncServer.make.pipe(
@@ -871,8 +876,15 @@ const makeEnginePair = Effect.fn("makeEnginePair")(function* () {
   const engineFor = (clientId: string, clientGroupId: string) =>
     Effect.gen(function* () {
       const store = yield* ClientStore.makeMemory;
-      const transport = yield* Transport.makeInMemory(handler, clientGroupId);
-      return yield* ClientEngine.make({ clientId, clientGroupId, mutators }).pipe(
+      const transport = yield* Transport.makeInMemory(
+        handler,
+        Protocol.ClientGroupId.make(clientGroupId)
+      );
+      return yield* ClientEngine.make({
+        clientId,
+        clientGroupId: Protocol.ClientGroupId.make(clientGroupId),
+        mutators,
+      }).pipe(
         Effect.provideService(ClientStore.ClientStore, store),
         Effect.provideService(Transport.ClientTransport, transport)
       );
@@ -969,7 +981,9 @@ describe("pulled marks follow their rows over a mirror", () => {
         expect(rootPulled(yield* mirror.pulled(todosRoot))).toBe(false);
         // The rows land: now the mark counts.
         yield* hostChannel.post(
-          MirrorProtocol.mirrorUpdate(todosRoot, [{ id: "1", value: { title: "a" } }])
+          MirrorProtocol.mirrorUpdate(todosRoot, [
+            { id: Protocol.RowId.make("1"), value: { title: "a" } },
+          ])
         );
         yield* eventually(mirror.pulled(todosRoot), rootPulled);
         // Released and taken again, the key waits for fresh rows once more.

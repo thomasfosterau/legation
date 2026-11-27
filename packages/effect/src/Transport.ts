@@ -25,6 +25,7 @@ import type { RequestCredentials } from "./Authorization.js";
 import { TransportError } from "./Errors.js";
 import type { VersionNotSupportedError } from "./Errors.js";
 import type {
+  ClientGroupId,
   Poke,
   PullRequest,
   PullResponse,
@@ -93,7 +94,7 @@ export interface ServerHandler {
     options?: HandleOptions
   ) => Effect.Effect<ReadResponse, TransportError | VersionNotSupportedError>;
   /** Pokes addressed to one client group. */
-  readonly pokes: (clientGroupId: string) => Stream.Stream<Poke>;
+  readonly pokes: (clientGroupId: ClientGroupId) => Stream.Stream<Poke>;
 }
 
 /**
@@ -170,7 +171,7 @@ const failWhileOffline =
  */
 export const makeInMemory: (
   handler: ServerHandler,
-  clientGroupId: string,
+  clientGroupId: ClientGroupId,
   options?: InMemoryOptions
 ) => Effect.Effect<InMemoryTransport, never, Scope.Scope> = Effect.fn(
   "legation/Transport.makeInMemory"
@@ -220,7 +221,7 @@ export const offline: ClientTransport = {
  * {@link makeInMemory}'s options (the credentials each call presents).
  */
 export const layerInMemory = (
-  clientGroupId: string,
+  clientGroupId: ClientGroupId,
   options?: InMemoryOptions
 ): Layer.Layer<ClientTransport, never, ServerHandler> =>
   Layer.effect(ClientTransport)(

@@ -44,7 +44,7 @@ const fetchClient = Effect.map(Layer.build(FetchHttpClient.layer), (built) =>
  * `response` fails as "answer is invalid", and anything else (the send) as "request failed",
  * each a `TransportError` naming the route.
  */
-export const post = <A>(target: PostTarget, route: string, response: Schema.Codec<A>) => {
+export const post = <A, I>(target: PostTarget, route: string, response: Schema.Codec<A, I>) => {
   const decodeResponse = HttpClientResponse.schemaBodyJson(response);
   const failed = (cause: unknown) =>
     new TransportError({ message: `${target.label} ${route} request failed`, cause });

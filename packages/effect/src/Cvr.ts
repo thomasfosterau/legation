@@ -23,6 +23,7 @@ import { KeyValueStore } from "effect/persistence";
 import type { RowId, RowVersion } from "./Collection.js";
 import { StoreError } from "./Errors.js";
 import * as Json from "./internal/Json.js";
+import { RowId as RowIdSchema } from "./Protocol.js";
 
 /** What one client group holds: collection → row id → row version. */
 export interface Cvr {
@@ -102,7 +103,7 @@ const WireCvr = Schema.fromJsonString(
     rows: Schema.Array(
       Schema.Tuple([
         Schema.String,
-        Schema.Array(Schema.Tuple([Schema.String, Schema.Union([Schema.String, Schema.Number])])),
+        Schema.Array(Schema.Tuple([RowIdSchema, Schema.Union([Schema.String, Schema.Number])])),
       ])
     ),
   })

@@ -49,7 +49,7 @@ over the existing REST API.
 ```ts
 import { Duration, Effect, Layer, Option } from "effect";
 import * as FetchHttpClient from "effect/http/FetchHttpClient";
-import { Predicate } from "@thomasfosterau/legation";
+import { Client, Predicate } from "@thomasfosterau/legation";
 import { ClientEngine, Subset } from "@thomasfosterau/legation/internal";
 import { JsonApiSync } from "@thomasfosterau/legation-jsonapi";
 import { api } from "./my-json-api"; // your app's Effect HttpApi
@@ -57,7 +57,7 @@ import { api } from "./my-json-api"; // your app's Effect HttpApi
 const sync = JsonApiSync.layer(api, {
   baseUrl: "https://api.example.com",
   clientId: "device-1",
-  clientGroupId: "user-42",
+  clientGroupId: Client.ClientGroupId.make("user-42"),
   // Both legs are opt-in: without `pushDebounce` a journaled mutation waits
   // for a reconnect, a poke-driven pull, or an explicit `push` — an
   // already-connected client would sit on unflushed writes. `pullInterval`
@@ -153,7 +153,29 @@ create; `PATCH`/`DELETE` are naturally idempotent).
 Mutators beyond the derived CRUD ones can ride the same backend: give
 `JsonApiBackend.make` a `writes` map from mutator name to a function expressing
 its decoded args as one JSON:API `Write` (a create, update or delete of one
-resource), and both delivery paths carry it.
+resource), and both delivery paths carry it. The function returns a `Result`:
+`Result.succeed(write)`, or `Result.fail(new InvalidWriteArgs({ message }))` for
+args it cannot express, which fails the push as args that do not decode do.
+
+```ts
+const writes = new Map<string, JsonApiBackend.Expression>([
+  [
+    "todo/archive",
+    (args) =>
+      P.hasProperty(args, "id") && P.isString(args.id)
+        ? Result.succeed({
+            operation: "update",
+            type: "todos",
+            id: args.id,
+            attributes: { archived: true },
+          })
+        : Result.fail(new InvalidWriteArgs({ message: '"todo/archive" needs an id' })),
+  ],
+]);
+```
+
+`FacadeWrites.writesOf(nodes)` builds this map for the graph-derived CRUD
+mutations.
 
 ### The ledger across restarts
 
@@ -187,7 +209,9 @@ JsonApiSync.layer(api, {
 ```
 
 An explicit `store` replaces the default client store, and an explicit `ledger`
-overrides the default ledger. If you pass both `store` and `keyValueStore`, build
+overrides the default ledger. A `store` that fails to open, such as an
+`IndexedDbClientStore` layer the browser refuses, fails `JsonApiSync.layer` with
+its `StoreError`. If you pass both `store` and `keyValueStore`, build
 `store` over the same key/value store: the layer cannot check that, because
 `store` is an opaque layer. Pass `ledger: Ledger.keyValue(keyValueStore)` yourself
 to name a store the client store does not use, and `JsonApiBackend.make` takes the
@@ -507,7 +531,10 @@ const rest = RestHandlers.make({
   backend,
   policy,
   context: (request) =>
-    Effect.succeed({ clientGroupId: "http", identity: request.headers["x-user"] }),
+    Effect.succeed({
+      clientGroupId: Backend.ClientGroupId.make("http"),
+      identity: request.headers["x-user"],
+    }),
 });
 ```
 

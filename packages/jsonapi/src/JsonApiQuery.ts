@@ -384,7 +384,7 @@ const relationshipsOf = (
 ): Record<string, Relationship.Descriptor> => {
   return R.map(node.edges, (edge): Relationship.Descriptor => {
     const target = () => resourceIn(resources, edge.target);
-    return edge.kind === "one" ? Relationship.one(target) : Relationship.many(target);
+    return P.isTagged(edge, "one") ? Relationship.one(target) : Relationship.many(target);
   });
 };
 

@@ -76,13 +76,14 @@ const productSet = Mutation.make("product/set", Schema.Unknown);
 const mutations = Mutation.registry([
   {
     mutator: productSet,
-    local: (args, writer) => writer.put("products", decodeIdentified(args).id, args),
+    local: (args, writer) =>
+      writer.put("products", Protocol.RowId.make(decodeIdentified(args).id), args),
   },
 ]);
 
 const backendHandlers = {
   "product/set": (args, writer) =>
-    Effect.asVoid(writer.put("products", decodeIdentified(args).id, args)),
+    Effect.asVoid(writer.put("products", Protocol.RowId.make(decodeIdentified(args).id), args)),
 } satisfies Record<string, MemoryBackend.BackendHandler>;
 
 // ─── The API Worker ──────────────────────────────────────────────────────────
@@ -229,7 +230,7 @@ const makeApi = Effect.fn("makeApi")(function* (): Effect.fn.Return<Api, never, 
 // ─── Clients ─────────────────────────────────────────────────────────────────
 
 const SESSION = "session=alice";
-const GROUP = "group-browser";
+const GROUP = Protocol.ClientGroupId.make("group-browser");
 
 /** The document request the front Worker is rendering. */
 const inbound = (cookie?: string): Request =>
@@ -258,7 +259,7 @@ const makeEngine = (
     const store = yield* ClientStore.makeMemory;
     const engine = yield* ClientEngine.make({
       clientId,
-      clientGroupId,
+      clientGroupId: Protocol.ClientGroupId.make(clientGroupId),
       mutators: mutations,
       syncLoop: { pullInterval: "10 minutes", pushDebounce: "10 minutes" },
     }).pipe(
@@ -296,7 +297,9 @@ describe("BindingTransport", () => {
         headers: { "x-internal": "token" },
       });
 
-      yield* transport.pull({ clientGroupId: GROUP, subscriptions: [] }).pipe(Effect.orDie);
+      yield* transport
+        .pull({ clientGroupId: Protocol.ClientGroupId.make(GROUP), subscriptions: [] })
+        .pipe(Effect.orDie);
 
       const sent = defined(seen[0]);
       expect(sent.url).toBe(`https://shop.example.com/sync${routes.pull}`);
@@ -326,7 +329,10 @@ describe("BindingTransport", () => {
       });
       const transport = BindingTransport.make({ binding, request, path: "/legation" });
 
-      yield* defined(transport.read)({ clientGroupId: GROUP, subsets: [] }).pipe(Effect.orDie);
+      yield* defined(transport.read)({
+        clientGroupId: Protocol.ClientGroupId.make(GROUP),
+        subsets: [],
+      }).pipe(Effect.orDie);
 
       expect(defined(seen[0]).url).toBe(`https://shop.example.com/legation${routes.read}`);
       expect(defined(seen[0]).headers.get("origin")).toBe("https://admin.example.com");
@@ -340,7 +346,7 @@ describe("BindingTransport", () => {
       };
       const transport = BindingTransport.make({ binding, request: inbound(SESSION) });
       const failure = yield* Effect.flip(
-        transport.pull({ clientGroupId: GROUP, subscriptions: [] })
+        transport.pull({ clientGroupId: Protocol.ClientGroupId.make(GROUP), subscriptions: [] })
       );
       expect(failure._tag).toBe("TransportError");
       expect(failure.message).toBe("nope");
@@ -352,7 +358,7 @@ describe("BindingTransport", () => {
       const binding = { fetch: async () => json({ cookie: 1, patch: "not a patch" }) };
       const transport = BindingTransport.make({ binding, request: inbound(SESSION) });
       const failure = yield* Effect.flip(
-        transport.pull({ clientGroupId: GROUP, subscriptions: [] })
+        transport.pull({ clientGroupId: Protocol.ClientGroupId.make(GROUP), subscriptions: [] })
       );
       expect(failure._tag).toBe("TransportError");
       expect(failure.message).toBe(`binding ${routes.pull} answer is invalid`);

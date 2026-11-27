@@ -36,6 +36,7 @@ import * as Defined from "./Defined.js";
 import * as Arr from "effect/Array";
 import type * as Brand from "effect/Brand";
 import * as HashSet from "effect/HashSet";
+import * as P from "effect/Predicate";
 import * as R from "effect/Record";
 import * as Schema from "effect/Schema";
 import * as Collection from "./Collection.js";
@@ -43,11 +44,19 @@ import * as Edge from "./Edge.js";
 import { DuplicateNameError, FilterDeclarationError, UnknownCollectionError } from "./Errors.js";
 import * as FilterPolicy from "./FilterPolicy.js";
 import type { NoEdges } from "./internal/NoEdges.js";
+import * as Ids from "./internal/Ids.js";
 import * as NodeRowCodec from "./internal/NodeRowCodec.js";
 import * as Subset from "./Subset.js";
 
-/** The branded id schema for a node type: `string & Brand<"<type>/id">`. */
-export interface Id<Type extends string> extends Schema.brand<Schema.String, `${Type}/id`> {}
+/**
+ * The branded id schema for a node type: a {@link Collection.RowId} also
+ * branded `"<type>/id"`, so a node id passes wherever a row id is expected
+ * but not where another node type's id is.
+ */
+export interface Id<Type extends string> extends Schema.brand<
+  Schema.brand<Schema.String, "legation/RowId">,
+  `${Type}/id`
+> {}
 
 /** Create the branded id schema for a node type. */
 export const Id = <const Type extends string>(type: Type): Id<Type> =>
@@ -57,7 +66,7 @@ export const Id = <const Type extends string>(type: Type): Id<Type> =>
   // (non-union, non-wide) string and is `unknown` for the literal ids callers
   // pass; the cast only satisfies it, the value is the same template string,
   // and the public `Id<Type>` signature is untouched.
-  Schema.String.pipe(
+  Collection.RowId.pipe(
     Schema.brand<`${Type}/id`>(`${type}/id` as Parameters<typeof Schema.brand<`${Type}/id`>>[0])
   );
 
@@ -210,7 +219,7 @@ export const make = <
   if (options.id !== undefined) assertTextIdentity(type, options.id, options.attributes);
   const viaFields: Record<string, Schema.Top> = {};
   Arr.forEach(R.values(edges), (edge) => {
-    if (edge.kind === "one") viaFields[edge.via] = Id(edge.target);
+    if (P.isTagged(edge, "one")) viaFields[edge.via] = Id(edge.target);
   });
   // SAFETY: `filterable` maps field names (strings) to `FilterableInput`s, and
   // `exactOptionalPropertyTypes` rules out an explicit `undefined` value.
@@ -278,7 +287,7 @@ const assertTextIdentity = (
 export const derivableSet = (node: AnyNode): ReadonlySet<string> => {
   const fields = new Set<string>(node.hintKeys);
   Arr.forEach(R.values(node.edges), (edge) => {
-    if (edge.kind === "one") fields.add(edge.via);
+    if (P.isTagged(edge, "one")) fields.add(edge.via);
   });
   return fields;
 };
@@ -341,7 +350,7 @@ const inverseVia = (
     });
   }
   const inverse = target.edges[edge.inverse];
-  if (inverse === undefined || inverse.kind !== "one" || inverse.target !== node.type) {
+  if (inverse === undefined || !P.isTagged(inverse, "one") || inverse.target !== node.type) {
     throw new UnknownCollectionError({
       from: node.type,
       relationship: `${name} (inverse "${edge.inverse}" is not a one-edge back to ${node.type})`,
@@ -376,7 +385,7 @@ const toCollection = (
 ): Collection.AnyCollection => {
   const relationships: Array<Collection.Relationship> = [];
   Arr.forEach(R.toEntries(node.edges), ([name, edge]) => {
-    if (edge.kind === "one") {
+    if (P.isTagged(edge, "one")) {
       relationships.push({
         name,
         kind: "one",
@@ -388,13 +397,13 @@ const toCollection = (
     } else {
       relationships.push({
         name,
-        kind: edge.kind,
+        kind: edge._tag,
         collection: edge.target,
         // The parent side of a dependent collection is this node's identity.
         localField: node.id,
         foreignField: inverseVia(node, name, edge, nodes),
         ...Defined.fields({
-          order: edge.kind === "paginated" ? Subset.parseOrder(edge.order) : undefined,
+          order: P.isTagged(edge, "paginated") ? Subset.parseOrder(edge.order) : undefined,
         }),
       });
     }
@@ -403,8 +412,8 @@ const toCollection = (
     name: node.type,
     schema: NodeRowCodec.rowCodec(node),
     // SAFETY: `value` is a decoded row of this node, whose identity field is a
-    // string id.
-    id: (value) => (value as Record<string, string>)[node.id] ?? "",
+    // string id: a branded `Node.Id`, or a natural key, which is a row id too.
+    id: (value) => Ids.rowId((value as Record<string, string>)[node.id] ?? ""),
     identity: node.id,
     relationships,
     ...Defined.fields({
@@ -426,7 +435,7 @@ const rowFields = (node: AnyNode): HashSet.HashSet<string> =>
   HashSet.fromIterable([
     node.id,
     ...R.keys(node.attributes),
-    ...Arr.flatMap(R.values(node.edges), (edge) => (edge.kind === "one" ? [edge.via] : [])),
+    ...Arr.flatMap(R.values(node.edges), (edge) => (P.isTagged(edge, "one") ? [edge.via] : [])),
   ]);
 
 /**
@@ -441,7 +450,7 @@ const withEdgeOrders = <N extends AnyNode>(node: N, definitions: ReadonlyArray<A
   const fields = rowFields(node);
   Arr.forEach(definitions, (source) =>
     Arr.forEach(R.toEntries(source.edges), ([name, edge]) => {
-      if (edge.kind !== "paginated" || edge.target !== node.type) return;
+      if (!P.isTagged(edge, "paginated") || edge.target !== node.type) return;
       Arr.forEach(Subset.parseOrder(edge.order), (term) => {
         if (!HashSet.has(fields, term.field)) {
           throw new FilterDeclarationError({
@@ -484,7 +493,7 @@ export const registry = <const Nodes extends AnyNode>(
           collection: edge.target,
         });
       }
-      if (edge.kind !== "one") inverseVia(node, name, edge, declared);
+      if (!P.isTagged(edge, "one")) inverseVia(node, name, edge, declared);
     });
   });
   const nodes = new Map<string, Nodes>();

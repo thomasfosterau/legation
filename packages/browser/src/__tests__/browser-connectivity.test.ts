@@ -28,6 +28,7 @@ import {
   InvalidationBus,
   Subset,
   SyncServer,
+  Protocol,
 } from "@thomasfosterau/legation/internal";
 import { describe, expect, it } from "@effect/vitest";
 import * as Arr from "effect/Array";
@@ -47,12 +48,14 @@ const decodeIdentified = Schema.decodeUnknownSync(Schema.Struct({ id: Schema.Str
 const setTodo = Mutator.registry([
   {
     mutator: Mutator.make("todo/set", Schema.Unknown),
-    local: (args, writer) => writer.put("todos", decodeIdentified(args).id, args),
+    local: (args, writer) =>
+      writer.put("todos", Protocol.RowId.make(decodeIdentified(args).id), args),
   },
 ]);
 
 const backendHandlers = {
-  "todo/set": (args, writer) => Effect.asVoid(writer.put("todos", decodeIdentified(args).id, args)),
+  "todo/set": (args, writer) =>
+    Effect.asVoid(writer.put("todos", Protocol.RowId.make(decodeIdentified(args).id), args)),
 } satisfies Record<string, MemoryBackend.BackendHandler>;
 
 const authPolicy = Authorization.policy({ todos: Authorization.allowAll });
@@ -130,7 +133,7 @@ describe("BrowserConnectivity", () => {
       setVisible();
       const handler = yield* makeServer();
       const store = yield* ClientStore.makeMemory;
-      const base = yield* Transport.makeInMemory(handler, "group-a");
+      const base = yield* Transport.makeInMemory(handler, Protocol.ClientGroupId.make("group-a"));
 
       const pushes = yield* Ref.make(0);
       const pulls = yield* Ref.make(0);
@@ -157,7 +160,7 @@ describe("BrowserConnectivity", () => {
 
       const engine = yield* ClientEngine.make({
         clientId: "client-a",
-        clientGroupId: "group-a",
+        clientGroupId: Protocol.ClientGroupId.make("group-a"),
         mutators: setTodo,
       }).pipe(
         Effect.provideService(ClientStore.ClientStore, store),
@@ -204,7 +207,10 @@ describe("BrowserConnectivity", () => {
           yield* stubWorkerGlobals(navigatorStub);
           const handler = yield* makeServer();
           const store = yield* ClientStore.makeMemory;
-          const base = yield* Transport.makeInMemory(handler, "group-a");
+          const base = yield* Transport.makeInMemory(
+            handler,
+            Protocol.ClientGroupId.make("group-a")
+          );
 
           const pushes = yield* Ref.make(0);
           const pulls = yield* Ref.make(0);
@@ -231,7 +237,7 @@ describe("BrowserConnectivity", () => {
 
           const engine = yield* ClientEngine.make({
             clientId: "client-a",
-            clientGroupId: "group-a",
+            clientGroupId: Protocol.ClientGroupId.make("group-a"),
             mutators: setTodo,
           }).pipe(
             Effect.provideService(ClientStore.ClientStore, store),
@@ -268,7 +274,10 @@ describe("BrowserConnectivity", () => {
           yield* stubWorkerGlobals(navigatorStub);
           const handler = yield* makeServer();
           const store = yield* ClientStore.makeMemory;
-          const base = yield* Transport.makeInMemory(handler, "group-a");
+          const base = yield* Transport.makeInMemory(
+            handler,
+            Protocol.ClientGroupId.make("group-a")
+          );
 
           const pushes = yield* Ref.make(0);
           const pulls = yield* Ref.make(0);
@@ -296,7 +305,7 @@ describe("BrowserConnectivity", () => {
 
           const engine = yield* ClientEngine.make({
             clientId: "client-a",
-            clientGroupId: "group-a",
+            clientGroupId: Protocol.ClientGroupId.make("group-a"),
             mutators: setTodo,
           }).pipe(
             Effect.provideService(ClientStore.ClientStore, store),
@@ -329,7 +338,7 @@ describe("BrowserConnectivity", () => {
         yield* stubWorkerGlobals(navigatorStub);
         const handler = yield* makeServer();
         const store = yield* ClientStore.makeMemory;
-        const base = yield* Transport.makeInMemory(handler, "group-a");
+        const base = yield* Transport.makeInMemory(handler, Protocol.ClientGroupId.make("group-a"));
 
         const pushes = yield* Ref.make(0);
         const counted: Transport.ClientTransport = {
@@ -347,7 +356,7 @@ describe("BrowserConnectivity", () => {
         // goes out even though the navigator reads offline.
         const engine = yield* ClientEngine.make({
           clientId: "client-a",
-          clientGroupId: "group-a",
+          clientGroupId: Protocol.ClientGroupId.make("group-a"),
           mutators: setTodo,
           syncLoop: { pushDebounce: "10 millis" },
         }).pipe(

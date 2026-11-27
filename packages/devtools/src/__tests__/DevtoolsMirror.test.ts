@@ -25,6 +25,7 @@ import {
   MirrorChannel,
   Subset,
   SyncServer,
+  Protocol,
 } from "@thomasfosterau/legation/internal";
 import * as Devtools from "../Devtools.js";
 
@@ -35,7 +36,7 @@ const mutators = Mutator.registry([
 ]);
 const backendHandlers = MemoryBackend.validatedHandlers([
   MemoryBackend.handler(setTodo, (args, writer) =>
-    Effect.asVoid(writer.put("todos", args.id, args))
+    Effect.asVoid(writer.put("todos", Protocol.RowId.make(args.id), args))
   ),
 ]);
 const allTodos = Subset.make({ collection: "todos" });
@@ -56,13 +57,13 @@ const setup = (serveDevtools: boolean) =>
     const store = yield* ClientStore.makeMemory;
     const engine = yield* ClientEngine.make({
       clientId: "host-a",
-      clientGroupId: "group-a",
+      clientGroupId: Protocol.ClientGroupId.make("group-a"),
       mutators,
     }).pipe(
       Effect.provideService(ClientStore.ClientStore, store),
       Effect.provideService(
         Transport.ClientTransport,
-        yield* Transport.makeInMemory(handler, "group-a")
+        yield* Transport.makeInMemory(handler, Protocol.ClientGroupId.make("group-a"))
       )
     );
     const pair = yield* MirrorChannel.makeLoopbackPair;

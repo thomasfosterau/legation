@@ -14,6 +14,7 @@ import * as IndexedDbClientStore from "../IndexedDbClientStore.js";
 import { keyValueLayer } from "../internal/IndexedDbKeyValue.js";
 import { withLayer } from "./with-layer.js";
 import * as Schema from "effect/Schema";
+import { Protocol } from "@thomasfosterau/legation/internal";
 
 const JsonText = Schema.fromJsonString(Schema.Unknown);
 const decodeJson = Schema.decodeSync(JsonText);
@@ -93,7 +94,11 @@ describe("IndexedDbClientStore round trips with the platform store", () => {
       const database = "round-trip-store";
       yield* Effect.gen(function* () {
         const store = yield* ClientStore.ClientStore;
-        yield* store.putRow("counters", { id: "a", version: 1, value: { id: "a", n: 5 } });
+        yield* store.putRow("counters", {
+          id: Protocol.RowId.make("a"),
+          version: 1,
+          value: { id: "a", n: 5 },
+        });
         yield* store.setCookie("cookie-rt2");
       }).pipe(withLayer(clientStore(database)));
 

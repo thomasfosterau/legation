@@ -29,6 +29,7 @@ import * as SyncServer from "../SyncServer.js";
 import * as Telemetry from "../Telemetry.js";
 import { ClientTransport, makeInMemory, type ServerHandler } from "../Transport.js";
 import { idOf } from "./shapes.js";
+import { ClientGroupId, RowId } from "../Protocol.js";
 
 interface Todo {
   readonly id: string;
@@ -39,12 +40,12 @@ interface Todo {
 const mutators = Mutator.registry([
   {
     mutator: Mutator.make("todo/set", Schema.Unknown),
-    local: (args: Todo, writer) => writer.put("todos", args.id, args),
+    local: (args: Todo, writer) => writer.put("todos", RowId.make(args.id), args),
   },
 ]);
 
 const backendHandlers = {
-  "todo/set": (args, writer) => Effect.asVoid(writer.put("todos", idOf(args), args)),
+  "todo/set": (args, writer) => Effect.asVoid(writer.put("todos", RowId.make(idOf(args)), args)),
 } satisfies Record<string, MemoryBackend.BackendHandler>;
 
 const makeServerWithIntrospection = Effect.fn("makeServerWithIntrospection")(function* () {
@@ -68,10 +69,10 @@ const makeServer: Effect.Effect<ServerHandler, never, Scope.Scope> =
 const makeClient = (handler: ServerHandler, name: string) =>
   Effect.gen(function* () {
     const store = yield* ClientStoreModule.makeMemory;
-    const transport = yield* makeInMemory(handler, `group-${name}`);
+    const transport = yield* makeInMemory(handler, ClientGroupId.make(`group-${name}`));
     const engine = yield* ClientEngineModule.make({
       clientId: `client-${name}`,
-      clientGroupId: `group-${name}`,
+      clientGroupId: ClientGroupId.make(`group-${name}`),
       mutators,
     }).pipe(
       Effect.provideService(ClientStore, store),

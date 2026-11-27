@@ -16,8 +16,9 @@ import { BackendError, Mutator, Predicate } from "@thomasfosterau/legation";
 import { Subset } from "@thomasfosterau/legation/internal";
 import * as SqlBackend from "../../sql/SqlBackend.js";
 import { defined } from "../defined.js";
+import { ClientGroupId } from "../../Protocol.js";
 
-const context = { clientGroupId: "g" };
+const context = { clientGroupId: ClientGroupId.make("g") };
 
 const DDL: ReadonlyArray<string> = [
   `CREATE TABLE projects (id TEXT PRIMARY KEY, archived INTEGER NOT NULL, "it's" TEXT)`,

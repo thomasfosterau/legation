@@ -32,6 +32,7 @@ import { ClientEngine, ClientView, EngineHost, MirrorChannel, Subset } from "../
 import { defined } from "./defined.js";
 import { TestFailure } from "./test-failure.js";
 import { idOf, stringField } from "./shapes.js";
+import { ClientGroupId, MutationId, RowId } from "../Protocol.js";
 
 const nameOf = stringField("name");
 
@@ -50,11 +51,11 @@ const reviewSet = Mutator.make("review/set", Schema.Unknown);
 const mutations = Mutator.registry([
   {
     mutator: productSet,
-    local: (args: { id: string }, writer) => writer.put("products", args.id, args),
+    local: (args: { id: string }, writer) => writer.put("products", RowId.make(args.id), args),
   },
   {
     mutator: reviewSet,
-    local: (args: { id: string }, writer) => writer.put("reviews", args.id, args),
+    local: (args: { id: string }, writer) => writer.put("reviews", RowId.make(args.id), args),
   },
 ]);
 
@@ -81,9 +82,11 @@ const makeServer = (policy?: Authorization.AuthPolicy) =>
     const backend = yield* MemoryBackend.make(
       MemoryBackend.validatedHandlers([
         MemoryBackend.handler(productSet, (args, writer) =>
-          writer.put("products", idOf(args), args)
+          writer.put("products", RowId.make(idOf(args)), args)
         ),
-        MemoryBackend.handler(reviewSet, (args, writer) => writer.put("reviews", idOf(args), args)),
+        MemoryBackend.handler(reviewSet, (args, writer) =>
+          writer.put("reviews", RowId.make(idOf(args)), args)
+        ),
       ])
     );
     const server = yield* Server.make({
@@ -103,10 +106,10 @@ const makeServer = (policy?: Authorization.AuthPolicy) =>
 const makeEngine = (handler: Transport.ServerHandler, group: string) =>
   Effect.gen(function* () {
     const store = yield* ClientStore.makeMemory;
-    const transport = yield* Transport.makeInMemory(handler, group);
+    const transport = yield* Transport.makeInMemory(handler, ClientGroupId.make(group));
     const engine = yield* ClientEngine.make({
       clientId: `client-${group}`,
-      clientGroupId: group,
+      clientGroupId: ClientGroupId.make(group),
       mutators: mutations,
     }).pipe(
       Effect.provideService(ClientStore.ClientStore, store),
@@ -187,10 +190,10 @@ describe("the server tier", () => {
 
         // An out-of-band write the server never announces (no broadcast).
         yield* backend
-          .applyMutations({ clientGroupId: "oob" }, [
+          .applyMutations({ clientGroupId: ClientGroupId.make("oob") }, [
             {
               clientId: "cron",
-              mutationId: 1,
+              mutationId: MutationId.make(1),
               mutator: "product/set",
               args: { id: "p-2", name: "Lamp" },
               createdAt: 0,
@@ -262,12 +265,15 @@ describe("the server tier", () => {
         yield* seed(server.handler);
 
         const store = yield* ClientStore.makeMemory;
-        const full = yield* Transport.makeInMemory(server.handler, "group-noread");
+        const full = yield* Transport.makeInMemory(
+          server.handler,
+          ClientGroupId.make("group-noread")
+        );
         // A carrier that predates the read tier.
         const { read: _read, ...withoutRead } = full;
         const engine = yield* ClientEngine.make({
           clientId: "client-noread",
-          clientGroupId: "group-noread",
+          clientGroupId: ClientGroupId.make("group-noread"),
           mutators: mutations,
         }).pipe(
           Effect.provideService(ClientStore.ClientStore, store),
@@ -312,10 +318,12 @@ describe("over a hosted engine", () => {
 const makeReader = (handler: Transport.ServerHandler, group: string) =>
   Effect.gen(function* () {
     const store = yield* ClientStore.makeMemory;
-    const gate = yield* Transport.simulateOffline(yield* Transport.makeInMemory(handler, group));
+    const gate = yield* Transport.simulateOffline(
+      yield* Transport.makeInMemory(handler, ClientGroupId.make(group))
+    );
     const engine = yield* ClientEngine.make({
       clientId: `client-${group}`,
-      clientGroupId: group,
+      clientGroupId: ClientGroupId.make(group),
       mutators: mutations,
     }).pipe(
       Effect.provideService(ClientStore.ClientStore, store),
@@ -402,11 +410,11 @@ describe("answer completeness", () => {
         const store = yield* ClientStore.makeMemory;
         const { read: _read, ...withoutRead } = yield* Transport.makeInMemory(
           server.handler,
-          "group-noread-mark"
+          ClientGroupId.make("group-noread-mark")
         );
         const engine = yield* ClientEngine.make({
           clientId: "client-noread-mark",
-          clientGroupId: "group-noread-mark",
+          clientGroupId: ClientGroupId.make("group-noread-mark"),
           mutators: mutations,
         }).pipe(
           Effect.provideService(ClientStore.ClientStore, store),

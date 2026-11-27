@@ -42,6 +42,7 @@ import * as SyncServer from "../SyncServer.js";
 import { ClientTransport, makeInMemory, type ServerHandler } from "../Transport.js";
 import { defined } from "./defined.js";
 import { idOf } from "./shapes.js";
+import { ClientGroupId, RowId } from "../Protocol.js";
 
 const PutArgs = Schema.Struct({ id: Schema.String, value: Schema.Finite });
 type PutArgs = typeof PutArgs.Type;
@@ -56,39 +57,43 @@ const asStored = Schema.decodeUnknownSync(Schema.UndefinedOr(Schema.Finite));
 const mutators = Mutator.registry([
   {
     mutator: Mutator.make("todo/put", Schema.Unknown),
-    local: (args: PutArgs, writer) => writer.put("todos", args.id, args.value),
+    local: (args: PutArgs, writer) => writer.put("todos", RowId.make(args.id), args.value),
   },
   {
     mutator: Mutator.make("todo/del", Schema.Unknown),
-    local: (args: IdArgs, writer) => writer.del("todos", args.id),
+    local: (args: IdArgs, writer) => writer.del("todos", RowId.make(args.id)),
   },
   {
     // Read-modify-write: exercises `writer.get` through the tracked-write path.
     mutator: Mutator.make("todo/bump", Schema.Unknown),
     local: (args: IdArgs, writer) =>
       writer
-        .get("todos", args.id)
+        .get("todos", RowId.make(args.id))
         .pipe(
-          Effect.flatMap((current) => writer.put("todos", args.id, (asStored(current) ?? 0) + 1))
+          Effect.flatMap((current) =>
+            writer.put("todos", RowId.make(args.id), (asStored(current) ?? 0) + 1)
+          )
         ),
   },
   {
     // Applies optimistically like `todo/put`, but the backend always
     // permanently rejects it — exercises the reject/drop-the-overlay path.
     mutator: Mutator.make("todo/reject", Schema.Unknown),
-    local: (args: PutArgs, writer) => writer.put("todos", args.id, args.value),
+    local: (args: PutArgs, writer) => writer.put("todos", RowId.make(args.id), args.value),
   },
 ]);
 
 const backendHandlers = {
   "todo/put": (args, writer) =>
-    Effect.asVoid(writer.put("todos", asPut(args).id, asPut(args).value)),
-  "todo/del": (args, writer) => Effect.asVoid(writer.del("todos", idOf(args))),
+    Effect.asVoid(writer.put("todos", RowId.make(asPut(args).id), asPut(args).value)),
+  "todo/del": (args, writer) => Effect.asVoid(writer.del("todos", RowId.make(idOf(args)))),
   "todo/bump": (args, writer) =>
     writer
-      .get("todos", idOf(args))
+      .get("todos", RowId.make(idOf(args)))
       .pipe(
-        Effect.flatMap((current) => writer.put("todos", idOf(args), (asStored(current) ?? 0) + 1))
+        Effect.flatMap((current) =>
+          writer.put("todos", RowId.make(idOf(args)), (asStored(current) ?? 0) + 1)
+        )
       ),
   "todo/reject": () => Effect.fail(new MutationRejected({ reason: "property test rejection" })),
 } satisfies Record<string, MemoryBackend.BackendHandler>;
@@ -115,11 +120,11 @@ const makeServer = Effect.fn("makeServer")(function* (): Effect.fn.Return<
 const makeEngine = (handler: ServerHandler, store: ClientStore, group: string) =>
   ClientEngineModule.make({
     clientId: group,
-    clientGroupId: group,
+    clientGroupId: ClientGroupId.make(group),
     mutators,
   }).pipe(
     Effect.provideService(ClientStore, store),
-    Effect.provideServiceEffect(ClientTransport, makeInMemory(handler, group))
+    Effect.provideServiceEffect(ClientTransport, makeInMemory(handler, ClientGroupId.make(group)))
   );
 
 const allTodos = Subset.make({ collection: "todos" });

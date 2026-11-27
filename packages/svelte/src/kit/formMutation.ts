@@ -49,7 +49,7 @@ export const RECEIPT_KEY = "legationReceipt";
 /** A form client: the id minted for one rendered form, and its mutation id (`1`). */
 export interface FormClient {
   readonly clientId: string;
-  readonly mutationId: number;
+  readonly mutationId: Client.MutationId;
 }
 
 /**
@@ -60,7 +60,7 @@ export interface FormClient {
  */
 export const mintFormClient = (generate: () => string = () => crypto.randomUUID()): FormClient => ({
   clientId: `form-${generate()}`,
-  mutationId: 1,
+  mutationId: Client.MutationId.make(1),
 });
 
 /** The form client a posted form names, or `undefined` when its fields are missing or malformed. */
@@ -68,13 +68,13 @@ export const formClientOf = (data: FormData): FormClient | undefined => {
   const clientId = data.get(FORM_CLIENT_FIELD);
   const mutationId = Number(data.get(FORM_MUTATION_FIELD));
   return P.isString(clientId) && clientId !== "" && Number.isInteger(mutationId) && mutationId >= 1
-    ? { clientId, mutationId }
+    ? { clientId, mutationId: Client.MutationId.make(mutationId) }
     : undefined;
 };
 
 /** Where a form action's Mutation runs: the client group and the form client. */
 export interface FormMutationTarget extends FormClient {
-  readonly clientGroupId: string;
+  readonly clientGroupId: Client.ClientGroupId;
 }
 
 /** Options for {@link formMutationTarget}. */
@@ -98,7 +98,7 @@ export const formMutationTarget = (
   const form = formClientOf(data);
   return group === undefined || group === "" || form === undefined
     ? undefined
-    : { clientGroupId: group, ...form };
+    : { clientGroupId: Client.ClientGroupId.make(group), ...form };
 };
 
 /** Options for {@link runFormMutation}. */

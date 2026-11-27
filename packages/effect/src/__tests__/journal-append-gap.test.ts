@@ -32,6 +32,7 @@ import * as Mutator from "../Mutator.js";
 import * as SyncServer from "../SyncServer.js";
 import { ClientTransport, makeInMemory } from "../Transport.js";
 import { defined } from "./defined.js";
+import { ClientGroupId, MutationId, RowId } from "../Protocol.js";
 
 const todoSet = Mutator.make("todo/set", Schema.Struct({ id: Schema.String }));
 
@@ -43,7 +44,7 @@ const harness = (store: ClientStore) =>
       MemoryBackend.validatedHandlers([
         MemoryBackend.handler(todoSet, (args, writer) => {
           applied.push(args.id);
-          return writer.put("todos", args.id, args);
+          return writer.put("todos", RowId.make(args.id), args);
         }),
       ])
     );
@@ -56,14 +57,14 @@ const harness = (store: ClientStore) =>
       Effect.provideService(Cvr.CvrStore, yield* Cvr.makeMemoryStore),
       Effect.provideService(InvalidationBus.InvalidationBus, yield* InvalidationBus.makeInProcess)
     );
-    const transport = yield* makeInMemory(handler, "group-gap");
+    const transport = yield* makeInMemory(handler, ClientGroupId.make("group-gap"));
     const engine = yield* ClientEngineModule.make({
       clientId: "client-gap",
-      clientGroupId: "group-gap",
+      clientGroupId: ClientGroupId.make("group-gap"),
       mutators: Mutator.registry([
         {
           mutator: todoSet,
-          local: (args: { id: string }, writer) => writer.put("todos", args.id, args),
+          local: (args: { id: string }, writer) => writer.put("todos", RowId.make(args.id), args),
         },
       ]),
     }).pipe(
@@ -436,7 +437,7 @@ describe("an id that has left the journal is never reissued", () => {
         scoped.effect(`heals the counter from journal entries it did not allocate (${name})`, () =>
           Effect.gen(function* () {
             const store = yield* makeStore;
-            yield* store.appendMutation({ ...draft, mutationId: 5 });
+            yield* store.appendMutation({ ...draft, mutationId: MutationId.make(5) });
             expect((yield* store.appendNext(draft)).mutationId).toBe(6);
             yield* store.acknowledge("c1", 6);
             expect((yield* store.appendNext(draft)).mutationId).toBe(7);
@@ -450,7 +451,7 @@ describe("an id that has left the journal is never reissued", () => {
           () =>
             Effect.gen(function* () {
               const store = yield* makeStore;
-              yield* store.appendMutation({ ...draft, mutationId: 3 });
+              yield* store.appendMutation({ ...draft, mutationId: MutationId.make(3) });
               yield* store.acknowledge("c1", 3);
               expect((yield* store.appendNext(draft)).mutationId).toBe(4);
               const fingerprint: Identity.Fingerprint = "sha256:bob";
@@ -502,7 +503,10 @@ const race = <A, B, E>(a: Effect.Effect<A, E>, b: Effect.Effect<B, E>) =>
 
 const key = (x: { clientId: string; mutationId: number }) => `${x.clientId}:${x.mutationId}`;
 
-const m = (mutationId: number, clientId = "c") => ({ ...d(clientId), mutationId });
+const m = (mutationId: number, clientId = "c") => ({
+  ...d(clientId),
+  mutationId: MutationId.make(mutationId),
+});
 
 /**
  * Every memory-store operation that writes the journal, the quarantine or the
@@ -613,7 +617,13 @@ describeWrapped("memory store: journal writers exclude one another", (it) => {
                 lastMutationIds: { c: 1 },
                 cookie: "cookie-1",
                 patch: [
-                  { _tag: "Put", collection: "counters", id: "x", version: 1, value: { n: 1 } },
+                  {
+                    _tag: "Put",
+                    collection: "counters",
+                    id: RowId.make("x"),
+                    version: 1,
+                    value: { n: 1 },
+                  },
                 ],
               })
             );
@@ -622,7 +632,7 @@ describeWrapped("memory store: journal writers exclude one another", (it) => {
             const trimmed = !(yield* store.pendingMutations).map(key).includes("c:1");
             const written =
               (yield* store.getCookie) === "cookie-1" &&
-              (yield* store.getRow("counters", "x")) !== undefined;
+              (yield* store.getRow("counters", RowId.make("x"))) !== undefined;
             if (trimmed !== written) torn++;
           }
         }

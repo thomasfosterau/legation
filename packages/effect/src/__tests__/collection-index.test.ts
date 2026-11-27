@@ -27,10 +27,11 @@ import * as Subset from "../Subset.js";
 import { ClientTransport, makeInMemory, type ServerHandler } from "../Transport.js";
 import { defined } from "./defined.js";
 import { booleanField } from "./shapes.js";
+import { ClientGroupId, RowId } from "../Protocol.js";
 
 // ─── CollectionIndex (pure module) ───────────────────────────────────────────
 
-const row = (id: string, value: unknown) => ({ id, value });
+const row = (id: string, value: unknown) => ({ id: RowId.make(id), value });
 
 describe("CollectionIndex", () => {
   it("rebuild + upsertRow + deleteRow maintain hash buckets", () => {
@@ -44,9 +45,9 @@ describe("CollectionIndex", () => {
       CollectionIndex.evaluate(
         index,
         new Map([
-          ["a", row("a", { done: true })],
-          ["b", row("b", { done: false })],
-          ["c", row("c", { done: true })],
+          [RowId.make("a"), row("a", { done: true })],
+          [RowId.make("b"), row("b", { done: false })],
+          [RowId.make("c"), row("c", { done: true })],
         ]),
         Predicate.eq("done", true)
       )
@@ -54,11 +55,11 @@ describe("CollectionIndex", () => {
         .toSorted()
     ).toEqual(["a", "c"]);
 
-    CollectionIndex.upsertRow(index, "b", { done: true });
+    CollectionIndex.upsertRow(index, RowId.make("b"), { done: true });
     const rowsById = new Map([
-      ["a", row("a", { done: true })],
-      ["b", row("b", { done: true })],
-      ["c", row("c", { done: true })],
+      [RowId.make("a"), row("a", { done: true })],
+      [RowId.make("b"), row("b", { done: true })],
+      [RowId.make("c"), row("c", { done: true })],
     ]);
     expect(
       CollectionIndex.evaluate(index, rowsById, Predicate.eq("done", true))
@@ -66,10 +67,10 @@ describe("CollectionIndex", () => {
         .toSorted()
     ).toEqual(["a", "b", "c"]);
 
-    CollectionIndex.deleteRow(index, "c");
+    CollectionIndex.deleteRow(index, RowId.make("c"));
     const afterDelete = new Map([
-      ["a", row("a", { done: true })],
-      ["b", row("b", { done: true })],
+      [RowId.make("a"), row("a", { done: true })],
+      [RowId.make("b"), row("b", { done: true })],
     ]);
     expect(
       CollectionIndex.evaluate(index, afterDelete, Predicate.eq("done", true))
@@ -199,7 +200,7 @@ const decodePriority = Schema.decodeUnknownSync(Schema.Struct({ priority: Schema
 const setItem = Mutator.registry([
   {
     mutator: Mutator.make("item/set", Schema.Unknown),
-    local: (args: Item, writer) => writer.put("items", args.id, args),
+    local: (args: Item, writer) => writer.put("items", RowId.make(args.id), args),
   },
 ]);
 
@@ -211,11 +212,11 @@ interface User {
 const setItemAndUser = Mutator.registry([
   {
     mutator: Mutator.make("item/set", Schema.Unknown),
-    local: (args: Item, writer) => writer.put("items", args.id, args),
+    local: (args: Item, writer) => writer.put("items", RowId.make(args.id), args),
   },
   {
     mutator: Mutator.make("user/set", Schema.Unknown),
-    local: (args: User, writer) => writer.put("users", args.id, args),
+    local: (args: User, writer) => writer.put("users", RowId.make(args.id), args),
   },
 ]);
 
@@ -230,7 +231,9 @@ const items = (n: number): ReadonlyArray<Item> =>
   Array.from({ length: n }, (_, i) => ({ id: `i${i}`, priority: i % 5, done: i % 2 === 0 }));
 
 const seedEngine = (engine: ClientEngineModule.ClientEngine, rows: ReadonlyArray<Item>) =>
-  engine.seed(rows.map((item) => ({ collection: "items", id: item.id, version: 1, value: item })));
+  engine.seed(
+    rows.map((item) => ({ collection: "items", id: RowId.make(item.id), version: 1, value: item }))
+  );
 
 /** A parked `listRows` call: it reads its rows, then waits for `release`. */
 interface Parked {
@@ -284,10 +287,10 @@ const armPark = (parking: ParkingStore) =>
 /** An engine over `store` with `items` indexed on `priority`. */
 const priorityEngine = (store: ClientStoreModule.ClientStore) =>
   Effect.gen(function* () {
-    const transport = yield* makeInMemory(noopHandler, "g");
+    const transport = yield* makeInMemory(noopHandler, ClientGroupId.make("g"));
     return yield* ClientEngineModule.make({
       clientId: "c",
-      clientGroupId: "g",
+      clientGroupId: ClientGroupId.make("g"),
       mutators: setItem,
       indexes: { items: ["priority"] },
     }).pipe(
@@ -300,10 +303,10 @@ describe("ClientEngine + CollectionIndex", () => {
   it.effect("declared indexes: eq/In/range queries match an unindexed baseline", () =>
     Effect.gen(function* () {
       const store = yield* ClientStoreModule.makeMemory;
-      const transport = yield* makeInMemory(noopHandler, "g");
+      const transport = yield* makeInMemory(noopHandler, ClientGroupId.make("g"));
       const engine = yield* ClientEngineModule.make({
         clientId: "c",
-        clientGroupId: "g",
+        clientGroupId: ClientGroupId.make("g"),
         mutators: setItem,
         indexes: { items: ["priority"] },
       }).pipe(
@@ -351,10 +354,10 @@ describe("ClientEngine + CollectionIndex", () => {
     () =>
       Effect.gen(function* () {
         const store = yield* ClientStoreModule.makeMemory;
-        const transport = yield* makeInMemory(noopHandler, "g");
+        const transport = yield* makeInMemory(noopHandler, ClientGroupId.make("g"));
         const engine = yield* ClientEngineModule.make({
           clientId: "c",
-          clientGroupId: "g",
+          clientGroupId: ClientGroupId.make("g"),
           mutators: setItem,
           autoIndex: true,
         }).pipe(
@@ -385,10 +388,10 @@ describe("ClientEngine + CollectionIndex", () => {
     () =>
       Effect.gen(function* () {
         const store = yield* ClientStoreModule.makeMemory;
-        const transport = yield* makeInMemory(noopHandler, "g");
+        const transport = yield* makeInMemory(noopHandler, ClientGroupId.make("g"));
         const engine = yield* ClientEngineModule.make({
           clientId: "c",
-          clientGroupId: "g",
+          clientGroupId: ClientGroupId.make("g"),
           mutators: setItem,
           indexes: { items: ["done"] },
         }).pipe(
@@ -416,10 +419,10 @@ describe("ClientEngine + CollectionIndex", () => {
   it.effect("a pending mutation on collection A doesn't disable collection B's index", () =>
     Effect.gen(function* () {
       const store = yield* ClientStoreModule.makeMemory;
-      const transport = yield* makeInMemory(noopHandler, "g");
+      const transport = yield* makeInMemory(noopHandler, ClientGroupId.make("g"));
       const engine = yield* ClientEngineModule.make({
         clientId: "c",
-        clientGroupId: "g",
+        clientGroupId: ClientGroupId.make("g"),
         mutators: setItemAndUser,
         indexes: { items: ["done"] },
       }).pipe(
@@ -470,17 +473,17 @@ describe("ClientEngine + CollectionIndex", () => {
           {
             _tag: "Put",
             collection: "items",
-            id: "a",
+            id: RowId.make("a"),
             version: 1,
             value: { id: "a", priority: 1 },
           },
         ],
-        [{ _tag: "Del", collection: "items", id: "a" }],
+        [{ _tag: "Del", collection: "items", id: RowId.make("a") }],
         [
           {
             _tag: "Put",
             collection: "items",
-            id: "b",
+            id: RowId.make("b"),
             version: 1,
             value: { id: "b", priority: 1 },
           },
@@ -494,12 +497,12 @@ describe("ClientEngine + CollectionIndex", () => {
             Effect.map((patch) => ({ patch, cookie: "c", lastMutationIds: {} }))
           ),
         handleRead: () => Effect.succeed({ rows: [] }),
-        pokes: () => noopHandler.pokes("g"),
+        pokes: () => noopHandler.pokes(ClientGroupId.make("g")),
       };
-      const transport = yield* makeInMemory(handler, "g");
+      const transport = yield* makeInMemory(handler, ClientGroupId.make("g"));
       const engine = yield* ClientEngineModule.make({
         clientId: "c",
-        clientGroupId: "g",
+        clientGroupId: ClientGroupId.make("g"),
         mutators: setItem,
         indexes: { items: ["priority"] },
       }).pipe(
@@ -536,7 +539,7 @@ describe("ClientEngine + CollectionIndex", () => {
             {
               _tag: "Put",
               collection: "items",
-              id: "i1",
+              id: RowId.make("i1"),
               version: 2,
               value: { id: "i1", priority: 3, done: false },
             },
@@ -549,12 +552,12 @@ describe("ClientEngine + CollectionIndex", () => {
               Effect.map((patch) => ({ patch, cookie: "c", lastMutationIds: {} }))
             ),
           handleRead: () => Effect.succeed({ rows: [] }),
-          pokes: () => noopHandler.pokes("g"),
+          pokes: () => noopHandler.pokes(ClientGroupId.make("g")),
         };
-        const transport = yield* makeInMemory(handler, "g");
+        const transport = yield* makeInMemory(handler, ClientGroupId.make("g"));
         const engine = yield* ClientEngineModule.make({
           clientId: "c",
-          clientGroupId: "g",
+          clientGroupId: ClientGroupId.make("g"),
           mutators: setItem,
           autoIndex: true,
         }).pipe(
@@ -600,12 +603,15 @@ describe("ClientEngine + CollectionIndex", () => {
       const parking = yield* parkingStore();
       const engine = yield* ClientEngineModule.make({
         clientId: "c",
-        clientGroupId: "g",
+        clientGroupId: ClientGroupId.make("g"),
         mutators: setItem,
         autoIndex: true,
       }).pipe(
         Effect.provideService(ClientStore, parking.store),
-        Effect.provideService(ClientTransport, yield* makeInMemory(noopHandler, "g"))
+        Effect.provideService(
+          ClientTransport,
+          yield* makeInMemory(noopHandler, ClientGroupId.make("g"))
+        )
       );
       yield* seedEngine(engine, [{ id: "i1", priority: 1, done: false }]);
       yield* engine.query(Subset.make({ collection: "items", where: Predicate.isNotNull("done") }));
@@ -624,7 +630,7 @@ describe("ClientEngine + CollectionIndex", () => {
         rows: [
           {
             collection: "items",
-            id: "i1",
+            id: RowId.make("i1"),
             version: 2,
             value: { id: "i1", priority: 3, done: false },
           },
@@ -704,7 +710,7 @@ describe("ClientEngine + CollectionIndex", () => {
         rows: [
           {
             collection: "items",
-            id: "i1",
+            id: RowId.make("i1"),
             version: 2,
             value: { id: "i1", priority: 3, done: false },
           },
@@ -768,13 +774,13 @@ describe("ClientEngine + CollectionIndex", () => {
         rows: [
           {
             collection: "items",
-            id: "i1",
+            id: RowId.make("i1"),
             version: 2,
             value: { id: "i1", priority: 3, done: false },
           },
           {
             collection: "items",
-            id: "i2",
+            id: RowId.make("i2"),
             version: 2,
             value: { id: "i2", priority: 4, done: false },
           },
@@ -798,7 +804,7 @@ describe("ClientEngine + CollectionIndex", () => {
     Effect.gen(function* () {
       const memory = yield* ClientStoreModule.makeMemory;
       yield* memory.putRow("items", {
-        id: "i1",
+        id: RowId.make("i1"),
         version: 1,
         value: { id: "i1", priority: 1, done: false },
       });
@@ -824,7 +830,7 @@ describe("ClientEngine + CollectionIndex", () => {
           rows: [
             {
               collection: "items",
-              id: "i1",
+              id: RowId.make("i1"),
               version: 2,
               value: { id: "i1", priority: 3, done: false },
             },
@@ -856,7 +862,7 @@ describe("ClientEngine + CollectionIndex", () => {
         rows: [
           {
             collection: "items",
-            id: "i1",
+            id: RowId.make("i1"),
             version: 2,
             value: { id: "i1", priority: 3, done: false },
           },

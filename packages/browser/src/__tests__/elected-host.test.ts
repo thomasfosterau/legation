@@ -12,12 +12,19 @@ import {
   Backend,
   ClientStore as ClientStoreModule,
   MemoryBackend,
+  StoreError,
   Mutator,
   Node,
   Query,
   Transport,
 } from "@thomasfosterau/legation";
-import { Cvr, InvalidationBus, Subset, SyncServer } from "@thomasfosterau/legation/internal";
+import {
+  Cvr,
+  InvalidationBus,
+  Subset,
+  SyncServer,
+  Protocol,
+} from "@thomasfosterau/legation/internal";
 import { describe, expect, it } from "@effect/vitest";
 import * as Arr from "effect/Array";
 import * as Effect from "effect/Effect";
@@ -51,7 +58,8 @@ const todoSet = Mutator.make("todo/set", TodoArgs);
 const mutations = Mutator.registry([
   {
     mutator: todoSet,
-    local: (args, writer) => writer.put("todos", decodeIdentified(args).id, args),
+    local: (args, writer) =>
+      writer.put("todos", Protocol.RowId.make(decodeIdentified(args).id), args),
   },
 ]);
 
@@ -84,7 +92,9 @@ const currentRole = (role: Stream.Stream<Role>) =>
 const makeServer = Effect.fn("makeServer")(function* () {
   const backend = yield* MemoryBackend.make(
     MemoryBackend.validatedHandlers([
-      MemoryBackend.handler(todoSet, (args, writer) => writer.put("todos", args.id, args)),
+      MemoryBackend.handler(todoSet, (args, writer) =>
+        writer.put("todos", Protocol.RowId.make(args.id), args)
+      ),
     ])
   );
   return yield* SyncServer.make.pipe(
@@ -174,7 +184,7 @@ const makeFakeLockManager = (): LockManager => {
 const dependenciesOf = (
   handler: Transport.ServerHandler,
   store: ClientStoreModule.ClientStore,
-  clientGroupId: string
+  clientGroupId: Protocol.ClientGroupId
 ): Layer.Layer<ClientStoreModule.ClientStore | Transport.ClientTransport> =>
   Layer.mergeAll(
     Layer.succeed(ClientStoreModule.ClientStore)(store),
@@ -190,7 +200,7 @@ describe("ElectedHost", () => {
       Effect.scoped(
         Effect.gen(function* () {
           const locks = makeFakeLockManager();
-          const clientGroupId = `group-voice-${crypto.randomUUID()}`;
+          const clientGroupId = Protocol.ClientGroupId.make(`group-voice-${crypto.randomUUID()}`);
           const channelName = `legation-elected-voice-${crypto.randomUUID()}`;
           const handler = yield* makeServer();
           const store = yield* ClientStoreModule.makeMemory;
@@ -254,7 +264,7 @@ describe("ElectedHost", () => {
       Effect.scoped(
         Effect.gen(function* () {
           const locks = makeFakeLockManager();
-          const clientGroupId = `group-${crypto.randomUUID()}`;
+          const clientGroupId = Protocol.ClientGroupId.make(`group-${crypto.randomUUID()}`);
           const channelName = `legation-elected-${crypto.randomUUID()}`;
           const handler = yield* makeServer();
           const store = yield* ClientStoreModule.makeMemory;
@@ -341,7 +351,7 @@ describe("ElectedHost", () => {
     Effect.scoped(
       Effect.gen(function* () {
         const locks = makeFakeLockManager();
-        const clientGroupId = `group-kill-${crypto.randomUUID()}`;
+        const clientGroupId = Protocol.ClientGroupId.make(`group-kill-${crypto.randomUUID()}`);
         const channelName = `legation-elected-kill-${crypto.randomUUID()}`;
         const handler = yield* makeServer();
         const store = yield* ClientStoreModule.makeMemory;
@@ -416,14 +426,14 @@ describe("ElectedHost", () => {
     () =>
       Effect.scoped(
         Effect.gen(function* () {
-          const clientGroupId = `group-nolocks-${crypto.randomUUID()}`;
+          const clientGroupId = Protocol.ClientGroupId.make(`group-nolocks-${crypto.randomUUID()}`);
           const channelName = `legation-elected-nolocks-${crypto.randomUUID()}`;
           const handler = yield* makeServer();
           const store = yield* ClientStoreModule.makeMemory;
           // No `locks` option: falls back to the ambient `navigator.locks`,
           // which this Node test environment doesn't have.
           const tab = yield* ElectedHost.run({
-            clientGroupId,
+            clientGroupId: clientGroupId,
             nodes,
             mutations,
             channelName,
@@ -432,6 +442,33 @@ describe("ElectedHost", () => {
           });
 
           yield* eventually(currentRole(tab.role), (role) => role === "host");
+        })
+      )
+  );
+
+  it.effect(
+    "without navigator.locks, a store that fails to open fails run with its StoreError",
+    () =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const clientGroupId = Protocol.ClientGroupId.make(
+            `group-nolocks-failed-${crypto.randomUUID()}`
+          );
+          const handler = yield* makeServer();
+          const failure = new StoreError({ message: "Failed to open the IndexedDB store" });
+          const error = yield* ElectedHost.run({
+            clientGroupId,
+            nodes,
+            mutations,
+            channelName: `legation-elected-nolocks-failed-${crypto.randomUUID()}`,
+            dependencies: Layer.mergeAll(
+              Layer.effect(ClientStoreModule.ClientStore)(Effect.fail(failure)),
+              Layer.effect(Transport.ClientTransport)(
+                Transport.makeInMemory(handler, clientGroupId)
+              )
+            ),
+          }).pipe(Effect.flip);
+          expect(error).toBe(failure);
         })
       )
   );

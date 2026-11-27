@@ -30,6 +30,7 @@ import * as Predicate from "../Predicate.js";
 import * as Subset from "../Subset.js";
 import * as SyncServer from "../SyncServer.js";
 import * as Transport from "../Transport.js";
+import { ClientGroupId, RowId } from "../Protocol.js";
 
 const Note = Schema.Struct({ id: Schema.String });
 
@@ -43,14 +44,16 @@ const writes = <Name extends string>(
 ) => ({
   mutator,
   local: (args: typeof Note.Type, writer: Mutator.LocalWriter) =>
-    writer.put("notes", args.id, args),
+    writer.put("notes", RowId.make(args.id), args),
 });
 
 const mutators = Mutator.registry([writes(put), writes(refused)]);
 const widerMutators = Mutator.registry([writes(put), writes(refused), writes(unknownToHost)]);
 
 const backendHandlers = MemoryBackend.validatedHandlers([
-  MemoryBackend.handler(put, (args, writer) => Effect.asVoid(writer.put("notes", args.id, args))),
+  MemoryBackend.handler(put, (args, writer) =>
+    Effect.asVoid(writer.put("notes", RowId.make(args.id), args))
+  ),
   MemoryBackend.handler(refused, () => Effect.fail(new MutationRejected({ reason: "refused" }))),
 ]);
 
@@ -74,10 +77,10 @@ const makeHost = Effect.fn("makeHost")(function* () {
     Effect.provideService(InvalidationBus.InvalidationBus, yield* InvalidationBus.makeInProcess)
   );
   const store = yield* ClientStore.makeMemory;
-  const transport = yield* Transport.makeInMemory(handler, "group-a");
+  const transport = yield* Transport.makeInMemory(handler, ClientGroupId.make("group-a"));
   const engine = yield* ClientEngine.make({
     clientId: "host-a",
-    clientGroupId: "group-a",
+    clientGroupId: ClientGroupId.make("group-a"),
     mutators,
   }).pipe(
     Effect.provideService(ClientStore.ClientStore, store),

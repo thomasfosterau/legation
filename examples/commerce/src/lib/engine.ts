@@ -25,7 +25,7 @@
  */
 import * as Effect from "effect/Effect";
 import type * as Stream from "effect/Stream";
-import type { Hydration } from "@thomasfosterau/legation";
+import type { Client, Hydration } from "@thomasfosterau/legation";
 import { BroadcastMirrorChannel, type ElectedHost, ServiceWorkerHost } from "@thomasfosterau/legation-browser";
 import {
   type ClientRuntime,
@@ -45,7 +45,7 @@ export type AppRuntime = ClientRuntime;
  * answered, and no answer needs any action here.
  */
 export const boot = (options: {
-  readonly clientGroupId: string;
+  readonly clientGroupId: Client.ClientGroupId;
   readonly userId: string | undefined;
   readonly snapshot: Hydration.Snapshot | undefined;
 }): ConnectedClientHandle => {
@@ -92,7 +92,7 @@ export const boot = (options: {
  * `+layout.svelte` never branches application logic on it.
  */
 export const bootMainThread = (options: {
-  readonly clientGroupId: string;
+  readonly clientGroupId: Client.ClientGroupId;
   readonly userId: string | undefined;
 }): { readonly runtime: AppRuntime; readonly role: Stream.Stream<ElectedHost.Role> } => {
   const { runtime, role } = bootElected({

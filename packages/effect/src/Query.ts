@@ -323,10 +323,10 @@ export const planResult = (
       const window = options === true ? {} : options;
       return Result.succeed({
         edge: name,
-        kind: edge.kind,
+        kind: edge._tag,
         target: edge.target,
         ...Defined.fields({ first: window.first }),
-        order: edge.kind === "paginated" ? orderBy(edge.order) : [],
+        order: P.isTagged(edge, "paginated") ? orderBy(edge.order) : [],
       });
     })
   ).pipe(Result.map((edges) => ({ root, edges })));

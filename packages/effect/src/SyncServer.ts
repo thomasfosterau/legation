@@ -63,7 +63,9 @@ import {
   TransportError,
   VersionNotSupportedError,
 } from "./Errors.js";
+import type { RowId, RowVersion } from "./Collection.js";
 import type {
+  ClientGroupId,
   PatchOp,
   PullRequest,
   PullResponse,
@@ -101,7 +103,7 @@ export interface ReadDeps {
 }
 
 /** A row's key across collections, for the read's row lookup. */
-const rowKey = (collection: string, id: string): string => Hash.canonicalJson([collection, id]);
+const rowKey = (collection: string, id: RowId): string => Hash.canonicalJson([collection, id]);
 
 /**
  * Evaluate already-authorized subsets to their current rows: one
@@ -119,7 +121,7 @@ const evaluateRows = Effect.fnUntraced(function* (
   subsets: ReadonlyArray<Subset>
 ): Effect.fn.Return<ReadonlyArray<ReadRow>, BackendError> {
   const evaluated = yield* evaluateAll(backend, context, subsets);
-  const idsOf = (index: number): ReadonlyArray<string> =>
+  const idsOf = (index: number): ReadonlyArray<RowId> =>
     (evaluated[index] ?? []).map((entry) => entry.id);
   const collections = Arr.dedupe(subsets.map((subset) => subset.collection));
   const fetched = yield* Effect.forEach(
@@ -163,9 +165,9 @@ const evaluateView = Effect.fnUntraced(function* (
   subsets: ReadonlyArray<Subset>
 ) {
   const evaluated = yield* evaluateCountedAll(backend, context, subsets);
-  const rows = new Map<string, Map<string, string | number>>();
+  const rows = new Map<string, Map<RowId, RowVersion>>();
   Arr.forEach(subsets, (subset, index) => {
-    const collection = rows.get(subset.collection) ?? new Map<string, string | number>();
+    const collection = rows.get(subset.collection) ?? new Map<RowId, RowVersion>();
     Arr.forEach(evaluated[index]?.entries ?? [], (entry) => {
       collection.set(entry.id, entry.version);
     });
@@ -184,7 +186,7 @@ const assemblePatch = Effect.fnUntraced(function* (
   isReset: boolean
 ) {
   const patch: Array<PatchOp> = isReset ? [{ _tag: "Clear" }] : [];
-  const putsByCollection = new Map<string, Array<string>>();
+  const putsByCollection = new Map<string, Array<RowId>>();
   Arr.forEach(difference.puts, (put) => {
     putsByCollection.set(put.collection, [...(putsByCollection.get(put.collection) ?? []), put.id]);
   });
@@ -440,7 +442,7 @@ const predicateMatch = (
 
 /** One active client group as the server sees it: its authorised subsets and CVR size. */
 export interface ServerGroup {
-  readonly clientGroupId: string;
+  readonly clientGroupId: ClientGroupId;
   /** The subsets authorised on the group's most recent pull. */
   readonly subsets: ReadonlyArray<Subset>;
   /** Rows tracked in the group's last-synced CVR, summed across collections. */
@@ -515,7 +517,7 @@ export const makeWithIntrospectionWith: (
   // The request's credentials go to the resolver and nowhere else (ADR-0035):
   // the SyncContext built here carries the group and the resolved identity only.
   const contextFor = (
-    clientGroupId: string,
+    clientGroupId: ClientGroupId,
     handleOptions?: HandleOptions
   ): Effect.Effect<SyncContext, AuthorizationError> =>
     resolveContext(identityOption, {
@@ -531,9 +533,11 @@ export const makeWithIntrospectionWith: (
   // set's key: the collection whose scope declares it and its name, so two
   // collections that declare different sets under one name never share an
   // entry.
-  const setCache = yield* Ref.make(HashMap.empty<string, SessionSets>());
-  const sessionSetsOf = (all: HashMap.HashMap<string, SessionSets>, clientGroupId: string) =>
-    Option.getOrElse(HashMap.get(all, clientGroupId), () => HashMap.empty<string, CachedSet>());
+  const setCache = yield* Ref.make(HashMap.empty<ClientGroupId, SessionSets>());
+  const sessionSetsOf = (
+    all: HashMap.HashMap<ClientGroupId, SessionSets>,
+    clientGroupId: ClientGroupId
+  ) => Option.getOrElse(HashMap.get(all, clientGroupId), () => HashMap.empty<string, CachedSet>());
   // How many writes each source collection has seen. A resolution that
   // overlaps a write to its source is cached as stale, so the write's hint,
   // which found no entry to mark while the resolution was in flight, is not
@@ -606,7 +610,9 @@ export const makeWithIntrospectionWith: (
   const staleSets = (touched: HashSet.HashSet<string>) =>
     Ref.modify(
       setCache,
-      (all): readonly [HashSet.HashSet<string>, HashMap.HashMap<string, SessionSets>] => {
+      (
+        all
+      ): readonly [HashSet.HashSet<ClientGroupId>, HashMap.HashMap<ClientGroupId, SessionSets>] => {
         const groups = HashSet.fromIterable(
           HashMap.keys(
             HashMap.filter(all, (sets) =>
@@ -636,10 +642,10 @@ export const makeWithIntrospectionWith: (
       )
     ).pipe(Effect.andThen(staleSets(sources)));
   // Active subscriptions per client group, for fan-out matching.
-  const activeSubsets = yield* Ref.make(new Map<string, ReadonlyArray<Subset>>());
+  const activeSubsets = yield* Ref.make(new Map<ClientGroupId, ReadonlyArray<Subset>>());
   // Each group's last-synced view (collection → id → version), for matching a
   // delete against the rows a group actually holds.
-  const activeCvrs = yield* Ref.make(new Map<string, Cvr.Cvr>());
+  const activeCvrs = yield* Ref.make(new Map<ClientGroupId, Cvr.Cvr>());
 
   // Monotonic cookie minting, scoped to this handler instead of a module
   // global. The Clock makes the timestamp injectable (TestClock in tests).

@@ -14,7 +14,12 @@ import { awaitPromise } from "../kit/__tests__/await-promise.js";
 import * as Option from "effect/Option";
 import * as Schedule from "effect/Schedule";
 import { Client, ClientStore, type Hydration, Transport } from "@thomasfosterau/legation";
-import { ClientEngine, EngineHost, MirrorChannel } from "@thomasfosterau/legation/internal";
+import {
+  ClientEngine,
+  EngineHost,
+  MirrorChannel,
+  Protocol,
+} from "@thomasfosterau/legation/internal";
 import { type ClientHandle, type ConnectedClientHandle, createClient } from "../index.svelte.js";
 import { mutators, nodes } from "./world.js";
 
@@ -23,7 +28,7 @@ const allTodos = { collection: "todos" };
 const snapshotOf = (cookie: string, ids: ReadonlyArray<string>): Hydration.Snapshot => ({
   rows: ids.map((id) => ({
     collection: "todos",
-    id,
+    id: Protocol.RowId.make(id),
     version: 1,
     value: { id, title: `todo ${id}` },
   })),
@@ -36,7 +41,7 @@ const startHost = Effect.fn("startHost")(function* () {
   const store = yield* ClientStore.makeMemory;
   const engine = yield* ClientEngine.make({
     clientId: "host",
-    clientGroupId: "group-1",
+    clientGroupId: Protocol.ClientGroupId.make("group-1"),
     mutators,
   }).pipe(
     Effect.provideService(ClientStore.ClientStore, store),

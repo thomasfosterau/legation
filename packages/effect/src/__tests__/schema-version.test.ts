@@ -23,7 +23,13 @@ import * as Cvr from "../Cvr.js";
 import * as InvalidationBus from "../InvalidationBus.js";
 import * as MemoryBackend from "../MemoryBackend.js";
 import * as Mutator from "../Mutator.js";
-import { decodePullRequest, decodePushRequest } from "../Protocol.js";
+import {
+  ClientGroupId,
+  MutationId,
+  RowId,
+  decodePullRequest,
+  decodePushRequest,
+} from "../Protocol.js";
 import * as Subset from "../Subset.js";
 import * as SyncServer from "../SyncServer.js";
 import { ClientTransport, makeInMemory, type ServerHandler } from "../Transport.js";
@@ -38,12 +44,12 @@ interface Todo {
 const mutators = Mutator.registry([
   {
     mutator: Mutator.make("todo/set", Schema.Unknown),
-    local: (todo: Todo, writer) => writer.put("todos", todo.id, todo),
+    local: (todo: Todo, writer) => writer.put("todos", RowId.make(todo.id), todo),
   },
 ]);
 
 const backendHandlers = {
-  "todo/set": (args, writer) => Effect.asVoid(writer.put("todos", idOf(args), args)),
+  "todo/set": (args, writer) => Effect.asVoid(writer.put("todos", RowId.make(idOf(args)), args)),
 } satisfies Record<string, MemoryBackend.BackendHandler>;
 
 const authPolicy = Authorization.policy({ todos: Authorization.allowAll });
@@ -86,10 +92,10 @@ interface ClientOptions {
 const makeClient = (handler: ServerHandler, name: string, clientOptions?: ClientOptions) =>
   Effect.gen(function* () {
     const store = yield* ClientStoreModule.makeMemory;
-    const transport = yield* makeInMemory(handler, `group-${name}`);
+    const transport = yield* makeInMemory(handler, ClientGroupId.make(`group-${name}`));
     const engine = yield* ClientEngineModule.make({
       clientId: `client-${name}`,
-      clientGroupId: `group-${name}`,
+      clientGroupId: ClientGroupId.make(`group-${name}`),
       mutators,
       ...Defined.fields({
         schemaVersion: clientOptions?.schemaVersion,
@@ -202,13 +208,19 @@ describeWrapped("schema-version interop old ↔ new", (it) => {
 describeWrapped("protocol round-trips a version-less request unchanged", (it) => {
   it.effect("a push/pull request without schemaVersion decodes as today", () =>
     Effect.gen(function* () {
-      const push = yield* decodePushRequest({ clientGroupId: "g", mutations: [] });
+      const push = yield* decodePushRequest({
+        clientGroupId: ClientGroupId.make("g"),
+        mutations: [],
+      });
       expect(push.schemaVersion).toBeUndefined();
-      expect(push).toEqual({ clientGroupId: "g", mutations: [] });
+      expect(push).toEqual({ clientGroupId: ClientGroupId.make("g"), mutations: [] });
 
-      const pull = yield* decodePullRequest({ clientGroupId: "g", subscriptions: [] });
+      const pull = yield* decodePullRequest({
+        clientGroupId: ClientGroupId.make("g"),
+        subscriptions: [],
+      });
       expect(pull.schemaVersion).toBeUndefined();
-      expect(pull).toEqual({ clientGroupId: "g", subscriptions: [] });
+      expect(pull).toEqual({ clientGroupId: ClientGroupId.make("g"), subscriptions: [] });
     })
   );
 });
@@ -218,7 +230,11 @@ describe("storeVersion buster", () => {
     scoped.effect("a changed storeVersion clears rows + cookie but preserves the journal", () =>
       Effect.gen(function* () {
         const first = yield* ClientStoreModule.makeKeyValue({ storeVersion: "v1" });
-        yield* first.putRow("todos", { id: "1", version: 1, value: { title: "cached" } });
+        yield* first.putRow("todos", {
+          id: RowId.make("1"),
+          version: 1,
+          value: { title: "cached" },
+        });
         yield* first.setCookie("cookie-1");
         yield* first.appendMutation({
           clientId: "c1",
@@ -251,10 +267,10 @@ describe("storeVersion buster", () => {
 
           // Client A (storeVersion v1) commits a row so the backend holds it.
           const storeA = yield* ClientStoreModule.makeKeyValue({ storeVersion: "v1" });
-          const transportA = yield* makeInMemory(handler, "group-a");
+          const transportA = yield* makeInMemory(handler, ClientGroupId.make("group-a"));
           const engineA = yield* ClientEngineModule.make({
             clientId: "client-a",
-            clientGroupId: "group-a",
+            clientGroupId: ClientGroupId.make("group-a"),
             mutators,
           }).pipe(
             Effect.provideService(ClientStore, storeA),
@@ -275,10 +291,10 @@ describe("storeVersion buster", () => {
           expect(yield* storeB.getCookie).toBeUndefined();
           expect(yield* storeB.pendingMutations).toHaveLength(1);
 
-          const transportB = yield* makeInMemory(handler, "group-a");
+          const transportB = yield* makeInMemory(handler, ClientGroupId.make("group-a"));
           const engineB = yield* ClientEngineModule.make({
             clientId: "client-a",
-            clientGroupId: "group-a",
+            clientGroupId: ClientGroupId.make("group-a"),
             mutators,
           }).pipe(
             Effect.provideService(ClientStore, storeB),
@@ -303,25 +319,28 @@ describeWrapped("fleet cookie-reset via CVR namespace bump", (it) => {
 
       // Commit a row and take a cookie under namespace A.
       yield* serverA.handlePush({
-        clientGroupId: "g",
+        clientGroupId: ClientGroupId.make("g"),
         mutations: [
           {
             clientId: "c",
-            mutationId: 1,
+            mutationId: MutationId.make(1),
             mutator: "todo/set",
             args: { id: "1", title: "x", done: false },
             createdAt: 0,
           },
         ],
       });
-      const pull1 = yield* serverA.handlePull({ clientGroupId: "g", subscriptions: [allTodos] });
+      const pull1 = yield* serverA.handlePull({
+        clientGroupId: ClientGroupId.make("g"),
+        subscriptions: [allTodos],
+      });
       const oldCookie = pull1.cookie;
       // First pull (no cookie presented) is not a reset.
       expect(pull1.patch.some((op) => P.isTagged(op, "Clear"))).toBe(false);
 
       // Same namespace, known cookie → minimal (empty) patch, no reset.
       const sameNs = yield* serverA.handlePull({
-        clientGroupId: "g",
+        clientGroupId: ClientGroupId.make("g"),
         cookie: oldCookie,
         subscriptions: [allTodos],
       });
@@ -331,7 +350,7 @@ describeWrapped("fleet cookie-reset via CVR namespace bump", (it) => {
       // treats the pre-bump cookie as unknown → a reset patch.
       const serverB = yield* provideServer(SyncServer.makeWith({ cookieNamespace: "B" }), services);
       const afterBump = yield* serverB.handlePull({
-        clientGroupId: "g",
+        clientGroupId: ClientGroupId.make("g"),
         cookie: oldCookie,
         subscriptions: [allTodos],
       });

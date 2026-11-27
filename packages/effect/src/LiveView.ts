@@ -41,8 +41,10 @@
 import { identity } from "effect/Function";
 import * as Result from "effect/Result";
 import * as Defined from "./Defined.js";
+import type { RowId } from "./Collection.js";
 import type * as Index from "./CollectionIndex.js";
 import * as FractionalIndex from "./FractionalIndex.js";
+import * as Ids from "./internal/Ids.js";
 import * as OrderedTree from "./OrderedTree.js";
 import * as Predicate from "./Predicate.js";
 import * as Subset from "./Subset.js";
@@ -55,7 +57,7 @@ export type Row = Subset.Row;
  * and pages out (a {@link Row} at `A = unknown`).
  */
 export interface ValueRow<A> {
-  readonly id: string;
+  readonly id: RowId;
   readonly value: A;
 }
 
@@ -86,7 +88,7 @@ export interface LiveView<A = unknown> {
 
 // Ids order by code point, the same order `Subset.comparator`'s tie-break uses (ADR-0028).
 const byIdCompare = (a: Row, b: Row): number => Predicate.compareText(a.id, b.id);
-const findById = <A>(byId: OrderedTree.Tree<ValueRow<A>>, id: string): ValueRow<A> | undefined =>
+const findById = <A>(byId: OrderedTree.Tree<ValueRow<A>>, id: RowId): ValueRow<A> | undefined =>
   OrderedTree.findBy(byId, id, (key, row) => Predicate.compareText(key, row.id));
 
 const compareOf = (subset: Subset.Subset) => Subset.comparator(subset.orderBy);
@@ -99,7 +101,7 @@ const windowSlice = <A>(
 ): ReadonlyArray<ValueRow<A>> => {
   let from = 0;
   if (subset.cursor !== undefined) {
-    const cursorRow = findById(byId, subset.cursor);
+    const cursorRow = findById(byId, Ids.rowId(subset.cursor));
     if (cursorRow !== undefined) {
       const rank = OrderedTree.rankOf(order, cursorRow, compareOf(subset));
       from = rank < 0 ? 0 : rank + 1;
@@ -210,7 +212,7 @@ export const make = <A>(subset: Subset.Subset, rows: ReadonlyArray<ValueRow<A>>)
  */
 export const makeIndexed = <A>(
   subset: Subset.Subset,
-  rowsById: ReadonlyMap<string, ValueRow<A>>,
+  rowsById: ReadonlyMap<RowId, ValueRow<A>>,
   index?: Index.CollectionIndex
 ): LiveView<A> => {
   const sorted = Subset.sortFilteredIndexed(rowsById, subset, index);
@@ -281,7 +283,7 @@ export const put = <A>(view: LiveView<A>, row: ValueRow<A>): LiveView<A> => {
 };
 
 /** Apply a row deletion. Returns the same view reference if the id is absent. */
-export const del = <A>(view: LiveView<A>, id: string): LiveView<A> => {
+export const del = <A>(view: LiveView<A>, id: RowId): LiveView<A> => {
   const existing = findById(view.byId, id);
   if (existing === undefined) return view;
   const order = OrderedTree.remove(view.order, existing, compareOf(view.subset));

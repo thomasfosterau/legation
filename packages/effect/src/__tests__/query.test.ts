@@ -21,6 +21,7 @@ import * as Subset from "../Subset.js";
 import * as SyncServer from "../SyncServer.js";
 import { ClientTransport, makeInMemory, type ServerHandler } from "../Transport.js";
 import { idOf } from "./shapes.js";
+import { ClientGroupId, RowId } from "../Protocol.js";
 
 interface Todo {
   readonly id: string;
@@ -30,10 +31,13 @@ interface Todo {
 
 const setTodo = Mutator.make("todo/set", Schema.Unknown);
 const mutators = Mutator.registry([
-  { mutator: setTodo, local: (args: Todo, writer) => writer.put("todos", args.id, args) },
+  {
+    mutator: setTodo,
+    local: (args: Todo, writer) => writer.put("todos", RowId.make(args.id), args),
+  },
 ]);
 const handlers = {
-  "todo/set": (args, writer) => Effect.asVoid(writer.put("todos", idOf(args), args)),
+  "todo/set": (args, writer) => Effect.asVoid(writer.put("todos", RowId.make(idOf(args)), args)),
 } satisfies Record<string, MemoryBackend.BackendHandler>;
 
 // `visibleTodos`: the client renders *all* todos locally; the server narrows to
@@ -93,10 +97,10 @@ const withoutResolver = serverOver(SyncServer.make);
 const makeClient = (handler: ServerHandler) =>
   Effect.gen(function* () {
     const store = yield* ClientStoreModule.makeMemory;
-    const transport = yield* makeInMemory(handler, "group-1");
+    const transport = yield* makeInMemory(handler, ClientGroupId.make("group-1"));
     return yield* ClientEngineModule.make({
       clientId: "client-1",
-      clientGroupId: "group-1",
+      clientGroupId: ClientGroupId.make("group-1"),
       mutators,
       queries,
     }).pipe(

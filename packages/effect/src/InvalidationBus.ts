@@ -25,6 +25,7 @@ import * as Schema from "effect/Schema";
 import * as Scope from "effect/Scope";
 import type { ChangeHint } from "./Backend.js";
 import * as Json from "./internal/Json.js";
+import { RowId } from "./Protocol.js";
 import * as Telemetry from "./Telemetry.js";
 
 /**
@@ -173,10 +174,8 @@ const HintsFromJson = Schema.fromJsonString(
   Schema.Array(
     Schema.Struct({
       collection: Schema.String,
-      ids: Schema.Array(Schema.String),
-      values: Schema.optional(
-        Schema.Array(Schema.Struct({ id: Schema.String, value: Schema.Unknown }))
-      ),
+      ids: Schema.Array(RowId),
+      values: Schema.optional(Schema.Array(Schema.Struct({ id: RowId, value: Schema.Unknown }))),
     })
   )
 );

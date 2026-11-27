@@ -37,6 +37,7 @@ import { defined } from "./defined.js";
 import { TestFailure } from "./test-failure.js";
 import * as Json from "../internal/Json.js";
 import { idOf, optionalCountOf } from "./shapes.js";
+import { ClientGroupId, MutationId, RowId } from "../Protocol.js";
 
 // ─── Harness ─────────────────────────────────────────────────────────────────
 
@@ -144,7 +145,7 @@ const openStore = (kv: KeyValueStore.KeyValueStore, batch?: AtomicKeyValue) => {
 
 const mutation = (clientId: string, mutationId: number): Mutation => ({
   clientId,
-  mutationId,
+  mutationId: MutationId.make(mutationId),
   mutator: "counter/inc",
   args: { id: "c" },
   createdAt: 0,
@@ -153,7 +154,7 @@ const mutation = (clientId: string, mutationId: number): Mutation => ({
 const put = (id: string, n: number): PatchOp => ({
   _tag: "Put",
   collection: "counters",
-  id,
+  id: RowId.make(id),
   version: 1,
   value: { id, n },
 });
@@ -274,7 +275,11 @@ describe("the atomic batch on the key-value store", () => {
               concurrency: 1,
               discard: true,
             });
-            yield* store.putRow("counters", { id: "a", version: 1, value: { id: "a", n: 0 } });
+            yield* store.putRow("counters", {
+              id: RowId.make("a"),
+              version: 1,
+              value: { id: "a", n: 0 },
+            });
           }),
         { concurrency: 1, discard: true }
       );
@@ -381,7 +386,9 @@ describe("the atomic batch on the key-value store", () => {
         const reopened = yield* openStore(kv, batchOver(data, writes, state));
         // The open finished the release from its record: the row, the cookie, and the released tail.
         expect(yield* reopened.getCookie).toBe("k1");
-        expect(yield* reopened.getRow("counters", "a")).toMatchObject({ value: { id: "a", n: 7 } });
+        expect(yield* reopened.getRow("counters", RowId.make("a"))).toMatchObject({
+          value: { id: "a", n: 7 },
+        });
         expect(yield* reopened.unpulled).toEqual([]);
         expect(MutableHashMap.has(data, RECORD)).toBe(false);
       })
@@ -400,7 +407,7 @@ describe("the atomic batch on the key-value store", () => {
         // The next read of the record fails, so the row write that would finish it fails too.
         MutableHashSet.add(failGets, RECORD);
         const failed = yield* Effect.exit(
-          store.putRow("counters", { id: "b", version: 1, value: { id: "b", n: 0 } })
+          store.putRow("counters", { id: RowId.make("b"), version: 1, value: { id: "b", n: 0 } })
         );
         expect(Exit.isFailure(failed)).toBe(true);
         expect(MutableHashMap.has(data, RECORD)).toBe(true);
@@ -413,7 +420,11 @@ describe("the atomic batch on the key-value store", () => {
           patch: [put("a", 2)],
         });
         // A later row write finishes whatever is still outstanding.
-        yield* store.putRow("counters", { id: "c", version: 1, value: { id: "c", n: 0 } });
+        yield* store.putRow("counters", {
+          id: RowId.make("c"),
+          version: 1,
+          value: { id: "c", n: 0 },
+        });
 
         expect(
           Json.parse(Option.getOrUndefined(MutableHashMap.get(data, ROW_A)) ?? "null")
@@ -483,7 +494,9 @@ describe("the atomic batch on the key-value store", () => {
       // Reopened without the seam, the record path reads what the batch wrote and keeps working.
       const recordPath = yield* openStore(kv);
       expect(yield* recordPath.getCookie).toBe("k1");
-      expect(yield* recordPath.getRow("counters", "a")).toMatchObject({ value: { n: 4 } });
+      expect(yield* recordPath.getRow("counters", RowId.make("a"))).toMatchObject({
+        value: { n: 4 },
+      });
       expect(yield* recordPath.unpulled).toEqual([]);
       expect(yield* recordPath.pendingMutations).toEqual([]);
       yield* pullOnRecordPath(recordPath, {
@@ -492,7 +505,9 @@ describe("the atomic batch on the key-value store", () => {
         patch: [put("a", 9)],
       });
       expect(yield* recordPath.getCookie).toBe("k2");
-      expect(yield* recordPath.getRow("counters", "a")).toMatchObject({ value: { n: 9 } });
+      expect(yield* recordPath.getRow("counters", RowId.make("a"))).toMatchObject({
+        value: { n: 9 },
+      });
       expect(MutableHashMap.has(data, RECORD)).toBe(false);
     })
   );
@@ -553,7 +568,7 @@ describe("the atomic batch on the key-value store", () => {
         state.commitThenFailNext = true;
         expect(Exit.isFailure(yield* Effect.exit(engine.pull))).toBe(true);
 
-        const row = yield* store.getRow("counters", "c");
+        const row = yield* store.getRow("counters", RowId.make("c"));
         expect(row).toMatchObject({ value: { id: "c", n: 2 } });
         expect(yield* tailOf(store)).toEqual([]);
         // The engine's view is the store's: the released tail is not replayed over the committed row.
@@ -615,7 +630,7 @@ describe("the atomic batch on the key-value store", () => {
 
         expect(died.count).toBe(1);
         expect(Exit.isFailure(pull)).toBe(true);
-        const row = yield* store.getRow("counters", "c");
+        const row = yield* store.getRow("counters", RowId.make("c"));
         expect(row).toMatchObject({ value: { id: "c", n: 2 } });
         expect(yield* tailOf(store)).toEqual([]);
         expect(yield* counterValue(engine)).toBe(2);
@@ -657,14 +672,14 @@ describe("the atomic batch on the key-value store", () => {
 
 const incrementCounter = <E>(
   writer: {
-    readonly get: (collection: string, id: string) => Effect.Effect<unknown, E>;
-    readonly put: (collection: string, id: string, value: unknown) => Effect.Effect<void, E>;
+    readonly get: (collection: string, id: RowId) => Effect.Effect<unknown, E>;
+    readonly put: (collection: string, id: RowId, value: unknown) => Effect.Effect<void, E>;
   },
   id: string
 ): Effect.Effect<void, E> =>
   Effect.gen(function* () {
-    const current = optionalCountOf(yield* writer.get("counters", id));
-    yield* writer.put("counters", id, { id, n: (current ?? 0) + 1 });
+    const current = optionalCountOf(yield* writer.get("counters", RowId.make(id)));
+    yield* writer.put("counters", RowId.make(id), { id, n: (current ?? 0) + 1 });
   });
 
 const counterMutators = Mutator.registry([
@@ -700,10 +715,10 @@ const makeCounterEngine = (
   }
 ) =>
   Effect.gen(function* () {
-    const transport = yield* makeInMemory(handler, who.group);
+    const transport = yield* makeInMemory(handler, ClientGroupId.make(who.group));
     return yield* ClientEngineModule.make({
       clientId: who.clientId,
-      clientGroupId: who.group,
+      clientGroupId: ClientGroupId.make(who.group),
       mutators: counterMutators,
     }).pipe(
       Effect.provideService(ClientStore, store),

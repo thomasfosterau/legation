@@ -72,6 +72,7 @@ import { defined } from "./defined.js";
 import { TestFailure } from "./test-failure.js";
 import * as Json from "../internal/Json.js";
 import { idOf } from "./shapes.js";
+import { ClientGroupId, RowId } from "../Protocol.js";
 
 interface Todo {
   readonly id: string;
@@ -86,22 +87,22 @@ interface User {
 const mutators = Mutator.registry([
   {
     mutator: Mutator.make("todo/set", Schema.Unknown),
-    local: (args: Todo, writer) => writer.put("todos", args.id, args),
+    local: (args: Todo, writer) => writer.put("todos", RowId.make(args.id), args),
   },
   {
     mutator: Mutator.make("todo/remove", Schema.Unknown),
-    local: (args: { id: string }, writer) => writer.del("todos", args.id),
+    local: (args: { id: string }, writer) => writer.del("todos", RowId.make(args.id)),
   },
   {
     mutator: Mutator.make("user/set", Schema.Unknown),
-    local: (args: User, writer) => writer.put("users", args.id, args),
+    local: (args: User, writer) => writer.put("users", RowId.make(args.id), args),
   },
 ]);
 
 const handlers = {
-  "todo/set": (args, writer) => Effect.asVoid(writer.put("todos", idOf(args), args)),
-  "todo/remove": (args, writer) => Effect.asVoid(writer.del("todos", idOf(args))),
-  "user/set": (args, writer) => Effect.asVoid(writer.put("users", idOf(args), args)),
+  "todo/set": (args, writer) => Effect.asVoid(writer.put("todos", RowId.make(idOf(args)), args)),
+  "todo/remove": (args, writer) => Effect.asVoid(writer.del("todos", RowId.make(idOf(args)))),
+  "user/set": (args, writer) => Effect.asVoid(writer.put("users", RowId.make(idOf(args)), args)),
 } satisfies Record<string, MemoryBackend.BackendHandler>;
 
 const makeServer = Effect.fn("makeServer")(function* () {
@@ -122,10 +123,10 @@ const makeServer = Effect.fn("makeServer")(function* () {
 const makeClient = (handler: ServerHandler, group: string, changeHubCapacity?: number) =>
   Effect.gen(function* () {
     const store = yield* ClientStoreModule.makeMemory;
-    const transport = yield* makeInMemory(handler, group);
+    const transport = yield* makeInMemory(handler, ClientGroupId.make(group));
     return yield* ClientEngineModule.make({
       clientId: group,
-      clientGroupId: group,
+      clientGroupId: ClientGroupId.make(group),
       mutators,
       ...Defined.fields({ changeHubCapacity }),
     }).pipe(
@@ -481,10 +482,10 @@ describe("ClientEngine.observeChanges", () => {
 const makeEngine = (handler: ServerHandler) =>
   Effect.gen(function* () {
     const store = yield* ClientStoreModule.makeMemory;
-    const transport = yield* makeInMemory(handler, "group-host");
+    const transport = yield* makeInMemory(handler, ClientGroupId.make("group-host"));
     return yield* ClientEngineModule.make({
       clientId: "host",
-      clientGroupId: "group-host",
+      clientGroupId: ClientGroupId.make("group-host"),
       mutators,
     }).pipe(
       Effect.provideService(ClientStore, store),

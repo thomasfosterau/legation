@@ -13,7 +13,7 @@ import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
 import { SqlClient } from "effect/sql/SqlClient";
 import type { SqlError } from "effect/sql/SqlError";
-import { Backend, BackendError, MutationRejected } from "@thomasfosterau/legation";
+import { Backend, BackendError, Collection, MutationRejected } from "@thomasfosterau/legation";
 import type { SqlBackend } from "@thomasfosterau/legation/sql";
 import {
   CartAddArgs,
@@ -114,7 +114,7 @@ const callerOf = (
 
 const hint = (collection: string, ids: ReadonlyArray<string>): Backend.ChangeHint => ({
   collection,
-  ids,
+  ids: ids.map((id) => Collection.RowId.make(id)),
 });
 
 /** A statement failure is transient (aborts the push); rejections are explicit. */

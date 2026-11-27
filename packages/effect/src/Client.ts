@@ -71,9 +71,10 @@ import * as ClientView from "./ClientView.js";
 import * as Coverage from "./Coverage.js";
 import { QueryError, StoreError, TransportError } from "./Errors.js";
 import * as Identity from "./Identity.js";
+import * as Ids from "./internal/Ids.js";
 import type * as Edge from "./Edge.js";
 import type * as Mutator from "./Mutator.js";
-import type { Mutation } from "./Protocol.js";
+import { ClientGroupId, type Mutation, MutationId, type RowId } from "./Protocol.js";
 import type * as MutationState from "./MutationState.js";
 import type * as Node from "./Node.js";
 import * as Query from "./Query.js";
@@ -83,6 +84,16 @@ import * as Subset from "./Subset.js";
 import type { MirrorChannel } from "./MirrorChannel.js";
 import * as Mirror from "./Mirror.js";
 import * as MirrorProtocol from "./MirrorProtocol.js";
+
+export {
+  /**
+   * A client group's id: a branded string. Build one from a stored or literal
+   * value with `Client.ClientGroupId.make("…")`.
+   */
+  ClientGroupId,
+  /** A mutation's per-client sequence number: a branded number (`Client.MutationId.make(1)`). */
+  MutationId,
+};
 
 // ─── Typed reads ─────────────────────────────────────────────────────────────
 
@@ -131,7 +142,7 @@ type IncludedOf<R> = R extends { readonly include: infer I }
 
 /** A row of a read of node `N`: its row value and the edges the read includes. */
 interface TypedRow<Graph extends Node.NodeRegistry, N extends Node.AnyNode, R> {
-  readonly id: string;
+  readonly id: RowId;
   readonly value: Node.RowOf<N>;
   readonly related: {
     readonly [E in IncludedOf<R> & Node.EdgeOf<N>]: RelatedOf<Graph, N["edges"][E]>;
@@ -1148,7 +1159,7 @@ export interface MakeOptions<
    * The client group (the server's CVR unit). Defaults to a random id —
    * same caveat as {@link MakeOptions.clientId}.
    */
-  readonly clientGroupId?: string;
+  readonly clientGroupId?: ClientGroupId;
   /**
    * Row persistence. Resolution order: this option → a `ClientStore` in
    * context (layer-composed apps) → in-memory (the default; pair
@@ -1253,7 +1264,7 @@ export const make: <Graph extends Node.NodeRegistry>(
     Option.getOrUndefined(yield* Effect.serviceOption(ClientStore.ClientStore)) ??
     (yield* ClientStore.makeMemory);
 
-  const clientGroupId = options.clientGroupId ?? `group-${crypto.randomUUID()}`;
+  const clientGroupId = options.clientGroupId ?? Ids.clientGroupId(`group-${crypto.randomUUID()}`);
   const configured =
     options.transport !== undefined && "url" in options.transport
       ? yield* RpcTransport.fromOrigin({ origin: options.transport.url, clientGroupId })

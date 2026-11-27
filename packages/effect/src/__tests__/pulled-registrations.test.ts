@@ -35,6 +35,7 @@ import * as Query from "../Query.js";
 import * as Subset from "../Subset.js";
 import { ClientTransport } from "../Transport.js";
 import { TestFailure } from "./test-failure.js";
+import { ClientGroupId, RowId } from "../Protocol.js";
 
 const Product = Node.make("products", {
   attributes: { name: Schema.String, sellerId: Schema.String },
@@ -99,7 +100,7 @@ const engineOver = (transport: ClientTransport) =>
     const store = yield* ClientStoreModule.makeMemory;
     return yield* ClientEngineModule.make({
       clientId: "client-426",
-      clientGroupId: "group-426",
+      clientGroupId: ClientGroupId.make("group-426"),
       mutators: Mutator.registry([]),
     }).pipe(
       Effect.provideService(ClientStore, store),
@@ -224,7 +225,7 @@ const reviewWindow = (id: string) =>
 const put = (collection: string, id: string, value: Record<string, string>): PatchOp => ({
   _tag: "Put",
   collection,
-  id,
+  id: RowId.make(id),
   version: 1,
   value: { id, ...value },
 });

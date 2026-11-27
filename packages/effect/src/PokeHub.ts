@@ -15,13 +15,14 @@ import type * as Scope from "effect/Scope";
 import * as Semaphore from "effect/Semaphore";
 import * as Stream from "effect/Stream";
 import type { Poke } from "./Protocol.js";
+import type { ClientGroupId } from "./Protocol.js";
 
 /** A poke hub: publish a poke to a client group, or subscribe to a group's pokes. */
 export interface PokeHub {
   /** Publish `poke` to every current and next subscriber of `clientGroupId`. */
-  readonly publish: (clientGroupId: string, poke: Poke) => Effect.Effect<void>;
+  readonly publish: (clientGroupId: ClientGroupId, poke: Poke) => Effect.Effect<void>;
   /** The pokes of `clientGroupId`: the latest one first, if any, then each new one. */
-  readonly subscribe: (clientGroupId: string) => Stream.Stream<Poke>;
+  readonly subscribe: (clientGroupId: ClientGroupId) => Stream.Stream<Poke>;
 }
 
 /**
@@ -46,7 +47,7 @@ export interface PokeHub {
  * down together when the enclosing scope closes.
  */
 export const make: Effect.Effect<PokeHub, never, Scope.Scope> = Effect.gen(function* () {
-  const hubs = yield* Ref.make(HashMap.empty<string, PubSub.PubSub<Poke>>());
+  const hubs = yield* Ref.make(HashMap.empty<ClientGroupId, PubSub.PubSub<Poke>>());
   const lock = yield* Semaphore.make(1);
   // One finalizer shuts every group's hub down when the scope closes.
   yield* Effect.addFinalizer(() =>
@@ -59,7 +60,7 @@ export const make: Effect.Effect<PokeHub, never, Scope.Scope> = Effect.gen(funct
   );
   // Get-or-create a group's `sliding(1)` hub; the lock makes creation
   // single-flight so concurrent publish/subscribe for a new group share one hub.
-  const hubFor = (clientGroupId: string): Effect.Effect<PubSub.PubSub<Poke>> =>
+  const hubFor = (clientGroupId: ClientGroupId): Effect.Effect<PubSub.PubSub<Poke>> =>
     Semaphore.withPermit(
       lock,
       Effect.gen(function* () {

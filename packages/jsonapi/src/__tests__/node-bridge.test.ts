@@ -28,6 +28,7 @@ import {
 import * as NodeBridge from "../NodeBridge.js";
 import { defined } from "./defined.js";
 import { TestFailure } from "./test-failure.js";
+import { Protocol } from "@thomasfosterau/legation/internal";
 
 const decodeIdentified = Schema.decodeUnknownSync(Schema.Struct({ id: Schema.String }));
 const decodeIdentifiedRows = Schema.decodeUnknownSync(
@@ -76,7 +77,7 @@ describe("NodeBridge.fromResource", () => {
       })
     );
     expect(withEdge.edges["category"]).toEqual({
-      kind: "one",
+      _tag: "one",
       target: "categories",
       via: "categoryId",
     });
@@ -90,19 +91,19 @@ describe("NodeBridge.fromResource", () => {
       relationships: { avatar: Relationship.optional(() => Category) },
     });
     expect(NodeBridge.fromResource(Profile).edges["avatar"]).toEqual({
-      kind: "one",
+      _tag: "one",
       target: "categories",
       via: "avatarId",
     });
     expect(
       NodeBridge.fromResource(Profile, { via: { avatar: "avatar_ref" } }).edges["avatar"]
-    ).toEqual({ kind: "one", target: "categories", via: "avatar_ref" });
+    ).toEqual({ _tag: "one", target: "categories", via: "avatar_ref" });
   });
 
   it("promotes a key attribute to a one-edge and moves it out of attributes", () => {
     const node = NodeBridge.fromResource(Review, bridgeOptions.reviews);
     expect(node.edges["product"]).toEqual({
-      kind: "one",
+      _tag: "one",
       target: "products",
       via: "productId",
     });
@@ -136,7 +137,7 @@ describe("NodeBridge.fromResource", () => {
       inverses: { reviews: "product" },
     });
     expect(node.edges["reviews"]).toEqual({
-      kind: "paginated",
+      _tag: "paginated",
       target: "reviews",
       inverse: "product",
       order: ["-createdAt"],
@@ -153,7 +154,7 @@ describe("NodeBridge.registry", () => {
       "reviews",
     ]);
     expect(defined(nodes.nodes.get("products")).edges["reviews"]).toEqual({
-      kind: "paginated",
+      _tag: "paginated",
       target: "reviews",
       inverse: "product",
       order: ["-createdAt"],
@@ -189,7 +190,7 @@ describe("NodeBridge.registry", () => {
       accounts: { inverses: { messages: "recipient" } },
     });
     expect(defined(nodes.nodes.get("accounts")).edges["messages"]).toEqual({
-      kind: "many",
+      _tag: "many",
       target: "messages",
       inverse: "recipient",
     });
@@ -228,21 +229,23 @@ describe("a bridged registry over a real engine", () => {
         const mutations = Mutator.registry([
           {
             mutator: productSet,
-            local: (args, writer) => writer.put("products", decodeIdentified(args).id, args),
+            local: (args, writer) =>
+              writer.put("products", Protocol.RowId.make(decodeIdentified(args).id), args),
           },
           {
             mutator: reviewSet,
-            local: (args, writer) => writer.put("reviews", decodeIdentified(args).id, args),
+            local: (args, writer) =>
+              writer.put("reviews", Protocol.RowId.make(decodeIdentified(args).id), args),
           },
         ]);
 
         const backend = yield* MemoryBackend.make(
           MemoryBackend.validatedHandlers([
             MemoryBackend.handler(productSet, (args, writer) =>
-              writer.put("products", decodeIdentified(args).id, args)
+              writer.put("products", Protocol.RowId.make(decodeIdentified(args).id), args)
             ),
             MemoryBackend.handler(reviewSet, (args, writer) =>
-              writer.put("reviews", decodeIdentified(args).id, args)
+              writer.put("reviews", Protocol.RowId.make(decodeIdentified(args).id), args)
             ),
           ])
         );
@@ -257,12 +260,15 @@ describe("a bridged registry over a real engine", () => {
           },
         });
         const store = yield* ClientStore.makeMemory;
-        const transport = yield* Transport.makeInMemory(server.handler, "group-bridge");
+        const transport = yield* Transport.makeInMemory(
+          server.handler,
+          Protocol.ClientGroupId.make("group-bridge")
+        );
         const { client } = yield* Client.make({
           nodes,
           mutations,
           clientId: "client-bridge",
-          clientGroupId: "group-bridge",
+          clientGroupId: Protocol.ClientGroupId.make("group-bridge"),
           syncLoop: { pushDebounce: "10 millis" },
         }).pipe(
           Effect.provideService(ClientStore.ClientStore, store),
@@ -413,7 +419,7 @@ describe("sync metadata read off the resource", () => {
     });
     const declared = NodeBridge.registry([Ordered, Review], { reviews: bridgeOptions.reviews });
     expect(defined(declared.nodes.get("products")).edges["reviews"]).toEqual({
-      kind: "paginated",
+      _tag: "paginated",
       target: "reviews",
       inverse: "product",
       order: ["-createdAt", "id"],
@@ -480,7 +486,7 @@ describe("sync metadata read off the resource", () => {
     });
     const node = NodeBridge.fromResource(Profile);
     expect(node.edges["category"]).toEqual({
-      kind: "one",
+      _tag: "one",
       target: "categories",
       via: "category_ref",
     });
@@ -502,7 +508,7 @@ describe("sync metadata read off the resource", () => {
     });
     const article = defined(NodeBridge.registry([Category, Article]).nodes.get("articles"));
     expect(article.edges["category"]).toEqual({
-      kind: "one",
+      _tag: "one",
       target: "categories",
       via: "category_ref",
     });
@@ -517,12 +523,12 @@ describe("sync metadata read off the resource", () => {
   it("bridges a cyclic parent ⇄ child pair with no edges option", () => {
     const definition = defined(cyclic.nodes.get("posts"));
     expect(definition.edges["comments"]).toEqual({
-      kind: "many",
+      _tag: "many",
       target: "comments",
       inverse: "post",
     });
     expect(defined(cyclic.nodes.get("comments")).edges["post"]).toEqual({
-      kind: "one",
+      _tag: "one",
       target: "posts",
       via: "post_ref",
     });

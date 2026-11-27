@@ -28,10 +28,11 @@ import type { Mutation } from "../Protocol.js";
 import { defined } from "./defined.js";
 import * as Json from "../internal/Json.js";
 import { countOf, titleOf } from "./shapes.js";
+import { ClientGroupId, MutationId, RowId } from "../Protocol.js";
 
 const mutation = (mutationId: number): Mutation => ({
   clientId: "c1",
-  mutationId,
+  mutationId: MutationId.make(mutationId),
   mutator: "noop",
   args: {},
   createdAt: 0,
@@ -42,14 +43,20 @@ describe("ClientStore.makeKeyValue", () => {
     scoped.effect("rehydrates rows, journal, counters, and cookie from the same KVS", () =>
       Effect.gen(function* () {
         const first = yield* ClientStoreModule.makeKeyValue();
-        yield* first.putRow("todos", { id: "1", version: 1, value: { title: "persisted" } });
-        yield* first.putRow("notes", { id: "n1", version: 2, value: { body: "x" } });
+        yield* first.putRow("todos", {
+          id: RowId.make("1"),
+          version: 1,
+          value: { title: "persisted" },
+        });
+        yield* first.putRow("notes", { id: RowId.make("n1"), version: 2, value: { body: "x" } });
         yield* first.appendMutation(mutation(yield* first.nextMutationId("c1")));
         yield* first.setCookie("cookie-1");
 
         // A second store over the same KeyValueStore sees everything.
         const second = yield* ClientStoreModule.makeKeyValue();
-        expect((yield* second.getRow("todos", "1"))?.value).toEqual({ title: "persisted" });
+        expect((yield* second.getRow("todos", RowId.make("1")))?.value).toEqual({
+          title: "persisted",
+        });
         expect(yield* second.listRows("notes")).toHaveLength(1);
         expect(yield* second.pendingMutations).toHaveLength(1);
         expect(yield* second.getCookie).toBe("cookie-1");
@@ -112,11 +119,11 @@ describe("ClientStore.makeKeyValue", () => {
           ["c2", 1],
         ]);
 
-        yield* store.putRow("todos", { id: "1", version: 1, value: {} });
+        yield* store.putRow("todos", { id: RowId.make("1"), version: 1, value: {} });
         yield* store.setCookie("keep-me");
         yield* store.clearRows;
         expect(yield* store.listRows("todos")).toEqual([]);
-        expect(yield* store.getRow("todos", "1")).toBeUndefined();
+        expect(yield* store.getRow("todos", RowId.make("1"))).toBeUndefined();
         // Journal and cookie survive a row reset.
         expect(yield* store.pendingMutations).toHaveLength(2);
         expect(yield* store.getCookie).toBe("keep-me");
@@ -166,7 +173,7 @@ describe("ClientStore.makeKeyValue", () => {
       Effect.gen(function* () {
         const a = yield* ClientStoreModule.makeKeyValue({ prefix: "a/" });
         const b = yield* ClientStoreModule.makeKeyValue({ prefix: "b/" });
-        yield* a.putRow("todos", { id: "1", version: 1, value: {} });
+        yield* a.putRow("todos", { id: RowId.make("1"), version: 1, value: {} });
         yield* a.setCookie("a-cookie");
         expect(yield* b.listRows("todos")).toEqual([]);
         expect(yield* b.getCookie).toBeUndefined();
@@ -181,7 +188,7 @@ describe("ClientStore.makeKeyValue", () => {
           MemoryBackend.validatedHandlers([
             MemoryBackend.handler(
               Mutator.make("todo/set", Schema.Struct({ id: Schema.String, title: Schema.String })),
-              (args, writer) => writer.put("todos", args.id, args)
+              (args, writer) => writer.put("todos", RowId.make(args.id), args)
             ),
           ])
         );
@@ -199,17 +206,18 @@ describe("ClientStore.makeKeyValue", () => {
         );
 
         const store = yield* ClientStoreModule.makeKeyValue();
-        const transport = yield* makeInMemory(handler, "group-a");
+        const transport = yield* makeInMemory(handler, ClientGroupId.make("group-a"));
         const engine = yield* ClientEngineModule.make({
           clientId: "client-a",
-          clientGroupId: "group-a",
+          clientGroupId: ClientGroupId.make("group-a"),
           mutators: Mutator.registry([
             {
               mutator: Mutator.make(
                 "todo/set",
                 Schema.Struct({ id: Schema.String, title: Schema.String })
               ),
-              local: (args: { id: string }, writer) => writer.put("todos", args.id, args),
+              local: (args: { id: string }, writer) =>
+                writer.put("todos", RowId.make(args.id), args),
             },
           ]),
         }).pipe(

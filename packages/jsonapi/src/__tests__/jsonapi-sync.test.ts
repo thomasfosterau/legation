@@ -22,8 +22,8 @@ import * as HttpClient from "effect/http/HttpClient";
 import type * as HttpClientRequest from "effect/http/HttpClientRequest";
 import * as HttpClientResponse from "effect/http/HttpClientResponse";
 import * as Str from "effect/String";
-import { ClientStore } from "@thomasfosterau/legation";
-import { ClientEngine, Subset } from "@thomasfosterau/legation/internal";
+import { ClientStore, StoreError } from "@thomasfosterau/legation";
+import { ClientEngine, Subset, Protocol } from "@thomasfosterau/legation/internal";
 import * as Convention from "../Convention.js";
 import * as JsonApiSync from "../JsonApiSync.js";
 import * as Ledger from "../Ledger.js";
@@ -193,7 +193,7 @@ describe("end-to-end client-direct sync", () => {
       JsonApiSync.layer(api, {
         baseUrl: "http://api.test",
         clientId: "client-1",
-        clientGroupId: "group-1",
+        clientGroupId: Protocol.ClientGroupId.make("group-1"),
       }).pipe(Layer.provide(server.layer))
     )((scoped) => {
       scoped.effect("optimistic create is visible, then syncs through the API", () =>
@@ -260,7 +260,7 @@ describe("end-to-end client-direct sync", () => {
       JsonApiSync.layer(api, {
         baseUrl: "http://api.test",
         clientId: "client-1",
-        clientGroupId: "group-1",
+        clientGroupId: Protocol.ClientGroupId.make("group-1"),
       }).pipe(Layer.provide(server.layer))
     )((scoped) => {
       scoped.effect("a 4xx create is permanently rejected without poisoning the queue", () =>
@@ -316,12 +316,28 @@ describeWrapped("JsonApiSync.layer store option", (it) => {
           JsonApiSync.layer(api, {
             baseUrl: "http://api.test",
             clientId: "client-1",
-            clientGroupId: "group-1",
+            clientGroupId: Protocol.ClientGroupId.make("group-1"),
             store: Layer.succeed(ClientStore.ClientStore)(appStore),
           }).pipe(Layer.provide(server.layer))
         )
       );
       expect((yield* appStore.pendingMutations).map((m) => m.mutator)).toEqual(["todos/create"]);
+    }).pipe(Effect.scoped);
+  });
+
+  it.effect("fails with the StoreError of a store that cannot open", () => {
+    const server = makeServer();
+    const failure = new StoreError({ message: "Failed to open the IndexedDB store" });
+    return Effect.gen(function* () {
+      const error = yield* Layer.build(
+        JsonApiSync.layer(api, {
+          baseUrl: "http://api.test",
+          clientId: "client-1",
+          clientGroupId: Protocol.ClientGroupId.make("group-1"),
+          store: Layer.effect(ClientStore.ClientStore)(Effect.fail(failure)),
+        }).pipe(Layer.provide(server.layer))
+      ).pipe(Effect.flip);
+      expect(error).toBe(failure);
     }).pipe(Effect.scoped);
   });
 });
@@ -347,7 +363,7 @@ describe("JsonApiSync.layer ledger default", () => {
             JsonApiSync.layer(api, {
               baseUrl: "http://api.test",
               clientId: "client-1",
-              clientGroupId: "group-1",
+              clientGroupId: Protocol.ClientGroupId.make("group-1"),
               keyValueStore: kv,
             }).pipe(Layer.provide(server.layer))
           ),
@@ -377,7 +393,7 @@ describe("JsonApiSync.layer ledger default", () => {
               JsonApiSync.layer(api, {
                 baseUrl: "http://api.test",
                 clientId: "client-1",
-                clientGroupId: "group-1",
+                clientGroupId: Protocol.ClientGroupId.make("group-1"),
                 keyValueStore: kv,
               }).pipe(Layer.provide(server.layer))
             ),
@@ -415,7 +431,7 @@ describe("JsonApiSync.layer ledger default", () => {
             JsonApiSync.layer(api, {
               baseUrl: "http://api.test",
               clientId: "client-1",
-              clientGroupId: "group-1",
+              clientGroupId: Protocol.ClientGroupId.make("group-1"),
               keyValueStore: kv,
               ledger: Ledger.memory,
             }).pipe(Layer.provide(server.layer))

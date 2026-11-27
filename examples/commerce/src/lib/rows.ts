@@ -14,8 +14,9 @@
  * resource's id under the edge's key field. A resource that does not make a
  * row is a defect of the load, and fails here rather than in the markup.
  */
+import * as P from "effect/Predicate";
 import * as Schema from "effect/Schema";
-import type { Node } from "@thomasfosterau/legation";
+import { Collection, type Node } from "@thomasfosterau/legation";
 import {
   cartItems,
   categories,
@@ -40,7 +41,7 @@ interface ResourceLike {
 
 /** An engine row seed: the node's row and no included edges. */
 export interface RowSeed<Value> {
-  readonly id: string;
+  readonly id: Collection.RowId;
   readonly value: Value;
   readonly related: Record<never, never>;
 }
@@ -60,14 +61,14 @@ const seeds =
   <N extends Node.AnyNode, Value>(node: N, decode: (input: unknown) => Value) =>
   (resources: ReadonlyArray<ResourceLike>): ReadonlyArray<RowSeed<Value>> =>
     resources.map((resource) => ({
-      id: resource.id,
+      id: Collection.RowId.make(resource.id),
       value: decode({
         [node.id]: resource.id,
         ...resource.attributes,
         ...Object.fromEntries(
           Object.entries(node.edges).flatMap(([name, edge]) => {
-            const id = edge.kind === "one" ? refId(resource, name) : undefined;
-            return edge.kind === "one" && id !== undefined ? [[edge.via, id]] : [];
+            const id = P.isTagged(edge, "one") ? refId(resource, name) : undefined;
+            return P.isTagged(edge, "one") && id !== undefined ? [[edge.via, id]] : [];
           })
         ),
       }),

@@ -20,6 +20,7 @@ import * as Mutator from "../Mutator.js";
 import * as Subset from "../Subset.js";
 import { type ClientTransport, layerInMemory, ServerHandler } from "../Transport.js";
 import { awaitPromise } from "./await-promise.js";
+import { ClientGroupId, RowId } from "../Protocol.js";
 
 const ROWS = 10_000;
 const MUTATIONS = 30;
@@ -32,7 +33,7 @@ const SAMPLE = { warmupIterations: 1, warmupTime: 0, iterations: 5, time: 0 };
 const mutators = Mutator.registry([
   {
     mutator: Mutator.make("todo/set", Schema.Unknown),
-    local: (a: { id: string }, w) => w.put("todos", a.id, a),
+    local: (a: { id: string }, w) => w.put("todos", RowId.make(a.id), a),
   },
 ]);
 
@@ -63,7 +64,7 @@ const scenario = Effect.fnUntraced(function* () {
   const store = yield* ClientStoreModule.makeMemory;
   const engine = yield* ClientEngineModule.make({
     clientId: "bench",
-    clientGroupId: "bench",
+    clientGroupId: ClientGroupId.make("bench"),
     mutators,
   }).pipe(Effect.provideService(ClientStore, store));
   yield* seed(engine);
@@ -84,7 +85,7 @@ const scenario = Effect.fnUntraced(function* () {
 });
 
 // The in-memory transport over the no-op server, shared by every iteration.
-const transportLayer = layerInMemory("bench").pipe(
+const transportLayer = layerInMemory(ClientGroupId.make("bench")).pipe(
   Layer.provide(Layer.succeed(ServerHandler)(noopHandler))
 );
 

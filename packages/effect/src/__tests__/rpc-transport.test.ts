@@ -26,6 +26,7 @@ import * as SyncRoom from "../SyncRoom.js";
 import * as Transport from "../Transport.js";
 import { ClientTransport } from "../Transport.js";
 import { titleOf } from "./shapes.js";
+import { ClientGroupId, RowId } from "../Protocol.js";
 
 const Todo = Schema.Struct({
   id: Schema.String,
@@ -37,7 +38,10 @@ type Todo = typeof Todo.Type;
 const todoSet = Mutator.make("todo/set", Todo);
 
 const mutators = Mutator.registry([
-  { mutator: todoSet, local: (args: Todo, writer) => writer.put("todos", args.id, args) },
+  {
+    mutator: todoSet,
+    local: (args: Todo, writer) => writer.put("todos", RowId.make(args.id), args),
+  },
 ]);
 
 /** One sync room behind the RPC handlers, fresh per provided layer. */
@@ -46,7 +50,9 @@ const serverLayer = RpcTransport.layerHandlers.pipe(
   Layer.provide(
     MemoryBackend.layer(
       MemoryBackend.validatedHandlers([
-        MemoryBackend.handler(todoSet, (args, writer) => writer.put("todos", args.id, args)),
+        MemoryBackend.handler(todoSet, (args, writer) =>
+          writer.put("todos", RowId.make(args.id), args)
+        ),
       ])
     )
   ),
@@ -58,11 +64,13 @@ const serverLayer = RpcTransport.layerHandlers.pipe(
 const makeEngine = (name: string) =>
   Effect.gen(function* () {
     const client = yield* RpcTest.makeClient(RpcTransport.SyncRpcs);
-    const transport = RpcTransport.fromRpcClient(client, { clientGroupId: `group-${name}` });
+    const transport = RpcTransport.fromRpcClient(client, {
+      clientGroupId: ClientGroupId.make(`group-${name}`),
+    });
     const store = yield* ClientStoreModule.makeMemory;
     const engine = yield* ClientEngineModule.make({
       clientId: `client-${name}`,
-      clientGroupId: `group-${name}`,
+      clientGroupId: ClientGroupId.make(`group-${name}`),
       mutators,
     }).pipe(
       Effect.provideService(ClientStore, store),
@@ -145,12 +153,14 @@ describe("RpcTransport", () => {
           const client = yield* RpcTest.makeClient(RpcTransport.SyncRpcs);
           const withKey = RpcClient.withHeaders({ authorization: "Bearer api-key-1" });
           yield* client
-            .push({ clientGroupId: "group-a", mutations: [] })
+            .push({ clientGroupId: ClientGroupId.make("group-a"), mutations: [] })
             .pipe(withKey, Effect.orDie);
           yield* client
-            .pull({ clientGroupId: "group-a", subscriptions: [allTodos] })
+            .pull({ clientGroupId: ClientGroupId.make("group-a"), subscriptions: [allTodos] })
             .pipe(withKey, Effect.orDie);
-          yield* client.read({ clientGroupId: "group-a", subsets: [allTodos] }).pipe(Effect.orDie);
+          yield* client
+            .read({ clientGroupId: ClientGroupId.make("group-a"), subsets: [allTodos] })
+            .pipe(Effect.orDie);
         }).pipe(Effect.provideContext(served));
         expect(yield* Ref.get(seen)).toEqual([
           Option.some("Bearer api-key-1"),
@@ -176,7 +186,7 @@ describe("RpcTransport", () => {
         const client = yield* RpcTest.makeClient(RpcTransport.SyncRpcs);
         const transport = yield* Transport.withFallback(
           Transport.offline,
-          RpcTransport.fromRpcClient(client, { clientGroupId: "group-reader" })
+          RpcTransport.fromRpcClient(client, { clientGroupId: ClientGroupId.make("group-reader") })
         );
         const { client: reader } = yield* Client.make({
           nodes: Node.registry([Node.make("todos", { attributes: Todo.fields })]),
@@ -199,7 +209,7 @@ describe("RpcTransport", () => {
         // not yet "disconnected", since no call has failed.
         const transport = yield* RpcTransport.fromOrigin({
           origin: "http://127.0.0.1:9",
-          clientGroupId: "group-origin",
+          clientGroupId: ClientGroupId.make("group-origin"),
           httpPath: "/rpc",
           wsPath: "/rpc-ws",
           fallback: { restoreAfter: "1 second", primaryTimeout: "1 second" },

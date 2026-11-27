@@ -22,7 +22,7 @@ import * as HttpClient from "effect/http/HttpClient";
 import type * as HttpClientRequest from "effect/http/HttpClientRequest";
 import * as HttpClientResponse from "effect/http/HttpClientResponse";
 import type { Predicate } from "@thomasfosterau/legation";
-import { ClientEngine, Subset, Defined } from "@thomasfosterau/legation/internal";
+import { ClientEngine, Subset, Defined, Protocol } from "@thomasfosterau/legation/internal";
 import { RowSchema, type JsonApiRow } from "../Derive.js";
 import * as Relationships from "../Relationships.js";
 import * as JsonApiSync from "../JsonApiSync.js";
@@ -183,7 +183,7 @@ const provide = <E>(
       JsonApiSync.layer(api, {
         baseUrl: "http://api.test",
         clientId: "c1",
-        clientGroupId: "g1",
+        clientGroupId: Protocol.ClientGroupId.make("g1"),
         ...Defined.fields({ includes: options?.includes }),
       }).pipe(Layer.provide(server.layer))
     ),

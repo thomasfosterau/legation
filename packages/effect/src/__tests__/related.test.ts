@@ -42,6 +42,7 @@ import { defined } from "./defined.js";
 import { TestFailure } from "./test-failure.js";
 import * as Json from "../internal/Json.js";
 import { idOf } from "./shapes.js";
+import { ClientGroupId, RowId } from "../Protocol.js";
 
 interface Issue {
   readonly id: string;
@@ -76,7 +77,7 @@ const Person: Schema.Codec<Person> = Schema.Struct({
 const issuesCollection = Collection.make({
   name: "issues",
   schema: Issue,
-  id: (row) => row.id,
+  id: (row) => RowId.make(row.id),
   relationships: [
     {
       name: "author",
@@ -97,12 +98,12 @@ const issuesCollection = Collection.make({
 const commentsCollection = Collection.make({
   name: "comments",
   schema: Comment,
-  id: (row) => row.id,
+  id: (row) => RowId.make(row.id),
 });
 const peopleCollection = Collection.make({
   name: "people",
   schema: Person,
-  id: (row) => row.id,
+  id: (row) => RowId.make(row.id),
 });
 
 const registry = Collection.registry([issuesCollection, commentsCollection, peopleCollection]);
@@ -110,8 +111,8 @@ const registry = Collection.registry([issuesCollection, commentsCollection, peop
 // A generic "set" mutator per collection: put the row value at its id.
 const setRow =
   (collection: string) =>
-  (args: unknown, writer: { put: (c: string, id: string, v: unknown) => any }) =>
-    writer.put(collection, idOf(args), args);
+  (args: unknown, writer: { put: (c: string, id: RowId, v: unknown) => any }) =>
+    writer.put(collection, RowId.make(idOf(args)), args);
 
 const mutators = Mutator.registry([
   { mutator: Mutator.make("issue/set", Schema.Unknown), local: setRow("issues") },
@@ -120,9 +121,10 @@ const mutators = Mutator.registry([
 ]);
 
 const backendHandlers = {
-  "issue/set": (args, writer) => Effect.asVoid(writer.put("issues", idOf(args), args)),
-  "comment/set": (args, writer) => Effect.asVoid(writer.put("comments", idOf(args), args)),
-  "person/set": (args, writer) => Effect.asVoid(writer.put("people", idOf(args), args)),
+  "issue/set": (args, writer) => Effect.asVoid(writer.put("issues", RowId.make(idOf(args)), args)),
+  "comment/set": (args, writer) =>
+    Effect.asVoid(writer.put("comments", RowId.make(idOf(args)), args)),
+  "person/set": (args, writer) => Effect.asVoid(writer.put("people", RowId.make(idOf(args)), args)),
 } satisfies Record<string, MemoryBackend.BackendHandler>;
 
 const authPolicy = Authorization.policy({
@@ -150,10 +152,10 @@ const makeServer = Effect.fn("makeServer")(function* (): Effect.fn.Return<
 const makeClient = (handler: ServerHandler, name: string) =>
   Effect.gen(function* () {
     const store = yield* ClientStoreModule.makeMemory;
-    const transport = yield* makeInMemory(handler, `group-${name}`);
+    const transport = yield* makeInMemory(handler, ClientGroupId.make(`group-${name}`));
     const engine = yield* ClientEngineModule.make({
       clientId: `client-${name}`,
-      clientGroupId: `group-${name}`,
+      clientGroupId: ClientGroupId.make(`group-${name}`),
       mutators,
     }).pipe(
       Effect.provideService(ClientStore, store),
@@ -226,7 +228,7 @@ describe("Collection.registry relationship validation", () => {
     const bad = Collection.make({
       name: "a",
       schema: Person,
-      id: (r) => r.id,
+      id: (r) => RowId.make(r.id),
       relationships: [
         { name: "dup", kind: "one", collection: "a", localField: "id", foreignField: "id" },
         { name: "dup", kind: "one", collection: "a", localField: "id", foreignField: "id" },
@@ -239,7 +241,7 @@ describe("Collection.registry relationship validation", () => {
     const bad = Collection.make({
       name: "a",
       schema: Person,
-      id: (r) => r.id,
+      id: (r) => RowId.make(r.id),
       relationships: [
         { name: "ghost", kind: "one", collection: "nope", localField: "id", foreignField: "id" },
       ],
@@ -648,7 +650,7 @@ const applyOp = (truth: GroundTruth, op: Op): void =>
     Match.withReturnType<void>(),
     Match.tag("putIssue", (put) => {
       MutableHashMap.set(truth.issues, put.id, {
-        id: put.id,
+        id: RowId.make(put.id),
         value: { id: put.id, authorId: put.authorId },
       });
     }),
@@ -663,7 +665,7 @@ const applyOp = (truth: GroundTruth, op: Op): void =>
           : put.collection === "comments"
             ? { id: put.id, issueId: put.fk }
             : { id: put.id, issueId: put.fk, rank: put.rank };
-      MutableHashMap.set(map, put.id, { id: put.id, value });
+      MutableHashMap.set(map, put.id, { id: RowId.make(put.id), value });
     }),
     Match.tag("deleteForeign", (del) => {
       MutableHashMap.remove(truth[del.collection], del.id);

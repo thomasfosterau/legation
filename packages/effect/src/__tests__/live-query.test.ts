@@ -22,12 +22,16 @@ import * as SyncServer from "../SyncServer.js";
 import { ClientTransport, makeInMemory } from "../Transport.js";
 import { TestFailure } from "./test-failure.js";
 import { titleOf } from "./shapes.js";
+import { ClientGroupId, RowId } from "../Protocol.js";
 
 const TodoArgs = Schema.Struct({ id: Schema.String, title: Schema.String });
 type Todo = typeof TodoArgs.Type;
 const todoSet = Mutator.make("todo/set", TodoArgs);
 const mutators = Mutator.registry([
-  { mutator: todoSet, local: (args: Todo, writer) => writer.put("todos", args.id, args) },
+  {
+    mutator: todoSet,
+    local: (args: Todo, writer) => writer.put("todos", RowId.make(args.id), args),
+  },
 ]);
 
 const allTodos = Subset.make({ collection: "todos" });
@@ -41,7 +45,9 @@ const sleepReal = (millis: number) =>
 const makeEngine = Effect.fn("makeEngine")(function* () {
   const backend = yield* MemoryBackend.make(
     MemoryBackend.validatedHandlers([
-      MemoryBackend.handler(todoSet, (args, writer) => writer.put("todos", args.id, args)),
+      MemoryBackend.handler(todoSet, (args, writer) =>
+        writer.put("todos", RowId.make(args.id), args)
+      ),
     ])
   );
   const handler = yield* SyncServer.make.pipe(
@@ -54,10 +60,10 @@ const makeEngine = Effect.fn("makeEngine")(function* () {
     Effect.provideService(InvalidationBus.InvalidationBus, yield* InvalidationBus.makeInProcess)
   );
   const store = yield* ClientStoreModule.makeMemory;
-  const transport = yield* makeInMemory(handler, "group-a");
+  const transport = yield* makeInMemory(handler, ClientGroupId.make("group-a"));
   const engine = yield* ClientEngineModule.make({
     clientId: "client-a",
-    clientGroupId: "group-a",
+    clientGroupId: ClientGroupId.make("group-a"),
     mutators,
   }).pipe(
     Effect.provideService(ClientStore, store),

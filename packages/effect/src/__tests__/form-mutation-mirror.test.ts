@@ -32,6 +32,7 @@ import * as Server from "../Server.js";
 import * as Subscriptions from "../Subscriptions.js";
 import * as Subset from "../Subset.js";
 import { ClientTransport, makeInMemory } from "../Transport.js";
+import { ClientGroupId, MutationId, RowId } from "../Protocol.js";
 
 const counterArgs = Schema.Struct({ id: Schema.String });
 // A non-idempotent counter: a double application shows as `n: 2`.
@@ -88,17 +89,17 @@ const widerMutators = Mutator.registry([
 
 const nodes = Node.registry([Node.make("counters", { attributes: { n: Schema.Finite } })]);
 const countersSubset = Subset.make({ collection: "counters" });
-const form = { clientId: "form-1", mutationId: 1 } as const;
+const form = { clientId: "form-1", mutationId: MutationId.make(1) } as const;
 
 const makeServer = Effect.fn("makeServer")(function* () {
   const backend = yield* MemoryBackend.make(
     MemoryBackend.validatedHandlers([
       MemoryBackend.handler(increment, (args, writer) =>
         writer
-          .get("counters", args.id)
+          .get("counters", RowId.make(args.id))
           .pipe(
             Effect.flatMap((row) =>
-              writer.put("counters", args.id, incremented(args.id, asCounter(row)))
+              writer.put("counters", RowId.make(args.id), incremented(args.id, asCounter(row)))
             )
           )
       ),
@@ -124,7 +125,7 @@ const makeHosted = (
 ) =>
   Effect.gen(function* () {
     const store = storeOf(yield* ClientStoreModule.makeMemory);
-    const inner = yield* makeInMemory(server.handler, "group-a");
+    const inner = yield* makeInMemory(server.handler, ClientGroupId.make("group-a"));
     const transport: ClientTransport = {
       ...inner,
       pull: (request) =>
@@ -141,7 +142,7 @@ const makeHosted = (
     const engine = Subscriptions.counted(
       yield* ClientEngineModule.make({
         clientId: "host-a",
-        clientGroupId: "group-a",
+        clientGroupId: ClientGroupId.make("group-a"),
         mutators,
       }).pipe(
         Effect.provideService(ClientStore, store),
@@ -185,7 +186,7 @@ describe("enhanced form submit over a connected host", () => {
         expect(yield* store.pendingMutations).toEqual([]);
 
         const receipt = yield* server.mutate({
-          clientGroupId: "group-a",
+          clientGroupId: ClientGroupId.make("group-a"),
           ...form,
           mutation: increment,
           args: { id: "c1" },
@@ -312,9 +313,13 @@ describe("enhanced form submit over a connected host", () => {
           [
             Effect.exit(tabA.beginFormMutation(form, increment.name, { id: "a1" })),
             Effect.exit(
-              tabB.beginFormMutation({ clientId: "form-2", mutationId: 1 }, unknownToHost.name, {
-                id: "b1",
-              })
+              tabB.beginFormMutation(
+                { clientId: "form-2", mutationId: MutationId.make(1) },
+                unknownToHost.name,
+                {
+                  id: "b1",
+                }
+              )
             ),
           ],
           { concurrency: "unbounded" }

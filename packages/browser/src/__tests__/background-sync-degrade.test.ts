@@ -24,6 +24,7 @@ import {
   InvalidationBus,
   Subset,
   SyncServer,
+  Protocol,
 } from "@thomasfosterau/legation/internal";
 import { describe, expect, layer } from "@effect/vitest";
 import * as Duration from "effect/Duration";
@@ -104,7 +105,9 @@ describe("BackgroundSync without Background Sync", () => {
           const setTodo = Mutator.make("todo/set", Schema.Unknown);
           const backend = yield* MemoryBackend.make({
             "todo/set": (args, writer) =>
-              Effect.asVoid(writer.put("todos", decodeIdentified(args).id, args)),
+              Effect.asVoid(
+                writer.put("todos", Protocol.RowId.make(decodeIdentified(args).id), args)
+              ),
           });
           const handler = yield* SyncServer.make.pipe(
             Effect.provideService(Backend.Backend, backend),
@@ -118,7 +121,10 @@ describe("BackgroundSync without Background Sync", () => {
               yield* InvalidationBus.makeInProcess
             )
           );
-          const base = yield* Transport.makeInMemory(handler, "group-degrade");
+          const base = yield* Transport.makeInMemory(
+            handler,
+            Protocol.ClientGroupId.make("group-degrade")
+          );
           const transport = yield* BrowserConnectivity.withBrowserConnectivity({
             ...base,
             pokes: Stream.empty,
@@ -126,11 +132,12 @@ describe("BackgroundSync without Background Sync", () => {
           const store = yield* ClientStore.makeMemory;
           const engine = yield* ClientEngine.make({
             clientId: "client-degrade",
-            clientGroupId: "group-degrade",
+            clientGroupId: Protocol.ClientGroupId.make("group-degrade"),
             mutators: Mutator.registry([
               {
                 mutator: setTodo,
-                local: (args, writer) => writer.put("todos", decodeIdentified(args).id, args),
+                local: (args, writer) =>
+                  writer.put("todos", Protocol.RowId.make(decodeIdentified(args).id), args),
               },
             ]),
           }).pipe(

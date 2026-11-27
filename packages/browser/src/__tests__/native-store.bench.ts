@@ -43,7 +43,7 @@ import { KeyValueStore } from "effect/persistence";
 import { IndexedDb } from "@effect/platform-browser";
 import { ClientStore, Predicate } from "@thomasfosterau/legation";
 import { CollectionIndex, Subset, Defined } from "@thomasfosterau/legation/internal";
-import type { Protocol } from "@thomasfosterau/legation/internal";
+import { Protocol } from "@thomasfosterau/legation/internal";
 import { IDBFactory, IDBKeyRange } from "fake-indexeddb";
 import * as IndexedDbClientStore from "../IndexedDbClientStore.js";
 import { defined } from "./defined.js";
@@ -111,7 +111,7 @@ const putOps = (items: ReadonlyArray<Item>): Array<Protocol.PatchOp> =>
   items.map((row) => ({
     _tag: "Put" as const,
     collection: COLLECTION,
-    id: row.id,
+    id: Protocol.RowId.make(row.id),
     version: 1,
     value: row,
   }));
@@ -324,7 +324,7 @@ const sectionA = async () => {
 
 // ─── B. CollectionIndex: rebuild and indexed evaluate vs full scan ───────────
 
-const storedRows = rows.map((row) => ({ id: row.id, value: row }));
+const storedRows = rows.map((row) => ({ id: Protocol.RowId.make(row.id), value: row }));
 const rowsById = new Map(storedRows.map((r) => [r.id, r]));
 const index = CollectionIndex.empty(["qty", "name", "note"]);
 

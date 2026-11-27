@@ -24,6 +24,7 @@ import * as SyncServer from "../SyncServer.js";
 import { ClientTransport, makeInMemory, type ServerHandler } from "../Transport.js";
 import { defined } from "./defined.js";
 import { idOf, titleOf } from "./shapes.js";
+import { ClientGroupId, RowId } from "../Protocol.js";
 
 interface Todo {
   readonly id: string;
@@ -36,20 +37,20 @@ interface Todo {
 const mutators = Mutator.registry([
   {
     mutator: Mutator.make("todo/set", Schema.Unknown),
-    local: (args: Todo, writer) => writer.put("todos", args.id, args),
+    local: (args: Todo, writer) => writer.put("todos", RowId.make(args.id), args),
   },
   {
     mutator: Mutator.make("todo/forbidden", Schema.Unknown),
-    local: (args: Todo, writer) => writer.put("todos", args.id, args),
+    local: (args: Todo, writer) => writer.put("todos", RowId.make(args.id), args),
   },
 ]);
 
 const backendHandlers = {
-  "todo/set": (args, writer) => Effect.asVoid(writer.put("todos", idOf(args), args)),
+  "todo/set": (args, writer) => Effect.asVoid(writer.put("todos", RowId.make(idOf(args)), args)),
   "todo/forbidden": (args, writer) =>
     // Write, then reject: proves the staged effect is rolled back.
     writer
-      .put("todos", idOf(args), args)
+      .put("todos", RowId.make(idOf(args)), args)
       .pipe(Effect.andThen(Effect.fail(new MutationRejected({ reason: "permission revoked" })))),
 } satisfies Record<string, MemoryBackend.BackendHandler>;
 
@@ -79,10 +80,10 @@ describe("permanent mutation rejection", () => {
     Effect.gen(function* () {
       const handler = yield* makeServer();
       const store = yield* ClientStoreModule.makeMemory;
-      const transport = yield* makeInMemory(handler, "group-a");
+      const transport = yield* makeInMemory(handler, ClientGroupId.make("group-a"));
       const engine = yield* ClientEngineModule.make({
         clientId: "client-a",
-        clientGroupId: "group-a",
+        clientGroupId: ClientGroupId.make("group-a"),
         mutators,
       }).pipe(
         Effect.provideService(ClientStore, store),
@@ -129,16 +130,16 @@ describe("permanent mutation rejection", () => {
         Effect.provideService(InvalidationBus.InvalidationBus, bus)
       );
       const store = yield* ClientStoreModule.makeMemory;
-      const transport = yield* makeInMemory(handler, "group-t");
+      const transport = yield* makeInMemory(handler, ClientGroupId.make("group-t"));
       const boomMutators = Mutator.registry([
         {
           mutator: Mutator.make("todo/boom", Schema.Unknown),
-          local: (args: Todo, writer) => writer.put("todos", args.id, args),
+          local: (args: Todo, writer) => writer.put("todos", RowId.make(args.id), args),
         },
       ]);
       const engine = yield* ClientEngineModule.make({
         clientId: "client-t",
-        clientGroupId: "group-t",
+        clientGroupId: ClientGroupId.make("group-t"),
         mutators: boomMutators,
       }).pipe(
         Effect.provideService(ClientStore, store),

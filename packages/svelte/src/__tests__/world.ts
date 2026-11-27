@@ -25,7 +25,13 @@ import {
   Query,
   Transport,
 } from "@thomasfosterau/legation";
-import { ClientEngine, ClientView, Subset, SyncRoom } from "@thomasfosterau/legation/internal";
+import {
+  ClientEngine,
+  ClientView,
+  Subset,
+  SyncRoom,
+  Protocol,
+} from "@thomasfosterau/legation/internal";
 import { TestFailure } from "./test-failure.js";
 
 const decodeIdentified = Schema.decodeUnknownSync(Schema.Struct({ id: Schema.String }));
@@ -63,23 +69,28 @@ export const collections: Collection.CollectionRegistry = nodes.collections;
 export const mutators = Mutator.registry([
   {
     mutator: Mutator.make("todo/set", Schema.Unknown),
-    local: (args, writer) => writer.put("todos", decodeIdentified(args).id, args),
+    local: (args, writer) =>
+      writer.put("todos", Protocol.RowId.make(decodeIdentified(args).id), args),
   },
   {
     mutator: Mutator.make("user/set", Schema.Unknown),
-    local: (args, writer) => writer.put("users", decodeIdentified(args).id, args),
+    local: (args, writer) =>
+      writer.put("users", Protocol.RowId.make(decodeIdentified(args).id), args),
   },
   {
     // Optimistically applied, permanently rejected by the backend — the
     // overlay row must disappear on the rebase that observes the rejection.
     mutator: Mutator.make("todo/reject", Schema.Unknown),
-    local: (args, writer) => writer.put("todos", decodeIdentified(args).id, args),
+    local: (args, writer) =>
+      writer.put("todos", Protocol.RowId.make(decodeIdentified(args).id), args),
   },
 ]);
 
 const handlers = {
-  "todo/set": (args, writer) => Effect.asVoid(writer.put("todos", decodeIdentified(args).id, args)),
-  "user/set": (args, writer) => Effect.asVoid(writer.put("users", decodeIdentified(args).id, args)),
+  "todo/set": (args, writer) =>
+    Effect.asVoid(writer.put("todos", Protocol.RowId.make(decodeIdentified(args).id), args)),
+  "user/set": (args, writer) =>
+    Effect.asVoid(writer.put("users", Protocol.RowId.make(decodeIdentified(args).id), args)),
   "todo/reject": () => Effect.fail(new MutationRejected({ reason: "not allowed" })),
 } satisfies Record<string, MemoryBackend.BackendHandler>;
 
@@ -93,12 +104,12 @@ const queries = Query.registry([
 
 export const engineLayer = ClientEngine.layer({
   clientId: "c1",
-  clientGroupId: "group-1",
+  clientGroupId: Protocol.ClientGroupId.make("group-1"),
   mutators,
   queries,
 }).pipe(
   Layer.provide(
-    Transport.layerInMemory("group-1").pipe(
+    Transport.layerInMemory(Protocol.ClientGroupId.make("group-1")).pipe(
       Layer.provide(
         SyncRoom.layer.pipe(
           Layer.provide(Layer.effect(Backend.Backend)(MemoryBackend.make(handlers))),
@@ -168,7 +179,7 @@ export interface RecordedPull {
 const countingEngineLayer = (pulls: Array<RecordedPull>): typeof engineLayer =>
   ClientEngine.layer({
     clientId: "c1",
-    clientGroupId: "group-1",
+    clientGroupId: Protocol.ClientGroupId.make("group-1"),
     mutators,
     queries,
   }).pipe(
@@ -183,7 +194,7 @@ const countingEngineLayer = (pulls: Array<RecordedPull>): typeof engineLayer =>
         }))
       ).pipe(
         Layer.provide(
-          Transport.layerInMemory("group-1").pipe(
+          Transport.layerInMemory(Protocol.ClientGroupId.make("group-1")).pipe(
             Layer.provide(
               SyncRoom.layer.pipe(
                 Layer.provide(Layer.effect(Backend.Backend)(MemoryBackend.make(handlers))),

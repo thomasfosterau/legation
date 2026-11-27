@@ -91,11 +91,12 @@ const program = Effect.gen(function* () {
 
   // 3. Client: one per thread. Here it reaches the server over an in-process
   //    loopback transport; `syncLoop.pushDebounce` pushes writes on its own.
+  const clientGroupId = Client.ClientGroupId.make("group-1");
   const { client } = yield* Client.make({
     nodes,
     mutations,
-    clientGroupId: "group-1",
-    transport: yield* Transport.makeInMemory(server.handler, "group-1"),
+    clientGroupId,
+    transport: yield* Transport.makeInMemory(server.handler, clientGroupId),
     syncLoop: { pushDebounce: "50 millis" },
   });
 

@@ -21,6 +21,7 @@ import * as Mutator from "../Mutator.js";
 import * as Node from "../Node.js";
 import * as Predicate from "../Predicate.js";
 import * as Query from "../Query.js";
+import type { RowId } from "../Protocol.js";
 
 const categories = Node.make("categories", {
   attributes: { name: Schema.String },
@@ -130,7 +131,7 @@ describe("typed reads", () => {
       const row = rowOf(client.query(allProducts));
       expectTypeOf(row.value).toEqualTypeOf<ProductRow>();
       expectTypeOf(row.value.name).toEqualTypeOf<string>();
-      expectTypeOf(row.value.categoryId).toEqualTypeOf<string & Brand.Brand<"categories/id">>();
+      expectTypeOf(row.value.categoryId).toEqualTypeOf<RowId & Brand.Brand<"categories/id">>();
       // `one` edges: the target row, or `null` when the referenced row is absent.
       expectTypeOf(row.related.category).toEqualTypeOf<CategoryRow | null>();
       expectTypeOf(row.related.seller).toEqualTypeOf<SellerRow | null>();

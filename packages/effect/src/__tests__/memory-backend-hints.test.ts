@@ -13,14 +13,15 @@ import type { SyncContext } from "../Backend.js";
 import * as MemoryBackend from "../MemoryBackend.js";
 import type { Mutation } from "../Protocol.js";
 import { idOf } from "./shapes.js";
+import { ClientGroupId, MutationId, RowId } from "../Protocol.js";
 
-const context: SyncContext = { clientGroupId: "memory-hints-group" };
+const context: SyncContext = { clientGroupId: ClientGroupId.make("memory-hints-group") };
 const clientId = "memory-hints-client";
 const rows = "rows";
 
 const mutation = (mutationId: number, mutator: string, args: unknown): Mutation => ({
   clientId,
-  mutationId,
+  mutationId: MutationId.make(mutationId),
   mutator,
   args,
   createdAt: 0,
@@ -31,11 +32,11 @@ const decodePut = Schema.decodeUnknownSync(Schema.Struct({ id: Schema.String, n:
 const handlers = {
   "test/put": (raw, writer) => {
     const { id, n } = decodePut(raw);
-    return writer.put(rows, id, { n });
+    return writer.put(rows, RowId.make(id), { n });
   },
   "test/del": (raw, writer) => {
     const id = idOf(raw);
-    return writer.del(rows, id);
+    return writer.del(rows, RowId.make(id));
   },
 } satisfies Record<string, MemoryBackend.BackendHandler>;
 
@@ -52,7 +53,7 @@ describe("MemoryBackend change hints across mutations", () => {
       // r1 is touched (it was written, then deleted) but has no value: the
       // delete wins, so the hint must not carry the earlier put's value.
       expect(result.hints).toEqual([{ collection: rows, ids: ["r1"], values: [] }]);
-      expect(yield* backend.getRows(context, rows, ["r1"])).toEqual([]);
+      expect(yield* backend.getRows(context, rows, [RowId.make("r1")])).toEqual([]);
     })
   );
 
@@ -107,7 +108,9 @@ describe("MemoryBackend change hints across mutations", () => {
       const backend = yield* MemoryBackend.make({
         "test/put-del": (raw, writer) => {
           const { id, n } = decodePut(raw);
-          return writer.put(rows, id, { n }).pipe(Effect.andThen(writer.del(rows, id)));
+          return writer
+            .put(rows, RowId.make(id), { n })
+            .pipe(Effect.andThen(writer.del(rows, RowId.make(id))));
         },
       });
 

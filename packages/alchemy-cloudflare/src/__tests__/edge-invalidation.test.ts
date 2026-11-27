@@ -13,7 +13,12 @@ import * as Layer from "effect/Layer";
 import * as Logger from "effect/Logger";
 import * as Schema from "effect/Schema";
 import { Authorization, MemoryBackend, Mutation, Server } from "@thomasfosterau/legation";
-import { HttpCache, InvalidationBus, InvalidationSink } from "@thomasfosterau/legation/internal";
+import {
+  HttpCache,
+  InvalidationBus,
+  InvalidationSink,
+  Protocol,
+} from "@thomasfosterau/legation/internal";
 import { EdgeInvalidation } from "../index.js";
 
 /** A binding, a KV namespace or a purge that is unreachable. */
@@ -204,7 +209,9 @@ describeWrapped("InvalidationSink.run over a server's bus", (it) => {
       const bus = yield* InvalidationBus.makeInProcess;
       const backend = yield* MemoryBackend.make(
         MemoryBackend.validatedHandlers([
-          MemoryBackend.handler(put, (args, writer) => writer.put("posts", args.id, args)),
+          MemoryBackend.handler(put, (args, writer) =>
+            writer.put("posts", Protocol.RowId.make(args.id), args)
+          ),
         ])
       );
       const server = yield* Server.make({
@@ -227,11 +234,11 @@ describeWrapped("InvalidationSink.run over a server's bus", (it) => {
       ).pipe(Effect.provideService(InvalidationBus.InvalidationBus, bus));
 
       const result = yield* server.handler.handlePush({
-        clientGroupId: "group-a",
+        clientGroupId: Protocol.ClientGroupId.make("group-a"),
         mutations: [
           {
             clientId: "client-a",
-            mutationId: 1,
+            mutationId: Protocol.MutationId.make(1),
             mutator: put.name,
             args: { id: "p1" },
             createdAt: 0,

@@ -16,8 +16,9 @@ import { Subset } from "@thomasfosterau/legation/internal";
 import * as Sql from "../../sql/Sql.js";
 import * as SqlBackend from "../../sql/SqlBackend.js";
 import { defined } from "../defined.js";
+import { ClientGroupId } from "../../Protocol.js";
 
-const context = { clientGroupId: "g" };
+const context = { clientGroupId: ClientGroupId.make("g") };
 
 /** A batched statement's rows: subset 0's row as JSON text, as `row_to_json(…)::text` gives it. */
 const jsonRows = (rows: ReadonlyArray<string>): ReadonlyArray<SqlBackend.SqlRow> =>

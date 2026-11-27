@@ -25,7 +25,7 @@
  */
 import { Defined } from "@thomasfosterau/legation/internal";
 import type { Collection, Mutation, Node, Query, Transport } from "@thomasfosterau/legation";
-import { Client, ClientStore, TransportError } from "@thomasfosterau/legation";
+import { Client, ClientStore, type StoreError, TransportError } from "@thomasfosterau/legation";
 import {
   ClientEngine,
   ClientView,
@@ -58,7 +58,7 @@ export type Role = "host" | "mirror";
 /** Options for {@link run}. */
 export interface ElectedHostOptions<Graph extends Node.NodeRegistry = Node.NodeRegistry> {
   /** The Web Lock name AND the sync-protocol client group — one election per group. */
-  readonly clientGroupId: string;
+  readonly clientGroupId: Client.ClientGroupId;
   /** The node graph the tab's Client reads, which types its rows (`Client.ResolvedRow`). */
   readonly nodes: Graph;
   readonly mutations: Mutation.MutatorRegistry;
@@ -68,8 +68,16 @@ export interface ElectedHostOptions<Graph extends Node.NodeRegistry = Node.NodeR
    * triggers connecting: nothing here opens a socket or an IndexedDB
    * transaction until this tab is actually elected, keeping a losing (or
    * still-waiting) tab's footprint to the mirror alone.
+   *
+   * A store that fails to open fails the layer with a `StoreError`
+   * (`IndexedDbClientStore`'s layers do): {@link run} fails with it when
+   * the tab hosts at once, and otherwise logs it and keeps the tab
+   * mirroring. To recover instead, catch it on the layer (a fallback store).
    */
-  readonly dependencies: Layer.Layer<ClientStore.ClientStore | Transport.ClientTransport>;
+  readonly dependencies: Layer.Layer<
+    ClientStore.ClientStore | Transport.ClientTransport,
+    StoreError
+  >;
   /**
    * The engine's client identity while this tab hosts. Defaults to
    * `host-${clientGroupId}` — deterministic and shared by construction, so
@@ -286,10 +294,14 @@ const switchingView = Effect.fnUntraced(function* (
  * host (ADR-0010) while the lock is held, a mirror over the same channel
  * otherwise — and hand back one `Client` that works unchanged across the
  * transition, plus a `role` stream for observability.
+ *
+ * Fails with the `StoreError` of `dependencies` only where there is no
+ * `navigator.locks` and the tab becomes the host at once; an elected tab
+ * whose dependencies fail logs the failure and keeps mirroring.
  */
 export const run: <Graph extends Node.NodeRegistry>(
   options: ElectedHostOptions<Graph>
-) => Effect.Effect<ElectedHost<Graph>, never, Scope.Scope> = Effect.fn(
+) => Effect.Effect<ElectedHost<Graph>, StoreError, Scope.Scope> = Effect.fn(
   "legation-browser/ElectedHost.run"
 )(function* <Graph extends Node.NodeRegistry>(options: ElectedHostOptions<Graph>) {
   const channelName = options.channelName ?? ServiceWorkerHost.defaultChannelName;
@@ -348,7 +360,10 @@ export const run: <Graph extends Node.NodeRegistry>(
       "ElectedHost: navigator.locks is unavailable — becoming host immediately. " +
         "This is only correct for a single tab; see the README's topology docs."
     );
-    yield* becomeHost();
+    // `run` fails with it, so nothing reads the mirror: close it rather than leave it running.
+    yield* becomeHost().pipe(
+      Effect.onError((cause) => Scope.close(mirrorScope, Exit.failCause(cause)))
+    );
   } else {
     // A failure here (e.g. the durable store or transport failing to
     // construct) leaves this tab mirroring forever rather than crashing

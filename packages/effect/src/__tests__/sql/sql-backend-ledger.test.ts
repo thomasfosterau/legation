@@ -24,8 +24,9 @@ import { SqliteClient } from "@effect/sql-sqlite-node";
 import { SqlClient } from "effect/sql/SqlClient";
 import { Backend, BackendError, MutationRejected, Mutator } from "@thomasfosterau/legation";
 import * as SqlBackend from "../../sql/SqlBackend.js";
+import { ClientGroupId, MutationId, RowId } from "../../Protocol.js";
 
-const CLIENT_GROUP = "g";
+const CLIENT_GROUP = ClientGroupId.make("g");
 const CLIENT = "c1";
 
 /** The schema a new install creates: the ledger with its `rejections` column. */
@@ -106,7 +107,7 @@ const mutators = new Map<string, Mutator.AnyMutator>(
 
 const mutation = (mutationId: number, mutator: string = "todo/set") => ({
   clientId: CLIENT,
-  mutationId,
+  mutationId: MutationId.make(mutationId),
   mutator,
   args: { id: String(mutationId), title: `t${mutationId}` },
   createdAt: 0,
@@ -121,7 +122,9 @@ const applyWrite = (tx: SqlBackend.SqlExecutor, args: Args) =>
     })
     .pipe(
       Effect.andThen(tx.run({ text: `INSERT INTO effects (id) VALUES (?)`, params: [args.id] })),
-      Effect.as<ReadonlyArray<Backend.ChangeHint>>([{ collection: "todos", ids: [args.id] }])
+      Effect.as<ReadonlyArray<Backend.ChangeHint>>([
+        { collection: "todos", ids: [RowId.make(args.id)] },
+      ])
     );
 
 const backendWith = (
@@ -287,7 +290,9 @@ describe("SqlBackend ledger on SQLite", () => {
           mutation(2),
         ]);
         expect(result.lastMutationIds).toEqual({ [CLIENT]: 2 });
-        expect(result.rejected).toEqual([{ clientId: CLIENT, mutationId: 1, reason: "forbidden" }]);
+        expect(result.rejected).toEqual([
+          { clientId: CLIENT, mutationId: MutationId.make(1), reason: "forbidden" },
+        ]);
         expect(yield* countOf(sql, "effects")).toBe(1);
         expect(yield* countOf(sql, "todos")).toBe(1);
         expect(yield* ledgerOf(sql)).toBe(2);
@@ -419,7 +424,7 @@ const rejectingHandlers = {
 
 const rejected = (mutationId: number) => ({
   clientId: CLIENT,
-  mutationId,
+  mutationId: MutationId.make(mutationId),
   reason: `forbidden ${mutationId}`,
 });
 

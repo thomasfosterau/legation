@@ -16,6 +16,7 @@ import { AuthorizationError, BackendError } from "../Errors.js";
 import * as MemoryBackend from "../MemoryBackend.js";
 import * as Mutator from "../Mutator.js";
 import * as Predicate from "../Predicate.js";
+import { ClientGroupId, MutationId, RowId } from "../Protocol.js";
 
 interface Seed {
   readonly id: string;
@@ -44,15 +45,15 @@ const makeBackend = Effect.fn("makeBackend")(function* () {
   const memory = yield* MemoryBackend.make(
     MemoryBackend.validatedHandlers([
       MemoryBackend.handler(putFollow, (seed, writer) =>
-        writer.put("follows", seed.id, seed.value)
+        writer.put("follows", RowId.make(seed.id), seed.value)
       ),
     ])
   );
   yield* memory.applyMutations(
-    { clientGroupId: "seed" },
+    { clientGroupId: ClientGroupId.make("seed") },
     follows.map((seed, index) => ({
       clientId: "seed",
-      mutationId: index + 1,
+      mutationId: MutationId.make(index + 1),
       mutator: "follow/put",
       args: seed,
       createdAt: 0,
@@ -82,7 +83,9 @@ const followingOver = (backend: Backend): Authorization.NamedSet =>
   });
 
 const viewer = (identity?: string): SyncContext =>
-  identity === undefined ? { clientGroupId: "g" } : { clientGroupId: "g", identity };
+  identity === undefined
+    ? { clientGroupId: ClientGroupId.make("g") }
+    : { clientGroupId: ClientGroupId.make("g"), identity };
 
 describe("Authorization.namedSet", () => {
   it.effect("declares its source and maxAge, and reads the distinct scalar members", () =>

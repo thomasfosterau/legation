@@ -41,7 +41,7 @@ import {
 import { Middleware } from "@thomasfosterau/effect-jsonapi";
 import {
   Authorization,
-  type Backend,
+  Backend,
   MemoryBackend,
   MutationRejected,
   Server,
@@ -196,7 +196,7 @@ export const makeServer = (users: ReadonlyArray<User>) =>
     const nextMutationId = (clientId: string) =>
       Ref.modify(mutationIds, (ids) => {
         const next = (ids.get(clientId) ?? 0) + 1;
-        return [next, new Map([...ids, [clientId, next]])] as const;
+        return [Backend.MutationId.make(next), new Map([...ids, [clientId, next]])] as const;
       });
 
     const audience: AudienceServer = {
@@ -213,7 +213,7 @@ export const makeServer = (users: ReadonlyArray<User>) =>
         Effect.gen(function* () {
           const clientId = `server-${session.user.id}`;
           return yield* server.mutate({
-            clientGroupId: clientId,
+            clientGroupId: Backend.ClientGroupId.make(clientId),
             clientId,
             mutationId: yield* nextMutationId(clientId),
             mutation,

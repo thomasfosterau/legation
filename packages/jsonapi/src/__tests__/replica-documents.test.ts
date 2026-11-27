@@ -28,7 +28,7 @@ import {
   Query,
   QueryError,
 } from "@thomasfosterau/legation";
-import { type ClientView, Subset, Defined } from "@thomasfosterau/legation/internal";
+import { type ClientView, Subset, Defined, Protocol } from "@thomasfosterau/legation/internal";
 import * as JsonApiQuery from "../JsonApiQuery.js";
 import * as ReplicaDocuments from "../ReplicaDocuments.js";
 import * as RestHandlers from "../RestHandlers.js";
@@ -106,7 +106,10 @@ const view: ClientView.Reader = {
   query: (subset) =>
     Effect.succeed(
       Subset.apply(
-        (seed[subset.collection] ?? []).map((value) => ({ id: value.id, value })),
+        (seed[subset.collection] ?? []).map((value) => ({
+          id: Protocol.RowId.make(value.id),
+          value,
+        })),
         subset
       )
     ),
@@ -124,17 +127,17 @@ const makeRest = (prefix?: string) =>
     const backend = yield* MemoryBackend.make({
       "seed/put": (args, writer) => {
         const { collection, value } = decodeSeedPut(args);
-        return writer.put(collection, decodeIdentified(value).id, value);
+        return writer.put(collection, Protocol.RowId.make(decodeIdentified(value).id), value);
       },
     });
     const puts = R.toEntries(seed).flatMap(([collection, rows]) =>
       rows.map((value) => ({ collection, value }))
     );
     yield* backend.applyMutations(
-      { clientGroupId: "seed" },
+      { clientGroupId: Protocol.ClientGroupId.make("seed") },
       puts.map((args, index) => ({
         clientId: "seed",
-        mutationId: index + 1,
+        mutationId: Protocol.MutationId.make(index + 1),
         mutator: "seed/put",
         args,
         createdAt: 0,
@@ -147,7 +150,7 @@ const makeRest = (prefix?: string) =>
         R.fromEntries([...nodes.nodes.keys()].map((name) => [name, Authorization.allowAll])),
         { collections: nodes.collections }
       ),
-      context: () => Effect.succeed({ clientGroupId: "http" }),
+      context: () => Effect.succeed({ clientGroupId: Protocol.ClientGroupId.make("http") }),
       ...Defined.fields({ prefix }),
     });
   });

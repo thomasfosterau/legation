@@ -64,7 +64,8 @@ import {
 } from "./Backend.js";
 import { BackendError, MutationRejected } from "./Errors.js";
 import type { Mutator } from "./Mutator.js";
-import type { Mutation } from "./Protocol.js";
+import * as Ids from "./internal/Ids.js";
+import type { Mutation, MutationId, RowId } from "./Protocol.js";
 import * as Predicate from "./Predicate.js";
 import * as RejectionMemory from "./RejectionMemory.js";
 import * as Subset from "./Subset.js";
@@ -75,6 +76,7 @@ import * as Subset from "./Subset.js";
  * handler's own earlier writes.
  */
 export interface BackendWriter {
+  /** Write a row; `id` takes a plain string, since handlers mint ids from their args. */
   readonly put: (collection: string, id: string, value: unknown) => Effect.Effect<void>;
   readonly del: (collection: string, id: string) => Effect.Effect<void>;
   readonly get: (collection: string, id: string) => Effect.Effect<unknown | undefined>;
@@ -136,7 +138,7 @@ export const validatedHandlers = (
   );
 
 interface MemoryRow {
-  readonly id: string;
+  readonly id: RowId;
   readonly version: number;
   readonly value: unknown;
 }
@@ -149,15 +151,15 @@ interface MemoryRow {
 const MAX_HANDLER_ATTEMPTS = 16;
 
 interface MemoryState {
-  readonly rows: ReadonlyMap<string, ReadonlyMap<string, MemoryRow>>;
+  readonly rows: ReadonlyMap<string, ReadonlyMap<RowId, MemoryRow>>;
   readonly versionCounter: number;
   /** clientGroupId → clientId → last applied mutation id. */
-  readonly lastMutationIds: ReadonlyMap<string, ReadonlyMap<string, number>>;
+  readonly lastMutationIds: ReadonlyMap<string, ReadonlyMap<string, MutationId>>;
   /**
    * clientGroupId → clientId → mutationId → reason, for mutations committed as
    * permanently rejected and not yet forgotten (see {@link forgetRejectionsBelow}).
    */
-  readonly rejections: ReadonlyMap<string, ReadonlyMap<string, ReadonlyMap<number, string>>>;
+  readonly rejections: ReadonlyMap<string, ReadonlyMap<string, ReadonlyMap<MutationId, string>>>;
 }
 
 /**
@@ -192,7 +194,7 @@ type StagedWrite = { readonly _tag: "put"; readonly value: unknown } | { readonl
 /** One staged write, tagged with the row it targets. */
 interface StagedEntry {
   readonly collection: string;
-  readonly id: string;
+  readonly id: RowId;
   readonly write: StagedWrite;
 }
 
@@ -200,7 +202,7 @@ interface StagedEntry {
  * The committed rows a handler read: for each row, the version it had at the
  * first read (`None` when the row was absent). The commit re-checks them.
  */
-type ReadSet = Map<string, Map<string, Option.Option<number>>>;
+type ReadSet = Map<string, Map<RowId, Option.Option<number>>>;
 
 /**
  * A mutation's writes, not yet committed. `log` keeps them in handler order so
@@ -210,7 +212,7 @@ type ReadSet = Map<string, Map<string, Option.Option<number>>>;
  */
 interface Stage {
   readonly log: Array<StagedEntry>;
-  readonly overlay: Map<string, Map<string, StagedWrite>>;
+  readonly overlay: Map<string, Map<RowId, StagedWrite>>;
   readonly reads: ReadSet;
 }
 
@@ -219,7 +221,7 @@ const newStage = (reads: ReadSet): Stage => ({ log: [], overlay: new Map(), read
 
 const stageWrite = (stage: Stage, entry: StagedEntry): void => {
   stage.log.push(entry);
-  const rowOverlay = stage.overlay.get(entry.collection) ?? new Map<string, StagedWrite>();
+  const rowOverlay = stage.overlay.get(entry.collection) ?? new Map<RowId, StagedWrite>();
   rowOverlay.set(entry.id, entry.write);
   stage.overlay.set(entry.collection, rowOverlay);
 };
@@ -228,10 +230,10 @@ const stageWrite = (stage: Stage, entry: StagedEntry): void => {
 const recordRead = (
   stage: Stage,
   collection: string,
-  id: string,
+  id: RowId,
   version: Option.Option<number>
 ): void => {
-  const rows = stage.reads.get(collection) ?? new Map<string, Option.Option<number>>();
+  const rows = stage.reads.get(collection) ?? new Map<RowId, Option.Option<number>>();
   if (!rows.has(id)) rows.set(id, version);
   stage.reads.set(collection, rows);
 };
@@ -264,11 +266,11 @@ const commitMutation = (
   mutation: Mutation,
   log: ReadonlyArray<StagedEntry>
 ): MemoryState => {
-  const working = new Map<string, Map<string, MemoryRow>>();
+  const working = new Map<string, Map<RowId, MemoryRow>>();
   let versionCounter = s.versionCounter;
   Arr.forEach(log, ({ collection, id, write }) => {
     const collectionRows =
-      working.get(collection) ?? new Map<string, MemoryRow>(s.rows.get(collection) ?? []);
+      working.get(collection) ?? new Map<RowId, MemoryRow>(s.rows.get(collection) ?? []);
     working.set(collection, collectionRows);
     if (P.isTagged(write, "put")) {
       versionCounter += 1;
@@ -285,7 +287,9 @@ const commitMutation = (
   const groupIds = new Map(lastIds.get(context.clientGroupId) ?? []);
   groupIds.set(
     mutation.clientId,
-    Math.max(lastIdOf(s, context.clientGroupId, mutation.clientId), mutation.mutationId)
+    Ids.mutationId(
+      Math.max(lastIdOf(s, context.clientGroupId, mutation.clientId), mutation.mutationId)
+    )
   );
   lastIds.set(context.clientGroupId, groupIds);
   return { ...s, rows, versionCounter, lastMutationIds: lastIds };
@@ -296,7 +300,7 @@ const rejectionOf = (
   s: MemoryState,
   clientGroupId: string,
   clientId: string,
-  mutationId: number
+  mutationId: MutationId
 ): Option.Option<string> =>
   Option.fromUndefinedOr(s.rejections.get(clientGroupId)?.get(clientId)?.get(mutationId));
 
@@ -305,7 +309,7 @@ const withRejection = (
   s: MemoryState,
   clientGroupId: string,
   clientId: string,
-  mutationId: number,
+  mutationId: MutationId,
   reason: string
 ): MemoryState => {
   const groups = new Map(s.rejections);
@@ -343,8 +347,8 @@ const forgetRejectionsBelow = (
  */
 const oldValuesOf = (
   before: MemoryState,
-  touched: ReadonlyMap<string, ReadonlySet<string>>
-): Map<string, Map<string, unknown>> =>
+  touched: ReadonlyMap<string, ReadonlySet<RowId>>
+): Map<string, Map<RowId, unknown>> =>
   new Map(
     [...touched].flatMap(([collection, ids]) => {
       const rows = before.rows.get(collection);
@@ -367,14 +371,14 @@ const oldValuesOf = (
  */
 const foldStage = (
   stage: Stage,
-  touched: Map<string, Set<string>>,
-  puts: Map<string, Map<string, unknown>>
+  touched: Map<string, Set<RowId>>,
+  puts: Map<string, Map<RowId, unknown>>
 ): void => {
   Arr.forEach(stage.overlay, ([collection, writes]) => {
-    const ids = touched.get(collection) ?? new Set<string>();
+    const ids = touched.get(collection) ?? new Set<RowId>();
     Arr.forEach(writes, ([id, write]) => {
       ids.add(id);
-      const values = puts.get(collection) ?? new Map<string, unknown>();
+      const values = puts.get(collection) ?? new Map<RowId, unknown>();
       if (P.isTagged(write, "put")) {
         values.set(id, write.value);
       } else {
@@ -413,11 +417,16 @@ export const make: (handlers: Readonly<Record<string, BackendHandler>>) => Effec
     // `state`, so nothing is visible before the mutation commits. Reads check
     // the stage first, so the handler sees its own writes.
     const stagingWriter = (stage: Stage): BackendWriter => ({
-      put: (collection, id, value) =>
-        Effect.sync(() => stageWrite(stage, { collection, id, write: { _tag: "put", value } })),
-      del: (collection, id) =>
-        Effect.sync(() => stageWrite(stage, { collection, id, write: { _tag: "del" } })),
-      get: (collection, id) => {
+      put: (collection, raw, value) =>
+        Effect.sync(() =>
+          stageWrite(stage, { collection, id: Ids.rowId(raw), write: { _tag: "put", value } })
+        ),
+      del: (collection, raw) =>
+        Effect.sync(() =>
+          stageWrite(stage, { collection, id: Ids.rowId(raw), write: { _tag: "del" } })
+        ),
+      get: (collection, raw) => {
+        const id = Ids.rowId(raw);
         const staged = stage.overlay.get(collection)?.get(id);
         if (staged !== undefined) {
           return Effect.succeed(P.isTagged(staged, "put") ? staged.value : undefined);
@@ -518,8 +527,8 @@ export const make: (handlers: Readonly<Record<string, BackendHandler>>) => Effec
       finish: ({ context, before }, stages) =>
         Ref.get(state).pipe(
           Effect.map((final) => {
-            const touched = new Map<string, Set<string>>();
-            const puts = new Map<string, Map<string, unknown>>();
+            const touched = new Map<string, Set<RowId>>();
+            const puts = new Map<string, Map<RowId, unknown>>();
             Arr.forEach(stages, (stage) => foldStage(stage, touched, puts));
             return {
               lastMutationIds: R.fromEntries(
@@ -563,7 +572,7 @@ export const make: (handlers: Readonly<Record<string, BackendHandler>>) => Effec
         Ref.get(state).pipe(
           Effect.map((s) => {
             const collectionRows = s.rows.get(collection);
-            const result: Array<{ id: string; version: number; value: unknown }> = [];
+            const result: Array<MemoryRow> = [];
             Arr.forEach(ids, (id) => {
               const row = collectionRows?.get(id);
               if (row !== undefined) result.push(row);

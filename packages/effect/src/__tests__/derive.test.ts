@@ -39,6 +39,7 @@ import { ClientTransport, makeInMemory, type ServerHandler } from "../Transport.
 import { defined } from "./defined.js";
 import { TestFailure } from "./test-failure.js";
 import { idOf, titleOf } from "./shapes.js";
+import { ClientGroupId, RowId } from "../Protocol.js";
 
 type Row<A> = Derive.Row<A>;
 const page = <A>(rows: ReadonlyArray<Row<A>>): ReadonlyArray<{ id: string; value: A }> =>
@@ -96,7 +97,7 @@ describe("Derive — composition (queries-from-queries)", () => {
       const joined = Derive.join(source(orders), source(customers), {
         leftKey: (v) => v.cust,
         rightKey: (v) => v.cid,
-        kind: "left",
+        _tag: "left",
       });
       const byRegion = Derive.groupBy(
         Derive.map(joined, (v) => ({
@@ -126,7 +127,7 @@ describe("Derive — composition (queries-from-queries)", () => {
       const joined = Derive.join(source(orders), source(customers), {
         leftKey: (v) => v.cust,
         rightKey: (v) => v.cid,
-        kind: "left",
+        _tag: "left",
         combine: (order, customer) => ({
           total: order.total,
           name: Option.map(customer, (c) => c.name),
@@ -165,10 +166,13 @@ interface Todo {
 const TodoArgs = Schema.Struct({ id: Schema.String, title: Schema.String });
 const todoSet = Mutator.make("todo/set", TodoArgs);
 const mutators = Mutator.registry([
-  { mutator: todoSet, local: (args: Todo, writer) => writer.put("todos", args.id, args) },
+  {
+    mutator: todoSet,
+    local: (args: Todo, writer) => writer.put("todos", RowId.make(args.id), args),
+  },
 ]);
 const handlers = {
-  "todo/set": (args, writer) => Effect.asVoid(writer.put("todos", idOf(args), args)),
+  "todo/set": (args, writer) => Effect.asVoid(writer.put("todos", RowId.make(idOf(args)), args)),
 } satisfies Record<string, MemoryBackend.BackendHandler>;
 
 const makeServer = Effect.fn("makeServer")(function* (): Effect.fn.Return<
@@ -191,10 +195,10 @@ const makeServer = Effect.fn("makeServer")(function* (): Effect.fn.Return<
 const makeClient = (handler: ServerHandler) =>
   Effect.gen(function* () {
     const store = yield* ClientStoreModule.makeMemory;
-    const transport = yield* makeInMemory(handler, "group-1");
+    const transport = yield* makeInMemory(handler, ClientGroupId.make("group-1"));
     return yield* ClientEngineModule.make({
       clientId: "client-1",
-      clientGroupId: "group-1",
+      clientGroupId: ClientGroupId.make("group-1"),
       mutators,
     }).pipe(
       Effect.provideService(ClientStore, store),

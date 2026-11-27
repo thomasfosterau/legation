@@ -56,6 +56,20 @@ export class ApiError extends Schema.TaggedError<ApiError, { readonly brand: uni
 ) {}
 
 /**
+ * Args a `JsonApiBackend` `writes` function refuses: they decoded against the
+ * mutator's schema but do not fit the one JSON:API write it expresses (for
+ * `FacadeWrites.writesOf`, args naming a type other than the mutation's own).
+ * The backend reports it as invalid args, as it does args that do not decode.
+ */
+export class InvalidWriteArgs extends Schema.TaggedError<
+  InvalidWriteArgs,
+  { readonly brand: unique symbol }
+>()("InvalidWriteArgs", {
+  message: Schema.String,
+  cause: Schema.optional(Schema.Defect()),
+}) {}
+
+/**
  * Conflict error raised when local and remote resource versions mismatch.
  */
 export class ConflictError extends Schema.TaggedError<

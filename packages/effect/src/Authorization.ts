@@ -40,6 +40,7 @@ import * as Predicates from "./Predicate.js";
 import type { PullRequest, PushRequest, ReadRequest } from "./Protocol.js";
 import type { Subset } from "./Subset.js";
 import * as Subsets from "./Subset.js";
+import type { ClientGroupId } from "./Protocol.js";
 
 /**
  * A named, session-resolved set an auth filter's predicate refers to by name
@@ -480,7 +481,7 @@ export const noCredentials: RequestCredentials = credentialsOf(HashMap.empty());
  */
 export interface IdentityRequest {
   /** The client group the push, pull or read names. It is client-chosen: never an identity on its own. */
-  readonly clientGroupId: string;
+  readonly clientGroupId: ClientGroupId;
   /** The transport request's credential-bearing headers; {@link noCredentials} when it had none. */
   readonly credentials: RequestCredentials;
 }

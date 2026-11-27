@@ -31,6 +31,7 @@ import * as SyncServer from "../SyncServer.js";
 import * as Telemetry from "../Telemetry.js";
 import { ClientTransport, makeInMemory } from "../Transport.js";
 import * as Json from "../internal/Json.js";
+import { ClientGroupId, MutationId, RowId } from "../Protocol.js";
 
 const todoSet = Mutator.make("todo/set", Schema.Struct({ id: Schema.String }));
 const allTodos = Subset.make({ collection: "todos" });
@@ -62,7 +63,9 @@ const journalDepth = Metric.value(Telemetry.journalDepth).pipe(Effect.map((s) =>
 const harness = Effect.fn("harness")(function* () {
   const backend = yield* MemoryBackend.make(
     MemoryBackend.validatedHandlers([
-      MemoryBackend.handler(todoSet, (args, writer) => writer.put("todos", args.id, args)),
+      MemoryBackend.handler(todoSet, (args, writer) =>
+        writer.put("todos", RowId.make(args.id), args)
+      ),
     ])
   );
   const handler = yield* SyncServer.make.pipe(
@@ -78,14 +81,14 @@ const harness = Effect.fn("harness")(function* () {
   const store = yield* ClientStoreModule.makeKeyValue().pipe(
     Effect.provideService(KeyValueStore.KeyValueStore, kv.store)
   );
-  const transport = yield* makeInMemory(handler, "group-depth");
+  const transport = yield* makeInMemory(handler, ClientGroupId.make("group-depth"));
   const engine = yield* ClientEngineModule.make({
     clientId: "client-depth",
-    clientGroupId: "group-depth",
+    clientGroupId: ClientGroupId.make("group-depth"),
     mutators: Mutator.registry([
       {
         mutator: todoSet,
-        local: (args: { id: string }, writer) => writer.put("todos", args.id, args),
+        local: (args: { id: string }, writer) => writer.put("todos", RowId.make(args.id), args),
       },
     ]),
   }).pipe(
@@ -137,7 +140,7 @@ describe("journal-depth sampling reads no journal bodies", () => {
 
 const entry = (mutationId: number, clientId = "c1"): Mutation => ({
   clientId,
-  mutationId,
+  mutationId: MutationId.make(mutationId),
   mutator: "noop",
   args: { n: mutationId },
   createdAt: 0,

@@ -44,6 +44,7 @@ import * as P from "effect/Predicate";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 import * as Mutator from "./Mutator.js";
+import { RowId } from "./Protocol.js";
 import type * as Node from "./Node.js";
 
 /** The three operations a graph-derived mutation performs. */
@@ -61,17 +62,17 @@ export const name = (type: string, operation: Operation): string => `${type}/${o
 /** The args of a `{type}/create` or `{type}/update`: the row's fields as a record, keyed by its id. */
 export const WriteArgs = Schema.Struct({
   type: Schema.String,
-  id: Schema.String,
+  id: RowId,
   attributes: Schema.Record(Schema.String, Schema.Unknown),
 });
 
-/** The decoded (and encoded) args of a create or an update. */
+/** The decoded args of a create or an update; encoded, `id` is a plain string. */
 export type WriteArgs = typeof WriteArgs.Type;
 
 /** The args of a `{type}/delete`. */
-export const DeleteArgs = Schema.Struct({ type: Schema.String, id: Schema.String });
+export const DeleteArgs = Schema.Struct({ type: Schema.String, id: RowId });
 
-/** The decoded (and encoded) args of a delete. */
+/** The decoded args of a delete; encoded, `id` is a plain string. */
 export type DeleteArgs = typeof DeleteArgs.Type;
 
 /** One derived mutation: its definition, its client handler, and what it does to which type. */

@@ -9,7 +9,7 @@
  * backend's `writes` seam; the server's rules make `reject` a 422 pointing at
  * the operation and `fail` a server fault (500).
  */
-import { describeWrapped, expect, layer, describe } from "@effect/vitest";
+import { expect, layer, describe } from "@effect/vitest";
 import * as Arr from "effect/Array";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
@@ -24,6 +24,7 @@ import * as Option from "effect/Option";
 import * as P from "effect/Predicate";
 import * as R from "effect/Record";
 import * as Ref from "effect/Ref";
+import * as Result from "effect/Result";
 import * as Schema from "effect/Schema";
 import * as Semaphore from "effect/Semaphore";
 import { KeyValueStore } from "effect/persistence";
@@ -46,7 +47,7 @@ import {
   Resource,
 } from "@thomasfosterau/effect-jsonapi";
 import { BackendError, type Backend, type Mutator } from "@thomasfosterau/legation";
-import { BackendContract, Subset, Defined } from "@thomasfosterau/legation/internal";
+import { BackendContract, Subset, Defined, Protocol } from "@thomasfosterau/legation/internal";
 import * as Convention from "../Convention.js";
 import * as JsonApiBackend from "../JsonApiBackend.js";
 import * as Ledger from "../Ledger.js";
@@ -296,6 +297,7 @@ const applyAdd = (
  */
 const applyUpdate = (
   staged: Store,
+  gates: BackendContract.ParkGates,
   index: number,
   operation: Extract<BatchOperation, { readonly op: "update" }>
 ): Effect.Effect<Entry, Rejection> => {
@@ -318,7 +320,7 @@ const applyUpdate = (
   }
   return Effect.gen(function* () {
     const read = current.attributes.n ?? 0;
-    yield* BackendContract.park(increment);
+    yield* gates.park(increment);
     const row: Stored = { ...current, attributes: { ...current.attributes, n: read + 1 } };
     MutableHashMap.set(tableOf(staged, row.type), id, row);
     return { data: resourceOf(row) };
@@ -342,6 +344,7 @@ const applyOperation = (
   staged: Store,
   committed: Store,
   probe: ServerProbe,
+  gates: BackendContract.ParkGates,
   index: number,
   operation: BatchOperation,
   clientId: Option.Option<string>
@@ -350,7 +353,7 @@ const applyOperation = (
     Match.discriminator("op")("add", (add) =>
       applyAdd(staged, committed, probe, index, add, clientId)
     ),
-    Match.discriminator("op")("update", (update) => applyUpdate(staged, index, update)),
+    Match.discriminator("op")("update", (update) => applyUpdate(staged, gates, index, update)),
     Match.discriminator("op")("remove", (remove) => applyRemove(staged, index, remove)),
     Match.exhaustive
   );
@@ -369,7 +372,12 @@ const RequestClientIds = Schema.Struct({
  * over it, so two overlapping batches would lose the first one's writes. One
  * batch at a time is the store-wide lock that meets guarantee 1.
  */
-const operationsLive = (store: Store, lock: Semaphore.Semaphore, probe: ServerProbe) =>
+const operationsLive = (
+  store: Store,
+  lock: Semaphore.Semaphore,
+  probe: ServerProbe,
+  gates: BackendContract.ParkGates
+) =>
   HttpApiBuilder.group(api, "operations", (handlers) =>
     handlers.handle("operations", ({ payload, request }) =>
       Effect.gen(function* () {
@@ -391,7 +399,9 @@ const operationsLive = (store: Store, lock: Semaphore.Semaphore, probe: ServerPr
             Effect.gen(function* () {
               const operation = yield* decodeOperation(rawOperation);
               const clientId = Option.fromUndefinedOr(raw["atomic:operations"][index]?.data?.id);
-              entries.push(yield* applyOperation(staged, store, probe, index, operation, clientId));
+              entries.push(
+                yield* applyOperation(staged, store, probe, gates, index, operation, clientId)
+              );
             }),
           { concurrency: 1, discard: true }
         );
@@ -409,6 +419,8 @@ const operationsLive = (store: Store, lock: Semaphore.Semaphore, probe: ServerPr
 const makeInProcessClient = (store: Store, probe: ServerProbe = noProbe) =>
   Effect.gen(function* () {
     const lock = yield* Semaphore.make(1);
+    // The server's count-up probe parks at the gates the contract opens.
+    const gates = yield* BackendContract.ParkGates;
     const middleware = Middleware.layerWith({ extensions: [Atomic.EXTENSION_URI] });
     // effect-jsonapi 0.12's `:id` endpoint declarations leak an `unknown`
     // requirement into their handlers (see examples/commerce/server/client.ts);
@@ -418,7 +430,7 @@ const makeInProcessClient = (store: Store, probe: ServerProbe = noProbe) =>
         Layer.mergeAll(
           rowsLive(store),
           evalRowsLive(store),
-          operationsLive(store, lock, probe)
+          operationsLive(store, lock, probe, gates)
         ).pipe(Layer.provide(middleware))
       ),
       Layer.provide(middleware),
@@ -464,7 +476,7 @@ const decodeAttributes = Schema.decodeUnknownSync(Schema.Record(Schema.String, S
  * `add` with the client-generated id (the server above replaces on conflict);
  * `fail` and `reject` trip the server's `crash` / `poison` rules.
  */
-const writes = new Map<string, (args: unknown) => JsonApiBackend.Write>([
+const expressions: ReadonlyArray<readonly [string, (args: unknown) => JsonApiBackend.Write]> = [
   [
     BackendContract.putRow.name,
     (args) => {
@@ -486,7 +498,12 @@ const writes = new Map<string, (args: unknown) => JsonApiBackend.Write>([
   ],
   [
     BackendContract.failAlways.name,
-    () => ({ operation: "create", type: COLLECTION, id: "crash", attributes: { crash: true } }),
+    () => ({
+      operation: "create",
+      type: COLLECTION,
+      id: Protocol.RowId.make("crash"),
+      attributes: { crash: true },
+    }),
   ],
   [
     BackendContract.rejectAlways.name,
@@ -522,7 +539,12 @@ const writes = new Map<string, (args: unknown) => JsonApiBackend.Write>([
       };
     },
   ],
-]);
+];
+
+/** The expressions as the backend's `writes`: none of them refuses. */
+const writes = new Map<string, JsonApiBackend.Expression>(
+  expressions.map(([name, express]) => [name, (args) => Result.succeed(express(args))])
+);
 
 /** A copy of `map` without `key`. */
 const without = <V>(map: ReadonlyMap<string, V>, key: string) =>
@@ -566,7 +588,7 @@ const makeBackend = (
     return { backend, requests, store };
   });
 
-describeWrapped(
+layer(BackendContract.layerParkGates)(
   "JsonApiBackend in atomic mode against effect-jsonapi's Endpoint.operations",
   (it) => {
     it.effect("satisfies verifyBackendContract", () =>
@@ -615,16 +637,16 @@ describeWrapped(
 
 // ─── Visibility before the bump (guarantee 1) ──────────────────────────
 
-const probeContext = { clientGroupId: "visibility-group" };
+const probeContext = { clientGroupId: Protocol.ClientGroupId.make("visibility-group") };
 const probeClient = "visibility-client";
 const heldRow = "held";
 
 /** What a concurrent reader sees: the row, the evaluated subset and the ledger. */
 const readView = (backend: Backend.Backend) =>
   Effect.gen(function* () {
-    const rows = (yield* backend.getRows(probeContext, COLLECTION, [heldRow])).map(
-      (row) => row.value
-    );
+    const rows = (yield* backend.getRows(probeContext, COLLECTION, [
+      Protocol.RowId.make(heldRow),
+    ])).map((row) => row.value);
     const entries = yield* backend.evaluate(probeContext, Subset.make({ collection: COLLECTION }));
     const ledger = yield* backend.lastMutationIds(probeContext);
     return { rows, entries, ledger };
@@ -647,7 +669,7 @@ const probeBatch = (publishEarly: boolean) =>
       backend.applyMutations(probeContext, [
         {
           clientId: probeClient,
-          mutationId: 1,
+          mutationId: Protocol.MutationId.make(1),
           mutator: BackendContract.putRow.name,
           args: { collection: COLLECTION, id: heldRow, value: { n: 1 } },
           createdAt: 0,
@@ -673,64 +695,70 @@ const expectInvisibleWhileParked = (parked: {
   expect(parked.ledger).toEqual({});
 };
 
-describeWrapped("JsonApiBackend visibility before the bump (guarantee 1)", (it) => {
-  it.effect("a concurrent read sees neither a parked batch's row nor its bump", () =>
-    Effect.gen(function* () {
-      const observed = yield* probeBatch(false);
-      expectInvisibleWhileParked(observed.parked);
-    })
-  );
-
-  it.effect("the row and the bump are both visible once the batch commits", () =>
-    Effect.gen(function* () {
-      const observed = yield* probeBatch(false);
-      expect(observed.reported).toEqual({ [probeClient]: 1 });
-      expect(observed.committed.rows).toEqual([expect.objectContaining({ n: 1 })]);
-      expect(observed.committed.entries).toEqual([expect.objectContaining({ id: heldRow })]);
-      expect(observed.committed.ledger).toEqual({ [probeClient]: 1 });
-    })
-  );
-
-  // Mutation: a server that publishes each staged row at once. The probe must
-  // see the row (and so the subset) while the batch is parked. The ledger stays
-  // empty: the client acknowledges only after the server's response.
-  it.effect(
-    "leaks the staged row, and only the row, from a server that publishes before commit (mutation)",
-    () =>
+layer(BackendContract.layerParkGates)(
+  "JsonApiBackend visibility before the bump (guarantee 1)",
+  (it) => {
+    it.effect("a concurrent read sees neither a parked batch's row nor its bump", () =>
       Effect.gen(function* () {
-        const observed = yield* probeBatch(true);
-        expect(observed.parked.rows).toEqual([expect.objectContaining({ n: 1 })]);
-        expect(observed.parked.entries).toEqual([expect.objectContaining({ id: heldRow })]);
-        expect(observed.parked.ledger).toEqual({});
+        const observed = yield* probeBatch(false);
+        expectInvisibleWhileParked(observed.parked);
       })
-  );
-});
+    );
+
+    it.effect("the row and the bump are both visible once the batch commits", () =>
+      Effect.gen(function* () {
+        const observed = yield* probeBatch(false);
+        expect(observed.reported).toEqual({ [probeClient]: 1 });
+        expect(observed.committed.rows).toEqual([expect.objectContaining({ n: 1 })]);
+        expect(observed.committed.entries).toEqual([expect.objectContaining({ id: heldRow })]);
+        expect(observed.committed.ledger).toEqual({ [probeClient]: 1 });
+      })
+    );
+
+    // Mutation: a server that publishes each staged row at once. The probe must
+    // see the row (and so the subset) while the batch is parked. The ledger stays
+    // empty: the client acknowledges only after the server's response.
+    it.effect(
+      "leaks the staged row, and only the row, from a server that publishes before commit (mutation)",
+      () =>
+        Effect.gen(function* () {
+          const observed = yield* probeBatch(true);
+          expect(observed.parked.rows).toEqual([expect.objectContaining({ n: 1 })]);
+          expect(observed.parked.entries).toEqual([expect.objectContaining({ id: heldRow })]);
+          expect(observed.parked.ledger).toEqual({});
+        })
+    );
+  }
+);
 
 // ─── The ledger store across a restart ────────────────────────────────
 
 const restartClient = "restart-client";
-const restartContext = { clientGroupId: "restart-group" };
+const restartContext = { clientGroupId: Protocol.ClientGroupId.make("restart-group") };
 
 /** One applied create and one permanently rejected create, in order. */
 const restartPush = () => [
   {
     clientId: restartClient,
-    mutationId: 1,
+    mutationId: Protocol.MutationId.make(1),
     mutator: BackendContract.putRow.name,
     args: { collection: COLLECTION, id: "kept", value: { n: 1 } },
     createdAt: 0,
   },
   {
     clientId: restartClient,
-    mutationId: 2,
+    mutationId: Protocol.MutationId.make(2),
     mutator: BackendContract.rejectAlways.name,
     args: { collection: COLLECTION, id: "poisoned" },
     createdAt: 0,
   },
 ];
 
+/** A ledger's key-value store, and the gates the contract opens (the server parks at them). */
+const ledgerServices = Layer.merge(KeyValueStore.layerMemory, BackendContract.layerParkGates);
+
 describe("JsonApiBackend ledger store, atomic mode", () => {
-  layer(KeyValueStore.layerMemory)((scoped) => {
+  layer(ledgerServices)((scoped) => {
     scoped.effect("satisfies verifyBackendContract over a durable ledger store", () =>
       Effect.gen(function* () {
         const ledger = Ledger.keyValue(yield* KeyValueStore.KeyValueStore);
@@ -740,7 +768,7 @@ describe("JsonApiBackend ledger store, atomic mode", () => {
     );
   });
 
-  layer(KeyValueStore.layerMemory)((scoped) => {
+  layer(ledgerServices)((scoped) => {
     scoped.effect("keeps lastMutationIds and a committed rejection across a restart", () =>
       Effect.gen(function* () {
         const ledger = Ledger.keyValue(yield* KeyValueStore.KeyValueStore);
@@ -770,7 +798,7 @@ describe("JsonApiBackend ledger store, atomic mode", () => {
 // ─── Ledger store failures and the forgetting bound ───────────────────
 
 describe("JsonApiBackend ledger store failures, atomic mode", () => {
-  layer(KeyValueStore.layerMemory)((scoped) => {
+  layer(ledgerServices)((scoped) => {
     scoped.effect(
       "a ledger write that fails after the server write fails the push, the store and cache agree, and a retry acknowledges",
       () =>
@@ -808,7 +836,7 @@ describe("JsonApiBackend ledger store failures, atomic mode", () => {
     );
   });
 
-  layer(KeyValueStore.layerMemory)((scoped) => {
+  layer(ledgerServices)((scoped) => {
     scoped.effect("a ledger read that fails is a BackendError and fills no cache", () =>
       Effect.gen(function* () {
         const kv = yield* KeyValueStore.KeyValueStore;
@@ -835,7 +863,7 @@ describe("JsonApiBackend ledger store failures, atomic mode", () => {
     );
   });
 
-  layer(KeyValueStore.layerMemory)((scoped) => {
+  layer(ledgerServices)((scoped) => {
     scoped.effect("the forgetting bound persists across a restart", () =>
       Effect.gen(function* () {
         const kv = yield* KeyValueStore.KeyValueStore;
@@ -844,7 +872,7 @@ describe("JsonApiBackend ledger store failures, atomic mode", () => {
         const first = yield* makeBackend(undefined, noProbe, { ledger, store: server });
         const mutation = (mutationId: number, mutator: string, args: unknown) => ({
           clientId: restartClient,
-          mutationId,
+          mutationId: Protocol.MutationId.make(mutationId),
           mutator,
           args,
           createdAt: 0,
@@ -885,7 +913,7 @@ describe("JsonApiBackend ledger store failures, atomic mode", () => {
     );
   });
 
-  layer(KeyValueStore.layerMemory)((scoped) => {
+  layer(ledgerServices)((scoped) => {
     scoped.effect(
       "restarts over the same durable store with the first group's ledger, and runs the contract in a fresh group",
       () =>
@@ -894,11 +922,11 @@ describe("JsonApiBackend ledger store failures, atomic mode", () => {
           // The first run uses one group, and its ledger is what a restart must bring back.
           // The restarted backend runs the contract in another group; the same group is the
           // restart test below.
-          const firstContext = { clientGroupId: "contract-first" };
+          const firstContext = { clientGroupId: Protocol.ClientGroupId.make("contract-first") };
           const first = yield* makeBackend(undefined, noProbe, { ledger });
           yield* BackendContract.verifyBackendContract(first.backend, {
             collection: COLLECTION,
-            clientGroupId: firstContext.clientGroupId,
+            clientGroupId: Protocol.ClientGroupId.make(firstContext.clientGroupId),
           });
           const acknowledged = yield* first.backend.lastMutationIds(firstContext);
           const rejected = yield* first.backend.rejections(firstContext);
@@ -913,7 +941,7 @@ describe("JsonApiBackend ledger store failures, atomic mode", () => {
           // The restarted backend then runs the contract in another group.
           yield* BackendContract.verifyBackendContract(restarted.backend, {
             collection: COLLECTION,
-            clientGroupId: "contract-restarted",
+            clientGroupId: Protocol.ClientGroupId.make("contract-restarted"),
           });
         })
     );
@@ -922,7 +950,7 @@ describe("JsonApiBackend ledger store failures, atomic mode", () => {
 
 // ─── The contract across a restart in the same client group ───
 
-const sameGroup = "contract-same-group";
+const sameGroup = Protocol.ClientGroupId.make("contract-same-group");
 const CONTRACT_CLIENT = "contract-client";
 
 /**
@@ -937,11 +965,11 @@ const restartInSameGroup = (restartWith: (ledger: Ledger.LedgerStore) => Ledger.
   Effect.gen(function* () {
     const ledger = Ledger.keyValue(yield* KeyValueStore.KeyValueStore);
     const context = { clientGroupId: sameGroup };
-    const peerContext = { clientGroupId: `${sameGroup}-peer` };
+    const peerContext = { clientGroupId: Protocol.ClientGroupId.make(`${sameGroup}-peer`) };
     const first = yield* makeBackend(undefined, noProbe, { ledger });
     yield* BackendContract.verifyBackendContract(first.backend, {
       collection: COLLECTION,
-      clientGroupId: sameGroup,
+      clientGroupId: Protocol.ClientGroupId.make(sameGroup),
     });
     const acknowledged = yield* first.backend.lastMutationIds(context);
     const peerAcknowledged = yield* first.backend.lastMutationIds(peerContext);
@@ -955,7 +983,7 @@ const restartInSameGroup = (restartWith: (ledger: Ledger.LedgerStore) => Ledger.
     const outcome = yield* Effect.exit(
       BackendContract.verifyBackendContract(restarted.backend, {
         collection: COLLECTION,
-        clientGroupId: sameGroup,
+        clientGroupId: Protocol.ClientGroupId.make(sameGroup),
         restoredLedger: acknowledged[CONTRACT_CLIENT] ?? 0,
         restoredPeerLedger: peerAcknowledged[CONTRACT_CLIENT] ?? 0,
       })
@@ -964,7 +992,7 @@ const restartInSameGroup = (restartWith: (ledger: Ledger.LedgerStore) => Ledger.
   });
 
 describe("JsonApiBackend restarted on the same ledger in the same group, atomic mode", () => {
-  layer(KeyValueStore.layerMemory)((scoped) => {
+  layer(ledgerServices)((scoped) => {
     scoped.effect(
       "runs the full contract over a backend restarted on the same durable ledger",
       () =>
@@ -977,7 +1005,7 @@ describe("JsonApiBackend restarted on the same ledger in the same group, atomic 
     );
   });
 
-  layer(KeyValueStore.layerMemory)((scoped) => {
+  layer(ledgerServices)((scoped) => {
     scoped.effect(
       "fails a backend that forgets its ledger on restart through the restored-ledger rule",
       () =>

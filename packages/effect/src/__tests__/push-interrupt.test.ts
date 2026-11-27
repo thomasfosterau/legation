@@ -17,10 +17,13 @@ import * as InvalidationBus from "../InvalidationBus.js";
 import * as MemoryBackend from "../MemoryBackend.js";
 import * as Mutator from "../Mutator.js";
 import * as SyncServer from "../SyncServer.js";
+import { ClientGroupId, MutationId, RowId } from "../Protocol.js";
 
 const todoSet = Mutator.make("todo/set", Schema.Struct({ id: Schema.String }));
 const handlers = MemoryBackend.validatedHandlers([
-  MemoryBackend.handler(todoSet, (args, writer) => writer.put("todos", args.id, { id: args.id })),
+  MemoryBackend.handler(todoSet, (args, writer) =>
+    writer.put("todos", RowId.make(args.id), { id: args.id })
+  ),
 ]);
 
 describe("SyncServer.handlePush and interruption", () => {
@@ -54,11 +57,11 @@ describe("SyncServer.handlePush and interruption", () => {
 
       const push = yield* Effect.forkScoped(
         server.handlePush({
-          clientGroupId: "group-a",
+          clientGroupId: ClientGroupId.make("group-a"),
           mutations: [
             {
               clientId: "c-a",
-              mutationId: 1,
+              mutationId: MutationId.make(1),
               mutator: "todo/set",
               args: { id: "1" },
               createdAt: 0,

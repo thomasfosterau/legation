@@ -33,10 +33,11 @@ import * as Sql from "../../sql/Sql.js";
 import * as SqlBackend from "../../sql/SqlBackend.js";
 import * as Env from "../env.js";
 import { TestFailure } from "../test-failure.js";
+import { ClientGroupId, MutationId, RowId } from "../../Protocol.js";
 
 const databaseUrl = Env.databaseUrl;
 
-const CLIENT_GROUP = "g";
+const CLIENT_GROUP = ClientGroupId.make("g");
 const CLIENT = "c1";
 const context = { clientGroupId: CLIENT_GROUP };
 
@@ -108,7 +109,7 @@ const parkTodo = Mutator.make("todo/park", TodoArgs);
 
 const mutation = (mutationId: number, mutator: string) => ({
   clientId: CLIENT,
-  mutationId,
+  mutationId: MutationId.make(mutationId),
   mutator,
   args: { id: String(mutationId), title: `t${mutationId}` },
   createdAt: 0,
@@ -126,7 +127,9 @@ const applyWrite = (tx: SqlBackend.SqlExecutor, args: Args) =>
     })
     .pipe(
       Effect.andThen(tx.run({ text: `INSERT INTO effects (id) VALUES ($1)`, params: [args.id] })),
-      Effect.as<ReadonlyArray<Backend.ChangeHint>>([{ collection: "todos", ids: [args.id] }])
+      Effect.as<ReadonlyArray<Backend.ChangeHint>>([
+        { collection: "todos", ids: [RowId.make(args.id)] },
+      ])
     );
 
 /** The ledger's watermark for the test client (0 when it has no row). */
@@ -391,8 +394,8 @@ describePostgres("SqlBackend on PostgreSQL: transactional: false bump", () => {
 // Serialisable isolation across client groups: group X's handler reads a
 // counter, parks, and group Y commits an increment before X writes. The rows are
 // the same, so X's write must be refused rather than lost.
-const GROUP_X = "gx";
-const GROUP_Y = "gy";
+const GROUP_X = ClientGroupId.make("gx");
+const GROUP_Y = ClientGroupId.make("gy");
 
 const incrementArgs = Schema.Struct({ id: Schema.String });
 const incrementCounter = Mutator.make("counter/increment", incrementArgs);
@@ -400,7 +403,7 @@ const incrementCounter = Mutator.make("counter/increment", incrementArgs);
 /** One increment of the `counter` row by one client of one group; `id` names its effect row. */
 const incrementMutation = (clientId: string, id: string) => ({
   clientId,
-  mutationId: 1,
+  mutationId: MutationId.make(1),
   mutator: incrementCounter.name,
   args: { id },
   createdAt: 0,
@@ -465,13 +468,15 @@ describePostgres("SqlBackend on PostgreSQL: serialisable isolation across client
           });
 
           const firstX = yield* Effect.forkChild(
-            backend.applyMutations({ clientGroupId: GROUP_X }, [incrementMutation("x1", "x1")])
+            backend.applyMutations({ clientGroupId: ClientGroupId.make(GROUP_X) }, [
+              incrementMutation("x1", "x1"),
+            ])
           );
           expect(yield* Deferred.await(read)).toBe(0);
 
           // Group Y increments and commits while X is parked after its read. Its
           // transaction touches nothing X has written, so it does not wait.
-          yield* backend.applyMutations({ clientGroupId: GROUP_Y }, [
+          yield* backend.applyMutations({ clientGroupId: ClientGroupId.make(GROUP_Y) }, [
             incrementMutation("y1", "y1"),
           ]);
 
@@ -486,7 +491,7 @@ describePostgres("SqlBackend on PostgreSQL: serialisable isolation across client
 
           // The client retries the batch. Its read now sees Y's value, so X
           // writes 2, and its refused first attempt left no effect behind.
-          yield* backend.applyMutations({ clientGroupId: GROUP_X }, [
+          yield* backend.applyMutations({ clientGroupId: ClientGroupId.make(GROUP_X) }, [
             incrementMutation("x1", "x1"),
           ]);
 
@@ -558,7 +563,7 @@ describePostgres("SqlBackend on PostgreSQL: a nested transaction", () => {
 // the committed outcome once it can read again.
 const rejectionOf = (mutationId: number) => ({
   clientId: CLIENT,
-  mutationId,
+  mutationId: MutationId.make(mutationId),
   reason: `forbidden ${mutationId}`,
 });
 

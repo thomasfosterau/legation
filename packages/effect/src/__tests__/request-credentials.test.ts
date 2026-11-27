@@ -25,13 +25,14 @@ import * as Mutator from "../Mutator.js";
 import * as Subset from "../Subset.js";
 import * as SyncServer from "../SyncServer.js";
 import { makeInMemory } from "../Transport.js";
+import { ClientGroupId, MutationId, RowId } from "../Protocol.js";
 
 /** A secret that must reach the resolver and nothing else. */
 const SECRET = "session=s3cr3t-token";
 
 const setTodo = Mutator.make("todo/set", Schema.Unknown);
 const handlers = MemoryBackend.validatedHandlers([
-  MemoryBackend.handler(setTodo, (args, writer) => writer.put("todos", "t1", args)),
+  MemoryBackend.handler(setTodo, (args, writer) => writer.put("todos", RowId.make("t1"), args)),
 ]);
 
 const allTodos = Subset.make({ collection: "todos" });
@@ -85,11 +86,19 @@ const makeServer = (resolve?: Authorization.IdentityResolver["resolve"]) =>
   });
 
 const push = {
-  clientGroupId: "group-a",
-  mutations: [{ clientId: "c1", mutationId: 1, mutator: setTodo.name, args: {}, createdAt: 0 }],
+  clientGroupId: ClientGroupId.make("group-a"),
+  mutations: [
+    {
+      clientId: "c1",
+      mutationId: MutationId.make(1),
+      mutator: setTodo.name,
+      args: {},
+      createdAt: 0,
+    },
+  ],
 };
-const pull = { clientGroupId: "group-a", subscriptions: [allTodos] };
-const read = { clientGroupId: "group-a", subsets: [allTodos] };
+const pull = { clientGroupId: ClientGroupId.make("group-a"), subscriptions: [allTodos] };
+const read = { clientGroupId: ClientGroupId.make("group-a"), subsets: [allTodos] };
 
 /** The credentials a carrier presents for a request with a session cookie. */
 const presented = {
@@ -183,7 +192,7 @@ describe("IdentityResolver sees the request's credentials", () => {
   it.effect("the in-memory loopback presents noCredentials", () =>
     Effect.gen(function* () {
       const { handler, seen } = yield* makeServer();
-      const transport = yield* makeInMemory(handler, "group-a");
+      const transport = yield* makeInMemory(handler, ClientGroupId.make("group-a"));
       yield* transport.push(push);
       yield* transport.pull(pull);
       const readOver = transport.read;
@@ -203,7 +212,7 @@ describe("IdentityResolver sees the request's credentials", () => {
   it.effect("a loopback acting for a request presents that request's credentials", () =>
     Effect.gen(function* () {
       const { handler, seen } = yield* makeServer();
-      const transport = yield* makeInMemory(handler, "group-a", presented);
+      const transport = yield* makeInMemory(handler, ClientGroupId.make("group-a"), presented);
       yield* transport.pull(pull);
 
       const { requests } = yield* seen;
@@ -219,7 +228,7 @@ describe("Transport.makeInMemory", () => {
     Effect.gen(function* () {
       const { handler, seen } = yield* makeServer();
       const jar = yield* Ref.make(Option.none<string>());
-      const transport = yield* makeInMemory(handler, "group-a", {
+      const transport = yield* makeInMemory(handler, ClientGroupId.make("group-a"), {
         credentials: Effect.map(
           Ref.get(jar),
           Option.map((cookie) => Authorization.credentialsFromHeaders({ cookie }))
@@ -243,7 +252,7 @@ describe("Transport.makeInMemory", () => {
   it.effect("fails every call with a TransportError while offline, until back online", () =>
     Effect.gen(function* () {
       const { handler, seen } = yield* makeServer();
-      const transport = yield* makeInMemory(handler, "group-a");
+      const transport = yield* makeInMemory(handler, ClientGroupId.make("group-a"));
       expect(yield* transport.status).toBe("connected");
 
       yield* transport.setOnline(false);
@@ -274,7 +283,7 @@ describe("Transport.makeInMemory", () => {
   it.effect("setStatus changes only the reported status", () =>
     Effect.gen(function* () {
       const { handler, seen } = yield* makeServer();
-      const transport = yield* makeInMemory(handler, "group-a");
+      const transport = yield* makeInMemory(handler, ClientGroupId.make("group-a"));
       yield* transport.setStatus("disconnected");
       expect(yield* transport.status).toBe("disconnected");
       yield* transport.pull(pull);
@@ -307,7 +316,7 @@ describe("credentials reach the resolver alone", () => {
         expect(contexts.length).toBeGreaterThanOrEqual(5);
         // Strict: no key beyond the group and the identity, credentials or otherwise.
         expect(contexts).toStrictEqual(
-          contexts.map(() => ({ clientGroupId: "group-a", identity: "alice" }))
+          contexts.map(() => ({ clientGroupId: ClientGroupId.make("group-a"), identity: "alice" }))
         );
       }).pipe(Effect.scoped)
   );

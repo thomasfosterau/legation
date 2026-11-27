@@ -35,14 +35,15 @@ import * as SyncServer from "../SyncServer.js";
 import { ClientTransport, makeInMemory } from "../Transport.js";
 import { defined } from "./defined.js";
 import { idOf } from "./shapes.js";
+import { ClientGroupId, MutationId, RowId } from "../Protocol.js";
 
-const context: SyncContext = { clientGroupId: "memory-atomicity-group" };
+const context: SyncContext = { clientGroupId: ClientGroupId.make("memory-atomicity-group") };
 const clientId = "memory-atomicity-client";
 const rows = "rows";
 
 const mutation = (mutationId: number, mutator: string, args: unknown): Mutation => ({
   clientId,
-  mutationId,
+  mutationId: MutationId.make(mutationId),
   mutator,
   args,
   createdAt: 0,
@@ -59,13 +60,13 @@ const handlersFor = (hooks: {
   ({
     "test/set": (raw, writer) => {
       const { id, n } = argsOf(raw);
-      return writer.put(rows, id, { n });
+      return writer.put(rows, RowId.make(id), { n });
     },
     // Write, then park before returning: the window a pull or evaluate can hit.
     "test/park": (raw, writer) => {
       const { id, n } = argsOf(raw);
       return writer
-        .put(rows, id, { n })
+        .put(rows, RowId.make(id), { n })
         .pipe(
           Effect.andThen(Deferred.succeed(hooks.written, undefined)),
           Effect.andThen(Deferred.await(hooks.release))
@@ -75,7 +76,7 @@ const handlersFor = (hooks: {
     "test/park-reject": (raw, writer) => {
       const { id, n } = argsOf(raw);
       return writer
-        .put(rows, id, { n })
+        .put(rows, RowId.make(id), { n })
         .pipe(
           Effect.andThen(Deferred.succeed(hooks.written, undefined)),
           Effect.andThen(Deferred.await(hooks.release)),
@@ -86,17 +87,17 @@ const handlersFor = (hooks: {
     "test/fail-after-write": (raw, writer) => {
       const { id, n } = argsOf(raw);
       return writer
-        .put(rows, id, { n })
+        .put(rows, RowId.make(id), { n })
         .pipe(Effect.andThen(Effect.fail(new BackendError({ message: "transient after write" }))));
     },
     // Write, read it back, delete it, read again.
     "test/read-back": (raw, writer) => {
       const { id, n } = argsOf(raw);
       return Effect.gen(function* () {
-        yield* writer.put(rows, id, { n });
-        const afterPut = yield* writer.get(rows, id);
-        yield* writer.del(rows, id);
-        const afterDel = yield* writer.get(rows, id);
+        yield* writer.put(rows, RowId.make(id), { n });
+        const afterPut = yield* writer.get(rows, RowId.make(id));
+        yield* writer.del(rows, RowId.make(id));
+        const afterDel = yield* writer.get(rows, RowId.make(id));
         yield* Ref.set(hooks.observed, [afterPut, afterDel]);
       });
     },
@@ -122,7 +123,7 @@ describe("MemoryBackend atomicity", () => {
       // The handler has written and is parked before it returns.
       yield* Deferred.await(hooks.written);
 
-      expect(yield* backend.getRows(context, rows, ["a"])).toEqual([]);
+      expect(yield* backend.getRows(context, rows, [RowId.make("a")])).toEqual([]);
       expect(yield* backend.evaluate(context, Subset.make({ collection: rows }))).toEqual([]);
       expect(yield* backend.lastMutationIds(context)).toEqual({});
 
@@ -131,7 +132,7 @@ describe("MemoryBackend atomicity", () => {
 
       // After the mutation finishes, the write and the bump are both visible.
       expect(result.lastMutationIds[clientId]).toBe(1);
-      const [row] = yield* backend.getRows(context, rows, ["a"]);
+      const [row] = yield* backend.getRows(context, rows, [RowId.make("a")]);
       expect(row?.value).toEqual({ n: 1 });
       expect(yield* backend.lastMutationIds(context)).toEqual({ [clientId]: 1 });
     })
@@ -147,7 +148,7 @@ describe("MemoryBackend atomicity", () => {
       );
       yield* Deferred.await(hooks.written);
 
-      expect(yield* backend.getRows(context, rows, ["a"])).toEqual([]);
+      expect(yield* backend.getRows(context, rows, [RowId.make("a")])).toEqual([]);
       expect(yield* backend.lastMutationIds(context)).toEqual({});
 
       yield* Deferred.succeed(hooks.release, undefined);
@@ -155,7 +156,7 @@ describe("MemoryBackend atomicity", () => {
 
       expect(result.lastMutationIds[clientId]).toBe(1);
       expect(result.rejected?.map((entry) => entry.mutationId)).toEqual([1]);
-      expect(yield* backend.getRows(context, rows, ["a"])).toEqual([]);
+      expect(yield* backend.getRows(context, rows, [RowId.make("a")])).toEqual([]);
       expect(yield* backend.lastMutationIds(context)).toEqual({ [clientId]: 1 });
     })
   );
@@ -166,7 +167,7 @@ describe("MemoryBackend atomicity", () => {
       const backend = yield* MemoryBackend.make(handlersFor(hooks));
 
       yield* backend.applyMutations(context, [mutation(1, "test/set", { id: "a", n: 1 })]);
-      const [before] = yield* backend.getRows(context, rows, ["a"]);
+      const [before] = yield* backend.getRows(context, rows, [RowId.make("a")]);
 
       const exit = yield* Effect.exit(
         backend.applyMutations(context, [mutation(2, "test/fail-after-write", { id: "a", n: 2 })])
@@ -174,7 +175,7 @@ describe("MemoryBackend atomicity", () => {
       expect(exit._tag).toBe("Failure");
 
       // The failed write is gone: same value, same version, no bump.
-      const [after] = yield* backend.getRows(context, rows, ["a"]);
+      const [after] = yield* backend.getRows(context, rows, [RowId.make("a")]);
       expect(after).toEqual(before);
       expect(yield* backend.lastMutationIds(context)).toEqual({ [clientId]: 1 });
 
@@ -183,7 +184,7 @@ describe("MemoryBackend atomicity", () => {
         mutation(2, "test/set", { id: "a", n: 2 }),
       ]);
       expect(retry.lastMutationIds[clientId]).toBe(2);
-      const [retried] = yield* backend.getRows(context, rows, ["a"]);
+      const [retried] = yield* backend.getRows(context, rows, [RowId.make("a")]);
       expect(retried?.value).toEqual({ n: 2 });
       expect(Number(retried?.version)).toBeGreaterThan(Number(before?.version));
     })
@@ -197,7 +198,7 @@ describe("MemoryBackend atomicity", () => {
       yield* backend.applyMutations(context, [mutation(1, "test/read-back", { id: "a", n: 7 })]);
 
       expect(yield* Ref.get(hooks.observed)).toEqual([{ n: 7 }, undefined]);
-      expect(yield* backend.getRows(context, rows, ["a"])).toEqual([]);
+      expect(yield* backend.getRows(context, rows, [RowId.make("a")])).toEqual([]);
       expect(yield* backend.lastMutationIds(context)).toEqual({ [clientId]: 1 });
     })
   );
@@ -258,9 +259,9 @@ const gatedHandlers = (gates: Record<GateName, Gate>) =>
       return Effect.gen(function* () {
         yield* Deferred.succeed(hook.entered, undefined);
         yield* Deferred.await(hook.release);
-        const current = decodeTally(yield* writer.get(rows, "counter"));
-        yield* writer.put(rows, "counter", { count: (current?.count ?? 0) + 1 });
-        yield* writer.put(rows, id, { n });
+        const current = decodeTally(yield* writer.get(rows, RowId.make("counter")));
+        yield* writer.put(rows, RowId.make("counter"), { count: (current?.count ?? 0) + 1 });
+        yield* writer.put(rows, RowId.make(id), { n });
       });
     },
   }) satisfies Record<string, MemoryBackend.BackendHandler>;
@@ -288,14 +289,19 @@ describe("MemoryBackend concurrent applyMutations", () => {
       yield* Deferred.succeed(gates.b.release, undefined);
       const resultB = yield* Fiber.join(copyB);
       expect(resultB.lastMutationIds[clientId]).toBe(1);
-      const afterB = yield* backend.getRows(context, rows, ["x", "counter"]);
+      const afterB = yield* backend.getRows(context, rows, [
+        RowId.make("x"),
+        RowId.make("counter"),
+      ]);
       expect(afterB.map((row) => row.value)).toEqual([{ n: 1 }, { count: 1 }]);
 
       yield* Deferred.succeed(gates.a.release, undefined);
       const resultA = yield* Fiber.join(copyA);
 
       // A's copy is a replay: the rows keep B's versions, and it reports no effects.
-      expect(yield* backend.getRows(context, rows, ["x", "counter"])).toEqual(afterB);
+      expect(
+        yield* backend.getRows(context, rows, [RowId.make("x"), RowId.make("counter")])
+      ).toEqual(afterB);
       expect(resultA.lastMutationIds[clientId]).toBe(1);
       expect(resultA.hints).toEqual([]);
       expect(resultA.rejected).toBeUndefined();
@@ -322,7 +328,10 @@ describe("MemoryBackend concurrent applyMutations", () => {
       yield* backend.applyMutations(context, [gatedMutation(2, "fresh", "x", 2)]);
       const committed = yield* backend.applyMutations(context, [gatedMutation(3, "next", "x", 3)]);
       expect(committed.lastMutationIds[clientId]).toBe(3);
-      const beforeStale = yield* backend.getRows(context, rows, ["x", "counter"]);
+      const beforeStale = yield* backend.getRows(context, rows, [
+        RowId.make("x"),
+        RowId.make("counter"),
+      ]);
       expect(beforeStale.map((row) => row.value)).toEqual([{ n: 3 }, { count: 3 }]);
 
       // The stale copy of mutation 2 resumes last.
@@ -333,12 +342,16 @@ describe("MemoryBackend concurrent applyMutations", () => {
       // mutation 3's row or bump the counter again.
       expect(staleResult.lastMutationIds[clientId]).toBe(3);
       expect(yield* backend.lastMutationIds(context)).toEqual({ [clientId]: 3 });
-      expect(yield* backend.getRows(context, rows, ["x", "counter"])).toEqual(beforeStale);
+      expect(
+        yield* backend.getRows(context, rows, [RowId.make("x"), RowId.make("counter")])
+      ).toEqual(beforeStale);
 
       // A later retry of mutation 3 is a replay and stays a no-op.
       const retry = yield* backend.applyMutations(context, [gatedMutation(3, "next", "x", 3)]);
       expect(retry.lastMutationIds[clientId]).toBe(3);
-      expect(yield* backend.getRows(context, rows, ["x", "counter"])).toEqual(beforeStale);
+      expect(
+        yield* backend.getRows(context, rows, [RowId.make("x"), RowId.make("counter")])
+      ).toEqual(beforeStale);
     })
   );
 });
@@ -350,13 +363,17 @@ const outcomeHandlers = (gates: Record<GateName, Gate>) =>
     "test/reject": () => Effect.fail(new MutationRejected({ reason: "forbidden" })),
     "test/set": (raw, writer) => {
       const { id, n } = argsOf(raw);
-      return writer.put(rows, id, { n });
+      return writer.put(rows, RowId.make(id), { n });
     },
   }) satisfies Record<string, MemoryBackend.BackendHandler>;
 
 const rejectedMutation = (mutationId: number): Mutation => mutation(mutationId, "test/reject", {});
 
-const rejection = (mutationId: number) => ({ clientId, mutationId, reason: "forbidden" });
+const rejection = (mutationId: number) => ({
+  clientId,
+  mutationId: MutationId.make(mutationId),
+  reason: "forbidden",
+});
 
 describe("MemoryBackend committed outcome of a copy that loses the race", () => {
   it.effect("a skipped copy of N does not stop N+1 from applying, in order", () =>
@@ -385,7 +402,11 @@ describe("MemoryBackend committed outcome of a copy that loses the race", () => 
       expect(resultA.lastMutationIds[clientId]).toBe(2);
       expect(resultA.rejected).toBeUndefined();
       expect(yield* backend.lastMutationIds(context)).toEqual({ [clientId]: 2 });
-      const stored = yield* backend.getRows(context, rows, ["x", "counter", "y"]);
+      const stored = yield* backend.getRows(context, rows, [
+        RowId.make("x"),
+        RowId.make("counter"),
+        RowId.make("y"),
+      ]);
       expect(stored.map((row) => row.value)).toEqual([{ n: 1 }, { count: 2 }, { n: 2 }]);
       const version = (id: string) => Number(stored.find((row) => row.id === id)?.version);
       expect(version("x")).toBeLessThan(version("counter"));
@@ -416,7 +437,9 @@ describe("MemoryBackend committed outcome of a copy that loses the race", () => 
       expect(resultA.lastMutationIds[clientId]).toBe(1);
 
       // Neither copy's effects are visible, and the id is bumped once.
-      expect(yield* backend.getRows(context, rows, ["x", "counter"])).toEqual([]);
+      expect(
+        yield* backend.getRows(context, rows, [RowId.make("x"), RowId.make("counter")])
+      ).toEqual([]);
       expect(yield* backend.lastMutationIds(context)).toEqual({ [clientId]: 1 });
     })
   );
@@ -475,12 +498,13 @@ const racingTransport = (
     }),
 });
 
-const raceContext: SyncContext = { clientGroupId: "group-a" };
+const raceContext: SyncContext = { clientGroupId: ClientGroupId.make("group-a") };
 
 const raceMutators = Mutator.registry([
   {
     mutator: Mutator.make("todo/race", Schema.Unknown),
-    local: (args: { readonly id: string }, writer) => writer.put("todos", args.id, args),
+    local: (args: { readonly id: string }, writer) =>
+      writer.put("todos", RowId.make(args.id), args),
   },
 ]);
 
@@ -499,7 +523,7 @@ const raceHandlers = (
         if (copy > 1) return yield* new MutationRejected({ reason: "forbidden" });
         yield* Deferred.succeed(parked.entered, undefined);
         yield* Deferred.await(parked.release);
-        return yield* writer.put("todos", idOf(args), args);
+        return yield* writer.put("todos", RowId.make(idOf(args)), args);
       }),
   }) satisfies Record<string, MemoryBackend.BackendHandler>;
 
@@ -605,10 +629,10 @@ const runRace = (order: "rejected-first" | "losing-first") =>
     const store = yield* ClientStoreModule.makeMemory;
     const pushes = yield* Ref.make(0);
     const gates = [yield* pushGate(), yield* pushGate()] as const;
-    const transport = yield* makeInMemory(handler, "group-a");
+    const transport = yield* makeInMemory(handler, ClientGroupId.make("group-a"));
     const engine = yield* ClientEngineModule.make({
       clientId: "client-a",
-      clientGroupId: "group-a",
+      clientGroupId: ClientGroupId.make("group-a"),
       mutators: raceMutators,
     }).pipe(
       Effect.provideService(ClientStore, store),
@@ -650,7 +674,7 @@ const runRace = (order: "rejected-first" | "losing-first") =>
     expect(yield* engine.query(Subset.make({ collection: "todos" }))).toEqual([]);
 
     // The server agrees: no effects, and the id is bumped.
-    expect(yield* backend.getRows(raceContext, "todos", ["x"])).toEqual([]);
+    expect(yield* backend.getRows(raceContext, "todos", [RowId.make("x")])).toEqual([]);
     expect(yield* backend.lastMutationIds(raceContext)).toEqual({ "client-a": 1 });
 
     // A pull changes nothing the client shows.
@@ -671,7 +695,7 @@ const runRace = (order: "rejected-first" | "losing-first") =>
 const withLateRejection = (
   inner: ClientTransport,
   pushNumber: number,
-  report: { readonly clientId: string; readonly mutationId: number; readonly reason: string }
+  report: { readonly clientId: string; readonly mutationId: MutationId; readonly reason: string }
 ): Effect.Effect<ClientTransport> =>
   Effect.gen(function* () {
     const pushes = yield* Ref.make(0);
@@ -691,7 +715,8 @@ const withLateRejection = (
 const setMutators = Mutator.registry([
   {
     mutator: Mutator.make("todo/set", Schema.Unknown),
-    local: (args: { readonly id: string }, writer) => writer.put("todos", args.id, args),
+    local: (args: { readonly id: string }, writer) =>
+      writer.put("todos", RowId.make(args.id), args),
   },
 ]);
 
@@ -705,20 +730,20 @@ describe("ClientEngine settled outcomes are not re-settled", () => {
   it.effect("a rejection reported after the entry was acknowledged is ignored", () =>
     Effect.gen(function* () {
       const backend = yield* MemoryBackend.make({
-        "todo/set": (args, writer) => writer.put("todos", idOf(args), args),
+        "todo/set": (args, writer) => writer.put("todos", RowId.make(idOf(args)), args),
       });
       const handler = yield* serverFor(backend);
       const store = yield* ClientStoreModule.makeMemory;
-      const transport = yield* makeInMemory(handler, "group-a");
+      const transport = yield* makeInMemory(handler, ClientGroupId.make("group-a"));
       // The second push's response reports mutation 1 rejected, though the client already has it applied.
       const contradicting = yield* withLateRejection(transport, 2, {
         clientId: "client-a",
-        mutationId: 1,
+        mutationId: MutationId.make(1),
         reason: "forbidden",
       });
       const engine = yield* ClientEngineModule.make({
         clientId: "client-a",
-        clientGroupId: "group-a",
+        clientGroupId: ClientGroupId.make("group-a"),
         mutators: setMutators,
       }).pipe(
         Effect.provideService(ClientStore, store),
@@ -753,7 +778,7 @@ describe("ClientEngine settled outcomes are not re-settled", () => {
 /** One write to the `hot` row, pushed by one client of one group. */
 const hotMutation = (client: string): Mutation => ({
   clientId: client,
-  mutationId: 1,
+  mutationId: MutationId.make(1),
   mutator: "test/hot",
   args: {},
   createdAt: 0,
@@ -762,7 +787,7 @@ const hotMutation = (client: string): Mutation => ({
 /** One increment of the shared counter, pushed by one client of one group. */
 const countMutation = (client: string): Mutation => ({
   clientId: client,
-  mutationId: 1,
+  mutationId: MutationId.make(1),
   mutator: "test/count",
   args: {},
   createdAt: 0,
@@ -781,31 +806,39 @@ describe("MemoryBackend serialisable isolation across client groups", () => {
         "test/count": (_raw, writer, callContext) =>
           Effect.gen(function* () {
             yield* Ref.update(runs, (n) => n + 1);
-            const current = decodeTally(yield* writer.get(rows, "counter"));
+            const current = decodeTally(yield* writer.get(rows, RowId.make("counter")));
             const count = current?.count ?? 0;
             if (callContext.clientGroupId === "group-x" && !(yield* Ref.getAndSet(parked, true))) {
               yield* Deferred.succeed(seen, count);
               yield* Deferred.await(release);
             }
-            yield* writer.put(rows, "counter", { count: count + 1 });
+            yield* writer.put(rows, RowId.make("counter"), { count: count + 1 });
           }),
       });
 
       const x = yield* Effect.forkChild(
-        backend.applyMutations({ clientGroupId: "group-x" }, [countMutation("x-client")])
+        backend.applyMutations({ clientGroupId: ClientGroupId.make("group-x") }, [
+          countMutation("x-client"),
+        ])
       );
       expect(yield* Deferred.await(seen)).toBe(0);
 
       // Group Y commits its increment while X is parked after its read. Under a
       // lock this call would wait for X; without one it commits at once.
-      yield* backend.applyMutations({ clientGroupId: "group-y" }, [countMutation("y-client")]);
+      yield* backend.applyMutations({ clientGroupId: ClientGroupId.make("group-y") }, [
+        countMutation("y-client"),
+      ]);
 
       yield* Deferred.succeed(release, undefined);
       yield* Fiber.join(x);
 
       // Both increments land. X's read was stale when it committed, so X ran
       // again on Y's value (three runs in all: X, Y, X's retry).
-      const [counter] = yield* backend.getRows({ clientGroupId: "group-x" }, rows, ["counter"]);
+      const [counter] = yield* backend.getRows(
+        { clientGroupId: ClientGroupId.make("group-x") },
+        rows,
+        [RowId.make("counter")]
+      );
       expect(counter?.value).toEqual({ count: 2 });
       expect(yield* Ref.get(runs)).toBe(3);
     })
@@ -821,24 +854,26 @@ describe("MemoryBackend serialisable isolation across client groups", () => {
       const built = yield* MemoryBackend.make({
         "test/hot": (_raw, writer, callContext) =>
           Effect.gen(function* () {
-            yield* writer.get(rows, "hot");
+            yield* writer.get(rows, RowId.make("hot"));
             if (callContext.clientGroupId !== "group-x") {
-              return yield* writer.put(rows, "hot", { by: callContext.clientGroupId });
+              return yield* writer.put(rows, RowId.make("hot"), { by: callContext.clientGroupId });
             }
             yield* Ref.update(xRuns, (n) => n + 1);
             const y = yield* Ref.updateAndGet(yCommits, (n) => n + 1);
             if (Option.isNone(backend)) return yield* Effect.die("backend not built");
-            yield* backend.value.applyMutations({ clientGroupId: "group-y" }, [
+            yield* backend.value.applyMutations({ clientGroupId: ClientGroupId.make("group-y") }, [
               hotMutation(`y-client-${y}`),
             ]);
-            return yield* writer.put(rows, "out", { run: y });
+            return yield* writer.put(rows, RowId.make("out"), { run: y });
           }),
       });
       backend = Option.some(built);
 
       // Flipped so the failure is the success value; a success would die here.
       const error = yield* Effect.flip(
-        built.applyMutations({ clientGroupId: "group-x" }, [hotMutation("x-client")])
+        built.applyMutations({ clientGroupId: ClientGroupId.make("group-x") }, [
+          hotMutation("x-client"),
+        ])
       ).pipe(Effect.orDie);
 
       // MemoryBackend's cap is 16 attempts: X ran that many times, each run's
@@ -848,10 +883,18 @@ describe("MemoryBackend serialisable isolation across client groups", () => {
       expect(yield* Ref.get(xRuns)).toBe(16);
       expect(yield* Ref.get(yCommits)).toBe(16);
       // Nothing of X's committed: no write, and the ledger did not move.
-      expect(yield* built.getRows({ clientGroupId: "group-x" }, rows, ["out"])).toEqual([]);
-      expect(yield* built.lastMutationIds({ clientGroupId: "group-x" })).toEqual({});
+      expect(
+        yield* built.getRows({ clientGroupId: ClientGroupId.make("group-x") }, rows, [
+          RowId.make("out"),
+        ])
+      ).toEqual([]);
+      expect(
+        yield* built.lastMutationIds({ clientGroupId: ClientGroupId.make("group-x") })
+      ).toEqual({});
       // Group y's own commits, one per run, did land.
-      expect(R.keys(yield* built.lastMutationIds({ clientGroupId: "group-y" }))).toHaveLength(16);
+      expect(
+        R.keys(yield* built.lastMutationIds({ clientGroupId: ClientGroupId.make("group-y") }))
+      ).toHaveLength(16);
     })
   );
 
@@ -862,15 +905,23 @@ describe("MemoryBackend serialisable isolation across client groups", () => {
         "test/count": (_raw, writer) =>
           Effect.gen(function* () {
             yield* Ref.update(runs, (n) => n + 1);
-            const current = decodeTally(yield* writer.get(rows, "counter"));
-            yield* writer.put(rows, "counter", { count: (current?.count ?? 0) + 1 });
+            const current = decodeTally(yield* writer.get(rows, RowId.make("counter")));
+            yield* writer.put(rows, RowId.make("counter"), { count: (current?.count ?? 0) + 1 });
           }),
       });
 
-      yield* backend.applyMutations({ clientGroupId: "group-x" }, [countMutation("x-client")]);
-      yield* backend.applyMutations({ clientGroupId: "group-y" }, [countMutation("y-client")]);
+      yield* backend.applyMutations({ clientGroupId: ClientGroupId.make("group-x") }, [
+        countMutation("x-client"),
+      ]);
+      yield* backend.applyMutations({ clientGroupId: ClientGroupId.make("group-y") }, [
+        countMutation("y-client"),
+      ]);
 
-      const [counter] = yield* backend.getRows({ clientGroupId: "group-x" }, rows, ["counter"]);
+      const [counter] = yield* backend.getRows(
+        { clientGroupId: ClientGroupId.make("group-x") },
+        rows,
+        [RowId.make("counter")]
+      );
       expect(counter?.value).toEqual({ count: 2 });
       expect(yield* Ref.get(runs)).toBe(2);
     })

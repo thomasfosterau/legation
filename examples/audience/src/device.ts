@@ -101,7 +101,7 @@ export const makeDevice = (audience: AudienceServer, name: string) =>
       Effect.provideService(KeyValueStore.KeyValueStore, kv)
     );
     const jar = makeJar();
-    const clientGroupId = `group-${name}`;
+    const clientGroupId = Client.ClientGroupId.make(`group-${name}`);
     // The in-process sync server, presenting whatever session cookie the jar
     // holds on each call, as a browser's cookie jar does.
     const transport = yield* Transport.makeInMemory(audience.server.handler, clientGroupId, {

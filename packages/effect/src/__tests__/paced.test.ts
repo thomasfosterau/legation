@@ -46,6 +46,7 @@ import {
 } from "../Transport.js";
 import { defined } from "./defined.js";
 import { idOf, titleOf } from "./shapes.js";
+import { ClientGroupId, MutationId, RowId } from "../Protocol.js";
 
 interface Todo {
   readonly id: string;
@@ -56,12 +57,12 @@ interface Todo {
 const mutators = Mutator.registry([
   {
     mutator: Mutator.make("todo/set", Schema.Unknown),
-    local: (args: Todo, writer) => writer.put("todos", args.id, args),
+    local: (args: Todo, writer) => writer.put("todos", RowId.make(args.id), args),
   },
 ]);
 
 const backendHandlers = {
-  "todo/set": (args, writer) => Effect.asVoid(writer.put("todos", idOf(args), args)),
+  "todo/set": (args, writer) => Effect.asVoid(writer.put("todos", RowId.make(idOf(args)), args)),
 } satisfies Record<string, MemoryBackend.BackendHandler>;
 
 const makeServer = Effect.fn("makeServer")(function* (): Effect.fn.Return<
@@ -86,7 +87,11 @@ const makeServer = Effect.fn("makeServer")(function* (): Effect.fn.Return<
 const allTodos = Subset.make({ collection: "todos" });
 
 const makeEngine = (transport: CT, store: ClientStore) =>
-  ClientEngineModule.make({ clientId: "client-a", clientGroupId: "group-a", mutators }).pipe(
+  ClientEngineModule.make({
+    clientId: "client-a",
+    clientGroupId: ClientGroupId.make("group-a"),
+    mutators,
+  }).pipe(
     Effect.provideService(ClientStore, store),
     Effect.provideService(ClientTransport, transport)
   );
@@ -115,7 +120,7 @@ const counting = (store: ClientStore) => {
 
 const setup = Effect.fn("setup")(function* () {
   const handler = yield* makeServer();
-  const transport = yield* makeInMemory(handler, "group-a");
+  const transport = yield* makeInMemory(handler, ClientGroupId.make("group-a"));
   const inner = yield* ClientStoreModule.makeMemory;
   const { wrapped: store, counter } = counting(inner);
   const engine = yield* makeEngine(transport, store);
@@ -138,7 +143,7 @@ const makeLoggingServer = Effect.fn("makeLoggingServer")(function* () {
   const backend = yield* MemoryBackend.make({
     "todo/set": (args, writer) =>
       Effect.sync(() => void applied.push(titleOf(args))).pipe(
-        Effect.andThen(writer.put("todos", idOf(args), args)),
+        Effect.andThen(writer.put("todos", RowId.make(idOf(args)), args)),
         Effect.asVoid
       ),
   });
@@ -179,7 +184,7 @@ const lossyAfterApply = (base: CT, mode: Ref.Ref<"ok" | "response-lost" | "reque
 
 const setupLossy = Effect.fn("setupLossy")(function* () {
   const { handler, applied, backend } = yield* makeLoggingServer();
-  const base = yield* makeInMemory(handler, "group-a");
+  const base = yield* makeInMemory(handler, ClientGroupId.make("group-a"));
   const mode = yield* Ref.make<"ok" | "response-lost" | "request-lost">("ok");
   const transport = lossyAfterApply(base, mode);
   const store = yield* ClientStoreModule.makeMemory;
@@ -310,7 +315,7 @@ describe("Paced", () => {
   it.effect("dropIfPending never compacts an entry while a push may still have it in flight", () =>
     Effect.gen(function* () {
       const handler = yield* makeServer();
-      const base = yield* makeInMemory(handler, "group-gate");
+      const base = yield* makeInMemory(handler, ClientGroupId.make("group-gate"));
       const store = yield* ClientStoreModule.makeMemory;
       const started = yield* Deferred.make<void>();
       const release = yield* Deferred.make<void>();
@@ -425,7 +430,11 @@ describe("paced compaction renumbers the journal", () => {
       expect(Exit.isSuccess(exit)).toBe(true);
       expect(yield* store.pendingMutations).toEqual([]);
       expect(applied).toEqual(["e3"]);
-      expect((yield* backend.lastMutationIds({ clientGroupId: "group-a" }))["client-a"]).toBe(1);
+      expect(
+        (yield* backend.lastMutationIds({ clientGroupId: ClientGroupId.make("group-a") }))[
+          "client-a"
+        ]
+      ).toBe(1);
     }).pipe(Effect.scoped)
   );
 
@@ -501,7 +510,11 @@ describe("paced compaction renumbers the journal", () => {
       yield* engine.push;
       expect(yield* store.pendingMutations).toEqual([]);
       expect(applied).toEqual(["a2", "a4", "b1"]);
-      expect((yield* backend.lastMutationIds({ clientGroupId: "group-a" }))["client-a"]).toBe(3);
+      expect(
+        (yield* backend.lastMutationIds({ clientGroupId: ClientGroupId.make("group-a") }))[
+          "client-a"
+        ]
+      ).toBe(3);
     }).pipe(Effect.scoped)
   );
 
@@ -510,7 +523,7 @@ describe("paced compaction renumbers the journal", () => {
     () =>
       Effect.gen(function* () {
         const { handler, applied } = yield* makeLoggingServer();
-        const base = yield* makeInMemory(handler, "group-gate");
+        const base = yield* makeInMemory(handler, ClientGroupId.make("group-gate"));
         const started = yield* Deferred.make<void>();
         const release = yield* Deferred.make<void>();
         const gated: CT = {
@@ -630,9 +643,9 @@ describe("paced compaction renumbers the journal", () => {
       const states = yield* Stream.runHead(engine.mutationStates);
       const map = Option.isSome(states) ? states.value : HashMap.empty();
       const phaseAt = (id: number) => Option.getOrUndefined(HashMap.get(map, id));
-      expect(phaseAt(1)).toMatchObject({ phase: "pending", mutationId: 1 });
+      expect(phaseAt(1)).toMatchObject({ phase: "pending", mutationId: MutationId.make(1) });
       expect(phaseAt(1)).toMatchObject({ args: { title: "b1" } });
-      expect(phaseAt(2)).toMatchObject({ phase: "pending", mutationId: 2 });
+      expect(phaseAt(2)).toMatchObject({ phase: "pending", mutationId: MutationId.make(2) });
       expect(phaseAt(2)).toMatchObject({ args: { title: "c1" } });
 
       // b and c's handles, issued under the old ids 2 and 3, settle when the
@@ -741,7 +754,7 @@ describe("paced compaction renumbers the journal", () => {
 
 const stale = (mutationId: number): Mutation => ({
   clientId: "client-a",
-  mutationId,
+  mutationId: MutationId.make(mutationId),
   mutator: "todo/set",
   args: todo(`t${mutationId}`, `old${mutationId}`),
   createdAt: 0,
@@ -794,7 +807,7 @@ describe("a committed compaction is never lost to a failure or an interrupt", ()
 
   const durableSetup = Effect.fn("durableSetup")(function* () {
     const { handler, applied } = yield* makeLoggingServer();
-    const transport = yield* makeInMemory(handler, "group-a");
+    const transport = yield* makeInMemory(handler, ClientGroupId.make("group-a"));
     const { store, fault } = yield* faultyDurable();
     const engine = yield* makeEngine(transport, store);
     yield* engine.subscribe(allTodos);
@@ -947,7 +960,7 @@ describe("entries from before this session are never renumbered", () => {
   it.effect("an engine booted over a persisted journal freezes it", () =>
     Effect.gen(function* () {
       const { handler } = yield* makeLoggingServer();
-      const transport = yield* makeInMemory(handler, "group-a");
+      const transport = yield* makeInMemory(handler, ClientGroupId.make("group-a"));
       // A journal left by an earlier session or a release with no sent
       // watermark: its entries may well have been pushed already.
       const store = yield* ClientStoreModule.makeMemory;

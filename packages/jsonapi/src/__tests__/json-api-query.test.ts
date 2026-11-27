@@ -32,7 +32,13 @@ import {
   Query,
   QueryError,
 } from "@thomasfosterau/legation";
-import { ClientEngine, FilterCorpus, Subset, Defined } from "@thomasfosterau/legation/internal";
+import {
+  ClientEngine,
+  FilterCorpus,
+  Subset,
+  Defined,
+  Protocol,
+} from "@thomasfosterau/legation/internal";
 import * as JsonApiQuery from "../JsonApiQuery.js";
 import * as JsonApiSync from "../JsonApiSync.js";
 import { defined } from "./defined.js";
@@ -537,7 +543,7 @@ describe("server-side narrowing", () => {
       JsonApiSync.layer(api, {
         baseUrl: "http://api.test",
         clientId: "c1",
-        clientGroupId: "g1",
+        clientGroupId: Protocol.ClientGroupId.make("g1"),
       }).pipe(Layer.provide(server.layer))
     )((scoped) => {
       scoped.effect("pushes the exact filter to the API and narrows the listing", () =>

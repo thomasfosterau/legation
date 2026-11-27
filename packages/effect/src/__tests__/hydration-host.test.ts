@@ -36,6 +36,7 @@ import type { PullRequest, PullResponse } from "../Protocol.js";
 import * as Subset from "../Subset.js";
 import * as SyncServer from "../SyncServer.js";
 import * as Transport from "../Transport.js";
+import { ClientGroupId, RowId } from "../Protocol.js";
 
 const Todo = Schema.Struct({ id: Schema.String, title: Schema.String });
 const setTodo = Mutator.make("todo/set", Todo);
@@ -44,12 +45,12 @@ const mutators = Mutator.registry([
 ]);
 const backendHandlers = MemoryBackend.validatedHandlers([
   MemoryBackend.handler(setTodo, (args, writer) =>
-    Effect.asVoid(writer.put("todos", args.id, args))
+    Effect.asVoid(writer.put("todos", RowId.make(args.id), args))
   ),
 ]);
 const nodes = Node.registry([Node.make("todos", { attributes: { title: Schema.String } })]);
 const allTodos = Subset.make({ collection: "todos" });
-const GROUP = "group-a";
+const GROUP = ClientGroupId.make("group-a");
 
 /** One pull the browser engine made: what it sent, and whether the answer was a reset. */
 interface Pulled {
@@ -103,13 +104,13 @@ const setup = (
     );
     const writer = yield* ClientEngine.make({
       clientId: "writer",
-      clientGroupId: "group-writer",
+      clientGroupId: ClientGroupId.make("group-writer"),
       mutators,
     }).pipe(
       Effect.provideService(ClientStore.ClientStore, yield* ClientStore.makeMemory),
       Effect.provideService(
         Transport.ClientTransport,
-        yield* Transport.makeInMemory(handler, "group-writer")
+        yield* Transport.makeInMemory(handler, ClientGroupId.make("group-writer"))
       )
     );
     yield* writer.mutate(setTodo.name, { id: "1", title: "first" });
@@ -120,20 +121,20 @@ const setup = (
       clientGroupId: GROUP,
       nodes,
       reads: [{ collection: "todos" }],
-      transport: yield* Transport.makeInMemory(handler, GROUP),
+      transport: yield* Transport.makeInMemory(handler, ClientGroupId.make(GROUP)),
     });
     const pulls = yield* Ref.make<ReadonlyArray<Pulled>>([]);
     const store = yield* ClientStore.makeMemory;
     const engine = yield* ClientEngine.make({
       clientId: "browser",
-      clientGroupId: GROUP,
+      clientGroupId: ClientGroupId.make(GROUP),
       mutators,
       retry: { pull: Schedule.recurs(0) },
     }).pipe(
       Effect.provideService(ClientStore.ClientStore, store),
       Effect.provideService(
         Transport.ClientTransport,
-        wrap(recording(yield* Transport.makeInMemory(handler, GROUP), pulls))
+        wrap(recording(yield* Transport.makeInMemory(handler, ClientGroupId.make(GROUP)), pulls))
       )
     );
     return { snapshot, store, engine, pulls };
@@ -171,7 +172,11 @@ describe("Hydration.hydrateUnpulled", () => {
   it.effect("answers NotEmpty over a returning visitor's store and leaves it untouched", () =>
     Effect.gen(function* () {
       const { snapshot, store, engine } = yield* setup();
-      yield* store.putRow("todos", { id: "9", version: 9, value: { id: "9", title: "newer" } });
+      yield* store.putRow("todos", {
+        id: RowId.make("9"),
+        version: 9,
+        value: { id: "9", title: "newer" },
+      });
       yield* store.setCookie("newer-cookie");
       yield* engine.mutate(setTodo.name, { id: "3", title: "journalled offline" });
       const before = yield* contents(store);
@@ -202,7 +207,14 @@ describe("Hydration.hydrateUnpulled", () => {
     Effect.gen(function* () {
       const { snapshot, store, engine } = yield* setup();
       const other: Hydration.Snapshot = {
-        rows: [{ collection: "todos", id: "x", version: 1, value: { id: "x", title: "other" } }],
+        rows: [
+          {
+            collection: "todos",
+            id: RowId.make("x"),
+            version: 1,
+            value: { id: "x", title: "other" },
+          },
+        ],
         cookie: "other-tab",
         journal: [],
       };

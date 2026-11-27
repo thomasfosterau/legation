@@ -14,13 +14,19 @@ import { BackendError, type Backend } from "@thomasfosterau/legation";
 import * as JsonApiBackend from "../JsonApiBackend.js";
 import * as JsonApiSync from "../JsonApiSync.js";
 import * as Ledger from "../Ledger.js";
+import { Protocol } from "@thomasfosterau/legation/internal";
 
 const JsonText = Schema.fromJsonString(Schema.Unknown);
 const encodeJson = Schema.encodeSync(JsonText);
 
 const group: Ledger.GroupLedger = {
-  lastMutationIds: { "client-1": 3, "client-2": 1 },
-  rejections: [{ clientId: "client-1", mutationId: 2, reason: "title taken" }],
+  lastMutationIds: {
+    "client-1": Protocol.MutationId.make(3),
+    "client-2": Protocol.MutationId.make(1),
+  },
+  rejections: [
+    { clientId: "client-1", mutationId: Protocol.MutationId.make(2), reason: "title taken" },
+  ],
 };
 
 describeWrapped("Ledger.memory", (it) => {
@@ -126,7 +132,7 @@ const refusingServer = HttpClient.make((request, url) =>
 
 const boundMutation = (mutationId: number, mutator: string, args: unknown) => ({
   clientId: "client-1",
-  mutationId,
+  mutationId: Protocol.MutationId.make(mutationId),
   mutator,
   args,
   createdAt: 0,
@@ -141,7 +147,9 @@ describeWrapped("JsonApiBackend rejection memory bound", (it) => {
         mutators: boundInspected.registry.mutators,
         operations: boundInspected.operations,
       }).pipe(Effect.provideService(HttpClient.HttpClient, refusingServer));
-      const context: Backend.SyncContext = { clientGroupId: "group-1" };
+      const context: Backend.SyncContext = {
+        clientGroupId: Protocol.ClientGroupId.make("group-1"),
+      };
       const update = boundMutation(1, "todos/update", {
         type: "todos",
         id: "1",

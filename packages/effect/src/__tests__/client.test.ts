@@ -50,6 +50,7 @@ import {
 import { defined } from "./defined.js";
 import { TestFailure } from "./test-failure.js";
 import { idOf, idsOf, stringField } from "./shapes.js";
+import { ClientGroupId, RowId } from "../Protocol.js";
 
 const nameOf = stringField("name");
 
@@ -68,11 +69,11 @@ const reviewSet = Mutator.make("review/set", Schema.Unknown);
 const mutations = Mutator.registry([
   {
     mutator: productSet,
-    local: (args: { id: string }, writer) => writer.put("products", args.id, args),
+    local: (args: { id: string }, writer) => writer.put("products", RowId.make(args.id), args),
   },
   {
     mutator: reviewSet,
-    local: (args: { id: string }, writer) => writer.put("reviews", args.id, args),
+    local: (args: { id: string }, writer) => writer.put("reviews", RowId.make(args.id), args),
   },
 ]);
 
@@ -94,8 +95,12 @@ const eventually = <A>(read: Effect.Effect<A>, until: (value: A) => boolean) => 
 const makeHandler = Effect.fn("makeHandler")(function* () {
   const backend = yield* MemoryBackend.make(
     MemoryBackend.validatedHandlers([
-      MemoryBackend.handler(productSet, (args, writer) => writer.put("products", idOf(args), args)),
-      MemoryBackend.handler(reviewSet, (args, writer) => writer.put("reviews", idOf(args), args)),
+      MemoryBackend.handler(productSet, (args, writer) =>
+        writer.put("products", RowId.make(idOf(args)), args)
+      ),
+      MemoryBackend.handler(reviewSet, (args, writer) =>
+        writer.put("reviews", RowId.make(idOf(args)), args)
+      ),
     ])
   );
   return yield* SyncServer.make.pipe(
@@ -115,10 +120,10 @@ const makeHandler = Effect.fn("makeHandler")(function* () {
 const makeEngine = Effect.fn("makeEngine")(function* () {
   const handler = yield* makeHandler();
   const store = yield* ClientStore.makeMemory;
-  const transport = yield* Transport.makeInMemory(handler, "group-client");
+  const transport = yield* Transport.makeInMemory(handler, ClientGroupId.make("group-client"));
   const engine = yield* ClientEngine.make({
     clientId: "client-facade",
-    clientGroupId: "group-client",
+    clientGroupId: ClientGroupId.make("group-client"),
     mutators: mutations,
   }).pipe(
     Effect.provideService(ClientStore.ClientStore, store),
@@ -220,12 +225,12 @@ describe("Client over an owned engine", () => {
       Effect.gen(function* () {
         const handler = yield* makeHandler();
         const store = yield* ClientStore.makeMemory;
-        const transport = yield* Transport.makeInMemory(handler, "group-auto");
+        const transport = yield* Transport.makeInMemory(handler, ClientGroupId.make("group-auto"));
         const { client } = yield* Client.make({
           nodes,
           mutations,
           clientId: "client-auto",
-          clientGroupId: "group-auto",
+          clientGroupId: ClientGroupId.make("group-auto"),
           syncLoop: { pushDebounce: "10 millis" },
         }).pipe(
           Effect.provideService(ClientStore.ClientStore, store),
@@ -246,7 +251,7 @@ describe("Client over an owned engine", () => {
 const makeCountingEngine = Effect.fn("makeCountingEngine")(function* () {
   const handler = yield* makeHandler();
   const store = yield* ClientStore.makeMemory;
-  const transport = yield* Transport.makeInMemory(handler, "group-coverage");
+  const transport = yield* Transport.makeInMemory(handler, ClientGroupId.make("group-coverage"));
   const reads = yield* Ref.make(0);
   const counting: Transport.ClientTransport = {
     ...transport,
@@ -257,7 +262,7 @@ const makeCountingEngine = Effect.fn("makeCountingEngine")(function* () {
   };
   const engine = yield* ClientEngine.make({
     clientId: "client-coverage",
-    clientGroupId: "group-coverage",
+    clientGroupId: ClientGroupId.make("group-coverage"),
     mutators: mutations,
   }).pipe(
     Effect.provideService(ClientStore.ClientStore, store),
@@ -814,12 +819,15 @@ describe("Client.make defaults (zero wiring)", () => {
       Effect.gen(function* () {
         const handler = yield* makeHandler();
         const store = yield* ClientStore.makeMemory;
-        const transport = yield* Transport.makeInMemory(handler, "group-options");
+        const transport = yield* Transport.makeInMemory(
+          handler,
+          ClientGroupId.make("group-options")
+        );
         // No context provides anywhere: everything arrives as options.
         const { client } = yield* Client.make({
           nodes,
           mutations,
-          clientGroupId: "group-options",
+          clientGroupId: ClientGroupId.make("group-options"),
           store,
           transport,
           syncLoop: { pushDebounce: "10 millis" },
@@ -839,11 +847,14 @@ describe("Client.make defaults (zero wiring)", () => {
         const handler = yield* makeHandler();
         const optionStore = yield* ClientStore.makeMemory;
         const contextStore = yield* ClientStore.makeMemory;
-        const transport = yield* Transport.makeInMemory(handler, "group-precedence");
+        const transport = yield* Transport.makeInMemory(
+          handler,
+          ClientGroupId.make("group-precedence")
+        );
         const { client } = yield* Client.make({
           nodes,
           mutations,
-          clientGroupId: "group-precedence",
+          clientGroupId: ClientGroupId.make("group-precedence"),
           store: optionStore,
           transport,
           syncLoop: { pushDebounce: "10 millis" },
@@ -934,10 +945,13 @@ const makeRacePair = Effect.fn("makeRacePair")(function* () {
   const make = (clientId: string) =>
     Effect.gen(function* () {
       const store = yield* ClientStore.makeMemory;
-      const transport = yield* Transport.makeInMemory(handler, `group-${clientId}`);
+      const transport = yield* Transport.makeInMemory(
+        handler,
+        ClientGroupId.make(`group-${clientId}`)
+      );
       return yield* ClientEngine.make({
         clientId,
-        clientGroupId: `group-${clientId}`,
+        clientGroupId: ClientGroupId.make(`group-${clientId}`),
         mutators: mutations,
       }).pipe(
         Effect.provideService(ClientStore.ClientStore, store),

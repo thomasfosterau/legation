@@ -9,6 +9,7 @@ import { describe, expect, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
 import * as Option from "effect/Option";
+import * as Result from "effect/Result";
 import * as Schema from "effect/Schema";
 import * as HttpClient from "effect/http/HttpClient";
 import * as HttpClientResponse from "effect/http/HttpClientResponse";
@@ -16,6 +17,8 @@ import { CrudMutation, Edge, Node } from "@thomasfosterau/legation";
 import type { ResourceMap } from "../Convention.js";
 import * as FacadeWrites from "../FacadeWrites.js";
 import * as JsonApiBackend from "../JsonApiBackend.js";
+import { defined } from "./defined.js";
+import { Protocol } from "@thomasfosterau/legation/internal";
 
 const categories = Node.make("categories", { attributes: { name: Schema.String } });
 const notes = Node.make("notes", {
@@ -32,8 +35,8 @@ const writes = FacadeWrites.writesOf(nodes);
 const roundTrip = (write: JsonApiBackend.Write) =>
   intentOf(write).pipe(
     Option.flatMap((intent) =>
-      Option.map(Option.fromUndefinedOr(writes.get(intent.mutator)), (inverse) =>
-        inverse(intent.args)
+      Option.flatMap(Option.fromUndefinedOr(writes.get(intent.mutator)), (inverse) =>
+        Result.getSuccess(inverse(intent.args))
       )
     )
   );
@@ -44,7 +47,7 @@ describe("FacadeWrites.writesOf", () => {
       roundTrip({
         operation: "create",
         type: "notes",
-        id: "n-1",
+        id: Protocol.RowId.make("n-1"),
         attributes: { title: "Hello" },
         relationships: { category: "c-1" },
       })
@@ -62,7 +65,7 @@ describe("FacadeWrites.writesOf", () => {
       roundTrip({
         operation: "update",
         type: "notes",
-        id: "n-1",
+        id: Protocol.RowId.make("n-1"),
         attributes: { title: "Renamed" },
         relationships: { category: null },
       })
@@ -76,7 +79,12 @@ describe("FacadeWrites.writesOf", () => {
       })
     );
     expect(
-      roundTrip({ operation: "update", type: "notes", id: "n-1", attributes: { title: "T" } })
+      roundTrip({
+        operation: "update",
+        type: "notes",
+        id: Protocol.RowId.make("n-1"),
+        attributes: { title: "T" },
+      })
     ).toEqual(
       Option.some({
         operation: "update",
@@ -86,19 +94,32 @@ describe("FacadeWrites.writesOf", () => {
         relationships: {},
       })
     );
-    expect(roundTrip({ operation: "delete", type: "notes", id: "n-1" })).toEqual(
-      Option.some({ operation: "delete", type: "notes", id: "n-1" })
-    );
+    expect(
+      roundTrip({ operation: "delete", type: "notes", id: Protocol.RowId.make("n-1") })
+    ).toEqual(Option.some({ operation: "delete", type: "notes", id: "n-1" }));
   });
 
   it("writes only the mutation's own type: args naming another are refused", () => {
-    const create = writes.get("notes/create");
-    const remove = writes.get("notes/delete");
-    expect(() =>
-      create?.({ type: "categories", id: "c-1", attributes: { name: "forged" } })
-    ).toThrow(FacadeWrites.InvalidWriteArgs);
-    expect(() => remove?.({ type: "categories", id: "c-1" })).toThrow(/writes "notes"/);
-    expect(create?.({ type: "notes", id: "n-1", attributes: { title: "T" } })?.type).toBe("notes");
+    const create = defined(writes.get("notes/create"));
+    const remove = defined(writes.get("notes/delete"));
+    const forged = Result.flip(
+      create({ type: "categories", id: "c-1", attributes: { name: "forged" } })
+    );
+    expect(Result.getOrUndefined(forged)).toBeInstanceOf(FacadeWrites.InvalidWriteArgs);
+    expect(
+      Result.getOrUndefined(Result.flip(remove({ type: "categories", id: "c-1" })))
+    ).toMatchObject({ _tag: "InvalidWriteArgs", message: expect.stringMatching(/writes "notes"/) });
+    expect(
+      Result.map(create({ type: "notes", id: "n-1", attributes: { title: "T" } }), (w) => w.type)
+    ).toEqual(Result.succeed("notes"));
+  });
+
+  it("refuses args that are not the derived mutation's shape, as a failure rather than a throw", () => {
+    const update = defined(writes.get("notes/update"));
+    expect(Result.getOrUndefined(Result.flip(update({ type: "notes" })))).toMatchObject({
+      _tag: "InvalidWriteArgs",
+      message: expect.stringMatching(/"notes\/update" args do not decode/),
+    });
   });
 
   it("covers every derived mutation, and only those `writes` selects", () => {
@@ -170,15 +191,15 @@ describe("a JsonApiBackend over a node-graph app", () => {
       const intent = intentOf({
         operation: "create",
         type: "notes",
-        id: "n-1",
+        id: Protocol.RowId.make("n-1"),
         attributes: { title: "Hello" },
         relationships: { category: "c-1" },
       });
       expect(Option.map(intent, ({ mutator }) => mutator)).toEqual(Option.some("notes/create"));
-      yield* backend.applyMutations({ clientGroupId: "g" }, [
+      yield* backend.applyMutations({ clientGroupId: Protocol.ClientGroupId.make("g") }, [
         {
           clientId: "c",
-          mutationId: 1,
+          mutationId: Protocol.MutationId.make(1),
           mutator: "notes/create",
           args: Option.getOrUndefined(intent)?.args,
           createdAt: 0,
@@ -190,10 +211,10 @@ describe("a JsonApiBackend over a node-graph app", () => {
       // A forged mutation: authorised as `notes/create`, its args name another
       // type. The push fails as invalid args, and nothing reaches the server.
       const forged = yield* Effect.exit(
-        backend.applyMutations({ clientGroupId: "g" }, [
+        backend.applyMutations({ clientGroupId: Protocol.ClientGroupId.make("g") }, [
           {
             clientId: "c",
-            mutationId: 2,
+            mutationId: Protocol.MutationId.make(2),
             mutator: "notes/create",
             args: { type: "categories", id: "c-9", attributes: { name: "forged" } },
             createdAt: 0,

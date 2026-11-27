@@ -34,6 +34,7 @@ import * as RowChange from "../RowChange.js";
 import * as Subset from "../Subset.js";
 import { defined } from "./defined.js";
 import * as Json from "../internal/Json.js";
+import { RowId } from "../Protocol.js";
 
 /** mulberry32: tiny deterministic PRNG so a failing seed is reproducible. */
 const mulberry32 = (seed: number) => {
@@ -85,7 +86,7 @@ const applyRebuild = (
 ): LiveView.LiveView => {
   const next = LiveView.make(
     subset,
-    [...truth].map(([id, value]) => ({ id, value }))
+    [...truth].map(([id, value]) => ({ id: RowId.make(id), value }))
   );
   MutableHashMap.clear(folded);
   Arr.forEach(LiveView.result(next), (row) => {
@@ -107,11 +108,11 @@ const applyMutation = (
   let next: LiveView.LiveView;
   if (isDelete) {
     MutableHashMap.remove(truth, id);
-    next = LiveView.del(view, id);
+    next = LiveView.del(view, RowId.make(id));
   } else {
     const value: Item = { rank: Math.floor(rand() * 6), open: rand() < 0.6 };
     MutableHashMap.set(truth, id, value);
-    next = LiveView.put(view, { id, value });
+    next = LiveView.put(view, { id: RowId.make(id), value });
   }
   const after = LiveView.result(next);
   Arr.forEach(RowChange.diff(before, after), (change) => {
@@ -284,17 +285,20 @@ describe("RowChange — folding the feed reproduces LiveView.result", () => {
   });
 
   it("diff is empty for identical references (fast path)", () => {
-    const rows: ReadonlyArray<LiveView.Row> = [{ id: "a", value: { rank: 1 } }];
+    const rows: ReadonlyArray<LiveView.Row> = [{ id: RowId.make("a"), value: { rank: 1 } }];
     expect(RowChange.diff(rows, rows)).toEqual([]);
   });
 
   it("enter/update/exit carry the expected shape", () => {
     const before: ReadonlyArray<LiveView.Row> = [
-      { id: "a", value: { rank: 1 } },
-      { id: "b", value: { rank: 2 } },
+      { id: RowId.make("a"), value: { rank: 1 } },
+      { id: RowId.make("b"), value: { rank: 2 } },
     ];
-    const bUpdated = { id: "b", value: { rank: 5 } };
-    const after: ReadonlyArray<LiveView.Row> = [bUpdated, { id: "c", value: { rank: 3 } }];
+    const bUpdated = { id: RowId.make("b"), value: { rank: 5 } };
+    const after: ReadonlyArray<LiveView.Row> = [
+      bUpdated,
+      { id: RowId.make("c"), value: { rank: 3 } },
+    ];
     const changes = RowChange.diff(before, after);
     expect(changes).toEqual([
       { _tag: "update", row: bUpdated, previous: before[1] },
@@ -304,7 +308,7 @@ describe("RowChange — folding the feed reproduces LiveView.result", () => {
   });
 
   it("reset batches a marker followed by fresh enters", () => {
-    const rows: ReadonlyArray<LiveView.Row> = [{ id: "a", value: { rank: 1 } }];
+    const rows: ReadonlyArray<LiveView.Row> = [{ id: RowId.make("a"), value: { rank: 1 } }];
     expect(RowChange.reset(rows)).toEqual([{ _tag: "reset" }, { _tag: "enter", row: rows[0] }]);
   });
 
@@ -313,11 +317,11 @@ describe("RowChange — folding the feed reproduces LiveView.result", () => {
       readonly position: string;
     }
     const before: ReadonlyArray<Positioned> = [
-      { id: "a", value: { rank: 1 }, position: "a0" },
-      { id: "b", value: { rank: 2 }, position: "a1" },
+      { id: RowId.make("a"), value: { rank: 1 }, position: "a0" },
+      { id: RowId.make("b"), value: { rank: 2 }, position: "a1" },
     ];
-    const bUpdated: Positioned = { id: "b", value: { rank: 5 }, position: "a1" };
-    const cEnters: Positioned = { id: "c", value: { rank: 3 }, position: "a2" };
+    const bUpdated: Positioned = { id: RowId.make("b"), value: { rank: 5 }, position: "a1" };
+    const cEnters: Positioned = { id: RowId.make("c"), value: { rank: 3 }, position: "a2" };
     const after: ReadonlyArray<Positioned> = [defined(before[0]), bUpdated, cEnters];
     expect(RowChange.diff(before, after)).toEqual([
       { _tag: "update", row: bUpdated, previous: before[1], position: "a1" },
@@ -330,12 +334,16 @@ describe("RowChange — folding the feed reproduces LiveView.result", () => {
       readonly position: string;
     }
     const before: ReadonlyArray<Positioned> = [
-      { id: "a", value: { rank: 1 }, position: "a0" },
-      { id: "b", value: { rank: 2 }, position: "a1" },
+      { id: RowId.make("a"), value: { rank: 1 }, position: "a0" },
+      { id: RowId.make("b"), value: { rank: 2 }, position: "a1" },
     ];
     // "b"'s value is unchanged but its position moved ahead of "a" (a
     // neighbor's insert/delete re-ranked it without touching its value).
-    const bMoved: Positioned = { id: "b", value: defined(before[1]).value, position: "a-1" };
+    const bMoved: Positioned = {
+      id: RowId.make("b"),
+      value: defined(before[1]).value,
+      position: "a-1",
+    };
     const after: ReadonlyArray<Positioned> = [bMoved, defined(before[0])];
     expect(RowChange.diff(before, after)).toEqual([
       { _tag: "move", row: bMoved, position: "a-1", previousPosition: "a1" },
@@ -346,11 +354,13 @@ describe("RowChange — folding the feed reproduces LiveView.result", () => {
     interface Positioned extends LiveView.Row {
       readonly position: string;
     }
-    const positioned: ReadonlyArray<Positioned> = [{ id: "a", value: { rank: 1 }, position: "a0" }];
+    const positioned: ReadonlyArray<Positioned> = [
+      { id: RowId.make("a"), value: { rank: 1 }, position: "a0" },
+    ];
     expect(RowChange.enters(positioned)).toEqual([
       { _tag: "enter", row: positioned[0], position: "a0" },
     ]);
-    const plain: ReadonlyArray<LiveView.Row> = [{ id: "a", value: { rank: 1 } }];
+    const plain: ReadonlyArray<LiveView.Row> = [{ id: RowId.make("a"), value: { rank: 1 } }];
     expect(RowChange.enters(plain)).toEqual([{ _tag: "enter", row: plain[0] }]);
   });
 });

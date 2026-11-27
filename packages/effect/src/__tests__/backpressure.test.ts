@@ -38,16 +38,17 @@ import { ClientTransport, makeInMemory, type ServerHandler } from "../Transport.
 import { defined } from "./defined.js";
 import { TestFailure } from "./test-failure.js";
 import { idOf } from "./shapes.js";
+import { ClientGroupId, RowId } from "../Protocol.js";
 
 const mutators = Mutator.registry([
   {
     mutator: Mutator.make("todo/set", Schema.Unknown),
-    local: (args: { id: string }, writer) => writer.put("todos", args.id, args),
+    local: (args: { id: string }, writer) => writer.put("todos", RowId.make(args.id), args),
   },
 ]);
 
 const handlers = {
-  "todo/set": (args, writer) => Effect.asVoid(writer.put("todos", idOf(args), args)),
+  "todo/set": (args, writer) => Effect.asVoid(writer.put("todos", RowId.make(idOf(args)), args)),
 } satisfies Record<string, MemoryBackend.BackendHandler>;
 
 const makeServer = Effect.fn("makeServer")(function* () {
@@ -68,10 +69,10 @@ const makeServer = Effect.fn("makeServer")(function* () {
 const makeClient = (handler: ServerHandler, capacity: number) =>
   Effect.gen(function* () {
     const store = yield* ClientStoreModule.makeMemory;
-    const transport = yield* makeInMemory(handler, "group-a");
+    const transport = yield* makeInMemory(handler, ClientGroupId.make("group-a"));
     return yield* ClientEngineModule.make({
       clientId: "client-a",
-      clientGroupId: "group-a",
+      clientGroupId: ClientGroupId.make("group-a"),
       mutators,
       changeHubCapacity: capacity,
     }).pipe(
@@ -111,16 +112,20 @@ describe("backpressure — poke hub", () => {
       // A subscriber that takes its first poke, then blocks — so the storm hits
       // a full sliding(1) buffer and collapses to a single queued survivor.
       yield* Effect.forkScoped(
-        Stream.runForEach(hub.subscribe("group-a"), (poke) =>
+        Stream.runForEach(hub.subscribe(ClientGroupId.make("group-a")), (poke) =>
           Ref.update(received, (a) => [...a, poke]).pipe(Effect.andThen(Deferred.await(release)))
         )
       );
       yield* sleepReal(30); // let the subscription establish (pull pending)
       // Storm: 50 pokes in a tick. The first is taken (in-flight), the rest
       // slide over one another — one survivor remains queued.
-      yield* Effect.forEach(Array.from({ length: 50 }), () => hub.publish("group-a", {}), {
-        concurrency: 1,
-      });
+      yield* Effect.forEach(
+        Array.from({ length: 50 }),
+        () => hub.publish(ClientGroupId.make("group-a"), {}),
+        {
+          concurrency: 1,
+        }
+      );
       yield* sleepReal(30);
       expect((yield* Ref.get(received)).length).toBe(1); // one in-flight, rest queued to one
       yield* Deferred.succeed(release, undefined);
@@ -133,11 +138,17 @@ describe("backpressure — poke hub", () => {
   it.live("a late subscriber sees only the latest poke (replay 1)", () =>
     Effect.gen(function* () {
       const hub = yield* PokeHub.make;
-      yield* Effect.forEach(Array.from({ length: 50 }), () => hub.publish("group-a", {}), {
-        concurrency: 1,
-      });
+      yield* Effect.forEach(
+        Array.from({ length: 50 }),
+        () => hub.publish(ClientGroupId.make("group-a"), {}),
+        {
+          concurrency: 1,
+        }
+      );
       // Late subscriber: replay 1 delivers the most recent poke, not all 50.
-      const got = yield* hub.subscribe("group-a").pipe(Stream.take(1), Stream.runCollect);
+      const got = yield* hub
+        .subscribe(ClientGroupId.make("group-a"))
+        .pipe(Stream.take(1), Stream.runCollect);
       expect(got.length).toBe(1);
     }).pipe(Effect.scoped)
   );
@@ -152,7 +163,7 @@ describe("backpressure — invalidation bus", () => {
       const before = (yield* Metric.value(Telemetry.hintsDroppedTotal)).count;
       yield* Effect.forEach(
         Array.from({ length: 20 }),
-        (_, i) => bus.publish([{ collection: "todos", ids: [`r${i}`] }]),
+        (_, i) => bus.publish([{ collection: "todos", ids: [RowId.make(`r${i}`)] }]),
         { concurrency: 1 }
       );
       const after = (yield* Metric.value(Telemetry.hintsDroppedTotal)).count;

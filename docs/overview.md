@@ -102,11 +102,12 @@ const program = Effect.gen(function* () {
   });
 
   // 3. Client: one per thread, here over an in-process loopback transport.
+  const clientGroupId = Client.ClientGroupId.make("g1");
   const { client } = yield* Client.make({
     nodes,
     mutations,
-    clientGroupId: "g1",
-    transport: yield* Transport.makeInMemory(server.handler, "g1"),
+    clientGroupId,
+    transport: yield* Transport.makeInMemory(server.handler, clientGroupId),
   });
   yield* client.subscribe(open); // pin the read so the replica holds it
   yield* client.mutate("todo/set", { id: "1", title: "ship it", done: false });

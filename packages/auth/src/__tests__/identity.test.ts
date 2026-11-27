@@ -24,7 +24,13 @@ import {
   Mutator,
   Predicate,
 } from "@thomasfosterau/legation";
-import { Cvr, InvalidationBus, Subset, SyncServer } from "@thomasfosterau/legation/internal";
+import {
+  Cvr,
+  InvalidationBus,
+  Subset,
+  SyncServer,
+  Protocol,
+} from "@thomasfosterau/legation/internal";
 import { Principal, Resolver } from "@thomasfosterau/legation-auth";
 import { alice, authLayer, bob } from "./harness.js";
 import { asPrincipal, Crash, mentions } from "./support.js";
@@ -42,7 +48,10 @@ const withApiKey = (key: string, extra: Record<string, string> = {}) =>
 const resolveWith = (credentials: Authorization.RequestCredentials) =>
   Effect.gen(function* () {
     const resolver = yield* Authorization.IdentityResolver;
-    return yield* resolver.resolve({ clientGroupId: "group-1", credentials });
+    return yield* resolver.resolve({
+      clientGroupId: Protocol.ClientGroupId.make("group-1"),
+      credentials,
+    });
   });
 
 /** Credentials whose header lookup throws: a defect in reading the request itself. */
@@ -106,11 +115,14 @@ describe("Resolver: the session plane", () => {
         const credentials = Authorization.credentialsFromHeaders({
           cookie: `${named}=${token}`,
         });
-        const principal = yield* resolver.resolve({ clientGroupId: "g", credentials });
+        const principal = yield* resolver.resolve({
+          clientGroupId: Protocol.ClientGroupId.make("g"),
+          credentials,
+        });
         expect(P.isTagged(principal, "Session")).toBe(true);
         // The default name is not read under another naming.
         const other = yield* resolver.resolve({
-          clientGroupId: "g",
+          clientGroupId: Protocol.ClientGroupId.make("g"),
           credentials: withCookie(token),
         });
         expect(other).toEqual(Principal.anonymous);
@@ -168,7 +180,10 @@ describe("Resolver: the session plane", () => {
     scoped.effect("fails closed to anonymous when reading the request itself dies", () =>
       Effect.gen(function* () {
         const resolver = Resolver.make({ sessions: Option.none(), apiKeys: Option.none() });
-        const principal = yield* resolver.resolve({ clientGroupId: "g", credentials: exploding });
+        const principal = yield* resolver.resolve({
+          clientGroupId: Protocol.ClientGroupId.make("g"),
+          credentials: exploding,
+        });
         expect(principal).toEqual(Principal.anonymous);
       })
     );
@@ -322,7 +337,9 @@ describe("Resolver behind SyncServer", () => {
         const seen = yield* Ref.make<ReadonlyArray<unknown>>([]);
         const backend = yield* MemoryBackend.make(
           MemoryBackend.validatedHandlers([
-            MemoryBackend.handler(putPost, (args, writer) => writer.put("posts", args.id, args)),
+            MemoryBackend.handler(putPost, (args, writer) =>
+              writer.put("posts", Protocol.RowId.make(args.id), args)
+            ),
           ])
         );
         const recording: Authorization.AuthFilter = (context) =>
@@ -346,18 +363,18 @@ describe("Resolver behind SyncServer", () => {
           )
         );
         yield* server.handlePush({
-          clientGroupId: "writer",
+          clientGroupId: Protocol.ClientGroupId.make("writer"),
           mutations: [
             {
               clientId: "w",
-              mutationId: 1,
+              mutationId: Protocol.MutationId.make(1),
               mutator: "post/put",
               args: { id: "a1", ownerId: alice.id },
               createdAt: 0,
             },
             {
               clientId: "w",
-              mutationId: 2,
+              mutationId: Protocol.MutationId.make(2),
               mutator: "post/put",
               args: { id: "b1", ownerId: bob.id },
               createdAt: 0,
@@ -368,7 +385,10 @@ describe("Resolver behind SyncServer", () => {
         const { token } = yield* sessions.createSession(alice.id);
         const pull = (credentials: Authorization.RequestCredentials) =>
           server.handlePull(
-            { clientGroupId: "group-1", subscriptions: [Subset.make({ collection: "posts" })] },
+            {
+              clientGroupId: Protocol.ClientGroupId.make("group-1"),
+              subscriptions: [Subset.make({ collection: "posts" })],
+            },
             { credentials: Option.some(credentials) }
           );
         const signedIn = yield* pull(withCookie(token));

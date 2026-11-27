@@ -37,6 +37,7 @@ import {
 } from "../Transport.js";
 import { defined } from "./defined.js";
 import { idOf, titleOf } from "./shapes.js";
+import { ClientGroupId, RowId } from "../Protocol.js";
 
 interface Todo {
   readonly id: string;
@@ -47,17 +48,17 @@ interface Todo {
 const setTodo = Mutator.registry([
   {
     mutator: Mutator.make("todo/set", Schema.Unknown),
-    local: (todo: Todo, writer) => writer.put("todos", todo.id, todo),
+    local: (todo: Todo, writer) => writer.put("todos", RowId.make(todo.id), todo),
   },
   {
     mutator: Mutator.make("todo/remove", Schema.Unknown),
-    local: (args: { id: string }, writer) => writer.del("todos", args.id),
+    local: (args: { id: string }, writer) => writer.del("todos", RowId.make(args.id)),
   },
 ]);
 
 const backendHandlers = {
-  "todo/set": (args, writer) => Effect.asVoid(writer.put("todos", idOf(args), args)),
-  "todo/remove": (args, writer) => Effect.asVoid(writer.del("todos", idOf(args))),
+  "todo/set": (args, writer) => Effect.asVoid(writer.put("todos", RowId.make(idOf(args)), args)),
+  "todo/remove": (args, writer) => Effect.asVoid(writer.del("todos", RowId.make(idOf(args)))),
 } satisfies Record<string, MemoryBackend.BackendHandler>;
 
 const authPolicy = Authorization.policy({ todos: Authorization.allowAll });
@@ -84,7 +85,7 @@ const makeManaged = (transport: CT, name: string) =>
     const store = yield* ClientStoreModule.makeMemory;
     const engine = yield* ClientEngineModule.make({
       clientId: `client-${name}`,
-      clientGroupId: `group-${name}`,
+      clientGroupId: ClientGroupId.make(`group-${name}`),
       mutators: setTodo,
     }).pipe(
       Effect.provideService(ClientStore, store),
@@ -113,7 +114,7 @@ describe("Undo", () => {
   it.effect("basic undo/redo tracks stacks and a new run clears redo", () =>
     Effect.gen(function* () {
       const handler = yield* makeServer();
-      const transport = yield* makeInMemory(handler, "group-basic");
+      const transport = yield* makeInMemory(handler, ClientGroupId.make("group-basic"));
       const { engine, manager } = yield* makeManaged(transport, "basic");
       yield* engine.subscribe(allTodos);
 
@@ -164,7 +165,7 @@ describe("Undo", () => {
   it.effect("delete-then-undo restores the pre-delete value captured at run time", () =>
     Effect.gen(function* () {
       const handler = yield* makeServer();
-      const transport = yield* makeInMemory(handler, "group-del");
+      const transport = yield* makeInMemory(handler, ClientGroupId.make("group-del"));
       const { engine, manager } = yield* makeManaged(transport, "del");
       yield* engine.subscribe(allTodos);
 
@@ -195,7 +196,7 @@ describe("Undo", () => {
   it.effect("offline undo then reconnect: both flow through journal → push → rebase", () =>
     Effect.gen(function* () {
       const handler = yield* makeServer();
-      const base = yield* makeInMemory(handler, "group-offline");
+      const base = yield* makeInMemory(handler, ClientGroupId.make("group-offline"));
       const online = yield* Ref.make(false);
       // A transport that fails push/pull while "offline" (like the demo + the
       // sync-loop tests). Mutations then queue in the journal.
@@ -247,7 +248,7 @@ describe("Undo", () => {
   it.effect("group coalesces runs into a single undo step", () =>
     Effect.gen(function* () {
       const handler = yield* makeServer();
-      const transport = yield* makeInMemory(handler, "group-grp");
+      const transport = yield* makeInMemory(handler, ClientGroupId.make("group-grp"));
       const { engine, manager } = yield* makeManaged(transport, "grp");
       yield* engine.subscribe(allTodos);
 
@@ -283,7 +284,7 @@ describe("Undo", () => {
   it.effect("undo/redo built from a Client, not a ClientEngine", () =>
     Effect.gen(function* () {
       const handler = yield* makeServer();
-      const transport = yield* makeInMemory(handler, "group-client");
+      const transport = yield* makeInMemory(handler, ClientGroupId.make("group-client"));
       const store = yield* ClientStoreModule.makeMemory;
       // The engine is held here only to pull: a pinned read answers locally
       // once a pull has landed (ADR-0029 section 3). `Undo.make` takes
@@ -291,7 +292,7 @@ describe("Undo", () => {
       // `Client.mutate`.
       const engine = yield* ClientEngineModule.make({
         clientId: "client-client",
-        clientGroupId: "group-client",
+        clientGroupId: ClientGroupId.make("group-client"),
         mutators: setTodo,
       }).pipe(
         Effect.provideService(ClientStore, store),

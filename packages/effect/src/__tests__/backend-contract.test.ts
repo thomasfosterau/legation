@@ -2,8 +2,9 @@
  * Backend contract tests: the reference MemoryBackend satisfies
  * verifyBackendContract, and the suite actually catches violations.
  */
-import { describe, expect, it, layer } from "@effect/vitest";
+import { expect, layer } from "@effect/vitest";
 import * as Effect from "effect/Effect";
+import * as Layer from "effect/Layer";
 import * as MutableHashMap from "effect/MutableHashMap";
 import * as Option from "effect/Option";
 import * as R from "effect/Record";
@@ -14,9 +15,11 @@ import { BackendError } from "../Errors.js";
 import * as MemoryBackend from "../MemoryBackend.js";
 import * as Subset from "../Subset.js";
 import * as UnknownMutator from "../UnknownMutator.js";
+import { ClientGroupId, MutationId, RowId } from "../Protocol.js";
 
 /** The reference handlers without the named contract mutator, i.e. an unregistered one. */
-const withoutHandler = (name: string) => R.remove(BackendContract.memoryHandlers, name);
+const withoutHandler = (name: string) =>
+  Effect.map(BackendContract.makeMemoryHandlers, (handlers) => R.remove(handlers, name));
 
 /** A contract counter row's value, absent before its first count. */
 const decodeCounter = Schema.decodeUnknownSync(
@@ -24,25 +27,28 @@ const decodeCounter = Schema.decodeUnknownSync(
 );
 
 // The documented shape: the backend from a layer, the contract run under `it.effect`.
-layer(MemoryBackend.layer(BackendContract.memoryHandlers))(
-  "verifyBackendContract in a layer",
-  (provided) => {
-    provided.effect("MemoryBackend satisfies the contract", () =>
-      Backend.use((backend) => BackendContract.verifyBackendContract(backend))
-    );
-  }
-);
+// The handlers park at the gates the contract opens, so both share one ParkGates.
+const ContractBackend = Layer.unwrap(
+  Effect.map(BackendContract.makeMemoryHandlers, MemoryBackend.layer)
+).pipe(Layer.provideMerge(BackendContract.layerParkGates));
 
-describe("verifyBackendContract", () => {
+layer(ContractBackend)("verifyBackendContract in a layer", (provided) => {
+  provided.effect("MemoryBackend satisfies the contract", () =>
+    Backend.use((backend) => BackendContract.verifyBackendContract(backend))
+  );
+});
+
+layer(BackendContract.layerParkGates)("verifyBackendContract", (it) => {
   it.effect("MemoryBackend satisfies the contract", () =>
-    MemoryBackend.make(BackendContract.memoryHandlers).pipe(
+    BackendContract.makeMemoryHandlers.pipe(
+      Effect.flatMap(MemoryBackend.make),
       Effect.flatMap((backend) => BackendContract.verifyBackendContract(backend))
     )
   );
 
   it.effect("catches a backend that re-applies acknowledged mutations", () =>
     Effect.gen(function* () {
-      const inner = yield* MemoryBackend.make(BackendContract.memoryHandlers);
+      const inner = yield* MemoryBackend.make(yield* BackendContract.makeMemoryHandlers);
       // Renumbering incoming mutation ids defeats idempotent skip: every
       // delivery applies, acknowledged or not.
       let sequence = 0;
@@ -51,7 +57,7 @@ describe("verifyBackendContract", () => {
         applyMutations: (context, mutations) =>
           inner.applyMutations(
             context,
-            mutations.map((m) => ({ ...m, mutationId: ++sequence }))
+            mutations.map((m) => ({ ...m, mutationId: MutationId.make(++sequence) }))
           ),
       };
       const failure = yield* Effect.flip(BackendContract.verifyBackendContract(broken));
@@ -62,7 +68,7 @@ describe("verifyBackendContract", () => {
 
   it.effect("catches a backend that accepts mutation-id gaps", () =>
     Effect.gen(function* () {
-      const inner = yield* MemoryBackend.make(BackendContract.memoryHandlers);
+      const inner = yield* MemoryBackend.make(yield* BackendContract.makeMemoryHandlers);
       // Compacting gapped ids into the next expected slot silently accepts
       // gaps, breaking exactly-once delivery accounting. In-order and
       // already-applied ids pass through untouched.
@@ -75,8 +81,10 @@ describe("verifyBackendContract", () => {
               context,
               mutations.map((m) => {
                 const last = running[m.clientId] ?? 0;
-                const mutationId = m.mutationId > last + 1 ? last + 1 : m.mutationId;
-                running[m.clientId] = Math.max(last, mutationId);
+                const mutationId = MutationId.make(
+                  m.mutationId > last + 1 ? last + 1 : m.mutationId
+                );
+                running[m.clientId] = MutationId.make(Math.max(last, mutationId));
                 return { ...m, mutationId };
               })
             );
@@ -92,7 +100,9 @@ describe("verifyBackendContract", () => {
     Effect.gen(function* () {
       // An unregistered mutator fails with "Unknown mutator", a BackendError too: the
       // atomic-bump rule must not let that pass as the expected failure.
-      const broken = yield* MemoryBackend.make(withoutHandler(BackendContract.failAlways.name));
+      const broken = yield* MemoryBackend.make(
+        yield* withoutHandler(BackendContract.failAlways.name)
+      );
       const failure = yield* Effect.flip(BackendContract.verifyBackendContract(broken));
       expect(failure._tag).toBe("ContractViolation");
       expect(failure.rule).toContain("atomic");
@@ -104,7 +114,9 @@ describe("verifyBackendContract", () => {
     Effect.gen(function* () {
       // An unregistered mutator fails with "Unknown mutator", a BackendError too: the
       // write-then-fail rule must not let that pass as the expected failure.
-      const broken = yield* MemoryBackend.make(withoutHandler(BackendContract.writeThenFail.name));
+      const broken = yield* MemoryBackend.make(
+        yield* withoutHandler(BackendContract.writeThenFail.name)
+      );
       const failure = yield* Effect.flip(BackendContract.verifyBackendContract(broken));
       expect(failure._tag).toBe("ContractViolation");
       expect(failure.rule).toContain("discards");
@@ -114,7 +126,9 @@ describe("verifyBackendContract", () => {
 
   it.effect("detects an unregistered mutator by its typed cause, whatever the message says", () =>
     Effect.gen(function* () {
-      const inner = yield* MemoryBackend.make(withoutHandler(BackendContract.writeThenFail.name));
+      const inner = yield* MemoryBackend.make(
+        yield* withoutHandler(BackendContract.writeThenFail.name)
+      );
       // Rewords the unknown-mutator error but keeps its typed cause.
       const broken: Backend = {
         ...inner,
@@ -135,7 +149,7 @@ describe("verifyBackendContract", () => {
 
   it.effect("does not mistake a registered handler's error that mentions an unknown mutator", () =>
     Effect.gen(function* () {
-      const inner = yield* MemoryBackend.make(BackendContract.memoryHandlers);
+      const inner = yield* MemoryBackend.make(yield* BackendContract.makeMemoryHandlers);
       // Rewords every handler failure except the typed unknown-mutator one, so a
       // registered failAlways fails with text that contains "Unknown mutator".
       const wordy: Backend = {
@@ -155,6 +169,21 @@ describe("verifyBackendContract", () => {
     })
   );
 
+  // Gates are per service instance: a backend whose handlers park at other gates
+  // than the contract opens never parks, and rule 11 says so.
+  it.effect("fails rule 11 when the handlers park at another ParkGates instance", () =>
+    Effect.gen(function* () {
+      const elsewhere = yield* BackendContract.makeParkGates;
+      const handlers = yield* BackendContract.makeMemoryHandlers.pipe(
+        Effect.provideService(BackendContract.ParkGates, elsewhere)
+      );
+      const backend = yield* MemoryBackend.make(handlers);
+      const failure = yield* Effect.flip(BackendContract.verifyBackendContract(backend));
+      expect(failure.rule).toContain("guarantee 1");
+      expect(failure.message).toContain("finished without reaching park()");
+    })
+  );
+
   it.effect("catches a backend whose count-up read escapes the commit's validation", () =>
     Effect.gen(function* () {
       // The handler reads the counter from a snapshot the wrapper takes when the
@@ -162,6 +191,7 @@ describe("verifyBackendContract", () => {
       // sees that read, so a peer group's commit between the read and the write is
       // overwritten: a lost update across client groups (rule 11).
       const snapshots = MutableHashMap.empty<string, number>();
+      const gates = yield* BackendContract.ParkGates;
       const staleCount: MemoryBackend.BackendHandler = (raw, writer, context) => {
         const args = Schema.decodeUnknownSync(BackendContract.countUp.args)(raw);
         return Effect.gen(function* () {
@@ -169,19 +199,19 @@ describe("verifyBackendContract", () => {
             MutableHashMap.get(snapshots, context.clientGroupId),
             () => 0
           );
-          yield* BackendContract.park(args.gate);
+          yield* gates.park(args.gate);
           yield* writer.put(args.collection, args.id, { n: seen + 1 });
         });
       };
       const inner = yield* MemoryBackend.make({
-        ...BackendContract.memoryHandlers,
+        ...(yield* BackendContract.makeMemoryHandlers),
         [BackendContract.countUp.name]: staleCount,
       });
       const broken: Backend = {
         ...inner,
         applyMutations: (context, mutations) =>
           Effect.gen(function* () {
-            const [row] = yield* inner.getRows(context, "__contract", ["race"]);
+            const [row] = yield* inner.getRows(context, "__contract", [RowId.make("race")]);
             MutableHashMap.set(snapshots, context.clientGroupId, decodeCounter(row?.value)?.n ?? 0);
             return yield* inner.applyMutations(context, mutations);
           }),
@@ -195,7 +225,9 @@ describe("verifyBackendContract", () => {
 
   it.effect("falls back to the message for a backend that carries no typed cause", () =>
     Effect.gen(function* () {
-      const inner = yield* MemoryBackend.make(withoutHandler(BackendContract.writeThenFail.name));
+      const inner = yield* MemoryBackend.make(
+        yield* withoutHandler(BackendContract.writeThenFail.name)
+      );
       // Drops the typed cause, keeping the "Unknown mutator" message.
       const broken: Backend = {
         ...inner,
@@ -212,7 +244,7 @@ describe("verifyBackendContract", () => {
 
   it.effect("passes a backend whose evaluateMany is per-subset evaluate", () =>
     Effect.gen(function* () {
-      const inner = yield* MemoryBackend.make(BackendContract.memoryHandlers);
+      const inner = yield* MemoryBackend.make(yield* BackendContract.makeMemoryHandlers);
       const batched: Backend = {
         ...inner,
         evaluateMany: (context, subsets) =>
@@ -224,7 +256,7 @@ describe("verifyBackendContract", () => {
 
   it.effect("catches a backend whose evaluateMany disagrees with evaluate", () =>
     Effect.gen(function* () {
-      const inner = yield* MemoryBackend.make(BackendContract.memoryHandlers);
+      const inner = yield* MemoryBackend.make(yield* BackendContract.makeMemoryHandlers);
       // Drops each subset's last entry: right for an empty subset, wrong otherwise.
       const broken: Backend = {
         ...inner,
@@ -243,7 +275,7 @@ describe("verifyBackendContract", () => {
   );
   it.effect("catches a backend whose evaluateCounted reports the window's size as the total", () =>
     Effect.gen(function* () {
-      const inner = yield* MemoryBackend.make(BackendContract.memoryHandlers);
+      const inner = yield* MemoryBackend.make(yield* BackendContract.makeMemoryHandlers);
       const windowed: Backend = {
         ...inner,
         evaluateCounted: (context, subsets) =>
@@ -264,10 +296,10 @@ describe("verifyBackendContract", () => {
   );
 });
 
-describe("Backend.evaluateAll", () => {
+layer(BackendContract.layerParkGates)("Backend.evaluateAll", (it) => {
   it.effect("asks evaluate per subset when the backend has no evaluateMany", () =>
     Effect.gen(function* () {
-      const inner = yield* MemoryBackend.make(BackendContract.memoryHandlers);
+      const inner = yield* MemoryBackend.make(yield* BackendContract.makeMemoryHandlers);
       const asked: Array<string> = [];
       const counted: Backend = {
         ...inner,
@@ -276,39 +308,43 @@ describe("Backend.evaluateAll", () => {
           return inner.evaluate(context, subset);
         },
       };
-      const lists = yield* evaluateAll(counted, { clientGroupId: "g" }, [
+      const lists = yield* evaluateAll(counted, { clientGroupId: ClientGroupId.make("g") }, [
         Subset.make({ collection: "a" }),
         Subset.make({ collection: "b" }),
       ]);
       expect(lists).toEqual([[], []]);
       expect(asked).toEqual(["a", "b"]);
-      expect(yield* evaluateAll(counted, { clientGroupId: "g" }, [])).toEqual([]);
+      expect(yield* evaluateAll(counted, { clientGroupId: ClientGroupId.make("g") }, [])).toEqual(
+        []
+      );
       expect(asked).toEqual(["a", "b"]);
     })
   );
 
   it.effect("fails when evaluateMany returns a list count other than the subsets'", () =>
     Effect.gen(function* () {
-      const inner = yield* MemoryBackend.make(BackendContract.memoryHandlers);
+      const inner = yield* MemoryBackend.make(yield* BackendContract.makeMemoryHandlers);
       const short: Backend = { ...inner, evaluateMany: () => Effect.succeed([]) };
       const error = yield* Effect.flip(
-        evaluateAll(short, { clientGroupId: "g" }, [Subset.make({ collection: "a" })])
+        evaluateAll(short, { clientGroupId: ClientGroupId.make("g") }, [
+          Subset.make({ collection: "a" }),
+        ])
       );
       expect(error.message).toContain("0 entry lists for 1 subsets");
     })
   );
 });
 
-describe("Backend totals", () => {
+layer(BackendContract.layerParkGates)("Backend totals", (it) => {
   const seeded = Effect.fnUntraced(function* () {
-    const backend = yield* MemoryBackend.make(BackendContract.memoryHandlers);
+    const backend = yield* MemoryBackend.make(yield* BackendContract.makeMemoryHandlers);
     yield* Effect.forEach(
       [1, 2, 3, 4, 5],
       (n) =>
-        backend.applyMutations({ clientGroupId: "g" }, [
+        backend.applyMutations({ clientGroupId: ClientGroupId.make("g") }, [
           {
             clientId: "c",
-            mutationId: n,
+            mutationId: MutationId.make(n),
             mutator: BackendContract.putRow.name,
             args: { collection: "items", id: `i-${n}`, value: { id: `i-${n}`, n } },
             createdAt: 0,
@@ -327,10 +363,16 @@ describe("Backend totals", () => {
   it.effect("the memory backend counts the collection, not the window", () =>
     Effect.gen(function* () {
       const backend = yield* seeded();
-      const [answer] = yield* evaluateCountedAll(backend, { clientGroupId: "g" }, [window]);
+      const [answer] = yield* evaluateCountedAll(
+        backend,
+        { clientGroupId: ClientGroupId.make("g") },
+        [window]
+      );
       expect(answer?.entries.map((entry) => entry.id)).toEqual(["i-1", "i-2"]);
       expect(answer?.total).toBe(5);
-      expect(yield* totalsOf(backend, { clientGroupId: "g" }, [window])).toEqual([5]);
+      expect(
+        yield* totalsOf(backend, { clientGroupId: ClientGroupId.make("g") }, [window])
+      ).toEqual([5]);
     })
   );
 
@@ -339,19 +381,27 @@ describe("Backend totals", () => {
     () =>
       Effect.gen(function* () {
         const backend: Backend = { ...(yield* seeded()), evaluateCounted: undefined };
-        const [answer] = yield* evaluateCountedAll(backend, { clientGroupId: "g" }, [window]);
+        const [answer] = yield* evaluateCountedAll(
+          backend,
+          { clientGroupId: ClientGroupId.make("g") },
+          [window]
+        );
         expect(answer?.entries).toHaveLength(2);
         expect(answer?.total).toBeUndefined();
-        expect(yield* totalsOf(backend, { clientGroupId: "g" }, [window])).toEqual([5]);
+        expect(
+          yield* totalsOf(backend, { clientGroupId: ClientGroupId.make("g") }, [window])
+        ).toEqual([5]);
       })
   );
 
   it.effect("fails when evaluateCounted returns an answer count other than the subsets'", () =>
     Effect.gen(function* () {
-      const inner = yield* MemoryBackend.make(BackendContract.memoryHandlers);
+      const inner = yield* MemoryBackend.make(yield* BackendContract.makeMemoryHandlers);
       const short: Backend = { ...inner, evaluateCounted: () => Effect.succeed([]) };
       const error = yield* Effect.flip(
-        evaluateCountedAll(short, { clientGroupId: "g" }, [Subset.make({ collection: "a" })])
+        evaluateCountedAll(short, { clientGroupId: ClientGroupId.make("g") }, [
+          Subset.make({ collection: "a" }),
+        ])
       );
       expect(error.message).toContain("evaluateCounted returned 0 entry lists for 1 subsets");
     })

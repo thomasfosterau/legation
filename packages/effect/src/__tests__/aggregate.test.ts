@@ -31,6 +31,7 @@ import { ClientTransport, makeInMemory, type ServerHandler } from "../Transport.
 import { defined } from "./defined.js";
 import * as Json from "../internal/Json.js";
 import { idOf } from "./shapes.js";
+import { ClientGroupId, RowId } from "../Protocol.js";
 
 const rowsOf = (...values: ReadonlyArray<unknown>) =>
   values.map((value, i) => ({ id: `${i}`, value }));
@@ -113,7 +114,7 @@ interface Todo {
 const put =
   (collection: string): MemoryBackend.BackendHandler =>
   (args, writer) =>
-    Effect.asVoid(writer.put(collection, idOf(args), args));
+    Effect.asVoid(writer.put(collection, RowId.make(idOf(args)), args));
 
 const handlers = { "todo/set": put("todos") } satisfies Record<
   string,
@@ -122,7 +123,7 @@ const handlers = { "todo/set": put("todos") } satisfies Record<
 const mutators = Mutator.registry([
   {
     mutator: Mutator.make("todo/set", Schema.Unknown),
-    local: (a: Todo, w) => w.put("todos", a.id, a),
+    local: (a: Todo, w) => w.put("todos", RowId.make(a.id), a),
   },
 ]);
 
@@ -144,8 +145,12 @@ const makeServer = Effect.fn("makeServer")(function* () {
 const makeClient = (handler: ServerHandler, group: string) =>
   Effect.gen(function* () {
     const store = yield* ClientStoreModule.makeMemory;
-    const transport = yield* makeInMemory(handler, group);
-    return yield* ClientEngineModule.make({ clientId: group, clientGroupId: group, mutators }).pipe(
+    const transport = yield* makeInMemory(handler, ClientGroupId.make(group));
+    return yield* ClientEngineModule.make({
+      clientId: group,
+      clientGroupId: ClientGroupId.make(group),
+      mutators,
+    }).pipe(
       Effect.provideService(ClientStore, store),
       Effect.provideService(ClientTransport, transport)
     );

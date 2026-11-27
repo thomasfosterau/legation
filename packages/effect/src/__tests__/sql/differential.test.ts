@@ -42,6 +42,7 @@ import { type Engine, makePostgres, makeSqlite, type Verdict } from "./different
 import * as Env from "../env.js";
 import { TestFailure } from "../test-failure.js";
 import * as Json from "../../internal/Json.js";
+import { RowId } from "../../Protocol.js";
 
 const seed = Result.getOrThrowWith(FilterCorpus.resolveSeed(Env.corpusSeed), identity);
 
@@ -478,7 +479,7 @@ layer(differentialLayer, { timeout: "120 seconds" })(
 
 /** Re-id a row set so it can share a table with another corpus. */
 function prefixed(prefix: string, rows: Rows): Rows {
-  return rows.map((row) => ({ id: `${prefix}${row.id}`, value: row.value }));
+  return rows.map((row) => ({ id: RowId.make(`${prefix}${row.id}`), value: row.value }));
 }
 
 function prefixedCorpus(prefix: string, corpus: FilterCorpus.Corpus): FilterCorpus.Corpus {
@@ -492,20 +493,20 @@ function prefixedCorpus(prefix: string, corpus: FilterCorpus.Corpus): FilterCorp
  * integers (an int4 bound among them).
  */
 const focusedRows: Rows = [
-  { id: "f-null", value: { s: null } },
-  { id: "f-absent", value: {} },
-  { id: "f-x", value: { s: "x" } },
-  { id: "f-a", value: { s: "a" } },
-  { id: "f-ffff", value: { s: "￿" } },
-  { id: "f-astral", value: { s: "😀" } },
-  { id: "f-true", value: { b: true } },
-  { id: "f-false", value: { b: false } },
-  { id: "f-t-epoch", value: { t: "1970-01-01T00:00:00.000Z" } },
-  { id: "f-t-2020", value: { t: "2020-02-29T12:34:56.789Z" } },
-  { id: "f-t-2038", value: { t: "2038-01-19T03:14:07.000Z" } },
-  { id: "f-i-1", value: { i: 1 } },
-  { id: "f-i-7", value: { i: 7 } },
-  { id: "f-i-max", value: { i: 2147483647 } },
+  { id: RowId.make("f-null"), value: { s: null } },
+  { id: RowId.make("f-absent"), value: {} },
+  { id: RowId.make("f-x"), value: { s: "x" } },
+  { id: RowId.make("f-a"), value: { s: "a" } },
+  { id: RowId.make("f-ffff"), value: { s: "￿" } },
+  { id: RowId.make("f-astral"), value: { s: "😀" } },
+  { id: RowId.make("f-true"), value: { b: true } },
+  { id: RowId.make("f-false"), value: { b: false } },
+  { id: RowId.make("f-t-epoch"), value: { t: "1970-01-01T00:00:00.000Z" } },
+  { id: RowId.make("f-t-2020"), value: { t: "2020-02-29T12:34:56.789Z" } },
+  { id: RowId.make("f-t-2038"), value: { t: "2038-01-19T03:14:07.000Z" } },
+  { id: RowId.make("f-i-1"), value: { i: 1 } },
+  { id: RowId.make("f-i-7"), value: { i: 7 } },
+  { id: RowId.make("f-i-max"), value: { i: 2147483647 } },
 ];
 
 const nullAndAbsent = ["f-null", "f-absent", "f-x"];

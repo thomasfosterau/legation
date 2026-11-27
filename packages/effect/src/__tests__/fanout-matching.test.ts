@@ -31,6 +31,7 @@ import * as SyncServer from "../SyncServer.js";
 import * as Telemetry from "../Telemetry.js";
 import type { ServerHandler } from "../Transport.js";
 import { idOf } from "./shapes.js";
+import { ClientGroupId, MutationId, RowId } from "../Protocol.js";
 
 interface Todo {
   readonly id: string;
@@ -39,8 +40,8 @@ interface Todo {
 }
 
 const handlers = {
-  "todo/set": (args, writer) => Effect.asVoid(writer.put("todos", idOf(args), args)),
-  "todo/remove": (args, writer) => writer.del("todos", idOf(args)),
+  "todo/set": (args, writer) => Effect.asVoid(writer.put("todos", RowId.make(idOf(args)), args)),
+  "todo/remove": (args, writer) => writer.del("todos", RowId.make(idOf(args))),
 } satisfies Record<string, MemoryBackend.BackendHandler>;
 
 const authPolicy = Authorization.policy({ todos: Authorization.allowAll });
@@ -68,17 +69,37 @@ const tenant = (id: string) =>
   Subset.make({ collection: "todos", where: Predicate.eq("tenantId", id) });
 
 const pushSet = (group: string, client: string, mutationId: number, row: Todo) => ({
-  clientGroupId: group,
-  mutations: [{ clientId: client, mutationId, mutator: "todo/set", args: row, createdAt: 0 }],
+  clientGroupId: ClientGroupId.make(group),
+  mutations: [
+    {
+      clientId: client,
+      mutationId: MutationId.make(mutationId),
+      mutator: "todo/set",
+      args: row,
+      createdAt: 0,
+    },
+  ],
 });
 
 const pushRemove = (group: string, client: string, mutationId: number, id: string) => ({
-  clientGroupId: group,
-  mutations: [{ clientId: client, mutationId, mutator: "todo/remove", args: { id }, createdAt: 0 }],
+  clientGroupId: ClientGroupId.make(group),
+  mutations: [
+    {
+      clientId: client,
+      mutationId: MutationId.make(mutationId),
+      mutator: "todo/remove",
+      args: { id },
+      createdAt: 0,
+    },
+  ],
 });
 
 const subscribe = (handler: ServerHandler, group: string, subset: Subset.Subset) =>
-  handler.handlePull({ clientGroupId: group, cookie: undefined, subscriptions: [subset] });
+  handler.handlePull({
+    clientGroupId: ClientGroupId.make(group),
+    cookie: undefined,
+    subscriptions: [subset],
+  });
 
 /** Snapshot the poke counters, for before/after deltas. */
 const counts = Effect.all(
@@ -125,7 +146,7 @@ const fanoutDeltas = <E>(publish: Effect.Effect<unknown, E>) =>
 
 /** Whether the group's hub holds a poke: a late subscriber gets the group's last poke replayed. */
 const wasPoked = (handler: ServerHandler, group: string) =>
-  Stream.runHead(handler.pokes(group)).pipe(Effect.map(Option.isSome));
+  Stream.runHead(handler.pokes(ClientGroupId.make(group))).pipe(Effect.map(Option.isSome));
 
 describe("predicate-aware fan-out matching", () => {
   it.effect("pokes only the group whose predicate the write matches", () =>
@@ -154,7 +175,9 @@ describe("predicate-aware fan-out matching", () => {
 
       // No `values`: the server cannot decide by predicate, so it pokes every
       // group subscribed to the collection (both A and B, disjoint predicates).
-      const deltas = yield* fanoutDeltas(bus.publish([{ collection: "todos", ids: ["z"] }]));
+      const deltas = yield* fanoutDeltas(
+        bus.publish([{ collection: "todos", ids: [RowId.make("z")] }])
+      );
 
       expect(deltas).toEqual({ poked: 2, suppressed: 0 });
     }).pipe(Effect.scoped)
@@ -215,13 +238,19 @@ describe("predicate-aware fan-out matching", () => {
       const subscription = yield* bus.subscribe;
 
       // An old, value-less hint must decode and behave exactly as before.
-      const valueLess: ReadonlyArray<ChangeHint> = [{ collection: "todos", ids: ["1", "2"] }];
+      const valueLess: ReadonlyArray<ChangeHint> = [
+        { collection: "todos", ids: [RowId.make("1"), RowId.make("2")] },
+      ];
       yield* bus.publish(valueLess);
       expect(yield* subscription.take).toEqual(valueLess);
 
       // A value-carrying hint round-trips its row values intact.
       const valueCarrying: ReadonlyArray<ChangeHint> = [
-        { collection: "todos", ids: ["1"], values: [{ id: "1", value: { tenantId: "a" } }] },
+        {
+          collection: "todos",
+          ids: [RowId.make("1")],
+          values: [{ id: RowId.make("1"), value: { tenantId: "a" } }],
+        },
       ];
       yield* bus.publish(valueCarrying);
       expect(yield* subscription.take).toEqual(valueCarrying);

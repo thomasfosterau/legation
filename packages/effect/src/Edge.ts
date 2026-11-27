@@ -20,7 +20,7 @@
 
 /** A reference to a single foreign node, held as a foreign-key field. */
 export interface One<Target extends string = string, Via extends string = string> {
-  readonly kind: "one";
+  readonly _tag: "one";
   readonly target: Target;
   /** The field on THIS node's rows holding the foreign id. */
   readonly via: Via;
@@ -28,7 +28,7 @@ export interface One<Target extends string = string, Via extends string = string
 
 /** The dependent collection of target nodes whose inverse edge points here. */
 export interface Many<Target extends string = string> {
-  readonly kind: "many";
+  readonly _tag: "many";
   readonly target: Target;
   /** The name of the `one` edge on the target that holds the key. */
   readonly inverse: string;
@@ -42,7 +42,7 @@ export interface Many<Target extends string = string> {
  * `-` prefixed for descending (`"-createdAt"`).
  */
 export interface Paginated<Target extends string = string> {
-  readonly kind: "paginated";
+  readonly _tag: "paginated";
   readonly target: Target;
   /** The name of the `one` edge on the target that holds the key. */
   readonly inverse: string;
@@ -58,20 +58,20 @@ export type Edge = One | Many | Paginated;
 export const one = <const Target extends string, const Via extends string>(
   target: Target,
   options: { readonly via: Via }
-): One<Target, Via> => ({ kind: "one", target, via: options.via });
+): One<Target, Via> => ({ _tag: "one", target, via: options.via });
 
 /** Declare the dependent collection of `target` nodes (unbounded). */
 export const many = <const Target extends string>(
   target: Target,
   options: { readonly inverse: string }
-): Many<Target> => ({ kind: "many", target, inverse: options.inverse });
+): Many<Target> => ({ _tag: "many", target, inverse: options.inverse });
 
 /** Declare the dependent collection of `target` nodes, paged by cursor. */
 export const paginated = <const Target extends string>(
   target: Target,
   options: { readonly inverse: string; readonly order: ReadonlyArray<string> }
 ): Paginated<Target> => ({
-  kind: "paginated",
+  _tag: "paginated",
   target,
   inverse: options.inverse,
   order: options.order,

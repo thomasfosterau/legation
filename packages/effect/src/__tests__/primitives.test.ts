@@ -6,6 +6,7 @@ import * as Predicate from "../Predicate.js";
 import * as Protocol from "../Protocol.js";
 import * as Subset from "../Subset.js";
 import * as Json from "../internal/Json.js";
+import { RowId } from "../Protocol.js";
 
 describe("Predicate", () => {
   const row = { id: "1", status: "open", priority: 3 };
@@ -53,9 +54,9 @@ describe("Predicate", () => {
 
 describe("Subset.apply", () => {
   const rows = [
-    { id: "a", value: { name: "alpha", rank: 2 } },
-    { id: "b", value: { name: "beta", rank: 1 } },
-    { id: "c", value: { name: "gamma", rank: 3 } },
+    { id: RowId.make("a"), value: { name: "alpha", rank: 2 } },
+    { id: RowId.make("b"), value: { name: "beta", rank: 1 } },
+    { id: RowId.make("c"), value: { name: "gamma", rank: 3 } },
   ];
 
   it("filters, orders, and limits", () => {
@@ -86,8 +87,8 @@ describe("Cvr.diff", () => {
         [
           "todos",
           new Map([
-            ["1", 1],
-            ["2", 1],
+            [RowId.make("1"), 1],
+            [RowId.make("2"), 1],
           ]),
         ],
       ]),
@@ -97,8 +98,8 @@ describe("Cvr.diff", () => {
         [
           "todos",
           new Map([
-            ["1", 2],
-            ["3", 1],
+            [RowId.make("1"), 2],
+            [RowId.make("3"), 1],
           ]),
         ],
       ]),
@@ -112,7 +113,7 @@ describe("Cvr.diff", () => {
   });
 
   it("is empty for identical views", () => {
-    const view = { rows: new Map([["todos", new Map([["1", 1]])]]) };
+    const view = { rows: new Map([["todos", new Map([[RowId.make("1"), 1]])]]) };
     const result = Cvr.diff(view, view);
     expect(result.puts).toEqual([]);
     expect(result.dels).toEqual([]);

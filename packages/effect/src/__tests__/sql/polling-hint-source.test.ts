@@ -24,6 +24,7 @@ import {
 } from "@thomasfosterau/legation/internal";
 import * as PollingHintSource from "../../sql/PollingHintSource.js";
 import type * as SqlBackend from "../../sql/SqlBackend.js";
+import { ClientGroupId } from "../../Protocol.js";
 
 /** A detector reading the test drives between polls (an out-of-band write). */
 interface Detector {
@@ -119,7 +120,7 @@ describe("PollingHintSource", () => {
         Effect.provideService(InvalidationBus.InvalidationBus, bus)
       );
       yield* handler.handlePull({
-        clientGroupId: "g",
+        clientGroupId: ClientGroupId.make("g"),
         cookie: undefined,
         subscriptions: [Subset.make({ collection: "todos" })],
       });

@@ -19,9 +19,10 @@ import * as MutableHashSet from "effect/MutableHashSet";
 import type * as Schema from "effect/Schema";
 import { DuplicateNameError, UnknownCollectionError } from "./Errors.js";
 import * as FilterPolicy from "./FilterPolicy.js";
+import { RowId } from "./Protocol.js";
 
-/** The identifier of one row within a collection. */
-export type RowId = string;
+/** The identifier of one row within a collection: a branded string (`RowId.make("…")`). */
+export { RowId };
 
 /**
  * A declared relationship from one collection to a foreign collection, by

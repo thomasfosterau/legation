@@ -34,11 +34,11 @@ export const floorsOf = (
  * a push calls this. Returns `clients` itself when nothing is forgotten, so a
  * caller can detect the no-op by reference.
  */
-export const forgetBelow = (
-  clients: ReadonlyMap<string, ReadonlyMap<number, string>>,
+export const forgetBelow = <Id extends number>(
+  clients: ReadonlyMap<string, ReadonlyMap<Id, string>>,
   floors: ReadonlyMap<string, number>
-): ReadonlyMap<string, ReadonlyMap<number, string>> => {
-  let kept = Option.none<Map<string, ReadonlyMap<number, string>>>();
+): ReadonlyMap<string, ReadonlyMap<Id, string>> => {
+  let kept = Option.none<Map<string, ReadonlyMap<Id, string>>>();
   Arr.forEach(floors, ([clientId, floor]) => {
     const ids = clients.get(clientId);
     if (ids === undefined) return;

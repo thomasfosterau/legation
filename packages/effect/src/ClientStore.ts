@@ -35,7 +35,14 @@ import type { RowId } from "./Collection.js";
 import { StoreError } from "./Errors.js";
 import * as Identity from "./Identity.js";
 import * as Json from "./internal/Json.js";
-import { Mutation, PatchOp } from "./Protocol.js";
+import * as Ids from "./internal/Ids.js";
+import {
+  LastMutationIds,
+  Mutation,
+  MutationId,
+  PatchOp,
+  RowId as RowIdSchema,
+} from "./Protocol.js";
 
 /** Narrows a patch op to `Clear`, the one variant that names no row. */
 const isClear = (op: PatchOp): op is Extract<PatchOp, { readonly _tag: "Clear" }> =>
@@ -48,7 +55,7 @@ const isClear = (op: PatchOp): op is Extract<PatchOp, { readonly _tag: "Clear" }
  * (ADR-0014: the engine never decodes row values on the read path).
  */
 export const StoredRow = Schema.Struct({
-  id: Schema.String,
+  id: RowIdSchema,
   version: Schema.Union([Schema.String, Schema.Number]),
   value: Schema.Unknown,
 });
@@ -267,7 +274,7 @@ export interface ClientStore {
    * prefer {@link ClientStore.appendNext}, since an id reserved here and never
    * appended is a gap.
    */
-  readonly nextMutationId: (clientId: string) => Effect.Effect<number, StoreError>;
+  readonly nextMutationId: (clientId: string) => Effect.Effect<MutationId, StoreError>;
   /**
    * Each client's mutation id counter: the highest id the store has issued, journaled or seen leave
    * the journal for that client. A client with no counter is absent. The next id the store issues for
@@ -762,7 +769,7 @@ export const makeMemory: Effect.Effect<ClientStore> = Effect.gen(function* () {
               draft.clientId,
               (yield* Ref.get(counters)).get(draft.clientId) ?? 0
             );
-            const mutation: Mutation = { ...draft, mutationId: last + 1 };
+            const mutation: Mutation = { ...draft, mutationId: Ids.mutationId(last + 1) };
             yield* Ref.set(journal, entries.concat(mutation));
             yield* raiseCounter(draft.clientId, mutation.mutationId);
             return mutation;
@@ -828,7 +835,7 @@ export const makeMemory: Effect.Effect<ClientStore> = Effect.gen(function* () {
         Effect.gen(function* () {
           const entries = yield* Ref.get(journal);
           const last = highestFor(entries, clientId, (yield* Ref.get(counters)).get(clientId) ?? 0);
-          const next = last + 1;
+          const next = Ids.mutationId(last + 1);
           yield* raiseCounter(clientId, next);
           return next;
         })
@@ -1153,20 +1160,20 @@ const LEGACY_JOURNAL_KEY = "journal";
 /** An entry in the compact ordered journal index — ids only, never the body. */
 const JournalIndexEntry = Schema.Struct({
   clientId: Schema.String,
-  mutationId: Schema.Number,
+  mutationId: MutationId,
 });
 type JournalIndexEntry = typeof JournalIndexEntry.Type;
 
 /** JSON codecs for the persisted values (envelope-validated on read). */
 const RowFromJson = Schema.fromJsonString(StoredRow);
-const IdsFromJson = Schema.fromJsonString(Schema.Array(Schema.String));
+const IdsFromJson = Schema.fromJsonString(Schema.Array(RowIdSchema));
 const CollectionsFromJson = Schema.fromJsonString(Schema.Array(Schema.String));
 const MutationFromJson = Schema.fromJsonString(Mutation);
 const JournalIndexFromJson = Schema.fromJsonString(Schema.Array(JournalIndexEntry));
 const CountersFromJson = Schema.fromJsonString(Schema.Record(Schema.String, Schema.Number));
 const ReleaseIntentFromJson = Schema.fromJsonString(
   Schema.Struct({
-    lastMutationIds: Schema.Record(Schema.String, Schema.Number),
+    lastMutationIds: LastMutationIds,
     cookie: Schema.optional(Schema.String),
     patch: Schema.Array(PatchOp),
   })
@@ -1237,7 +1244,7 @@ const raisedCounters = (
 };
 
 /** A batch of row ops grouped by collection: `null` marks a deletion. */
-type RowChanges = Map<string, StoredRow | null>;
+type RowChanges = Map<RowId, StoredRow | null>;
 interface RowOpPlan {
   readonly clear: boolean;
   readonly groups: Map<string, RowChanges>;
@@ -2317,7 +2324,7 @@ export const makeKeyValue: (
             }
             const counters = (yield* readDecoded("counters", CountersFromJson)) ?? {};
             const last = highestFor(index, draft.clientId, counters[draft.clientId] ?? 0);
-            const mutation: Mutation = { ...draft, mutationId: last + 1 };
+            const mutation: Mutation = { ...draft, mutationId: Ids.mutationId(last + 1) };
             yield* writeJson(journalBodyKey(mutation.clientId, mutation.mutationId), mutation);
             yield* writeJson("journalIndex", [
               ...index,
@@ -2406,7 +2413,7 @@ export const makeKeyValue: (
                             message: `Journal body missing for mutation ${from} of client ${clientId}; refusing to compact`,
                           })
                         )
-                      : Effect.succeed({ ...body, mutationId: to })
+                      : Effect.succeed({ ...body, mutationId: Ids.mutationId(to) })
                   )
                 ),
               { concurrency: 1 }
@@ -2470,7 +2477,7 @@ export const makeKeyValue: (
           // Heal from the live journal, as `appendNext` does, so a counter
           // write that was swallowed cannot hand out an id a live entry holds.
           const last = highestFor(yield* journalIndex, clientId, counters[clientId] ?? 0);
-          const next = last + 1;
+          const next = Ids.mutationId(last + 1);
           yield* writeJson("counters", { ...counters, [clientId]: next });
           return next;
         })

@@ -32,6 +32,7 @@ import * as Predicate from "../Predicate.js";
 import * as Subset from "../Subset.js";
 import { layerInMemory, ServerHandler } from "../Transport.js";
 import { awaitPromise } from "./await-promise.js";
+import { ClientGroupId, MutationId, RowId } from "../Protocol.js";
 
 const ROWS = 50_000;
 
@@ -46,13 +47,21 @@ const makeBulkSeededStore = (
   rows: ReadonlyArray<{ readonly id: string; readonly priority: number; readonly done: boolean }>
 ): Effect.Effect<ClientStore> =>
   Effect.sync(() => {
-    const collections = new Map<string, Map<string, StoredRow>>([
-      ["items", new Map(rows.map((row) => [row.id, { id: row.id, version: 1, value: row }]))],
+    const collections = new Map<string, Map<RowId, StoredRow>>([
+      [
+        "items",
+        new Map(
+          rows.map((row) => [
+            RowId.make(row.id),
+            { id: RowId.make(row.id), version: 1, value: row },
+          ])
+        ),
+      ],
     ]);
     const collectionOf = (name: string) => {
       const existing = collections.get(name);
       if (existing !== undefined) return existing;
-      const created = new Map<string, StoredRow>();
+      const created = new Map<RowId, StoredRow>();
       collections.set(name, created);
       return created;
     };
@@ -97,7 +106,7 @@ const makeBulkSeededStore = (
       markSent: () => Effect.void,
       appendNext: (draft) =>
         Effect.sync(() => {
-          const mutationId = (counters.get(draft.clientId) ?? 0) + 1;
+          const mutationId = MutationId.make((counters.get(draft.clientId) ?? 0) + 1);
           counters.set(draft.clientId, mutationId);
           const mutation = { ...draft, mutationId };
           journal = journal.concat(mutation);
@@ -105,7 +114,7 @@ const makeBulkSeededStore = (
         }),
       nextMutationId: (clientId) =>
         Effect.sync(() => {
-          const next = (counters.get(clientId) ?? 0) + 1;
+          const next = MutationId.make((counters.get(clientId) ?? 0) + 1);
           counters.set(clientId, next);
           return next;
         }),
@@ -163,7 +172,7 @@ const makeBulkSeededStore = (
 const mutators = Mutator.registry([
   {
     mutator: Mutator.make("item/set", Schema.Unknown),
-    local: (a: { id: string }, w) => w.put("items", a.id, a),
+    local: (a: { id: string }, w) => w.put("items", RowId.make(a.id), a),
   },
 ]);
 
@@ -186,13 +195,13 @@ const buildEngine = (indexed: boolean) =>
   Effect.gen(function* () {
     const store = yield* makeBulkSeededStore(rows);
     const transport = yield* Layer.build(
-      layerInMemory(`bench-${indexed}`).pipe(
+      layerInMemory(ClientGroupId.make(`bench-${indexed}`)).pipe(
         Layer.provide(Layer.succeed(ServerHandler)(noopHandler))
       )
     );
     const engine = yield* ClientEngineModule.make({
       clientId: "bench",
-      clientGroupId: `bench-${indexed}`,
+      clientGroupId: ClientGroupId.make(`bench-${indexed}`),
       mutators,
       ...Defined.fields({ indexes: indexed ? { items: ["priority"] } : undefined }),
     }).pipe(Effect.provideService(ClientStore, store), Effect.provideContext(transport));

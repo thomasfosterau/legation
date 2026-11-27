@@ -20,6 +20,7 @@ import {
   MirrorChannel,
   SyncServer,
   Mirror,
+  Protocol,
 } from "@thomasfosterau/legation/internal";
 import type { MutationState } from "@thomasfosterau/legation/internal";
 import { describe, expect, it } from "@effect/vitest";
@@ -42,7 +43,8 @@ const todoSet = Mutator.make("todo/set", TodoArgs);
 const mutators = Mutator.registry([
   {
     mutator: todoSet,
-    local: (args, writer) => writer.put("todos", decodeIdentified(args).id, args),
+    local: (args, writer) =>
+      writer.put("todos", Protocol.RowId.make(decodeIdentified(args).id), args),
   },
 ]);
 
@@ -65,7 +67,9 @@ const eventually = <A>(read: Effect.Effect<A>, until: (value: A) => boolean) => 
 const makeEngine = Effect.fn("makeEngine")(function* () {
   const backend = yield* MemoryBackend.make(
     MemoryBackend.validatedHandlers([
-      MemoryBackend.handler(todoSet, (args, writer) => writer.put("todos", args.id, args)),
+      MemoryBackend.handler(todoSet, (args, writer) =>
+        writer.put("todos", Protocol.RowId.make(args.id), args)
+      ),
     ])
   );
   const handler = yield* SyncServer.make.pipe(
@@ -78,10 +82,10 @@ const makeEngine = Effect.fn("makeEngine")(function* () {
     Effect.provideService(InvalidationBus.InvalidationBus, yield* InvalidationBus.makeInProcess)
   );
   const store = yield* ClientStore.makeMemory;
-  const transport = yield* Transport.makeInMemory(handler, "group-a");
+  const transport = yield* Transport.makeInMemory(handler, Protocol.ClientGroupId.make("group-a"));
   const engine = yield* ClientEngine.make({
     clientId: "client-a",
-    clientGroupId: "group-a",
+    clientGroupId: Protocol.ClientGroupId.make("group-a"),
     mutators,
   }).pipe(
     Effect.provideService(ClientStore.ClientStore, store),

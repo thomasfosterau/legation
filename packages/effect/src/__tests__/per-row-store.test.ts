@@ -26,10 +26,11 @@ import * as SyncServer from "../SyncServer.js";
 import { ClientTransport, makeInMemory } from "../Transport.js";
 import type { Mutation, PatchOp } from "../Protocol.js";
 import * as Json from "../internal/Json.js";
+import { ClientGroupId, MutationId, RowId } from "../Protocol.js";
 
 const mutation = (mutationId: number, clientId = "c1"): Mutation => ({
   clientId,
-  mutationId,
+  mutationId: MutationId.make(mutationId),
   mutator: "noop",
   // A deliberately chunky body, so a rewrite would be expensive and visible.
   args: { blob: "x".repeat(1024), n: mutationId },
@@ -60,17 +61,27 @@ describe("ClientStore per-row layout", () => {
     scoped.effect("round-trips rows, journal, counters, and cookie, and rehydrates", () =>
       Effect.gen(function* () {
         const first = yield* ClientStoreModule.makeKeyValue();
-        yield* first.putRow("todos", { id: "1", version: 1, value: { title: "persisted" } });
-        yield* first.putRow("todos", { id: "2", version: 1, value: { title: "second" } });
-        yield* first.putRow("notes", { id: "n1", version: 2, value: { body: "x" } });
+        yield* first.putRow("todos", {
+          id: RowId.make("1"),
+          version: 1,
+          value: { title: "persisted" },
+        });
+        yield* first.putRow("todos", {
+          id: RowId.make("2"),
+          version: 1,
+          value: { title: "second" },
+        });
+        yield* first.putRow("notes", { id: RowId.make("n1"), version: 2, value: { body: "x" } });
         yield* first.appendMutation(mutation(yield* first.nextMutationId("c1")));
         yield* first.setCookie("cookie-1");
-        yield* first.delRow("todos", "2");
+        yield* first.delRow("todos", RowId.make("2"));
 
         // A second store over the same KVS sees the split state.
         const second = yield* ClientStoreModule.makeKeyValue();
-        expect((yield* second.getRow("todos", "1"))?.value).toEqual({ title: "persisted" });
-        expect(yield* second.getRow("todos", "2")).toBeUndefined();
+        expect((yield* second.getRow("todos", RowId.make("1")))?.value).toEqual({
+          title: "persisted",
+        });
+        expect(yield* second.getRow("todos", RowId.make("2"))).toBeUndefined();
         expect(yield* second.listRows("todos")).toHaveLength(1);
         expect(yield* second.listRows("notes")).toHaveLength(1);
         expect(yield* second.pendingMutations).toHaveLength(1);
@@ -79,8 +90,14 @@ describe("ClientStore per-row layout", () => {
 
         // A batched applyRowOps round-trips through the index too.
         yield* second.applyRowOps([
-          { _tag: "Put", collection: "todos", id: "3", version: 1, value: { title: "batched" } },
-          { _tag: "Del", collection: "todos", id: "1" },
+          {
+            _tag: "Put",
+            collection: "todos",
+            id: RowId.make("3"),
+            version: 1,
+            value: { title: "batched" },
+          },
+          { _tag: "Del", collection: "todos", id: RowId.make("1") },
         ]);
         const third = yield* ClientStoreModule.makeKeyValue();
         expect((yield* third.listRows("todos")).map((r) => r.id)).toEqual(["3"]);
@@ -92,10 +109,10 @@ describe("ClientStore per-row layout", () => {
     scoped.effect("applyRowOps honours a Clear before the surviving ops", () =>
       Effect.gen(function* () {
         const store = yield* ClientStoreModule.makeKeyValue();
-        yield* store.putRow("todos", { id: "old", version: 1, value: {} });
+        yield* store.putRow("todos", { id: RowId.make("old"), version: 1, value: {} });
         yield* store.applyRowOps([
           { _tag: "Clear" },
-          { _tag: "Put", collection: "todos", id: "fresh", version: 1, value: {} },
+          { _tag: "Put", collection: "todos", id: RowId.make("fresh"), version: 1, value: {} },
         ]);
         expect((yield* store.listRows("todos")).map((r) => r.id)).toEqual(["fresh"]);
       })
@@ -119,7 +136,13 @@ describe("ClientStore per-row layout", () => {
         yield* kv.set(
           "legation/journal",
           Json.stringify([
-            { clientId: "c1", mutationId: 1, mutator: "noop", args: { a: 1 }, createdAt: 0 },
+            {
+              clientId: "c1",
+              mutationId: MutationId.make(1),
+              mutator: "noop",
+              args: { a: 1 },
+              createdAt: 0,
+            },
           ])
         );
         yield* kv.set("legation/counters", Json.stringify({ c1: 1 }));
@@ -127,7 +150,7 @@ describe("ClientStore per-row layout", () => {
 
         const store = yield* ClientStoreModule.makeKeyValue();
         // Everything reads back through the new per-row / per-mutation keys.
-        expect((yield* store.getRow("todos", "1"))?.value).toEqual({ title: "a" });
+        expect((yield* store.getRow("todos", RowId.make("1")))?.value).toEqual({ title: "a" });
         expect(yield* store.listRows("notes")).toHaveLength(1);
         expect(yield* store.pendingMutations).toHaveLength(1);
         expect(yield* store.getCookie).toBe("cookie-legacy");
@@ -202,7 +225,7 @@ describe("ClientStore per-row layout", () => {
           const seed: Array<PatchOp> = Array.from({ length: 500 }, (_, i) => ({
             _tag: "Put" as const,
             collection: "todos",
-            id: `r${i}`,
+            id: RowId.make(`r${i}`),
             version: 1,
             value: { i },
           }));
@@ -211,9 +234,9 @@ describe("ClientStore per-row layout", () => {
 
           // A 3-op patch over the 500-row collection.
           yield* s.applyRowOps([
-            { _tag: "Put", collection: "todos", id: "r0", version: 2, value: { i: 0 } },
-            { _tag: "Put", collection: "todos", id: "r1", version: 2, value: { i: 1 } },
-            { _tag: "Del", collection: "todos", id: "r2" },
+            { _tag: "Put", collection: "todos", id: RowId.make("r0"), version: 2, value: { i: 0 } },
+            { _tag: "Put", collection: "todos", id: RowId.make("r1"), version: 2, value: { i: 1 } },
+            { _tag: "Del", collection: "todos", id: RowId.make("r2") },
           ]);
           // 2 row-value writes for the puts (dels remove, not set), plus the
           // single index rewrite and the collections track — a small constant,
@@ -235,13 +258,13 @@ describe("ClientStore per-row layout", () => {
       Effect.gen(function* () {
         const kv = yield* KeyValueStore.KeyValueStore;
         const store = yield* ClientStoreModule.makeKeyValue();
-        yield* store.putRow("todos", { id: "1", version: 1, value: {} });
+        yield* store.putRow("todos", { id: RowId.make("1"), version: 1, value: {} });
 
         // Corrupt the per-row value directly; the index still points at it.
         yield* kv.set("legation/row/todos/1", "}{ not json");
         const listError = yield* Effect.flip(store.listRows("todos"));
         expect(listError._tag).toBe("StoreError");
-        const getError = yield* Effect.flip(store.getRow("todos", "1"));
+        const getError = yield* Effect.flip(store.getRow("todos", RowId.make("1")));
         expect(getError._tag).toBe("StoreError");
       })
     );
@@ -269,7 +292,7 @@ describe("ClientStore per-row layout", () => {
           MemoryBackend.validatedHandlers([
             MemoryBackend.handler(
               Mutator.make("todo/set", Schema.Struct({ id: Schema.String })),
-              (args, writer) => writer.put("todos", args.id, args)
+              (args, writer) => writer.put("todos", RowId.make(args.id), args)
             ),
           ])
         );
@@ -287,14 +310,15 @@ describe("ClientStore per-row layout", () => {
         );
 
         const store = yield* ClientStoreModule.makeKeyValue({ journalHighWater: 1 });
-        const transport = yield* makeInMemory(handler, "group-hw");
+        const transport = yield* makeInMemory(handler, ClientGroupId.make("group-hw"));
         const engine = yield* ClientEngineModule.make({
           clientId: "client-hw",
-          clientGroupId: "group-hw",
+          clientGroupId: ClientGroupId.make("group-hw"),
           mutators: Mutator.registry([
             {
               mutator: Mutator.make("todo/set", Schema.Struct({ id: Schema.String })),
-              local: (args: { id: string }, writer) => writer.put("todos", args.id, args),
+              local: (args: { id: string }, writer) =>
+                writer.put("todos", RowId.make(args.id), args),
             },
           ]),
         }).pipe(

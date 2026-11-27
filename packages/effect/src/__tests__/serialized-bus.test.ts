@@ -24,10 +24,13 @@ import * as Mutator from "../Mutator.js";
 import * as Subset from "../Subset.js";
 import * as SyncServer from "../SyncServer.js";
 import type { ServerHandler } from "../Transport.js";
+import { ClientGroupId, MutationId, RowId } from "../Protocol.js";
 
 const todoSet = Mutator.make("todo/set", Schema.Struct({ id: Schema.String }));
 const backendHandlers = MemoryBackend.validatedHandlers([
-  MemoryBackend.handler(todoSet, (args, writer) => writer.put("todos", args.id, { id: args.id })),
+  MemoryBackend.handler(todoSet, (args, writer) =>
+    writer.put("todos", RowId.make(args.id), { id: args.id })
+  ),
 ]);
 
 /** One server instance bound to the given bus. */
@@ -58,20 +61,26 @@ describe("serialized InvalidationBus", () => {
 
       // group-b registers its subscription on instance B (via a pull).
       yield* instanceB.handlePull({
-        clientGroupId: "group-b",
+        clientGroupId: ClientGroupId.make("group-b"),
         cookie: undefined,
         subscriptions: [allTodos],
       });
 
-      const poke = yield* Stream.runHead(Stream.take(instanceB.pokes("group-b"), 1)).pipe(
-        Effect.forkScoped
-      );
+      const poke = yield* Stream.runHead(
+        Stream.take(instanceB.pokes(ClientGroupId.make("group-b")), 1)
+      ).pipe(Effect.forkScoped);
 
       // A commits a write touching `todos`; the hint crosses the broker.
       yield* instanceA.handlePush({
-        clientGroupId: "group-a",
+        clientGroupId: ClientGroupId.make("group-a"),
         mutations: [
-          { clientId: "c-a", mutationId: 1, mutator: "todo/set", args: { id: "1" }, createdAt: 0 },
+          {
+            clientId: "c-a",
+            mutationId: MutationId.make(1),
+            mutator: "todo/set",
+            args: { id: "1" },
+            createdAt: 0,
+          },
         ],
       });
 
@@ -86,22 +95,28 @@ describe("serialized InvalidationBus", () => {
       const instanceB = yield* makeInstance(InvalidationBus.makeSerialized(broker));
 
       yield* instanceB.handlePull({
-        clientGroupId: "group-b",
+        clientGroupId: ClientGroupId.make("group-b"),
         cookie: undefined,
         subscriptions: [allTodos],
       });
 
       yield* instanceA.handlePush({
-        clientGroupId: "group-a",
+        clientGroupId: ClientGroupId.make("group-a"),
         mutations: [
-          { clientId: "c-a", mutationId: 1, mutator: "todo/set", args: { id: "1" }, createdAt: 0 },
+          {
+            clientId: "c-a",
+            mutationId: MutationId.make(1),
+            mutator: "todo/set",
+            args: { id: "1" },
+            createdAt: 0,
+          },
         ],
       });
 
       // group-other never registered a subscription, so it is never poked:
       // the listener loses the race to a short real-time timeout.
       const outcome = yield* Effect.race(
-        Stream.runHead(instanceB.pokes("group-other")).pipe(Effect.as("poked")),
+        Stream.runHead(instanceB.pokes(ClientGroupId.make("group-other"))).pipe(Effect.as("poked")),
         sleepReal(60).pipe(Effect.as("quiet"))
       );
       expect(outcome).toBe("quiet");

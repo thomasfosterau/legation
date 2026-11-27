@@ -14,7 +14,7 @@
  */
 
 import * as Schema from "effect/Schema";
-import { Mutation, Node, type Query } from "@thomasfosterau/legation";
+import { Client, Mutation, Node, type Query } from "@thomasfosterau/legation";
 
 /** A todo row. Same schema drives the node, the mutation args, and the UI. */
 export const Todo = Schema.Struct({
@@ -90,4 +90,4 @@ export const mutations = Mutation.registry([
 
 /** This tab's client identity (per-client mutation sequencing) and group. */
 export const CLIENT_ID = "todo-tab";
-export const CLIENT_GROUP_ID = "todo-demo";
+export const CLIENT_GROUP_ID = Client.ClientGroupId.make("todo-demo");

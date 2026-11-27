@@ -54,6 +54,7 @@ import * as Predicate from "../Predicate.js";
 import { defined } from "./defined.js";
 import { TestFailure } from "./test-failure.js";
 import { idOf, stringField } from "./shapes.js";
+import { ClientGroupId, RowId } from "../Protocol.js";
 
 const bodyOf = stringField("body");
 
@@ -258,7 +259,7 @@ const reviewSet = Mutation.make("review/set", Schema.Unknown);
 const mutations = Mutation.registry([
   {
     mutator: reviewSet,
-    local: (args: { id: string }, writer) => writer.put("reviews", args.id, args),
+    local: (args: { id: string }, writer) => writer.put("reviews", RowId.make(args.id), args),
   },
 ]);
 
@@ -320,10 +321,10 @@ const recordPushes = (handler: Transport.ServerHandler) =>
 const makeRoomClient = (handler: Transport.ServerHandler, group: string) =>
   Effect.gen(function* () {
     const store = yield* ClientStore.makeMemory;
-    const transport = yield* Transport.makeInMemory(handler, group);
+    const transport = yield* Transport.makeInMemory(handler, ClientGroupId.make(group));
     const engine = yield* ClientEngine.make({
       clientId: `client-${group}`,
-      clientGroupId: group,
+      clientGroupId: ClientGroupId.make(group),
       mutators: mutations,
       syncLoop: { pullInterval: "10 minutes", pushDebounce: "10 millis" },
     }).pipe(
@@ -341,7 +342,7 @@ describe("two rooms over one broker", () => {
         const backend = yield* MemoryBackend.make(
           MemoryBackend.validatedHandlers([
             MemoryBackend.handler(reviewSet, (args, writer) =>
-              writer.put("reviews", idOf(args), args)
+              writer.put("reviews", RowId.make(idOf(args)), args)
             ),
           ])
         );

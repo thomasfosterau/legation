@@ -13,19 +13,19 @@
 import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
 import { KeyValueStore } from "effect/persistence";
-import { BackendError } from "@thomasfosterau/legation";
+import { Backend, BackendError } from "@thomasfosterau/legation";
 
 /** A permanent rejection the ledger remembers: the mutation and the reason it was refused. */
 export interface Rejection {
   readonly clientId: string;
-  readonly mutationId: number;
+  readonly mutationId: Backend.MutationId;
   readonly reason: string;
 }
 
 /** One client group's ledger, as a store holds it. */
 export interface GroupLedger {
   /** Highest acknowledged mutation id per client. */
-  readonly lastMutationIds: Readonly<Record<string, number>>;
+  readonly lastMutationIds: Readonly<Record<string, Backend.MutationId>>;
   /** The rejections still remembered, for replayed copies and pulls. */
   readonly rejections: ReadonlyArray<Rejection>;
 }
@@ -58,12 +58,12 @@ export const memory: LedgerStore = {
 
 const Rejection = Schema.Struct({
   clientId: Schema.String,
-  mutationId: Schema.Number,
+  mutationId: Backend.MutationId,
   reason: Schema.String,
 });
 
 const GroupLedger = Schema.Struct({
-  lastMutationIds: Schema.Record(Schema.String, Schema.Number),
+  lastMutationIds: Schema.Record(Schema.String, Backend.MutationId),
   rejections: Schema.Array(Rejection),
 });
 
