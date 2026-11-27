@@ -1272,6 +1272,17 @@ const rules: ReadonlyArray<Rule> = [
  * over a restarted backend passes the ledger it expects as `restoredLedger`: the
  * contract first checks the backend reports exactly that, failing a backend that
  * forgot its ledger, and then numbers its mutations from it.
+ *
+ * It needs no services and no live clock, so it runs as is under
+ * `@effect/vitest`, with the backend from a layer:
+ *
+ * ```ts
+ * layer(MyBackendLayer)("MyBackend", (provided) => {
+ *   provided.effect("passes the Backend contract", () =>
+ *     Backend.use((backend) => verifyBackendContract(backend))
+ *   );
+ * });
+ * ```
  */
 export const verifyBackendContract = (
   backend: Backend,

@@ -2,13 +2,13 @@
  * Backend contract tests: the reference MemoryBackend satisfies
  * verifyBackendContract, and the suite actually catches violations.
  */
-import { describe, expect, it } from "@effect/vitest";
+import { describe, expect, it, layer } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as MutableHashMap from "effect/MutableHashMap";
 import * as Option from "effect/Option";
 import * as R from "effect/Record";
 import * as Schema from "effect/Schema";
-import { type Backend, evaluateAll, evaluateCountedAll, totalsOf } from "../Backend.js";
+import { Backend, evaluateAll, evaluateCountedAll, totalsOf } from "../Backend.js";
 import * as BackendContract from "../BackendContract.js";
 import { BackendError } from "../Errors.js";
 import * as MemoryBackend from "../MemoryBackend.js";
@@ -21,6 +21,16 @@ const withoutHandler = (name: string) => R.remove(BackendContract.memoryHandlers
 /** A contract counter row's value, absent before its first count. */
 const decodeCounter = Schema.decodeUnknownSync(
   Schema.UndefinedOr(Schema.Struct({ n: Schema.optional(Schema.Finite) }))
+);
+
+// The documented shape: the backend from a layer, the contract run under `it.effect`.
+layer(MemoryBackend.layer(BackendContract.memoryHandlers))(
+  "verifyBackendContract in a layer",
+  (provided) => {
+    provided.effect("MemoryBackend satisfies the contract", () =>
+      Backend.use((backend) => BackendContract.verifyBackendContract(backend))
+    );
+  }
 );
 
 describe("verifyBackendContract", () => {

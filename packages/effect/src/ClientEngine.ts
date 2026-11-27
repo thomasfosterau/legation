@@ -9,9 +9,16 @@
  * "confirmed rows with pending mutations replayed on top", so applying a
  * patch and dropping acknowledged mutations IS the rebase — revealed
  * atomically through a single changes event.
+ *
+ * Metrics (see `Telemetry`): `legation_client_pushes_total`, `…_pulls_total`,
+ * `legation_client_sync_retries_total` (by `operation`),
+ * `legation_client_sync_failures_total`, `legation_client_pokes_received_total`,
+ * `legation_client_poke_latency_ms`, `legation_journal_depth` (the outbox
+ * backlog) and `legation_rebase_duration_ms`.
  */
 
 import * as Exit from "effect/Exit";
+import { constTrue } from "effect/Function";
 import * as Defined from "./Defined.js";
 import * as Arr from "effect/Array";
 import * as Clock from "effect/Clock";
@@ -1104,8 +1111,7 @@ const infoOf = (error: VersionNotSupportedError) => ({
 
 // Retry only transient (transport) failures; store/mutator errors are not
 // transient and go straight to the failure surface.
-const isTransient = (error: { readonly _tag: string }): boolean =>
-  P.isTagged(error, "TransportError");
+const isTransient = P.isTagged("TransportError");
 
 const namedKey = (name: string, argsEncoded: unknown) =>
   `${name}:${Hash.canonicalJson(argsEncoded)}`;
@@ -2955,9 +2961,24 @@ export const make = (
         yield* dedupedPull(subset);
       });
 
-    const pushPolicy = options.retry?.push ?? defaultRetryPolicy;
-    const pullPolicy = options.retry?.pull ?? defaultRetryPolicy;
-    const pokePolicy = options.retry?.pokes ?? defaultRetryPolicy;
+    // Each leg's policy, limited to the failures it retries and counting the
+    // retries it schedules (`legation_client_sync_retries_total`). `Schedule.tap`
+    // runs only on a decision to recur, after the `while`, so neither a
+    // non-transient failure nor the attempt that exhausts the policy counts.
+    const counted = (
+      policy: Schedule.Schedule<unknown>,
+      operation: SyncFailure["operation"],
+      retries: P.Predicate<unknown>
+    ): Schedule.Schedule<unknown> => {
+      const series = Telemetry.syncRetries(operation);
+      return policy.pipe(
+        Schedule.while(({ input }) => retries(input)),
+        Schedule.tap(() => Metric.update(series, 1))
+      );
+    };
+    const pushPolicy = counted(options.retry?.push ?? defaultRetryPolicy, "push", isTransient);
+    const pullPolicy = counted(options.retry?.pull ?? defaultRetryPolicy, "pull", isTransient);
+    const pokePolicy = counted(options.retry?.pokes ?? defaultRetryPolicy, "pokes", constTrue);
 
     // A network leg that survives transient failure via its policy, then
     // surfaces (never raises) whatever it could not recover from.
@@ -2967,12 +2988,12 @@ export const make = (
     // already told to update). The journal is untouched, so pending intents
     // wait for an updated build.
     const attemptPush = push.pipe(
-      Effect.retry({ schedule: pushPolicy, while: isTransient }),
+      Effect.retry(pushPolicy),
       Effect.catchTag("VersionNotSupportedError", () => Effect.void),
       Effect.catch((error) => surfaceFailure("push", error))
     );
     const attemptPull = pull.pipe(
-      Effect.retry({ schedule: pullPolicy, while: isTransient }),
+      Effect.retry(pullPolicy),
       Effect.catchTag("VersionNotSupportedError", () => Effect.void),
       Effect.catch((error) => surfaceFailure("pull", error))
     );
@@ -3010,7 +3031,7 @@ export const make = (
     // both fail the push as a TransportError. Stopping is the only safe choice: sending on over a tail
     // that no pull has released would take it past the bound.
     const pullBetweenChunks: Effect.Effect<void, TransportError | StoreError> = pull.pipe(
-      Effect.retry({ schedule: pullPolicy, while: isTransient }),
+      Effect.retry(pullPolicy),
       Effect.catchTags({
         VersionNotSupportedError: (error) =>
           Effect.fail(
@@ -3051,7 +3072,10 @@ export const make = (
               emitEngineEvent({
                 _tag: "PokeReceived",
                 ...Defined.fields({ reason: poke.reason }),
-              }).pipe(Effect.as(poke))
+              }).pipe(
+                Effect.andThen(Metric.update(Telemetry.pokesReceivedTotal, 1)),
+                Effect.andThen(Clock.currentTimeMillis)
+              )
             ),
             // While a pull is in flight the consumer below does not take the next poke, so pokes
             // wait here. The buffer keeps only the newest, so a burst costs one follow-up pull.
@@ -3060,7 +3084,11 @@ export const make = (
             // Nothing is forked per poke.
             Stream.buffer({ capacity: 1, strategy: "sliding" })
           ),
-          () => attemptPull
+          (receivedAt) =>
+            attemptPull.pipe(
+              Effect.andThen(Clock.currentTimeMillis),
+              Effect.flatMap((now) => Metric.update(Telemetry.pokeLatencyMs, now - receivedAt))
+            )
         ).pipe(
           Effect.catch((error) => surfaceFailure("pokes", error)),
           Background.reported("ClientEngine: the sync loop's poke leg")
