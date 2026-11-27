@@ -19,6 +19,7 @@
 
 import * as Defined from "./Defined.js";
 import * as Arr from "effect/Array";
+import * as Order from "effect/Order";
 import * as Clock from "effect/Clock";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
@@ -343,16 +344,16 @@ const scopeEpochOf = (bound: HashMap.HashMap<string, BoundSet>): string =>
   HashMap.isEmpty(bound)
     ? ""
     : Hash.contentHash(
-        HashMap.toEntries(bound)
-          .toSorted(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))
-          .map(([name, values]) => [
+        Arr.sortWith(HashMap.toEntries(bound), ([name]) => name, Order.String).map(
+          ([name, values]) => [
             name,
             Option.match(values, {
               onNone: () => null,
               onSome: (members) =>
                 [...members].map((member) => Hash.canonicalJson(member)).toSorted(),
             }),
-          ])
+          ]
+        )
       );
 
 /** A bound named set's members: `None` when its resolution failed (it narrows). */

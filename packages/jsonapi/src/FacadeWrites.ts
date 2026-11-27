@@ -89,8 +89,8 @@ const refuse = (refusal: Refusal): Effect.Effect<never, Refusal> => Effect.fail(
 const invalid = (detail: string, pointer: string): Effect.Effect<never, Refusal> =>
   refuse({ status: 400, code: "invalid_document", title: "Invalid document", detail, pointer });
 
-const isRecord = (value: Schema.Json): value is Schema.JsonObject =>
-  P.isObject(value) && !Array.isArray(value);
+// `P.isObject` already excludes arrays; the guard narrows `Json` to its object member.
+const isRecord = (value: Schema.Json): value is Schema.JsonObject => P.isObject(value);
 
 const decodeJson = Schema.decodeUnknownEffect(Schema.fromJsonString(Schema.Json));
 

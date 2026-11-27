@@ -40,8 +40,9 @@ const fetchClient = Effect.map(Layer.build(FetchHttpClient.layer), (built) =>
 
 /**
  * POST a JSON body to `route` and decode the answer with `response`. A non-2xx answer fails with
- * the server's stated `error`, or one naming the route and status; anything else that goes wrong
- * (the send, a body that is not `response`) fails as a `TransportError` naming the route.
+ * the server's stated `error`, or one naming the route and status; an answer that is not
+ * `response` fails as "answer is invalid", and anything else (the send) as "request failed",
+ * each a `TransportError` naming the route.
  */
 export const post = <A>(target: PostTarget, route: string, response: Schema.Codec<A>) => {
   const decodeResponse = HttpClientResponse.schemaBodyJson(response);
@@ -64,7 +65,12 @@ export const post = <A>(target: PostTarget, route: string, response: Schema.Code
           message: detail.error ?? `${target.label} ${route} answered ${answer.status}`,
         });
       }
-      return yield* decodeResponse(answer).pipe(Effect.mapError(failed));
+      return yield* decodeResponse(answer).pipe(
+        Effect.mapError(
+          (cause) =>
+            new TransportError({ message: `${target.label} ${route} answer is invalid`, cause })
+        )
+      );
     }).pipe(
       Effect.scoped,
       // The server is often cross-origin: `b3`/`traceparent` headers would need it to list them

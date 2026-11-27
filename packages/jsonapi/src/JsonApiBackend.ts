@@ -107,6 +107,7 @@
  */
 
 import * as Arr from "effect/Array";
+import * as Order from "effect/Order";
 import * as Effect from "effect/Effect";
 import * as HashMap from "effect/HashMap";
 import * as HashSet from "effect/HashSet";
@@ -1438,9 +1439,8 @@ export const make = (
           { concurrency: 1, discard: true }
         );
 
-        const rejected = [...rejectedAt]
-          .toSorted(([a], [b]) => a - b)
-          .flatMap(([index, reason]) => {
+        const rejected = Arr.sortWith(rejectedAt, ([index]) => index, Order.Number).flatMap(
+          ([index, reason]) => {
             const entry = batch[index];
             return entry === undefined
               ? []
@@ -1451,7 +1451,8 @@ export const make = (
                     reason,
                   },
                 ];
-          });
+          }
+        );
         // The rejections are remembered before the ids are acknowledged.
         yield* rememberRejections(context, rejected);
         // Applied and rejected alike are acknowledged, in original order.

@@ -347,6 +347,18 @@ describe("BindingTransport", () => {
     })
   );
 
+  it.effect("refuses an answer that is not the route's protocol body, as a TransportError", () =>
+    Effect.gen(function* () {
+      const binding = { fetch: async () => json({ cookie: 1, patch: "not a patch" }) };
+      const transport = BindingTransport.make({ binding, request: inbound(SESSION) });
+      const failure = yield* Effect.flip(
+        transport.pull({ clientGroupId: GROUP, subscriptions: [] })
+      );
+      expect(failure._tag).toBe("TransportError");
+      expect(failure.message).toBe(`binding ${routes.pull} answer is invalid`);
+    })
+  );
+
   it.effect("has no poke channel — a binding is request/response, and pull is correctness", () =>
     Effect.gen(function* () {
       const transport = BindingTransport.make({

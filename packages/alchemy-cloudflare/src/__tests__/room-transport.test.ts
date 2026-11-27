@@ -99,7 +99,7 @@ describe("RoomTransport HTTP", () => {
         Effect.flip
       );
       expect(error).toBeInstanceOf(TransportError);
-      expect(error.message).toBe("room /read request failed");
+      expect(error.message).toBe("room /read answer is invalid");
     })
   );
 });
