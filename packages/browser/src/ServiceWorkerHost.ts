@@ -157,7 +157,7 @@ export const start = (
       hydrationWindow: options.hydrationWindow,
       ...Defined.fields({ registry, nodes, urls }),
     });
-    yield* engine.runSync.pipe(Effect.ignore);
+    yield* engine.runSync;
     if (backgroundSync !== undefined) yield* backgroundSync.serve(engine);
     if (pushPoke !== undefined) yield* pushPoke.serve(engine);
     return { engine, registrations: host.registrations };

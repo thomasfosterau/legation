@@ -335,7 +335,7 @@ export const run = <Graph extends Node.NodeRegistry>(
         nodes: options.nodes,
         ...Defined.fields({ registry: options.registry, urls: options.urls }),
       });
-      yield* Effect.forkScoped(engine.runSync.pipe(Effect.ignore));
+      yield* Effect.forkScoped(engine.runSync);
       yield* SubscriptionRef.set(viewRef, ClientView.fromEngine(engine));
       yield* SubscriptionRef.set(roleRef, "host");
       // The mirror is no longer reachable through the switching view (and,
