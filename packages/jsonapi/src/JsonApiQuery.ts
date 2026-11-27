@@ -79,6 +79,7 @@
 import { Defined } from "@thomasfosterau/legation/internal";
 import { Filter, Query as UrlQuery, Relationship, Resource } from "@thomasfosterau/effect-jsonapi";
 import * as Arr from "effect/Array";
+import { identity } from "effect/Function";
 import * as Effect from "effect/Effect";
 import * as Match from "effect/Match";
 import * as MutableHashMap from "effect/MutableHashMap";
@@ -945,21 +946,28 @@ const noUrlForm = (collection: string, detail: string): QueryError =>
   });
 
 /** The plan's edge selects as include paths, in code-point order (the include set is unordered). */
-const includeOf = (collection: string, edges: Query.Plan["edges"]): ReadonlyArray<string> =>
-  edges
-    .map((edge) => {
-      if (edge.first !== undefined) {
-        throw noUrlForm(
-          collection,
-          `the per-edge window on "${edge.edge}" (include: { first }) has no query parameter`
-        );
-      }
-      return edge.edge;
-    })
-    .toSorted((a, b) => Predicate.compareText(a, b));
+const includeOf = (
+  collection: string,
+  edges: Query.Plan["edges"]
+): Result.Result<ReadonlyArray<string>, QueryError> =>
+  Result.all(
+    edges.map((edge) =>
+      edge.first === undefined
+        ? Result.succeed(edge.edge)
+        : Result.fail(
+            noUrlForm(
+              collection,
+              `the per-edge window on "${edge.edge}" (include: { first }) has no query parameter`
+            )
+          )
+    )
+  ).pipe(Result.map((paths) => paths.toSorted((a, b) => Predicate.compareText(a, b))));
 
-const astOf = (collection: string, predicate: Predicate.Predicate): Filter.Node =>
-  Option.getOrThrowWith(toFilterAst(predicate), () =>
+const astOf = (
+  collection: string,
+  predicate: Predicate.Predicate
+): Result.Result<Filter.Node, QueryError> =>
+  Result.fromOption(toFilterAst(predicate), () =>
     noUrlForm(collection, `"${predicate._tag}" carries an Exists node or a null literal`)
   );
 
@@ -980,21 +988,24 @@ const filterOf = (
   collection: string,
   declaration: Filter.LiteralCodecs,
   where: Predicate.Predicate
-): Option.Option<Filter.Node> => {
-  const settle = (predicate: Predicate.Predicate, pass: number): Option.Option<Filter.Node> => {
-    if (pass >= NORMAL_FORM_PASSES) return Option.some(astOf(collection, predicate));
-    if (isTrue(predicate)) return Option.none();
-    const ast = Filter.normalise(astOf(collection, predicate), declaration);
-    // Safe by construction, not merely by convention: `ast` was normalised
-    // from `astOf`'s output, whose every literal is copied verbatim from a
-    // `Predicate.Literal` (`toFilterAst`'s `Compare` case) — already a wire
-    // scalar, so `literalOf` cannot reject it. Defect-by-contract for this
-    // one call site; the module doc explains why the exported function
-    // still returns a typed failure for its general contract.
+): Result.Result<Option.Option<Filter.Node>, QueryError> => {
+  const settle = (
+    predicate: Predicate.Predicate,
+    pass: number
+  ): Result.Result<Option.Option<Filter.Node>, QueryError> => {
+    if (pass >= NORMAL_FORM_PASSES) return Result.map(astOf(collection, predicate), Option.some);
+    if (isTrue(predicate)) return Result.succeed(Option.none());
+    const found = astOf(collection, predicate);
+    if (Result.isFailure(found)) return Result.fail(found.failure);
+    const ast = Filter.normalise(found.success, declaration);
+    // `ast` was normalised from `astOf`'s output, whose every literal is
+    // copied verbatim from a `Predicate.Literal` (`toFilterAst`'s `Compare`
+    // case), already a wire scalar, so `literalOf` cannot reject it; the
+    // failure is passed on all the same rather than assumed away.
     const back = fromFilterAst(ast);
-    if (Result.isFailure(back)) throw back.failure;
+    if (Result.isFailure(back)) return Result.fail(back.failure);
     const next = foldConstants(back.success);
-    if (encodeJson(next) === encodeJson(predicate)) return Option.some(ast);
+    if (encodeJson(next) === encodeJson(predicate)) return Result.succeed(Option.some(ast));
     return settle(next, pass + 1);
   };
   return settle(foldConstants(where), 0);
@@ -1012,17 +1023,21 @@ const decodedOf = (
   declaration: Filter.LiteralCodecs,
   fields: Option.Option<Projection>,
   read: Query.Read
-): DecodedQuery => {
+): Result.Result<DecodedQuery, QueryError> => {
   const { root } = compiled;
-  const include = includeOf(root.collection, compiled.edges);
-  const filter = filterOf(root.collection, declaration, root.where);
+  const parts = Result.all({
+    include: includeOf(root.collection, compiled.edges),
+    filter: filterOf(root.collection, declaration, root.where),
+  });
+  if (Result.isFailure(parts)) return Result.fail(parts.failure);
+  const { include, filter } = parts.success;
   const page =
     read.offset === undefined
       ? {
           ...Defined.fields({ limit: root.limit, after: root.cursor }),
         }
       : { ...Defined.fields({ limit: read.first }), offset: read.offset };
-  return {
+  return Result.succeed({
     ...Defined.fields({ include: Arr.isReadonlyArrayEmpty(include) ? undefined : include }),
     ...Option.match(fields, {
       onNone: () => ({}),
@@ -1031,7 +1046,7 @@ const decodedOf = (
     ...Option.match(filter, { onNone: () => ({}), onSome: (node) => ({ filter: node }) }),
     ...Defined.fields({ sort: Arr.isReadonlyArrayEmpty(root.orderBy) ? undefined : root.orderBy }),
     ...Defined.fields({ page: R.isEmptyReadonlyRecord<string, unknown>(page) ? undefined : page }),
-  };
+  });
 };
 
 /** A projection with each type's field list in code-point order (a set). */
@@ -1055,52 +1070,47 @@ export const canonical = (
   nodes: Node.NodeRegistry,
   read: Query.Read,
   fields?: Projection
-): string => {
-  const compiled = Query.plan(nodes, read);
-  const node = nodes.nodes.get(read.collection);
-  if (node === undefined) {
-    throw new QueryError({
-      message: `Unknown collection: ${read.collection}`,
-      query: read.collection,
+): string => Result.getOrThrowWith(canonicalResult(nodes, read, fields), identity);
+
+/** {@link canonical} as a `Result`: the string, or the `QueryError` it throws. */
+const canonicalResult = (
+  nodes: Node.NodeRegistry,
+  read: Query.Read,
+  fields?: Projection
+): Result.Result<string, QueryError> =>
+  Result.gen(function* () {
+    const compiled = yield* Query.planResult(nodes, read);
+    const node = yield* Result.fromOption(
+      Option.fromUndefinedOr(nodes.nodes.get(read.collection)),
+      () =>
+        new QueryError({
+          message: `Unknown collection: ${read.collection}`,
+          query: read.collection,
+        })
+    );
+    const refused = Arr.findFirst(R.keys(fields ?? {}), (type) => projectionError(node, type));
+    if (Option.isSome(refused)) return yield* Result.fail(refused.value);
+    const declaration = Resource.filterable(resourceIn(resourcesOf(nodes), node.type));
+    const decoded = yield* decodedOf(compiled, declaration, Option.fromUndefinedOr(fields), read);
+    // effect-jsonapi's encoder is a plain function that throws what it refuses.
+    const query = yield* Result.try({
+      try: () => codecOf(nodes, node).canonical(decoded),
+      catch: (cause) =>
+        new QueryError({
+          message: `Read on "${read.collection}" has no URL form: ${P.isError(cause) ? cause.message : String(cause)}`,
+          query: read.collection,
+          cause,
+        }),
     });
-  }
-  R.keys(fields ?? {}).forEach((type) => {
-    const error = projectionError(node, type);
-    if (Option.isSome(error)) throw error.value;
+    return query === "" ? `/${read.collection}` : `/${read.collection}?${query}`;
   });
-  const encoded = Result.try({
-    try: () => {
-      const declaration = Resource.filterable(resourceIn(resourcesOf(nodes), node.type));
-      return codecOf(nodes, node).canonical(
-        decodedOf(compiled, declaration, Option.fromUndefinedOr(fields), read)
-      );
-    },
-    catch: (error) =>
-      error instanceof QueryError
-        ? error
-        : new QueryError({
-            message: `Read on "${read.collection}" has no URL form: ${P.isError(error) ? error.message : String(error)}`,
-            query: read.collection,
-            cause: error,
-          }),
-  });
-  if (Result.isFailure(encoded)) throw encoded.failure;
-  const query = encoded.success;
-  return query === "" ? `/${read.collection}` : `/${read.collection}?${query}`;
-};
 
 /** {@link canonical} as an effect: the `QueryError` it throws becomes a typed failure. */
 const tryCanonical = (
   nodes: Node.NodeRegistry,
   read: Query.Read
 ): Effect.Effect<string, QueryError> =>
-  Effect.suspend(() => {
-    const result = Result.try(() => canonical(nodes, read));
-    if (Result.isSuccess(result)) return Effect.succeed(result.success);
-    return result.failure instanceof QueryError
-      ? Effect.fail(result.failure)
-      : Effect.die(result.failure);
-  });
+  Effect.suspend(() => Effect.fromResult(canonicalResult(nodes, read)));
 
 /**
  * The `Client.UrlReads` seam over this bridge (ADR-0029 §2): pass as
@@ -1152,21 +1162,27 @@ const collectLiteralTypes = (
 };
 
 /** The one JS type each field of a tree is compared with (`string` for a field only null-tested). */
-const literalTypesOf = (ast: Filter.Node): MutableHashMap.MutableHashMap<string, string> => {
+const literalTypesOf = (
+  ast: Filter.Node
+): Result.Result<MutableHashMap.MutableHashMap<string, string>, QueryError> => {
   const types = MutableHashMap.empty<string, MutableHashSet.MutableHashSet<string>>();
   collectLiteralTypes(ast, types);
-  const resolved = MutableHashMap.empty<string, string>();
-  MutableHashMap.forEach(types, (kinds, field) => {
-    const [kind, ...rest] = kinds;
-    if (Arr.isReadonlyArrayNonEmpty(rest)) {
-      throw new QueryError({
+  const mixed = Arr.findFirst(types, ([, kinds]) => MutableHashSet.size(kinds) > 1);
+  if (Option.isSome(mixed)) {
+    const [field, kinds] = mixed.value;
+    return Result.fail(
+      new QueryError({
         message: `Field "${field}" is compared with literals of several types (${[...kinds].join(", ")}); ADR-0028 rule (d) admits one`,
         parameter: `filter[${field}]`,
-      });
-    }
+      })
+    );
+  }
+  const resolved = MutableHashMap.empty<string, string>();
+  MutableHashMap.forEach(types, (kinds, field) => {
+    const [kind] = kinds;
     MutableHashMap.set(resolved, field, kind ?? "string");
   });
-  return resolved;
+  return Result.succeed(resolved);
 };
 
 /** The flat `filter[...]` codec of an untyped declaration. */
@@ -1190,8 +1206,12 @@ const flatFilterCodecs = new Map<string, FlatFilterCodec>();
  * signature, since a backend encodes the same shapes on every pull; the
  * memo keeps the {@link FLAT_FILTER_CODEC_CAPACITY} most recently used.
  */
-const flatFilterCodecOf = (ast: Filter.Node): FlatFilterCodec => {
-  const types = literalTypesOf(ast);
+const flatFilterCodecOf = (ast: Filter.Node): Result.Result<FlatFilterCodec, QueryError> =>
+  Result.map(literalTypesOf(ast), flatFilterCodecFor);
+
+const flatFilterCodecFor = (
+  types: MutableHashMap.MutableHashMap<string, string>
+): FlatFilterCodec => {
   const signature = [...types]
     .map(([field, type]) => `${field}:${type}`)
     .toSorted(Predicate.compareText)
@@ -1230,7 +1250,20 @@ const flatFilterCodecOf = (ast: Filter.Node): FlatFilterCodec => {
  * and member order are effect-jsonapi's byte for byte.
  */
 export const flatFilter = (ast: Filter.Node): Readonly<Record<string, string>> =>
-  Schema.encodeSync(flatFilterCodecOf(ast))(ast);
+  Result.getOrThrowWith(flatFilterResult(ast), identity);
+
+/** {@link flatFilter} as a `Result`: a tree its codec cannot encode is a `QueryError`. */
+const flatFilterResult = (
+  ast: Filter.Node
+): Result.Result<Readonly<Record<string, string>>, QueryError> =>
+  Result.flatMap(flatFilterCodecOf(ast), (codec) =>
+    Schema.encodeResult(codec)(ast).pipe(
+      Result.mapError(
+        (cause) =>
+          new QueryError({ message: `A filter could not be encoded: ${cause.message}`, cause })
+      )
+    )
+  );
 
 /**
  * Serialize sort terms into the JSON:API `sort` value (`-field,field`) through
@@ -1255,8 +1288,12 @@ const encodeSort = (terms: ReadonlyArray<SortTerm>): string => {
  * family order and percent-encoding (`Query.serialise`). `filter` is a
  * filter AST, encoded exactly through {@link flatFilter}.
  */
-export const buildQueryString = (options?: JsonApiRequestOptions): string => {
-  if (options === undefined) return "";
+export const buildQueryString = (options?: JsonApiRequestOptions): string =>
+  Result.getOrThrowWith(queryStringResult(options), identity);
+
+/** {@link buildQueryString} as a `Result`: a filter it cannot encode is a `QueryError`. */
+const queryStringResult = (options?: JsonApiRequestOptions): Result.Result<string, QueryError> => {
+  if (options === undefined) return Result.succeed("");
   const pairs: Array<UrlQuery.Pair> = [];
   if (options.include && Arr.isReadonlyArrayNonEmpty(options.include))
     pairs.push(["include", options.include.join(",")]);
@@ -1266,7 +1303,11 @@ export const buildQueryString = (options?: JsonApiRequestOptions): string => {
       names.join(","),
     ])
   );
-  if (options.filter !== undefined) pairs.push(...R.toEntries(flatFilter(options.filter)));
+  if (options.filter !== undefined) {
+    const filter = flatFilterResult(options.filter);
+    if (Result.isFailure(filter)) return Result.fail(filter.failure);
+    pairs.push(...R.toEntries(filter.success));
+  }
   if (options.sort && Arr.isReadonlyArrayNonEmpty(options.sort))
     pairs.push(["sort", encodeSort(options.sort)]);
   const page: Readonly<Partial<Record<string, string | number>>> = options.page ?? {};
@@ -1276,7 +1317,7 @@ export const buildQueryString = (options?: JsonApiRequestOptions): string => {
     )
   );
   const query = UrlQuery.serialise(pairs);
-  return query === "" ? "" : `?${query}`;
+  return Result.succeed(query === "" ? "" : `?${query}`);
 };
 
 /**
@@ -1295,33 +1336,39 @@ export interface QueryEncoder {
  * applied locally over the exact filter. Throws a `QueryError` for a
  * predicate with no URL form (`Exists`, a `null` literal).
  */
-export const toRequestOptions = (subset: Subset.Subset): Option.Option<JsonApiRequestOptions> => {
+export const toRequestOptions = (subset: Subset.Subset): Option.Option<JsonApiRequestOptions> =>
+  Result.getOrThrowWith(requestOptionsResult(subset), identity);
+
+/** {@link toRequestOptions} as a `Result`: a predicate with no URL form is a `QueryError`. */
+const requestOptionsResult = (
+  subset: Subset.Subset
+): Result.Result<Option.Option<JsonApiRequestOptions>, QueryError> => {
   const where = foldConstants(subset.where);
-  if (isFalse(where)) return Option.none();
-  const filter = isTrue(where)
-    ? undefined
-    : Option.getOrThrowWith(toFilterAst(where), () =>
-        noUrlForm(subset.collection, "the predicate carries an Exists node or a null literal")
-      );
+  if (isFalse(where)) return Result.succeed(Option.none());
   const sort = subset.orderBy.map((term) => ({ field: term.field, direction: term.direction }));
-  return Option.some({
-    ...Defined.fields({ filter }),
-    ...Defined.fields({ sort: Arr.isReadonlyArrayEmpty(sort) ? undefined : sort }),
-  });
+  const options = (filter: Option.Option<Filter.Node>): Option.Option<JsonApiRequestOptions> =>
+    Option.some({
+      ...Option.match(filter, { onNone: () => ({}), onSome: (node) => ({ filter: node }) }),
+      ...Defined.fields({ sort: Arr.isReadonlyArrayEmpty(sort) ? undefined : sort }),
+    });
+  if (isTrue(where)) return Result.succeed(options(Option.none()));
+  return Result.fromOption(toFilterAst(where), () =>
+    noUrlForm(subset.collection, "the predicate carries an Exists node or a null literal")
+  ).pipe(Result.map((node) => options(Option.some(node))));
 };
 
 /** The shipped encoder: exact under ADR-0028 (see the module doc). */
 export const defaultEncoder: QueryEncoder = {
   encode: (subset) =>
-    Effect.try({
-      try: () => Option.map(toRequestOptions(subset), buildQueryString),
-      catch: (error) =>
-        error instanceof QueryError
-          ? error
-          : new QueryError({
-              message: `Subset on "${subset.collection}" could not be encoded: ${P.isError(error) ? error.message : String(error)}`,
-              query: subset.collection,
-              cause: error,
-            }),
-    }),
+    Effect.suspend(() =>
+      Effect.fromResult(
+        Result.flatMap(
+          requestOptionsResult(subset),
+          Option.match({
+            onNone: () => Result.succeed(Option.none<string>()),
+            onSome: (options) => Result.map(queryStringResult(options), Option.some),
+          })
+        )
+      )
+    ),
 };
