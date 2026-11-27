@@ -619,15 +619,17 @@ export const fromView = <Graph extends Node.NodeRegistry>(
   // without its join — host-side over a connected engine, the reconcile
   // loop over an owned one — kept open in a scope of its own so the foreign
   // windows keep tracking the linkage until the entry is released.
-  const openEdges = (key: string, registration: Coverage.Registration): Effect.Effect<void> =>
-    Effect.gen(function* () {
-      const scope = yield* Scope.make();
-      const { root, edges } = registration;
-      yield* view
-        .pinEdges(nodes.collections, root.collection, root, edges)
-        .pipe(Scope.provide(scope));
-      MutableHashMap.set(edgeScopes, key, scope);
-    });
+  const openEdges = Effect.fnUntraced(function* (
+    key: string,
+    registration: Coverage.Registration
+  ): Effect.fn.Return<void> {
+    const scope = yield* Scope.make();
+    const { root, edges } = registration;
+    yield* view
+      .pinEdges(nodes.collections, root.collection, root, edges)
+      .pipe(Scope.provide(scope));
+    MutableHashMap.set(edgeScopes, key, scope);
+  });
 
   const closeEdges = (key: string): Effect.Effect<void> =>
     Effect.suspend(() => {
@@ -765,13 +767,14 @@ export const fromView = <Graph extends Node.NodeRegistry>(
 
   // A read given by value keeps its URL identity when it has one; a read
   // with no URL form is pinned all the same, without one.
-  const targetOfRead = (read: QueryModule.Read): Effect.Effect<Target, QueryError> =>
-    Effect.gen(function* () {
-      const plan = yield* Query.tryPlan(nodes, read);
-      const url =
-        urls === undefined ? Option.none<string>() : yield* Effect.option(urls.canonical(read));
-      return { registration: Coverage.ofPlan(plan), url };
-    });
+  const targetOfRead = Effect.fnUntraced(function* (
+    read: QueryModule.Read
+  ): Effect.fn.Return<Target, QueryError> {
+    const plan = yield* Query.tryPlan(nodes, read);
+    const url =
+      urls === undefined ? Option.none<string>() : yield* Effect.option(urls.canonical(read));
+    return { registration: Coverage.ofPlan(plan), url };
+  });
 
   const targetOf = (input: QueryModule.Read | string): Effect.Effect<Target, QueryError> =>
     P.isString(input) ? targetOfUrl(input) : targetOfRead(input);
@@ -1193,53 +1196,52 @@ export interface Made<Graph extends Node.NodeRegistry = Node.NodeRegistry> {
  * an app that needs an engine-level capability (devtools) need not build the
  * engine by hand.
  */
-export const make = <Graph extends Node.NodeRegistry>(
+export const make: <Graph extends Node.NodeRegistry>(
   options: MakeOptions<Graph>
-): Effect.Effect<Made<Graph>, never, Scope.Scope> =>
-  Effect.gen(function* () {
-    const store =
-      options.store ??
-      Option.getOrUndefined(yield* Effect.serviceOption(ClientStore.ClientStore)) ??
-      (yield* ClientStore.makeMemory);
+) => Effect.Effect<Made<Graph>, never, Scope.Scope> = Effect.fn("legation/Client.make")(function* <
+  Graph extends Node.NodeRegistry,
+>(options: MakeOptions<Graph>) {
+  const store =
+    options.store ??
+    Option.getOrUndefined(yield* Effect.serviceOption(ClientStore.ClientStore)) ??
+    (yield* ClientStore.makeMemory);
 
-    const clientGroupId = options.clientGroupId ?? `group-${crypto.randomUUID()}`;
-    const configured =
-      options.transport !== undefined && "url" in options.transport
-        ? yield* RpcTransport.fromOrigin({ origin: options.transport.url, clientGroupId })
-        : options.transport;
-    const contextual = Option.getOrUndefined(
-      yield* Effect.serviceOption(Transport.ClientTransport)
-    );
-    const transport = configured ?? contextual ?? Transport.offline;
-    // Defaulted offline: nothing to sync with, so the loop stays off
-    // unless the caller insists.
-    const sync = options.sync ?? (configured ?? contextual) !== undefined;
+  const clientGroupId = options.clientGroupId ?? `group-${crypto.randomUUID()}`;
+  const configured =
+    options.transport !== undefined && "url" in options.transport
+      ? yield* RpcTransport.fromOrigin({ origin: options.transport.url, clientGroupId })
+      : options.transport;
+  const contextual = Option.getOrUndefined(yield* Effect.serviceOption(Transport.ClientTransport));
+  const transport = configured ?? contextual ?? Transport.offline;
+  // Defaulted offline: nothing to sync with, so the loop stays off
+  // unless the caller insists.
+  const sync = options.sync ?? (configured ?? contextual) !== undefined;
 
-    const indexes = declaredIndexes(options.nodes);
-    const engine = yield* ClientEngine.make({
-      clientId: options.clientId ?? `client-${crypto.randomUUID()}`,
-      clientGroupId,
-      mutators: options.mutations,
-      ...Defined.fields({ queries: options.queries, syncLoop: options.syncLoop }),
-      ...Defined.fields({ indexes: !R.isEmptyReadonlyRecord(indexes) ? indexes : undefined }),
-      ...Defined.fields({ autoIndex: options.autoIndex }),
-    }).pipe(
-      Effect.provideService(ClientStore.ClientStore, store),
-      Effect.provideService(Transport.ClientTransport, transport)
-    );
-    // Adopt the identity before the sync loop starts: a mismatched replica
-    // must be quarantined and cleared before anything can read from it or
-    // push out of it. A store error here is fatal to construction on purpose
-    // — a Client that reported an identity it never actually scoped its
-    // replica to is the bug this whole boundary exists to prevent.
-    if (options.identity !== undefined) yield* engine.reset(options.identity).pipe(Effect.orDie);
-    if (sync) yield* engine.runSync;
-    return {
-      client: fromView(options.nodes, ClientView.fromEngine(engine), viewOptions(options)),
-      engine,
-      store,
-    };
-  });
+  const indexes = declaredIndexes(options.nodes);
+  const engine = yield* ClientEngine.make({
+    clientId: options.clientId ?? `client-${crypto.randomUUID()}`,
+    clientGroupId,
+    mutators: options.mutations,
+    ...Defined.fields({ queries: options.queries, syncLoop: options.syncLoop }),
+    ...Defined.fields({ indexes: !R.isEmptyReadonlyRecord(indexes) ? indexes : undefined }),
+    ...Defined.fields({ autoIndex: options.autoIndex }),
+  }).pipe(
+    Effect.provideService(ClientStore.ClientStore, store),
+    Effect.provideService(Transport.ClientTransport, transport)
+  );
+  // Adopt the identity before the sync loop starts: a mismatched replica
+  // must be quarantined and cleared before anything can read from it or
+  // push out of it. A store error here is fatal to construction on purpose
+  // — a Client that reported an identity it never actually scoped its
+  // replica to is the bug this whole boundary exists to prevent.
+  if (options.identity !== undefined) yield* engine.reset(options.identity).pipe(Effect.orDie);
+  if (sync) yield* engine.runSync;
+  return {
+    client: fromView(options.nodes, ClientView.fromEngine(engine), viewOptions(options)),
+    engine,
+    store,
+  };
+});
 
 /** Options for a Client connected to an engine hosted elsewhere. */
 export interface ConnectOptions<
@@ -1255,10 +1257,11 @@ export interface ConnectOptions<
  * a daemon), joined over a `MirrorChannel`. Reads and writes cross the
  * channel; relational reads resolve host-side.
  */
-export const connect = <Graph extends Node.NodeRegistry>(
+export const connect: <Graph extends Node.NodeRegistry>(
   options: ConnectOptions<Graph>
-): Effect.Effect<Client<Graph>, never, Scope.Scope> =>
-  Effect.gen(function* () {
+) => Effect.Effect<Client<Graph>, never, Scope.Scope> = Effect.fn("legation/Client.connect")(
+  function* <Graph extends Node.NodeRegistry>(options: ConnectOptions<Graph>) {
     const mirror = yield* Mirror.make({ channel: options.channel, mutators: options.mutations });
     return fromView(options.nodes, mirror, viewOptions(options));
-  });
+  }
+);

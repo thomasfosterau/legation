@@ -290,26 +290,25 @@ export interface Mirror {
 
 // Take a request's deferred out of its map and complete it. A no-op when the
 // requestId is not in this map (so both maps can be swept on `MutateError`).
-const resolveIn = <A>(
+const resolveIn = Effect.fnUntraced(function* <A>(
   ref: Ref.Ref<HashMap.HashMap<number, Deferred.Deferred<A, MutatorError | TransportError>>>,
   requestId: number,
   complete: (
     deferred: Deferred.Deferred<A, MutatorError | TransportError>
   ) => Effect.Effect<boolean>
-) =>
-  Effect.gen(function* () {
-    const deferred = HashMap.get(yield* Ref.get(ref), requestId);
-    if (Option.isNone(deferred)) return;
-    yield* Ref.update(ref, HashMap.remove(requestId));
-    yield* complete(deferred.value);
-  });
+) {
+  const deferred = HashMap.get(yield* Ref.get(ref), requestId);
+  if (Option.isNone(deferred)) return;
+  yield* Ref.update(ref, HashMap.remove(requestId));
+  yield* complete(deferred.value);
+});
 
 /**
  * Connect a {@link Mirror} to the host on `options.channel`; its subscriptions are released when
  * the scope closes.
  */
-export const make = (options: MirrorOptions): Effect.Effect<Mirror, never, Scope.Scope> =>
-  Effect.gen(function* () {
+export const make: (options: MirrorOptions) => Effect.Effect<Mirror, never, Scope.Scope> =
+  Effect.fn("legation/Mirror.make")(function* (options) {
     const { channel, mutators } = options;
     const mirrorId = crypto.randomUUID();
     const inbox = yield* channel.subscribe;
@@ -572,28 +571,30 @@ export const make = (options: MirrorOptions): Effect.Effect<Mirror, never, Scope
     // Open a host request: register its queue under a fresh requestId and post
     // it. Released, it posts `HostRequestCancel` unless the host already ended
     // it. Opened after this mirror began closing, it fails at once.
-    const openHostRequest = <I, O>(kind: HostRequest.Kind<I, O>, input: I) =>
-      Effect.gen(function* () {
-        const payload = yield* HostRequest.encodeRequest(kind, input);
-        const requestId = yield* Ref.updateAndGet(requestIds, (n) => n + 1);
-        const replies = yield* Queue.unbounded<
-          MirrorProtocol.HostResponseOutcome,
-          HostRequest.HostRequestError
-        >();
-        yield* Ref.update(hostRequests, HashMap.set(requestId, { kind: kind.name, replies }));
-        if (yield* Ref.get(closed)) {
-          yield* failHostRequests("Mirror: closed before the request was sent");
-        } else {
-          yield* channel
-            .post({ _tag: "HostRequest", mirrorId, requestId, kind: kind.name, payload })
-            .pipe(
-              Effect.catch((error) =>
-                Queue.fail(replies, HostRequest.unanswered(kind.name, error.message))
-              )
-            );
-        }
-        return { requestId, replies };
-      });
+    const openHostRequest = Effect.fnUntraced(function* <I, O>(
+      kind: HostRequest.Kind<I, O>,
+      input: I
+    ) {
+      const payload = yield* HostRequest.encodeRequest(kind, input);
+      const requestId = yield* Ref.updateAndGet(requestIds, (n) => n + 1);
+      const replies = yield* Queue.unbounded<
+        MirrorProtocol.HostResponseOutcome,
+        HostRequest.HostRequestError
+      >();
+      yield* Ref.update(hostRequests, HashMap.set(requestId, { kind: kind.name, replies }));
+      if (yield* Ref.get(closed)) {
+        yield* failHostRequests("Mirror: closed before the request was sent");
+      } else {
+        yield* channel
+          .post({ _tag: "HostRequest", mirrorId, requestId, kind: kind.name, payload })
+          .pipe(
+            Effect.catch((error) =>
+              Queue.fail(replies, HostRequest.unanswered(kind.name, error.message))
+            )
+          );
+      }
+      return { requestId, replies };
+    });
     const closeHostRequest = (requestId: number) =>
       Ref.modify(
         hostRequests,
@@ -771,43 +772,41 @@ export const make = (options: MirrorOptions): Effect.Effect<Mirror, never, Scope
     // Validate + encode args against the shared registry (fail fast in the mirror;
     // the host re-validates by decoding), then forward as a `Mutate` message and
     // register a deferred so the correlated reply resolves the caller.
-    const encodeArgs = (mutator: string, args: unknown) =>
-      Effect.gen(function* () {
-        const definition = mutators.mutators.get(mutator);
-        if (definition === undefined) {
-          return yield* new MutatorError({ message: `Unknown mutator: ${mutator}`, mutator });
-        }
-        return yield* Schema.encodeUnknownEffect(definition.args)(args).pipe(
-          Effect.mapError(
-            (cause) =>
-              new MutatorError({
-                message: `Invalid args for mutator "${mutator}"`,
-                mutator,
-                cause,
-              })
-          )
-        );
-      });
+    const encodeArgs = Effect.fnUntraced(function* (mutator: string, args: unknown) {
+      const definition = mutators.mutators.get(mutator);
+      if (definition === undefined) {
+        return yield* new MutatorError({ message: `Unknown mutator: ${mutator}`, mutator });
+      }
+      return yield* Schema.encodeUnknownEffect(definition.args)(args).pipe(
+        Effect.mapError(
+          (cause) =>
+            new MutatorError({
+              message: `Invalid args for mutator "${mutator}"`,
+              mutator,
+              cause,
+            })
+        )
+      );
+    });
 
     // Post `message` and wait for the host's answer, correlated by `requestId`
     // through `ref`. Registered after this mirror began closing, the request
     // can never be answered, so it fails at once instead of hanging.
-    const awaitReply = <A>(
+    const awaitReply = Effect.fnUntraced(function* <A>(
       ref: Ref.Ref<HashMap.HashMap<number, Deferred.Deferred<A, MutatorError | TransportError>>>,
       requestId: number,
       message: MirrorProtocol.MirrorMessage
-    ) =>
-      Effect.gen(function* () {
-        const deferred = yield* Deferred.make<A, MutatorError | TransportError>();
-        yield* Ref.update(ref, HashMap.set(requestId, deferred));
-        if (yield* Ref.get(closed)) {
-          return yield* resolveIn(ref, requestId, (waiting) =>
-            Deferred.fail(waiting, hostUnavailable)
-          ).pipe(Effect.andThen(Deferred.await(deferred)));
-        }
-        yield* channel.post(message);
-        return yield* Deferred.await(deferred);
-      });
+    ) {
+      const deferred = yield* Deferred.make<A, MutatorError | TransportError>();
+      yield* Ref.update(ref, HashMap.set(requestId, deferred));
+      if (yield* Ref.get(closed)) {
+        return yield* resolveIn(ref, requestId, (waiting) =>
+          Deferred.fail(waiting, hostUnavailable)
+        ).pipe(Effect.andThen(Deferred.await(deferred)));
+      }
+      yield* channel.post(message);
+      return yield* Deferred.await(deferred);
+    });
 
     const forward = <A>(
       ref: Ref.Ref<HashMap.HashMap<number, Deferred.Deferred<A, MutatorError | TransportError>>>,
@@ -841,19 +840,18 @@ export const make = (options: MirrorOptions): Effect.Effect<Mirror, never, Scope
     // might have been ours — the backing Ref holds latest); otherwise trigger
     // only when our own key changed. Under no pressure (contiguous seqs) this
     // is exactly a key-filter.
-    const decideTrigger = (
+    const decideTrigger = Effect.fnUntraced(function* (
       key: string,
       lastSeenRef: Ref.Ref<number>,
       item: SeqKey
-    ): Effect.Effect<Option.Option<{ readonly gapped: boolean }>> =>
-      Effect.gen(function* () {
-        const lastSeen = yield* Ref.get(lastSeenRef);
-        if (item.seq <= lastSeen) return Option.none();
-        const gapped = item.seq > lastSeen + 1;
-        yield* Ref.set(lastSeenRef, item.seq);
-        if (gapped) yield* Metric.update(Telemetry.mirrorRefreshesTotal, 1);
-        return gapped || item.key === key ? Option.some({ gapped }) : Option.none();
-      });
+    ): Effect.fn.Return<Option.Option<{ readonly gapped: boolean }>> {
+      const lastSeen = yield* Ref.get(lastSeenRef);
+      if (item.seq <= lastSeen) return Option.none();
+      const gapped = item.seq > lastSeen + 1;
+      yield* Ref.set(lastSeenRef, item.seq);
+      if (gapped) yield* Metric.update(Telemetry.mirrorRefreshesTotal, 1);
+      return gapped || item.key === key ? Option.some({ gapped }) : Option.none();
+    });
 
     // Emits `read`'s current value now and again whenever `key` changes on
     // the hub, per {@link decideTrigger}.
@@ -910,26 +908,25 @@ export const make = (options: MirrorOptions): Effect.Effect<Mirror, never, Scope
     // One unit of interest in a relational registration for the scope's
     // lifetime (counted like an observer's: pins of one registration add
     // up, and the host is told once). Returns the key the rows arrive under.
-    const holdRelated = (
+    const holdRelated = Effect.fnUntraced(function* (
       collectionName: string,
       subset: Subset.Subset,
       edgeInputs: ReadonlyArray<string | Related.EdgeSelect>
-    ): Effect.Effect<string, never, Scope.Scope> =>
-      Effect.gen(function* () {
-        const edges = edgeInputs.map(Related.edgeSelect);
-        const key = MirrorProtocol.relatedKey(collectionName, subset, edges);
-        const registration = { mirrorId, collection: collectionName, subset, edges };
-        yield* acquireInterest(
-          key,
-          {
-            subscribe: { _tag: "SubscribeRelated", ...registration },
-            unsubscribe: { _tag: "UnsubscribeRelated", ...registration },
-          },
-          "observer"
-        );
-        yield* Effect.addFinalizer(() => releaseInterest(key, "observer"));
-        return key;
-      });
+    ): Effect.fn.Return<string, never, Scope.Scope> {
+      const edges = edgeInputs.map(Related.edgeSelect);
+      const key = MirrorProtocol.relatedKey(collectionName, subset, edges);
+      const registration = { mirrorId, collection: collectionName, subset, edges };
+      yield* acquireInterest(
+        key,
+        {
+          subscribe: { _tag: "SubscribeRelated", ...registration },
+          unsubscribe: { _tag: "UnsubscribeRelated", ...registration },
+        },
+        "observer"
+      );
+      yield* Effect.addFinalizer(() => releaseInterest(key, "observer"));
+      return key;
+    });
 
     // Ask the host to end a form submission (settle on a ruling, or abandon
     // it) and wait for it to have done so. A host that is gone, or a mirror
@@ -1021,8 +1018,8 @@ export const make = (options: MirrorOptions): Effect.Effect<Mirror, never, Scope
         encodeArgs(mutator, args).pipe(
           Effect.flatMap((encoded) => forward(pending, mutator, encoded))
         ),
-      beginFormMutation: (form, mutator, args) =>
-        Effect.gen(function* () {
+      beginFormMutation: Effect.fn("legation/Mirror.beginFormMutation")(
+        function* (form, mutator, args) {
           const encoded = yield* encodeArgs(mutator, args);
           const requestId = yield* Ref.updateAndGet(requestIds, (n) => n + 1);
           const begin: MirrorProtocol.FormMutationBegin = {
@@ -1049,7 +1046,8 @@ export const make = (options: MirrorOptions): Effect.Effect<Mirror, never, Scope
             abandon: end(Option.none()).pipe(Effect.ignore),
           };
           return submission;
-        }),
+        }
+      ),
       mutateWithAck: (mutator, args) =>
         encodeArgs(mutator, args).pipe(
           Effect.flatMap((encoded) => forward(pendingSettled, mutator, encoded))
@@ -1078,17 +1076,16 @@ export const make = (options: MirrorOptions): Effect.Effect<Mirror, never, Scope
       query,
       // The server-fallthrough read (ADR-0025): forwarded to the host, which
       // owns the transport; correlated by requestId like mutations.
-      read: (subsets) =>
-        Effect.gen(function* () {
-          const requestId = yield* Ref.updateAndGet(requestIds, (n) => n + 1);
-          const deferred = yield* Deferred.make<
-            ReadonlyArray<ClientEngine.ReadRow>,
-            MutatorError | TransportError
-          >();
-          yield* Ref.update(pendingReads, HashMap.set(requestId, deferred));
-          yield* channel.post({ _tag: "Read", requestId, mirrorId, subsets });
-          return yield* Deferred.await(deferred);
-        }),
+      read: Effect.fn("legation/Mirror.read")(function* (subsets) {
+        const requestId = yield* Ref.updateAndGet(requestIds, (n) => n + 1);
+        const deferred = yield* Deferred.make<
+          ReadonlyArray<ClientEngine.ReadRow>,
+          MutatorError | TransportError
+        >();
+        yield* Ref.update(pendingReads, HashMap.set(requestId, deferred));
+        yield* channel.post({ _tag: "Read", requestId, mirrorId, subsets });
+        return yield* Deferred.await(deferred);
+      }),
       queryNamed: (name, args) => readKey(MirrorProtocol.namedKey(name, args)),
       // A key's mark counts only once its rows are here; see `received`.
       pulled: (key: string) =>

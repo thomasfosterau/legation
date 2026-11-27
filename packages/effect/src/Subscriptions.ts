@@ -151,30 +151,29 @@ export const make = (
   // that happens to now share the retargeted hash). `currentRef` tracks
   // this window's own current subset so `release` unsubscribes the right
   // one regardless of how many times it was retargeted.
-  const acquireWindow = (
+  const acquireWindow = Effect.fnUntraced(function* (
     subset: Subset.Subset
-  ): Effect.Effect<WindowHandle, StoreError | MutatorError, Scope.Scope> =>
-    Effect.gen(function* () {
-      yield* engine.subscribe(subset);
-      const currentRef = yield* Ref.make(subset);
-      const observation = yield* engine.observeWindow(subset);
-      const retarget: WindowHandle["retarget"] = (window) =>
-        observation.retarget(window).pipe(
-          Effect.andThen(
-            Ref.update(currentRef, (current): Subset.Subset => ({
-              ...current,
-              ...Defined.fields({ limit: window.limit, cursor: window.cursor }),
-            }))
-          )
-        );
-      let released = false;
-      const release = Effect.suspend(() => {
-        if (released) return Effect.void;
-        released = true;
-        return Ref.get(currentRef).pipe(Effect.flatMap((current) => engine.unsubscribe(current)));
-      });
-      return { rows: observation.rows, retarget, release };
+  ): Effect.fn.Return<WindowHandle, StoreError | MutatorError, Scope.Scope> {
+    yield* engine.subscribe(subset);
+    const currentRef = yield* Ref.make(subset);
+    const observation = yield* engine.observeWindow(subset);
+    const retarget: WindowHandle["retarget"] = (window) =>
+      observation.retarget(window).pipe(
+        Effect.andThen(
+          Ref.update(currentRef, (current): Subset.Subset => ({
+            ...current,
+            ...Defined.fields({ limit: window.limit, cursor: window.cursor }),
+          }))
+        )
+      );
+    let released = false;
+    const release = Effect.suspend(() => {
+      if (released) return Effect.void;
+      released = true;
+      return Ref.get(currentRef).pipe(Effect.flatMap((current) => engine.unsubscribe(current)));
     });
+    return { rows: observation.rows, retarget, release };
+  });
 
   return Effect.gen(function* () {
     const ttl = options?.ttl ?? Duration.minutes(5);

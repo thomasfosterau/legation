@@ -78,20 +78,21 @@ const guarded = (sink: InvalidationSink, touched: Touched): Effect.Effect<void> 
  * reach a cache in another process forwards there (Cloudflare:
  * `EdgeInvalidation.forward` over a service binding).
  */
-export const run = (
+export const run: (
   sink: InvalidationSink
-): Effect.Effect<void, never, InvalidationBus | Scope.Scope> =>
-  Effect.gen(function* () {
-    const bus = yield* InvalidationBus;
-    const subscription = yield* bus.subscribe;
-    yield* Effect.forkScoped(
-      Effect.forever(
-        subscription.take.pipe(
-          Effect.flatMap((hints) => {
-            const touched = touchedBy(hints);
-            return isEmpty(touched) ? Effect.void : guarded(sink, touched);
-          })
-        )
+) => Effect.Effect<void, never, InvalidationBus | Scope.Scope> = Effect.fn(
+  "legation/InvalidationSink.run"
+)(function* (sink) {
+  const bus = yield* InvalidationBus;
+  const subscription = yield* bus.subscribe;
+  yield* Effect.forkScoped(
+    Effect.forever(
+      subscription.take.pipe(
+        Effect.flatMap((hints) => {
+          const touched = touchedBy(hints);
+          return isEmpty(touched) ? Effect.void : guarded(sink, touched);
+        })
       )
-    );
-  });
+    )
+  );
+});

@@ -142,132 +142,130 @@ const backoffMs = (failures: number): number =>
  * stepping backwards, new IDs can fall at or below the sticky cursor and be
  * skipped until the subscriber resubscribes.
  */
-export const makeRedisBroker = (
+export const makeRedisBroker: (
   options?: RedisBrokerOptions
-): Effect.Effect<BusBroker, never, Redis.Redis> =>
-  Effect.gen(function* () {
-    const redis = yield* Redis.Redis;
-    const stream = options?.stream ?? "legation:hints";
-    const blockMillis = Math.trunc(Duration.toMillis(options?.block ?? "5 seconds"));
-    const blockMs = String(blockMillis);
-    const from = options?.from ?? "$";
-    const timeout = options?.timeout ?? "5 seconds";
+) => Effect.Effect<BusBroker, never, Redis.Redis> = Effect.fn(
+  "legation/BusBrokers.makeRedisBroker"
+)(function* (options) {
+  const redis = yield* Redis.Redis;
+  const stream = options?.stream ?? "legation:hints";
+  const blockMillis = Math.trunc(Duration.toMillis(options?.block ?? "5 seconds"));
+  const blockMs = String(blockMillis);
+  const from = options?.from ?? "$";
+  const timeout = options?.timeout ?? "5 seconds";
 
-    // Bounds one reader XREAD (see XREAD_MARGIN_MS). BLOCK 0 parks until an entry
-    // arrives, so no bound can tell a dead read from a quiet stream and none applies.
-    const boundRead = <A>(
-      read: Effect.Effect<A, Redis.RedisError>
-    ): Effect.Effect<A, Redis.RedisError | XReadTimeout> =>
-      blockMillis > 0
-        ? read.pipe(
-            Effect.timeoutOrElse({
-              duration: Duration.millis(blockMillis + XREAD_MARGIN_MS),
-              orElse: () => Effect.fail(new XReadTimeout()),
-            })
-          )
-        : read;
-
-    // The start position of a subscription, read before the first XREAD. XREAD's
-    // "$" re-resolves on each call, so a BLOCK timeout followed by a publish would
-    // move the cursor past that entry and the subscriber would never read it; the
-    // ID read here does not move. A failure is raised to the caller: `subscribe`
-    // treats it as "not yet", and the reader asks again. The reader bounds this
-    // lookup itself (START_LOOKUP_BOUND), so a hung Redis is a failed step too.
-    const lastId = redis
-      .send<XRevRangeReply>("XREVRANGE", stream, "+", "-", "COUNT", "1")
-      .pipe(Effect.map(cursorAfter));
-
-    return {
-      // Best-effort: a failed or timed-out publish only delays the next pull
-      // (ADR-0009), and BusBroker.publish has no error channel.
-      publish: (payload) =>
-        redis.send("XADD", stream, "*", PAYLOAD_FIELD, payload).pipe(
+  // Bounds one reader XREAD (see XREAD_MARGIN_MS). BLOCK 0 parks until an entry
+  // arrives, so no bound can tell a dead read from a quiet stream and none applies.
+  const boundRead = <A>(
+    read: Effect.Effect<A, Redis.RedisError>
+  ): Effect.Effect<A, Redis.RedisError | XReadTimeout> =>
+    blockMillis > 0
+      ? read.pipe(
           Effect.timeoutOrElse({
-            duration: timeout,
-            orElse: () => Effect.logWarning("Redis broker: XADD timed out; publish dropped"),
-          }),
-          Effect.ignore
-        ),
-      subscribe: Effect.gen(function* () {
-        const queue = yield* Queue.unbounded<string>();
-        // The ID the next XREAD continues from. `from: "0"` needs no lookup. Any
-        // other start gets one bounded attempt here, so a publish made right after
-        // `subscribe` returns is not missed while Redis answers in time. If the
-        // attempt fails or times out, the reader's first step resolves it.
-        let cursor: Option.Option<string> = from === "0" ? Option.some("0") : Option.none();
-        if (Option.isNone(cursor)) {
-          cursor = yield* lastId.pipe(
-            Effect.timeoutOption(START_LOOKUP_BOUND),
-            Effect.orElseSucceed(() => Option.none<string>())
-          );
-        }
-        // Per-subscription outage state: consecutive failed steps. The first failure
-        // of an outage logs a warning, each further retry logs at debug, and the
-        // first successful Redis reply after an outage logs at info.
-        const outage = { failures: 0 };
-        const answered = Effect.suspend(() => {
-          const failures = outage.failures;
-          if (failures === 0) return Effect.void;
-          outage.failures = 0;
-          return Effect.logInfo(`Redis broker: reader recovered after ${failures} failed step(s)`);
-        });
-        const failed = (error: unknown) =>
-          Effect.suspend(() => {
-            outage.failures += 1;
-            const delay = backoffMs(outage.failures);
-            const log =
-              outage.failures === 1
-                ? Effect.logWarning(
-                    "Redis broker: reader step failed; retrying with back-off",
-                    error
-                  )
-                : Effect.logDebug(
-                    `Redis broker: reader step failed again; retrying in ${delay} millis`,
-                    error
-                  );
-            return log.pipe(Effect.andThen(Effect.sleep(Duration.millis(delay))));
-          });
-        const readOnce = Effect.gen(function* () {
-          const position = Option.isSome(cursor)
-            ? cursor.value
-            : yield* lastId.pipe(
-                Effect.timeoutOrElse({
-                  duration: START_LOOKUP_BOUND,
-                  orElse: () => Effect.fail(new StartLookupTimeout()),
-                }),
-                Effect.tap(() => answered)
-              );
-          cursor = Option.some(position);
-          const reply = yield* boundRead(
-            redis.send<XReadReply>("XREAD", "BLOCK", blockMs, "STREAMS", stream, position)
-          ).pipe(Effect.tap(() => answered));
-          if (reply === null) return;
-          yield* Effect.forEach(
-            reply,
-            ([, entries]) =>
-              Effect.forEach(
-                entries,
-                ([id, fields]) =>
-                  Effect.gen(function* () {
-                    cursor = Option.some(id);
-                    const payload = payloadOf(fields);
-                    if (Option.isSome(payload)) yield* Queue.offer(queue, payload.value);
-                  }),
-                { concurrency: 1, discard: true }
-              ),
-            { concurrency: 1, discard: true }
-          );
-        }).pipe(
-          // A transient Redis error, a read with no reply (XReadTimeout), or an
-          // unresolved start position must not kill the subscription: log it, back
-          // off, and run the step again from the last ID seen.
-          Effect.catch(failed)
+            duration: Duration.millis(blockMillis + XREAD_MARGIN_MS),
+            orElse: () => Effect.fail(new XReadTimeout()),
+          })
+        )
+      : read;
+
+  // The start position of a subscription, read before the first XREAD. XREAD's
+  // "$" re-resolves on each call, so a BLOCK timeout followed by a publish would
+  // move the cursor past that entry and the subscriber would never read it; the
+  // ID read here does not move. A failure is raised to the caller: `subscribe`
+  // treats it as "not yet", and the reader asks again. The reader bounds this
+  // lookup itself (START_LOOKUP_BOUND), so a hung Redis is a failed step too.
+  const lastId = redis
+    .send<XRevRangeReply>("XREVRANGE", stream, "+", "-", "COUNT", "1")
+    .pipe(Effect.map(cursorAfter));
+
+  return {
+    // Best-effort: a failed or timed-out publish only delays the next pull
+    // (ADR-0009), and BusBroker.publish has no error channel.
+    publish: (payload) =>
+      redis.send("XADD", stream, "*", PAYLOAD_FIELD, payload).pipe(
+        Effect.timeoutOrElse({
+          duration: timeout,
+          orElse: () => Effect.logWarning("Redis broker: XADD timed out; publish dropped"),
+        }),
+        Effect.ignore
+      ),
+    subscribe: Effect.gen(function* () {
+      const queue = yield* Queue.unbounded<string>();
+      // The ID the next XREAD continues from. `from: "0"` needs no lookup. Any
+      // other start gets one bounded attempt here, so a publish made right after
+      // `subscribe` returns is not missed while Redis answers in time. If the
+      // attempt fails or times out, the reader's first step resolves it.
+      let cursor: Option.Option<string> = from === "0" ? Option.some("0") : Option.none();
+      if (Option.isNone(cursor)) {
+        cursor = yield* lastId.pipe(
+          Effect.timeoutOption(START_LOOKUP_BOUND),
+          Effect.orElseSucceed(() => Option.none<string>())
         );
-        yield* Effect.forkScoped(Effect.forever(readOnce));
-        return { take: Queue.take(queue) };
-      }),
-    };
-  });
+      }
+      // Per-subscription outage state: consecutive failed steps. The first failure
+      // of an outage logs a warning, each further retry logs at debug, and the
+      // first successful Redis reply after an outage logs at info.
+      const outage = { failures: 0 };
+      const answered = Effect.suspend(() => {
+        const failures = outage.failures;
+        if (failures === 0) return Effect.void;
+        outage.failures = 0;
+        return Effect.logInfo(`Redis broker: reader recovered after ${failures} failed step(s)`);
+      });
+      const failed = (error: unknown) =>
+        Effect.suspend(() => {
+          outage.failures += 1;
+          const delay = backoffMs(outage.failures);
+          const log =
+            outage.failures === 1
+              ? Effect.logWarning("Redis broker: reader step failed; retrying with back-off", error)
+              : Effect.logDebug(
+                  `Redis broker: reader step failed again; retrying in ${delay} millis`,
+                  error
+                );
+          return log.pipe(Effect.andThen(Effect.sleep(Duration.millis(delay))));
+        });
+      const readOnce = Effect.gen(function* () {
+        const position = Option.isSome(cursor)
+          ? cursor.value
+          : yield* lastId.pipe(
+              Effect.timeoutOrElse({
+                duration: START_LOOKUP_BOUND,
+                orElse: () => Effect.fail(new StartLookupTimeout()),
+              }),
+              Effect.tap(() => answered)
+            );
+        cursor = Option.some(position);
+        const reply = yield* boundRead(
+          redis.send<XReadReply>("XREAD", "BLOCK", blockMs, "STREAMS", stream, position)
+        ).pipe(Effect.tap(() => answered));
+        if (reply === null) return;
+        yield* Effect.forEach(
+          reply,
+          ([, entries]) =>
+            Effect.forEach(
+              entries,
+              ([id, fields]) =>
+                Effect.gen(function* () {
+                  cursor = Option.some(id);
+                  const payload = payloadOf(fields);
+                  if (Option.isSome(payload)) yield* Queue.offer(queue, payload.value);
+                }),
+              { concurrency: 1, discard: true }
+            ),
+          { concurrency: 1, discard: true }
+        );
+      }).pipe(
+        // A transient Redis error, a read with no reply (XReadTimeout), or an
+        // unresolved start position must not kill the subscription: log it, back
+        // off, and run the step again from the last ID seen.
+        Effect.catch(failed)
+      );
+      yield* Effect.forkScoped(Effect.forever(readOnce));
+      return { take: Queue.take(queue) };
+    }),
+  };
+});
 
 // ─── WebSocket / Durable Object broker ───────────────────────────────────────
 
@@ -327,37 +325,38 @@ export interface BroadcastChannelLike {
  * instance fans the hint out to its local sessions). Point every context's
  * broker at the same channel name.
  */
-export const makeBroadcastChannelBroker = (
+export const makeBroadcastChannelBroker: (
   channel: BroadcastChannelLike
-): Effect.Effect<BusBroker, never, Scope.Scope> =>
-  Effect.gen(function* () {
-    const queues = new Set<Queue.Queue<string>>();
-    const listener = (event: { readonly data: unknown }) => {
-      const data = event.data;
-      if (!P.isString(data)) return;
-      Arr.forEach(queues, (queue) => {
-        Queue.offerUnsafe(queue, data);
-      });
-    };
-    yield* Effect.acquireRelease(
-      Effect.sync(() => channel.addEventListener("message", listener)),
-      () => Effect.sync(() => channel.removeEventListener("message", listener))
-    );
-    return {
-      publish: (payload) =>
-        Effect.sync(() => {
-          Arr.forEach(queues, (queue) => {
-            Queue.offerUnsafe(queue, payload);
-          }); // self
-          channel.postMessage(payload); // other contexts
-        }),
-      subscribe: Effect.gen(function* () {
-        const queue = yield* Queue.unbounded<string>();
-        yield* Effect.acquireRelease(
-          Effect.sync(() => queues.add(queue)),
-          () => Effect.sync(() => queues.delete(queue))
-        );
-        return { take: Queue.take(queue) };
+) => Effect.Effect<BusBroker, never, Scope.Scope> = Effect.fn(
+  "legation/BusBrokers.makeBroadcastChannelBroker"
+)(function* (channel) {
+  const queues = new Set<Queue.Queue<string>>();
+  const listener = (event: { readonly data: unknown }) => {
+    const data = event.data;
+    if (!P.isString(data)) return;
+    Arr.forEach(queues, (queue) => {
+      Queue.offerUnsafe(queue, data);
+    });
+  };
+  yield* Effect.acquireRelease(
+    Effect.sync(() => channel.addEventListener("message", listener)),
+    () => Effect.sync(() => channel.removeEventListener("message", listener))
+  );
+  return {
+    publish: (payload) =>
+      Effect.sync(() => {
+        Arr.forEach(queues, (queue) => {
+          Queue.offerUnsafe(queue, payload);
+        }); // self
+        channel.postMessage(payload); // other contexts
       }),
-    };
-  });
+    subscribe: Effect.gen(function* () {
+      const queue = yield* Queue.unbounded<string>();
+      yield* Effect.acquireRelease(
+        Effect.sync(() => queues.add(queue)),
+        () => Effect.sync(() => queues.delete(queue))
+      );
+      return { take: Queue.take(queue) };
+    }),
+  };
+});

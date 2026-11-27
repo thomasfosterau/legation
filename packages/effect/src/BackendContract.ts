@@ -449,17 +449,8 @@ type Rule = (h: Harness) => Effect.Effect<void, ContractViolation>;
 // ─── Rules ───────────────────────────────────────────────────────────────────
 
 /** 1. In-order application bumps lastMutationIds and applies effects. */
-const rule1InOrderApplication: Rule = ({
-  backend,
-  context,
-  clientId,
-  rows,
-  start,
-  check,
-  expectOk,
-  put,
-}) =>
-  Effect.gen(function* () {
+const rule1InOrderApplication: Rule = Effect.fn("legation/BackendContract.rule1InOrderApplication")(
+  function* ({ backend, context, clientId, rows, start, check, expectOk, put }) {
     const rule = "applies mutations in order and bumps lastMutationIds";
     const result = yield* expectOk(
       rule,
@@ -480,20 +471,12 @@ const rule1InOrderApplication: Rule = ({
       fetched.every((row) => row.version !== undefined && row.version !== null),
       "Every row must carry a row version"
     );
-  });
+  }
+);
 
 /** 2. Idempotent skip: an already-applied mutation id has no effect. */
-const rule2IdempotentSkip: Rule = ({
-  backend,
-  context,
-  clientId,
-  rows,
-  start,
-  check,
-  expectOk,
-  put,
-}) =>
-  Effect.gen(function* () {
+const rule2IdempotentSkip: Rule = Effect.fn("legation/BackendContract.rule2IdempotentSkip")(
+  function* ({ backend, context, clientId, rows, start, check, expectOk, put }) {
     const rule = "skips already-applied mutation ids (idempotency)";
     const result = yield* expectOk(
       rule,
@@ -514,10 +497,11 @@ const rule2IdempotentSkip: Rule = ({
       counterOf(decodeCounter(b?.value)) === 2,
       `Replaying mutation 2 must not re-execute its effects (row "b" became ${Json.show(b?.value)})`
     );
-  });
+  }
+);
 
 /** 3. Gap rejection: a mutation id beyond last+1 is an error. */
-const rule3GapRejection: Rule = ({
+const rule3GapRejection: Rule = Effect.fn("legation/BackendContract.rule3GapRejection")(function* ({
   backend,
   context,
   rows,
@@ -527,25 +511,24 @@ const rule3GapRejection: Rule = ({
   expectFail,
   lastIdOf,
   put,
-}) =>
-  Effect.gen(function* () {
-    const rule = "rejects mutation-id gaps";
-    yield* expectFail(
-      rule,
-      backend.applyMutations(context, [put(start + 4, rows, "c", { n: 4 })]),
-      `mutation id ${start + 4} after lastMutationId ${start + 2}`
-    );
-    yield* check(
-      rule,
-      (yield* lastIdOf(rule)) === start + 2,
-      "A rejected gap must not bump lastMutationId"
-    );
-    const fetched = yield* expectOk(rule, backend.getRows(context, rows, ["c"]));
-    yield* check(rule, Arr.isReadonlyArrayEmpty(fetched), "A rejected gap must not apply effects");
-  });
+}) {
+  const rule = "rejects mutation-id gaps";
+  yield* expectFail(
+    rule,
+    backend.applyMutations(context, [put(start + 4, rows, "c", { n: 4 })]),
+    `mutation id ${start + 4} after lastMutationId ${start + 2}`
+  );
+  yield* check(
+    rule,
+    (yield* lastIdOf(rule)) === start + 2,
+    "A rejected gap must not bump lastMutationId"
+  );
+  const fetched = yield* expectOk(rule, backend.getRows(context, rows, ["c"]));
+  yield* check(rule, Arr.isReadonlyArrayEmpty(fetched), "A rejected gap must not apply effects");
+});
 
 /** 4. Atomicity: a failed mutator bumps nothing. */
-const rule4AtomicBump: Rule = ({
+const rule4AtomicBump: Rule = Effect.fn("legation/BackendContract.rule4AtomicBump")(function* ({
   backend,
   context,
   start,
@@ -553,56 +536,61 @@ const rule4AtomicBump: Rule = ({
   expectRegisteredFailure,
   lastIdOf,
   mutation,
-}) =>
-  Effect.gen(function* () {
-    const rule = "keeps the lastMutationId bump atomic with mutator effects";
-    yield* expectRegisteredFailure(
-      rule,
-      backend.applyMutations(context, [mutation(start + 3, failAlways.name, {})]),
-      failAlways.name,
-      "failAlways"
-    );
-    yield* check(
-      rule,
-      (yield* lastIdOf(rule)) === start + 2,
-      "A failed mutator must not bump lastMutationId"
-    );
-  });
+}) {
+  const rule = "keeps the lastMutationId bump atomic with mutator effects";
+  yield* expectRegisteredFailure(
+    rule,
+    backend.applyMutations(context, [mutation(start + 3, failAlways.name, {})]),
+    failAlways.name,
+    "failAlways"
+  );
+  yield* check(
+    rule,
+    (yield* lastIdOf(rule)) === start + 2,
+    "A failed mutator must not bump lastMutationId"
+  );
+});
 
 /** 5. Authoritative writes change row versions. */
-const rule5VersionBump: Rule = ({ backend, context, rows, start, check, expectOk, put }) =>
-  Effect.gen(function* () {
-    const rule = "changes the row version on every authoritative write";
-    const [before] = yield* expectOk(rule, backend.getRows(context, rows, ["a"]));
-    yield* expectOk(rule, backend.applyMutations(context, [put(start + 3, rows, "a", { n: 3 })]));
-    const [after] = yield* expectOk(rule, backend.getRows(context, rows, ["a"]));
-    yield* check(
-      rule,
-      before !== undefined && after !== undefined && before.version !== after.version,
-      `Rewriting row "a" must change its version (was ${before?.version}, now ${after?.version})`
-    );
-  });
+const rule5VersionBump: Rule = Effect.fn("legation/BackendContract.rule5VersionBump")(function* ({
+  backend,
+  context,
+  rows,
+  start,
+  check,
+  expectOk,
+  put,
+}) {
+  const rule = "changes the row version on every authoritative write";
+  const [before] = yield* expectOk(rule, backend.getRows(context, rows, ["a"]));
+  yield* expectOk(rule, backend.applyMutations(context, [put(start + 3, rows, "a", { n: 3 })]));
+  const [after] = yield* expectOk(rule, backend.getRows(context, rows, ["a"]));
+  yield* check(
+    rule,
+    before !== undefined && after !== undefined && before.version !== after.version,
+    `Rewriting row "a" must change its version (was ${before?.version}, now ${after?.version})`
+  );
+});
 
 /**
  * `evaluate` must return exactly the ids `Subset.apply` returns over
  * `reference`, order included. Returns the expected ids so a caller can
  * page on from them; `describe` renders the violation from both id lists.
  */
-const expectEvaluation = (
+const expectEvaluation = Effect.fnUntraced(function* (
   { backend, context, check, expectOk }: Harness,
   rule: string,
   reference: ReadonlyArray<Subset.Row>,
   subset: Subset.Subset,
   describe: (expected: ReadonlyArray<string>, evaluated: ReadonlyArray<string>) => string
-) =>
-  Effect.gen(function* () {
-    const expected = Subset.apply(reference, subset).map((row) => row.id);
-    const evaluated = (yield* expectOk(rule, backend.evaluate(context, subset))).map(
-      (entry) => entry.id
-    );
-    yield* check(rule, Json.show(evaluated) === Json.show(expected), describe(expected, evaluated));
-    return expected;
-  });
+) {
+  const expected = Subset.apply(reference, subset).map((row) => row.id);
+  const evaluated = (yield* expectOk(rule, backend.evaluate(context, subset))).map(
+    (entry) => entry.id
+  );
+  yield* check(rule, Json.show(evaluated) === Json.show(expected), describe(expected, evaluated));
+  return expected;
+});
 
 /** The five hand-picked rows rule 6 starts from, in insertion order. */
 const evalSeed: ReadonlyArray<readonly [string, EvalRow]> = [
@@ -666,44 +654,43 @@ const corpusSubsets = (
  * collation fails too — the contract requires `COLLATE "C"` (Postgres) or
  * `BINARY` (SQLite).
  */
-const generatedCorpus = (
+const generatedCorpus = Effect.fnUntraced(function* (
   h: Harness,
   rule: string,
   reference: ReadonlyArray<Subset.Row>,
   nextMutationId: number
-) =>
-  Effect.gen(function* () {
-    const corpus = yield* contractCorpus;
-    const corpusRows = corpus.rows.map((row) => ({ id: `c-${row.id}`, value: row.value }));
-    yield* h.expectOk(
-      rule,
-      h.backend.applyMutations(
-        h.context,
-        corpusRows.map((row, index) => h.put(nextMutationId + index, h.evalRows, row.id, row.value))
-      )
-    );
-    const all = [...reference, ...corpusRows];
-    yield* Effect.forEach(
-      corpusSubsets(h, corpus),
-      (subset, index) =>
-        expectEvaluation(h, rule, all, subset, (expected, evaluated) =>
-          FilterCorpus.formatDisagreement({
-            seed: corpus.seed,
-            subject: `generated subset ${index}${subset.limit !== undefined ? ` (limit ${subset.limit})` : ""}`,
-            predicate: subset.where,
-            orderBy: subset.orderBy,
-            rows: all,
-            results: { "Subset.apply": expected, "backend.evaluate": evaluated },
-            reproduce: "the contract corpus uses FilterCorpus.DEFAULT_SEED, not the environment",
-          })
-        ),
-      { concurrency: 1, discard: true }
-    );
-  });
+) {
+  const corpus = yield* contractCorpus;
+  const corpusRows = corpus.rows.map((row) => ({ id: `c-${row.id}`, value: row.value }));
+  yield* h.expectOk(
+    rule,
+    h.backend.applyMutations(
+      h.context,
+      corpusRows.map((row, index) => h.put(nextMutationId + index, h.evalRows, row.id, row.value))
+    )
+  );
+  const all = [...reference, ...corpusRows];
+  yield* Effect.forEach(
+    corpusSubsets(h, corpus),
+    (subset, index) =>
+      expectEvaluation(h, rule, all, subset, (expected, evaluated) =>
+        FilterCorpus.formatDisagreement({
+          seed: corpus.seed,
+          subject: `generated subset ${index}${subset.limit !== undefined ? ` (limit ${subset.limit})` : ""}`,
+          predicate: subset.where,
+          orderBy: subset.orderBy,
+          rows: all,
+          results: { "Subset.apply": expected, "backend.evaluate": evaluated },
+          reproduce: "the contract corpus uses FilterCorpus.DEFAULT_SEED, not the environment",
+        })
+      ),
+    { concurrency: 1, discard: true }
+  );
+});
 
 /** 6. Evaluate matches the reference subset semantics (Subset.apply). */
-const rule6ReferenceSemantics: Rule = (h) =>
-  Effect.gen(function* () {
+const rule6ReferenceSemantics: Rule = Effect.fn("legation/BackendContract.rule6ReferenceSemantics")(
+  function* (h) {
     const rule = "evaluates subsets with the reference semantics (Subset.apply)";
     yield* h.expectOk(
       rule,
@@ -746,11 +733,12 @@ const rule6ReferenceSemantics: Rule = (h) =>
     );
 
     yield* generatedCorpus(h, rule, reference, h.start + 4 + evalSeed.length);
-  });
+  }
+);
 
 /** 7. getRows omits missing ids. */
-const rule7OmitsMissingIds: Rule = ({ backend, context, rows, check, expectOk }) =>
-  Effect.gen(function* () {
+const rule7OmitsMissingIds: Rule = Effect.fn("legation/BackendContract.rule7OmitsMissingIds")(
+  function* ({ backend, context, rows, check, expectOk }) {
     const rule = "omits missing ids from getRows";
     const fetched = yield* expectOk(rule, backend.getRows(context, rows, ["a", "does-not-exist"]));
     yield* check(
@@ -758,27 +746,29 @@ const rule7OmitsMissingIds: Rule = ({ backend, context, rows, check, expectOk })
       fetched.length === 1 && fetched[0]?.id === "a",
       `Expected exactly row "a", got ${Json.show(fetched.map((row) => row.id))}`
     );
-  });
+  }
+);
 
 /** 8. Client groups are isolated. */
-const rule8ClientGroupIsolation: Rule = ({ backend, context, clientId, check, expectOk }) =>
-  Effect.gen(function* () {
-    const rule = "isolates lastMutationIds between client groups";
-    const other: SyncContext = { clientGroupId: `${context.clientGroupId}-other` };
-    const ids = yield* expectOk(rule, backend.lastMutationIds(other));
-    yield* check(
-      rule,
-      (ids[clientId] ?? 0) === 0,
-      `A fresh client group must not see another group's mutation ids (got ${ids[clientId]})`
-    );
-  });
+const rule8ClientGroupIsolation: Rule = Effect.fn(
+  "legation/BackendContract.rule8ClientGroupIsolation"
+)(function* ({ backend, context, clientId, check, expectOk }) {
+  const rule = "isolates lastMutationIds between client groups";
+  const other: SyncContext = { clientGroupId: `${context.clientGroupId}-other` };
+  const ids = yield* expectOk(rule, backend.lastMutationIds(other));
+  yield* check(
+    rule,
+    (ids[clientId] ?? 0) === 0,
+    `A fresh client group must not see another group's mutation ids (got ${ids[clientId]})`
+  );
+});
 
 /**
  * 9. Permanent rejection: the poison mutation is acknowledged (its id
  *    bumped) with no effects, and the mutation queued behind it applies.
  */
-const rule9PermanentRejection: Rule = (h) =>
-  Effect.gen(function* () {
+const rule9PermanentRejection: Rule = Effect.fn("legation/BackendContract.rule9PermanentRejection")(
+  function* (h) {
     const { backend, context, clientId, rows, check, expectOk } = h;
     const rule = "acknowledges a permanent rejection without effects and applies those behind it";
     const startId = yield* h.lastIdOf(rule);
@@ -813,15 +803,16 @@ const rule9PermanentRejection: Rule = (h) =>
       behind.length === 1,
       "A mutation queued behind a rejected one must still apply in the same push"
     );
-  });
+  }
+);
 
 /**
  * 10. Transient failure after a write: the failed mutator's write is discarded
  *     (the row keeps its value and version, and a new row is not created) and
  *     the id is not bumped, so the client's retry applies the mutation again.
  */
-const rule10WriteThenFail: Rule = (h) =>
-  Effect.gen(function* () {
+const rule10WriteThenFail: Rule = Effect.fn("legation/BackendContract.rule10WriteThenFail")(
+  function* (h) {
     const { backend, context, rows, check, expectOk } = h;
     const rule = "discards a transiently failed mutation's writes and does not bump";
     const startId = yield* h.lastIdOf(rule);
@@ -854,7 +845,8 @@ const rule10WriteThenFail: Rule = (h) =>
       (yield* h.lastIdOf(rule)) === startId,
       "A failed write must not bump lastMutationId"
     );
-  });
+  }
+);
 
 /** How many times a transient `BackendError` is retried, as the client's own retry would. */
 const TRANSIENT_RETRIES = 3;
@@ -910,107 +902,107 @@ const settleByTurns = (peerSettled: Effect.Effect<boolean>): Effect.Effect<void>
  *     isolate the read from another group's commit, so it is not run through this
  *     contract, and this rule does not claim it.
  */
-const rule11CrossGroupLostUpdate: Rule = (h) =>
-  Effect.gen(function* () {
-    const rule =
-      "keeps a read-modify-write across client groups from losing an update (guarantee 1)";
-    const startId = yield* h.lastIdOf(rule);
-    const row = "race";
-    yield* h.expectOk(
-      rule,
-      h.backend.applyMutations(h.context, [h.put(startId + 1, h.rows, row, { n: 0 })])
+const rule11CrossGroupLostUpdate: Rule = Effect.fn(
+  "legation/BackendContract.rule11CrossGroupLostUpdate"
+)(function* (h) {
+  const rule = "keeps a read-modify-write across client groups from losing an update (guarantee 1)";
+  const startId = yield* h.lastIdOf(rule);
+  const row = "race";
+  yield* h.expectOk(
+    rule,
+    h.backend.applyMutations(h.context, [h.put(startId + 1, h.rows, row, { n: 0 })])
+  );
+
+  // The peer group has its own ledger. A restarted run expects the one it left, and
+  // the check runs before the gate is registered, so a failure leaves no parked handler behind.
+  const peer: SyncContext = { clientGroupId: `${h.context.clientGroupId}-peer` };
+  const peerLedger = (yield* h.expectOk(rule, h.backend.lastMutationIds(peer)))[h.clientId] ?? 0;
+  yield* h.check(
+    rule,
+    peerLedger === h.peerStart,
+    ledgerMismatch("peer group", h.clientId, h.peerStart, peerLedger)
+  );
+
+  gateRuns += 1;
+  const gate = `${h.context.clientGroupId}/race-${gateRuns}`;
+  const parked: ParkGate = {
+    entered: yield* Deferred.make<void>(),
+    release: yield* Deferred.make<void>(),
+  };
+  MutableHashMap.set(parkGates, gate, parked);
+  const increment = (mutationId: number, gateName: string) =>
+    h.mutation(mutationId, countUp.name, { collection: h.rows, id: row, gate: gateName });
+
+  const run = Effect.fnUntraced(function* () {
+    const first = yield* Effect.forkChild(
+      retryTransient(h.backend.applyMutations(h.context, [increment(startId + 2, gate)]))
     );
-
-    // The peer group has its own ledger. A restarted run expects the one it left, and
-    // the check runs before the gate is registered, so a failure leaves no parked handler behind.
-    const peer: SyncContext = { clientGroupId: `${h.context.clientGroupId}-peer` };
-    const peerLedger = (yield* h.expectOk(rule, h.backend.lastMutationIds(peer)))[h.clientId] ?? 0;
-    yield* h.check(
-      rule,
-      peerLedger === h.peerStart,
-      ledgerMismatch("peer group", h.clientId, h.peerStart, peerLedger)
+    // Either X has parked after its read, or X finished without parking.
+    const firstEarly = yield* Effect.raceFirst(
+      Deferred.await(parked.entered).pipe(Effect.as(undefined)),
+      Effect.exit(Fiber.join(first))
     );
-
-    gateRuns += 1;
-    const gate = `${h.context.clientGroupId}/race-${gateRuns}`;
-    const parked: ParkGate = {
-      entered: yield* Deferred.make<void>(),
-      release: yield* Deferred.make<void>(),
-    };
-    MutableHashMap.set(parkGates, gate, parked);
-    const increment = (mutationId: number, gateName: string) =>
-      h.mutation(mutationId, countUp.name, { collection: h.rows, id: row, gate: gateName });
-
-    const run = Effect.fnUntraced(function* () {
-      const first = yield* Effect.forkChild(
-        retryTransient(h.backend.applyMutations(h.context, [increment(startId + 2, gate)]))
-      );
-      // Either X has parked after its read, or X finished without parking.
-      const firstEarly = yield* Effect.raceFirst(
-        Deferred.await(parked.entered).pipe(Effect.as(undefined)),
-        Effect.exit(Fiber.join(first))
-      );
-      if (firstEarly !== undefined) {
-        const failure = Exit.findErrorOption(firstEarly);
-        if (Option.isSome(failure) && isUnregisteredFailure(failure.value, countUp.name)) {
-          return yield* h.check(
-            rule,
-            false,
-            `${countUp.name} is not registered: register BackendContract.countUp`
-          );
-        }
+    if (firstEarly !== undefined) {
+      const failure = Exit.findErrorOption(firstEarly);
+      if (Option.isSome(failure) && isUnregisteredFailure(failure.value, countUp.name)) {
         return yield* h.check(
           rule,
           false,
-          Option.isSome(failure)
-            ? `Backend failed unexpectedly: ${failure.value.message}`
-            : `${countUp.name} finished without reaching park(): its handler must call BackendContract.park between its read and its write`
+          `${countUp.name} is not registered: register BackendContract.countUp`
         );
       }
-
-      const peerDone = yield* Deferred.make<void>();
-      const second = yield* Effect.forkChild(
-        retryTransient(h.backend.applyMutations(peer, [increment(h.peerStart + 1, NO_GATE)])).pipe(
-          Effect.ensuring(Deferred.succeed(peerDone, undefined))
-        )
-      );
-      const peerSettled = Deferred.isDone(peerDone);
-      yield* Option.getOrElse(h.awaitPeer, () => settleByTurns)(peerSettled);
-      yield* Deferred.succeed(parked.release, undefined);
-      const firstExit = yield* Effect.exit(Fiber.join(first));
-      const peerExit = yield* Effect.exit(Fiber.join(second));
-      const failed = Arr.findFirst(
-        [
-          ["first", firstExit],
-          ["peer", peerExit],
-        ] as const,
-        ([label, exit]) => Option.map(Exit.findErrorOption(exit), (error) => ({ label, error }))
-      );
-      if (Option.isSome(failed)) {
-        return yield* h.check(
-          rule,
-          false,
-          `The ${failed.value.label} increment failed: ${failed.value.error.message}`
-        );
-      }
-
-      const [stored] = yield* h.expectOk(rule, h.backend.getRows(h.context, h.rows, [row]));
-      const count = counterOf(decodeCounter(stored?.value));
       return yield* h.check(
         rule,
-        count === 2,
-        `Two increments of "${row}" from two client groups must leave it at 2, got ${count}: a committed write was lost to the other group's concurrent commit`
+        false,
+        Option.isSome(failure)
+          ? `Backend failed unexpectedly: ${failure.value.message}`
+          : `${countUp.name} finished without reaching park(): its handler must call BackendContract.park between its read and its write`
       );
-    });
+    }
 
-    yield* run().pipe(
-      Effect.ensuring(
-        Effect.sync(() => MutableHashMap.remove(parkGates, gate)).pipe(
-          Effect.andThen(Deferred.succeed(parked.release, undefined))
-        )
+    const peerDone = yield* Deferred.make<void>();
+    const second = yield* Effect.forkChild(
+      retryTransient(h.backend.applyMutations(peer, [increment(h.peerStart + 1, NO_GATE)])).pipe(
+        Effect.ensuring(Deferred.succeed(peerDone, undefined))
       )
     );
+    const peerSettled = Deferred.isDone(peerDone);
+    yield* Option.getOrElse(h.awaitPeer, () => settleByTurns)(peerSettled);
+    yield* Deferred.succeed(parked.release, undefined);
+    const firstExit = yield* Effect.exit(Fiber.join(first));
+    const peerExit = yield* Effect.exit(Fiber.join(second));
+    const failed = Arr.findFirst(
+      [
+        ["first", firstExit],
+        ["peer", peerExit],
+      ] as const,
+      ([label, exit]) => Option.map(Exit.findErrorOption(exit), (error) => ({ label, error }))
+    );
+    if (Option.isSome(failed)) {
+      return yield* h.check(
+        rule,
+        false,
+        `The ${failed.value.label} increment failed: ${failed.value.error.message}`
+      );
+    }
+
+    const [stored] = yield* h.expectOk(rule, h.backend.getRows(h.context, h.rows, [row]));
+    const count = counterOf(decodeCounter(stored?.value));
+    return yield* h.check(
+      rule,
+      count === 2,
+      `Two increments of "${row}" from two client groups must leave it at 2, got ${count}: a committed write was lost to the other group's concurrent commit`
+    );
   });
+
+  yield* run().pipe(
+    Effect.ensuring(
+      Effect.sync(() => MutableHashMap.remove(parkGates, gate)).pipe(
+        Effect.andThen(Deferred.succeed(parked.release, undefined))
+      )
+    )
+  );
+});
 
 /**
  * 12. Own writes reach getRows. A listing (`evaluate`) may cache a row, and a
@@ -1019,55 +1011,56 @@ const rule11CrossGroupLostUpdate: Rule = (h) =>
  *     omit the row. A backend that caches listed rows and does not bring its cache into
  *     line with its own writes passes rules 1 to 11 and fails here.
  */
-const rule12OwnWritesReachGetRows: Rule = (h) =>
-  Effect.gen(function* () {
-    const { backend, context, check, expectOk, put } = h;
-    const rule = "getRows reflects this backend's own writes to rows a listing has cached";
-    const collection = h.evalRows;
-    const kept = "cached-kept";
-    const gone = "cached-gone";
-    const startId = yield* h.lastIdOf(rule);
-    yield* expectOk(
-      rule,
-      backend.applyMutations(context, [
-        put(startId + 1, collection, kept, { n: 1 }),
-        put(startId + 2, collection, gone, { n: 1 }),
-      ])
-    );
-    const listed = (yield* expectOk(
-      rule,
-      backend.evaluate(context, Subset.make({ collection }))
-    )).map((entry) => entry.id);
-    yield* check(
-      rule,
-      listed.includes(kept) && listed.includes(gone),
-      `The listing must return both seeded rows so the backend can cache them, got ${Json.show(listed)}`
-    );
+const rule12OwnWritesReachGetRows: Rule = Effect.fn(
+  "legation/BackendContract.rule12OwnWritesReachGetRows"
+)(function* (h) {
+  const { backend, context, check, expectOk, put } = h;
+  const rule = "getRows reflects this backend's own writes to rows a listing has cached";
+  const collection = h.evalRows;
+  const kept = "cached-kept";
+  const gone = "cached-gone";
+  const startId = yield* h.lastIdOf(rule);
+  yield* expectOk(
+    rule,
+    backend.applyMutations(context, [
+      put(startId + 1, collection, kept, { n: 1 }),
+      put(startId + 2, collection, gone, { n: 1 }),
+    ])
+  );
+  const listed = (yield* expectOk(
+    rule,
+    backend.evaluate(context, Subset.make({ collection }))
+  )).map((entry) => entry.id);
+  yield* check(
+    rule,
+    listed.includes(kept) && listed.includes(gone),
+    `The listing must return both seeded rows so the backend can cache them, got ${Json.show(listed)}`
+  );
 
-    yield* expectOk(
-      rule,
-      backend.applyMutations(context, [put(startId + 3, collection, kept, { n: 2 })])
-    );
-    const [updated] = yield* expectOk(rule, backend.getRows(context, collection, [kept]));
-    yield* check(
-      rule,
-      counterOf(decodeCounter(updated?.value)) === 2,
-      `An update must show in getRows without a re-list: row "${kept}" reads ${Json.show(updated?.value)}`
-    );
+  yield* expectOk(
+    rule,
+    backend.applyMutations(context, [put(startId + 3, collection, kept, { n: 2 })])
+  );
+  const [updated] = yield* expectOk(rule, backend.getRows(context, collection, [kept]));
+  yield* check(
+    rule,
+    counterOf(decodeCounter(updated?.value)) === 2,
+    `An update must show in getRows without a re-list: row "${kept}" reads ${Json.show(updated?.value)}`
+  );
 
-    yield* expectOk(
-      rule,
-      backend.applyMutations(context, [
-        h.mutation(startId + 4, delRow.name, { collection, id: gone }),
-      ])
-    );
-    const removed = yield* expectOk(rule, backend.getRows(context, collection, [gone]));
-    yield* check(
-      rule,
-      Arr.isReadonlyArrayEmpty(removed),
-      `A delete must make getRows omit the row without a re-list: row "${gone}" still reads ${Json.show(removed[0]?.value)}`
-    );
-  });
+  yield* expectOk(
+    rule,
+    backend.applyMutations(context, [
+      h.mutation(startId + 4, delRow.name, { collection, id: gone }),
+    ])
+  );
+  const removed = yield* expectOk(rule, backend.getRows(context, collection, [gone]));
+  yield* check(
+    rule,
+    Arr.isReadonlyArrayEmpty(removed),
+    `A delete must make getRows omit the row without a re-list: row "${gone}" still reads ${Json.show(removed[0]?.value)}`
+  );
+});
 
 /**
  * 13. Rejection memory: a permanent rejection is listed by `rejections`, with
@@ -1075,8 +1068,8 @@ const rule12OwnWritesReachGetRows: Rule = (h) =>
  *     covers it can report it. A client whose push response was lost
  *     learns the outcome from that list.
  */
-const rule13ListsRejections: Rule = (h) =>
-  Effect.gen(function* () {
+const rule13ListsRejections: Rule = Effect.fn("legation/BackendContract.rule13ListsRejections")(
+  function* (h) {
     const { backend, context, clientId, rows, check, expectOk } = h;
     const rule =
       "lists a permanent rejection, with the reason applyMutations reported, in rejections";
@@ -1104,7 +1097,8 @@ const rule13ListsRejections: Rule = (h) =>
       ),
       `A permanent rejection must be listed by rejections with the reason applyMutations reported (${Json.show(reported?.reason)}), got ${Json.show(listed)}`
     );
-  });
+  }
+);
 
 /**
  * 14. `evaluateMany`, when the backend provides it, equals per-subset
@@ -1176,30 +1170,31 @@ const checkNoneForNone = (
     )
   );
 
-const rule14EvaluateManyEquivalence: Rule = (h) =>
-  Effect.gen(function* () {
-    const many = h.backend.evaluateMany;
-    if (many === undefined) return;
-    const rule = "evaluateMany equals per-subset evaluate";
-    const subsets = yield* batchSubsets(h);
-    const batched = yield* h.expectOk(rule, many(h.context, subsets));
-    yield* checkOnePerSubset(h, rule, subsets, batched, "entry lists");
-    yield* Effect.forEach(
-      subsets,
-      (subset, index) =>
-        Effect.gen(function* () {
-          const single = yield* h.expectOk(rule, h.backend.evaluate(h.context, subset));
-          const together = batched[index] ?? [];
-          yield* h.check(
-            rule,
-            sameEntries(together, single),
-            `Subset ${index} over "${subset.collection}": evaluate gave [${describeEntries(single)}], evaluateMany gave [${describeEntries(together)}]`
-          );
-        }),
-      { concurrency: 1, discard: true }
-    );
-    yield* checkNoneForNone(h, rule, "evaluateMany", many(h.context, []));
-  });
+const rule14EvaluateManyEquivalence: Rule = Effect.fn(
+  "legation/BackendContract.rule14EvaluateManyEquivalence"
+)(function* (h) {
+  const many = h.backend.evaluateMany;
+  if (many === undefined) return;
+  const rule = "evaluateMany equals per-subset evaluate";
+  const subsets = yield* batchSubsets(h);
+  const batched = yield* h.expectOk(rule, many(h.context, subsets));
+  yield* checkOnePerSubset(h, rule, subsets, batched, "entry lists");
+  yield* Effect.forEach(
+    subsets,
+    (subset, index) =>
+      Effect.gen(function* () {
+        const single = yield* h.expectOk(rule, h.backend.evaluate(h.context, subset));
+        const together = batched[index] ?? [];
+        yield* h.check(
+          rule,
+          sameEntries(together, single),
+          `Subset ${index} over "${subset.collection}": evaluate gave [${describeEntries(single)}], evaluateMany gave [${describeEntries(together)}]`
+        );
+      }),
+    { concurrency: 1, discard: true }
+  );
+  yield* checkNoneForNone(h, rule, "evaluateMany", many(h.context, []));
+});
 
 /**
  * 15. `evaluateCounted`, when the backend provides it, answers rule 14's
@@ -1210,39 +1205,40 @@ const rule14EvaluateManyEquivalence: Rule = (h) =>
  *     no subsets gives no answers. A backend without `evaluateCounted` passes
  *     vacuously: a pull then carries no totals.
  */
-const rule15EvaluateCountedTotals: Rule = (h) =>
-  Effect.gen(function* () {
-    const counted = h.backend.evaluateCounted;
-    if (counted === undefined) return;
-    const rule = "evaluateCounted equals evaluate, with the unwindowed total";
-    const subsets = yield* batchSubsets(h);
-    const answers = yield* h.expectOk(rule, counted(h.context, subsets));
-    yield* checkOnePerSubset(h, rule, subsets, answers, "answers");
-    yield* Effect.forEach(
-      subsets,
-      (subset, index) =>
-        Effect.gen(function* () {
-          const single = yield* h.expectOk(rule, h.backend.evaluate(h.context, subset));
-          const whole = yield* h.expectOk(
-            rule,
-            h.backend.evaluate(h.context, Subset.unwindowed(subset))
-          );
-          const answer = answers[index];
-          yield* h.check(
-            rule,
-            answer !== undefined && sameEntries(answer.entries, single),
-            `Subset ${index} over "${subset.collection}": evaluate gave [${describeEntries(single)}], evaluateCounted gave [${describeEntries(answer?.entries ?? [])}]`
-          );
-          yield* h.check(
-            rule,
-            answer?.total === whole.length,
-            `Subset ${index} over "${subset.collection}": its where matches ${whole.length} rows, evaluateCounted reported a total of ${answer?.total}`
-          );
-        }),
-      { concurrency: 1, discard: true }
-    );
-    yield* checkNoneForNone(h, rule, "evaluateCounted", counted(h.context, []));
-  });
+const rule15EvaluateCountedTotals: Rule = Effect.fn(
+  "legation/BackendContract.rule15EvaluateCountedTotals"
+)(function* (h) {
+  const counted = h.backend.evaluateCounted;
+  if (counted === undefined) return;
+  const rule = "evaluateCounted equals evaluate, with the unwindowed total";
+  const subsets = yield* batchSubsets(h);
+  const answers = yield* h.expectOk(rule, counted(h.context, subsets));
+  yield* checkOnePerSubset(h, rule, subsets, answers, "answers");
+  yield* Effect.forEach(
+    subsets,
+    (subset, index) =>
+      Effect.gen(function* () {
+        const single = yield* h.expectOk(rule, h.backend.evaluate(h.context, subset));
+        const whole = yield* h.expectOk(
+          rule,
+          h.backend.evaluate(h.context, Subset.unwindowed(subset))
+        );
+        const answer = answers[index];
+        yield* h.check(
+          rule,
+          answer !== undefined && sameEntries(answer.entries, single),
+          `Subset ${index} over "${subset.collection}": evaluate gave [${describeEntries(single)}], evaluateCounted gave [${describeEntries(answer?.entries ?? [])}]`
+        );
+        yield* h.check(
+          rule,
+          answer?.total === whole.length,
+          `Subset ${index} over "${subset.collection}": its where matches ${whole.length} rows, evaluateCounted reported a total of ${answer?.total}`
+        );
+      }),
+    { concurrency: 1, discard: true }
+  );
+  yield* checkNoneForNone(h, rule, "evaluateCounted", counted(h.context, []));
+});
 
 /** The contract, in the order the rules build on one another's state. */
 const rules: ReadonlyArray<Rule> = [

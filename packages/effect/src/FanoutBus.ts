@@ -63,8 +63,8 @@ export interface MakeOptions {
 }
 
 /** Build the bus; the lease heartbeat runs until the scope closes. */
-export const make = (options: MakeOptions): Effect.Effect<InvalidationBus, never, Scope.Scope> =>
-  Effect.gen(function* () {
+export const make: (options: MakeOptions) => Effect.Effect<InvalidationBus, never, Scope.Scope> =
+  Effect.fn("legation/FanoutBus.make")(function* (options) {
     const derivable = FanoutTopics.derivableSets(options.nodes);
     const heartbeat = options.heartbeat ?? "10 seconds";
     const ttl = options.ttl ?? Duration.times(Duration.fromInputUnsafe(heartbeat), 3);

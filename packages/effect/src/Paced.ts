@@ -162,28 +162,27 @@ interface Entry {
  * caller's own bookkeeping (not the engine's): each Paced instance tracks
  * only the ids *it* journaled, so it only ever asks to drop its own entries.
  */
-const flush = (
+const flush = Effect.fnUntraced(function* (
   engine: ClientEngine,
   mutator: string,
   lastIdByKey: Tracker,
   key: string,
   args: unknown
-): Effect.Effect<void, MutatorError | StoreError> =>
-  Effect.gen(function* () {
-    track(engine, lastIdByKey);
-    // Journaling and remembering the id are one uninterruptible step: an
-    // interrupt between them would leave an entry no tracker
-    // knows, which a later compaction could renumber without anyone noticing.
-    const previous = yield* Effect.uninterruptible(
-      Effect.gen(function* () {
-        const handle = yield* engine.mutateWithAck(mutator, args);
-        const before = MutableHashMap.get(lastIdByKey, key);
-        MutableHashMap.set(lastIdByKey, key, handle.mutationId);
-        return before;
-      })
-    );
-    if (Option.isSome(previous)) yield* compact(engine, previous.value);
-  });
+): Effect.fn.Return<void, MutatorError | StoreError> {
+  track(engine, lastIdByKey);
+  // Journaling and remembering the id are one uninterruptible step: an
+  // interrupt between them would leave an entry no tracker
+  // knows, which a later compaction could renumber without anyone noticing.
+  const previous = yield* Effect.uninterruptible(
+    Effect.gen(function* () {
+      const handle = yield* engine.mutateWithAck(mutator, args);
+      const before = MutableHashMap.get(lastIdByKey, key);
+      MutableHashMap.set(lastIdByKey, key, handle.mutationId);
+      return before;
+    })
+  );
+  if (Option.isSome(previous)) yield* compact(engine, previous.value);
+});
 
 /**
  * A background flush (debounce's trailing edge, throttle's periodic tick)
@@ -216,8 +215,8 @@ const flushBackground = (
  * at the cost of a momentary extra journal entry between a call and its
  * compaction.
  */
-export const coalesce = (engine: ClientEngine, mutator: string): Effect.Effect<PacedMutation> =>
-  Effect.gen(function* () {
+export const coalesce: (engine: ClientEngine, mutator: string) => Effect.Effect<PacedMutation> =
+  Effect.fn("legation/Paced.coalesce")(function* (engine, mutator) {
     const lock = yield* Semaphore.make(1);
     const lastIdByKey = MutableHashMap.empty<string, number>();
     const call: PacedMutation["call"] = (key, args) =>
@@ -235,12 +234,12 @@ export const coalesce = (engine: ClientEngine, mutator: string): Effect.Effect<P
  * (leading + trailing) no matter how many calls landed in between — see the
  * module doc for the durability tradeoff this implies.
  */
-export const debounce = (
+export const debounce: (
   engine: ClientEngine,
   mutator: string,
   duration: Duration.Input
-): Effect.Effect<PacedMutation, never, Scope.Scope> =>
-  Effect.gen(function* () {
+) => Effect.Effect<PacedMutation, never, Scope.Scope> = Effect.fn("legation/Paced.debounce")(
+  function* (engine, mutator, duration) {
     const lock = yield* Semaphore.make(1);
     const lastIdByKey = MutableHashMap.empty<string, number>();
     const entries = MutableHashMap.empty<string, Entry>();
@@ -286,7 +285,8 @@ export const debounce = (
       );
 
     return { call };
-  });
+  }
+);
 
 /**
  * Throttle: like {@link debounce}'s leading edge, but the window is never
@@ -295,12 +295,12 @@ export const debounce = (
  * one at the very end), then goes idle once a window elapses with nothing new
  * buffered.
  */
-export const throttle = (
+export const throttle: (
   engine: ClientEngine,
   mutator: string,
   duration: Duration.Input
-): Effect.Effect<PacedMutation, never, Scope.Scope> =>
-  Effect.gen(function* () {
+) => Effect.Effect<PacedMutation, never, Scope.Scope> = Effect.fn("legation/Paced.throttle")(
+  function* (engine, mutator, duration) {
     const lock = yield* Semaphore.make(1);
     const lastIdByKey = MutableHashMap.empty<string, number>();
     const entries = MutableHashMap.empty<string, Entry>();
@@ -351,4 +351,5 @@ export const throttle = (
       );
 
     return { call };
-  });
+  }
+);

@@ -134,15 +134,17 @@ export const make = <E>(handle: MutateHandle<E>): Effect.Effect<UndoManager<E>> 
 
   // Replay a step's members: undo runs the `undo` intents in reverse order,
   // redo runs the `execute` intents in order — the mirror of one another.
-  const replay = (step: Step, direction: "undo" | "redo"): Effect.Effect<void, E> =>
-    Effect.gen(function* () {
-      const ordered = direction === "undo" ? Arr.reverse(step) : step;
-      yield* Effect.forEach(
-        ordered,
-        (entry) => runIntent(direction === "undo" ? entry.undo : entry.execute),
-        { concurrency: 1, discard: true }
-      );
-    });
+  const replay = Effect.fn("legation/Undo.replay")(function* (
+    step: Step,
+    direction: "undo" | "redo"
+  ): Effect.fn.Return<void, E> {
+    const ordered = direction === "undo" ? Arr.reverse(step) : step;
+    yield* Effect.forEach(
+      ordered,
+      (entry) => runIntent(direction === "undo" ? entry.undo : entry.execute),
+      { concurrency: 1, discard: true }
+    );
+  });
 
   return Effect.gen(function* () {
     const history = yield* SubscriptionRef.make<History>(EMPTY_HISTORY);

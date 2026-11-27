@@ -113,46 +113,43 @@ const rowKey = (collection: string, id: string): string => Hash.canonicalJson([c
  * likes), and the order is the window's identity (ADR-0026). A row two subsets
  * share is returned once for each, as before.
  */
-const evaluateRows = (
+const evaluateRows = Effect.fnUntraced(function* (
   backend: Backend,
   context: SyncContext,
   subsets: ReadonlyArray<Subset>
-): Effect.Effect<ReadonlyArray<ReadRow>, BackendError> =>
-  Effect.gen(function* () {
-    const evaluated = yield* evaluateAll(backend, context, subsets);
-    const idsOf = (index: number): ReadonlyArray<string> =>
-      (evaluated[index] ?? []).map((entry) => entry.id);
-    const collections = Arr.dedupe(subsets.map((subset) => subset.collection));
-    const fetched = yield* Effect.forEach(
-      collections,
-      (collection) =>
-        backend
-          .getRows(
-            context,
-            collection,
-            Arr.dedupe(
-              subsets.flatMap((subset, index) =>
-                subset.collection === collection ? idsOf(index) : []
-              )
+): Effect.fn.Return<ReadonlyArray<ReadRow>, BackendError> {
+  const evaluated = yield* evaluateAll(backend, context, subsets);
+  const idsOf = (index: number): ReadonlyArray<string> =>
+    (evaluated[index] ?? []).map((entry) => entry.id);
+  const collections = Arr.dedupe(subsets.map((subset) => subset.collection));
+  const fetched = yield* Effect.forEach(
+    collections,
+    (collection) =>
+      backend
+        .getRows(
+          context,
+          collection,
+          Arr.dedupe(
+            subsets.flatMap((subset, index) =>
+              subset.collection === collection ? idsOf(index) : []
             )
           )
-          .pipe(Effect.map((rows) => [collection, rows] as const)),
-      { concurrency: 1 }
-    );
-    const byKey = HashMap.fromIterable(
-      fetched.flatMap(([collection, rows]) =>
-        rows.map((row): readonly [string, ReadRow] => [
-          rowKey(collection, row.id),
-          { collection, ...row },
-        ])
-      )
-    );
-    return subsets.flatMap((subset, index) =>
-      idsOf(index).flatMap((id) =>
-        Option.toArray(HashMap.get(byKey, rowKey(subset.collection, id)))
-      )
-    );
-  });
+        )
+        .pipe(Effect.map((rows) => [collection, rows] as const)),
+    { concurrency: 1 }
+  );
+  const byKey = HashMap.fromIterable(
+    fetched.flatMap(([collection, rows]) =>
+      rows.map((row): readonly [string, ReadRow] => [
+        rowKey(collection, row.id),
+        { collection, ...row },
+      ])
+    )
+  );
+  return subsets.flatMap((subset, index) =>
+    idsOf(index).flatMap((id) => Option.toArray(HashMap.get(byKey, rowKey(subset.collection, id))))
+  );
+});
 
 // Evaluate the desired next view: (collection → id → version) per subset.
 // The subsets go to the backend together (`Backend.evaluateAll`), so a
@@ -160,59 +157,58 @@ const evaluateRows = (
 // round trips; one without it is asked per subset.
 // Each subset's total rides beside it: `undefined` when the backend
 // cannot count (`Backend.evaluateCounted` absent).
-const evaluateView = (backend: Backend, context: SyncContext, subsets: ReadonlyArray<Subset>) =>
-  Effect.gen(function* () {
-    const evaluated = yield* evaluateCountedAll(backend, context, subsets);
-    const rows = new Map<string, Map<string, string | number>>();
-    Arr.forEach(subsets, (subset, index) => {
-      const collection = rows.get(subset.collection) ?? new Map<string, string | number>();
-      Arr.forEach(evaluated[index]?.entries ?? [], (entry) => {
-        collection.set(entry.id, entry.version);
-      });
-      rows.set(subset.collection, collection);
+const evaluateView = Effect.fnUntraced(function* (
+  backend: Backend,
+  context: SyncContext,
+  subsets: ReadonlyArray<Subset>
+) {
+  const evaluated = yield* evaluateCountedAll(backend, context, subsets);
+  const rows = new Map<string, Map<string, string | number>>();
+  Arr.forEach(subsets, (subset, index) => {
+    const collection = rows.get(subset.collection) ?? new Map<string, string | number>();
+    Arr.forEach(evaluated[index]?.entries ?? [], (entry) => {
+      collection.set(entry.id, entry.version);
     });
-    const view: Cvr.NextView = { rows };
-    return { view, totals: evaluated.map((answer) => answer.total) };
+    rows.set(subset.collection, collection);
   });
+  const view: Cvr.NextView = { rows };
+  return { view, totals: evaluated.map((answer) => answer.total) };
+});
 
 // Assemble the patch from a CVR diff: a reset clear, then puts (rows fetched
 // per collection) then deletes.
-const assemblePatch = (
+const assemblePatch = Effect.fnUntraced(function* (
   backend: Backend,
   context: SyncContext,
   difference: Cvr.CvrDiff,
   isReset: boolean
-) =>
-  Effect.gen(function* () {
-    const patch: Array<PatchOp> = isReset ? [{ _tag: "Clear" }] : [];
-    const putsByCollection = new Map<string, Array<string>>();
-    Arr.forEach(difference.puts, (put) => {
-      putsByCollection.set(put.collection, [
-        ...(putsByCollection.get(put.collection) ?? []),
-        put.id,
-      ]);
-    });
-    yield* Effect.forEach(
-      putsByCollection,
-      ([collection, ids]) =>
-        Effect.gen(function* () {
-          Arr.forEach(yield* backend.getRows(context, collection, ids), (row) => {
-            patch.push({
-              _tag: "Put",
-              collection,
-              id: row.id,
-              version: row.version,
-              value: row.value,
-            });
-          });
-        }),
-      { concurrency: 1, discard: true }
-    );
-    Arr.forEach(difference.dels, (del) => {
-      patch.push({ _tag: "Del", collection: del.collection, id: del.id });
-    });
-    return patch;
+) {
+  const patch: Array<PatchOp> = isReset ? [{ _tag: "Clear" }] : [];
+  const putsByCollection = new Map<string, Array<string>>();
+  Arr.forEach(difference.puts, (put) => {
+    putsByCollection.set(put.collection, [...(putsByCollection.get(put.collection) ?? []), put.id]);
   });
+  yield* Effect.forEach(
+    putsByCollection,
+    ([collection, ids]) =>
+      Effect.gen(function* () {
+        Arr.forEach(yield* backend.getRows(context, collection, ids), (row) => {
+          patch.push({
+            _tag: "Put",
+            collection,
+            id: row.id,
+            version: row.version,
+            value: row.value,
+          });
+        });
+      }),
+    { concurrency: 1, discard: true }
+  );
+  Arr.forEach(difference.dels, (del) => {
+    patch.push({ _tag: "Del", collection: del.collection, id: del.id });
+  });
+  return patch;
+});
 
 /**
  * ADR-0025's read without its carrier: pull's front half, then
@@ -228,12 +224,12 @@ const assemblePatch = (
  * resolution; a derived REST handler is this behind an HTTP request's —
  * one read path, two carriers.
  */
-export const readSubsets = (
+export const readSubsets: (
   deps: ReadDeps,
   context: SyncContext,
   request: ReadRequest
-): Effect.Effect<ReadonlyArray<ReadRow>, AuthorizationError | BackendError> =>
-  Effect.gen(function* () {
+) => Effect.Effect<ReadonlyArray<ReadRow>, AuthorizationError | BackendError> = Effect.fnUntraced(
+  function* (deps, context, request) {
     yield* Effect.forEach(request.subsets, (subset) => checkFilterable(deps.authPolicy, subset), {
       concurrency: 1,
       discard: true,
@@ -251,7 +247,8 @@ export const readSubsets = (
         evaluateRows(backend, context, authorized)
       )
     );
-  });
+  }
+);
 
 /**
  * The **total** of a read's root subset: how many rows its `where`
@@ -263,12 +260,12 @@ export const readSubsets = (
  * This is what the derived REST handler writes as `meta.total`, so it matches
  * the total a pull reports for the same subscription.
  */
-export const readTotal = (
+export const readTotal: (
   deps: ReadDeps,
   context: SyncContext,
   subset: Subset
-): Effect.Effect<number, AuthorizationError | BackendError> =>
-  Effect.gen(function* () {
+) => Effect.Effect<number, AuthorizationError | BackendError> = Effect.fnUntraced(
+  function* (deps, context, subset) {
     yield* checkFilterable(deps.authPolicy, subset);
     const request: ReadRequest = { clientGroupId: context.clientGroupId, subsets: [subset] };
     const onRead = deps.middleware?.onRead;
@@ -282,7 +279,8 @@ export const readTotal = (
       Effect.flatMap(forRequest(deps.backend), (backend) => totalsOf(backend, context, authorized))
     );
     return totals.reduce((sum, total) => sum + total, 0);
-  });
+  }
+);
 
 /**
  * Server construction options. Both default to today's behaviour: an
@@ -480,592 +478,580 @@ export interface ServerHandlerWithIntrospection {
 }
 
 /** Build the ServerHandler together with its introspection view (with options). */
-export const makeWithIntrospectionWith = (
+export const makeWithIntrospectionWith: (
   options?: SyncServerOptions
-): Effect.Effect<
+) => Effect.Effect<
   ServerHandlerWithIntrospection,
   never,
   Backend | AuthPolicy | Cvr.CvrStore | InvalidationBus | Scope.Scope
-> =>
-  Effect.gen(function* () {
-    const acceptSchemaVersion = options?.acceptSchemaVersion ?? (() => true);
-    const cookieNamespace = options?.cookieNamespace ?? "";
-    // Reject an unsupported schema version up front, before any mutation is
-    // applied or patch computed, so the journal is never poisoned.
-    const checkVersion = (version?: string): Effect.Effect<void, VersionNotSupportedError> =>
-      acceptSchemaVersion(version)
-        ? Effect.void
-        : Effect.fail(
-            new VersionNotSupportedError({
-              schemaVersion: version,
-              message: `Schema version ${version ?? "(unset)"} is not supported by this server`,
-            })
-          );
-    // The configured backend. Each push, pull and read runs against `forRequest`'s
-    // acquisition of it, one per request; everything else here is per server.
-    const configured = yield* Backend;
-    const authPolicy = yield* AuthPolicy;
-    const cvrStore = yield* Cvr.CvrStore;
-    const bus = yield* InvalidationBus;
-    const middleware = (yield* Effect.serviceOption(SyncMiddleware)).pipe((option) =>
-      Option.isSome(option) ? option.value : passthroughMiddleware
-    );
-    // Optional: resolve named-query subscriptions to subsets (Query.ts).
-    const resolverOption = yield* Effect.serviceOption(Query.QueryResolver);
-    // Optional: resolve the request's identity onto SyncContext.identity.
-    const identityOption = yield* Effect.serviceOption(IdentityResolver);
+> = Effect.fn("legation/SyncServer.makeWithIntrospectionWith")(function* (options) {
+  const acceptSchemaVersion = options?.acceptSchemaVersion ?? (() => true);
+  const cookieNamespace = options?.cookieNamespace ?? "";
+  // Reject an unsupported schema version up front, before any mutation is
+  // applied or patch computed, so the journal is never poisoned.
+  const checkVersion = (version?: string): Effect.Effect<void, VersionNotSupportedError> =>
+    acceptSchemaVersion(version)
+      ? Effect.void
+      : Effect.fail(
+          new VersionNotSupportedError({
+            schemaVersion: version,
+            message: `Schema version ${version ?? "(unset)"} is not supported by this server`,
+          })
+        );
+  // The configured backend. Each push, pull and read runs against `forRequest`'s
+  // acquisition of it, one per request; everything else here is per server.
+  const configured = yield* Backend;
+  const authPolicy = yield* AuthPolicy;
+  const cvrStore = yield* Cvr.CvrStore;
+  const bus = yield* InvalidationBus;
+  const middleware = (yield* Effect.serviceOption(SyncMiddleware)).pipe((option) =>
+    Option.isSome(option) ? option.value : passthroughMiddleware
+  );
+  // Optional: resolve named-query subscriptions to subsets (Query.ts).
+  const resolverOption = yield* Effect.serviceOption(Query.QueryResolver);
+  // Optional: resolve the request's identity onto SyncContext.identity.
+  const identityOption = yield* Effect.serviceOption(IdentityResolver);
 
-    // The request's credentials go to the resolver and nowhere else (ADR-0035):
-    // the SyncContext built here carries the group and the resolved identity only.
-    const contextFor = (
-      clientGroupId: string,
-      handleOptions?: HandleOptions
-    ): Effect.Effect<SyncContext, AuthorizationError> =>
-      resolveContext(identityOption, {
-        clientGroupId,
-        credentials: Option.getOrElse(
-          handleOptions?.credentials ?? Option.none(),
-          () => noCredentials
-        ),
-      });
-
-    const pokeHub = yield* PokeHub.make;
-    // Each session's named-set resolutions, by client group, then by the
-    // set's key: the collection whose scope declares it and its name, so two
-    // collections that declare different sets under one name never share an
-    // entry.
-    const setCache = yield* Ref.make(HashMap.empty<string, SessionSets>());
-    const sessionSetsOf = (all: HashMap.HashMap<string, SessionSets>, clientGroupId: string) =>
-      Option.getOrElse(HashMap.get(all, clientGroupId), () => HashMap.empty<string, CachedSet>());
-    // How many writes each source collection has seen. A resolution that
-    // overlaps a write to its source is cached as stale, so the write's hint,
-    // which found no entry to mark while the resolution was in flight, is not
-    // lost until the set's maxAge passes.
-    const sourceWrites = yield* Ref.make(HashMap.empty<string, number>());
-    const writesTo = (source: string) =>
-      Effect.map(Ref.get(sourceWrites), (counts) =>
-        Option.getOrElse(HashMap.get(counts, source), () => 0)
-      );
-
-    // Bind a named set for a pull, from the session's cache while it is fresh:
-    // not marked stale by a write to its source, and younger than its maxAge.
-    // Otherwise the set is resolved again and cached; a failed resolution binds
-    // nothing (it narrows). Every set bound is recorded in `bound`, which the
-    // pull's scope epoch is computed from.
-    const cachedBinder =
-      (bound: Ref.Ref<HashMap.HashMap<string, BoundSet>>): SetBinder =>
-      (context, collection, name, set) =>
-        Effect.gen(function* () {
-          const now = yield* Clock.currentTimeMillis;
-          const key = setKey(collection, name);
-          // A session's cache holds one identity's resolutions. When the identity
-          // behind the client group changes (a sign-out, another user), every
-          // entry resolved for the previous one is dropped, never served.
-          const identity = Hash.canonicalJson(context.identity ?? null);
-          const sessionSets = sessionSetsOf(yield* Ref.get(setCache), context.clientGroupId);
-          const sameIdentity = HashMap.every(sessionSets, (entry) => entry.identity === identity);
-          const cached = sameIdentity
-            ? Option.getOrUndefined(HashMap.get(sessionSets, key))
-            : undefined;
-          const fresh =
-            cached !== undefined &&
-            !cached.stale &&
-            cached.source === set.source &&
-            now - cached.resolvedAt < cached.maxAgeMillis;
-          const writesBefore = yield* writesTo(set.source);
-          const values = fresh ? cached.values : yield* set.resolve(context).pipe(Effect.option);
-          if (!fresh) {
-            // A write to the source landed while the set resolved: the members may
-            // predate it. Cache them as stale, so the next pull resolves again,
-            // and poke the session, whose windows do not yet lease the source.
-            const overlapped = (yield* writesTo(set.source)) !== writesBefore;
-            const entry: CachedSet = {
-              identity,
-              values,
-              resolvedAt: now,
-              maxAgeMillis: Duration.toMillis(set.maxAge),
-              source: set.source,
-              stale: overlapped,
-            };
-            yield* Ref.update(setCache, (all) => {
-              const current = sessionSetsOf(all, context.clientGroupId);
-              const kept = HashMap.every(current, (other) => other.identity === identity)
-                ? current
-                : HashMap.empty<string, CachedSet>();
-              return HashMap.set(all, context.clientGroupId, HashMap.set(kept, key, entry));
-            });
-            if (overlapped) {
-              yield* pokeHub.publish(context.clientGroupId, { reason: undefined });
-              yield* Metric.update(Telemetry.pokesTotal, 1);
-            }
-          }
-          yield* Ref.update(bound, HashMap.set(key, values));
-          return values;
-        });
-
-    // Mark every cached set whose source a hint touched stale, and return the
-    // client groups that held one, so they are poked: their next pull
-    // resolves the set again, and resets if its members moved.
-    const staleSets = (touched: HashSet.HashSet<string>) =>
-      Ref.modify(
-        setCache,
-        (all): readonly [HashSet.HashSet<string>, HashMap.HashMap<string, SessionSets>] => {
-          const groups = HashSet.fromIterable(
-            HashMap.keys(
-              HashMap.filter(all, (sets) =>
-                HashMap.some(sets, (cached) => HashSet.has(touched, cached.source))
-              )
-            )
-          );
-          const next = HashMap.map(all, (sets) =>
-            HashMap.map(sets, (cached) =>
-              HashSet.has(touched, cached.source) ? { ...cached, stale: true } : cached
-            )
-          );
-          return [groups, HashSet.isEmpty(groups) ? all : next];
-        }
-      );
-    // Record writes to these collections: count them, so a named set
-    // whose resolution overlapped a write is cached as stale, and mark every
-    // cached set over one of them stale. Returns the client groups that held
-    // one, which the fan-out pokes. A push records its own writes before it
-    // answers, so a pull it races can never bind a set's members from before
-    // the write; the fan-out records them again from the hints (idempotent),
-    // which is how another server's writes reach this one.
-    const recordWrites = (sources: HashSet.HashSet<string>) =>
-      Ref.update(sourceWrites, (counts) =>
-        HashSet.reduce(sources, counts, (next, collection) =>
-          HashMap.set(
-            next,
-            collection,
-            Option.getOrElse(HashMap.get(next, collection), () => 0) + 1
-          )
-        )
-      ).pipe(Effect.andThen(staleSets(sources)));
-    // Active subscriptions per client group, for fan-out matching.
-    const activeSubsets = yield* Ref.make(new Map<string, ReadonlyArray<Subset>>());
-    // Each group's last-synced view (collection → id → version), for matching a
-    // delete against the rows a group actually holds.
-    const activeCvrs = yield* Ref.make(new Map<string, Cvr.Cvr>());
-
-    // Monotonic cookie minting, scoped to this handler instead of a module
-    // global. The Clock makes the timestamp injectable (TestClock in tests).
-    const cookieCounter = yield* Ref.make(0);
-    const freshCookie = Effect.fnUntraced(function* () {
-      const now = yield* Clock.currentTimeMillis;
-      const seq = yield* Ref.updateAndGet(cookieCounter, (n) => n + 1);
-      const body = `cvr-${now}-${seq}`;
-      // Tag the cookie with the fleet namespace so a later namespace bump makes
-      // every pre-bump cookie unknown → a reset patch on its next pull.
-      return cookieNamespace === "" ? body : `${cookieNamespace}${COOKIE_NAMESPACE_SEP}${body}`;
+  // The request's credentials go to the resolver and nowhere else (ADR-0035):
+  // the SyncContext built here carries the group and the resolved identity only.
+  const contextFor = (
+    clientGroupId: string,
+    handleOptions?: HandleOptions
+  ): Effect.Effect<SyncContext, AuthorizationError> =>
+    resolveContext(identityOption, {
+      clientGroupId,
+      credentials: Option.getOrElse(
+        handleOptions?.credentials ?? Option.none(),
+        () => noCredentials
+      ),
     });
 
-    // Fan-out loop: hints → poke each group some hinted change plausibly
-    // affects. A group the collection-level match would poke but predicate
-    // matching rules out is suppressed (counted, never dropped for
-    // correctness). Poke-then-pull; correctness never depends on it.
-    // Subscribing before `make` returns guarantees the loop sees every hint
-    // published after construction, even ones racing the forked fiber's start.
-    // The exception is a Redis Streams broker while Redis is unreachable, which
-    // may miss a publish that races `subscribe`; a hint so missed only delays the
-    // next pull.
-    const hintSubscription = yield* bus.subscribe;
-    yield* Effect.forkScoped(
-      Effect.forever(
-        hintSubscription.take.pipe(
-          Effect.flatMap((hints) =>
-            Effect.gen(function* () {
-              const start = yield* Clock.currentTimeMillis;
-              const touched = new Set(hints.map((hint) => hint.collection));
-              const groups = yield* Ref.get(activeSubsets);
-              const cvrs = yield* Ref.get(activeCvrs);
-              // A write to a named set's source may move the set: those
-              // sessions are poked whatever their windows hold.
-              const scoped = yield* recordWrites(HashSet.fromIterable(touched));
-              yield* Effect.forEach(
-                groups,
-                ([clientGroupId, subsets]) =>
-                  Effect.gen(function* () {
-                    if (HashSet.has(scoped, clientGroupId)) {
-                      yield* pokeHub.publish(clientGroupId, { reason: undefined });
-                      yield* Metric.update(Telemetry.pokesTotal, 1);
-                      return;
-                    }
-                    if (!collectionMatch(touched, subsets)) return;
-                    if (
-                      predicateMatch(
-                        hints,
-                        subsets,
-                        Option.fromUndefinedOr(cvrs.get(clientGroupId))
-                      )
-                    ) {
-                      yield* pokeHub.publish(clientGroupId, { reason: undefined });
-                      yield* Metric.update(Telemetry.pokesTotal, 1);
-                    } else {
-                      yield* Metric.update(Telemetry.pokesSuppressedTotal, 1);
-                    }
-                  }),
-                { concurrency: 1, discard: true }
-              );
-              yield* Metric.update(
-                Telemetry.fanoutLatencyMs,
-                (yield* Clock.currentTimeMillis) - start
-              );
-            })
+  const pokeHub = yield* PokeHub.make;
+  // Each session's named-set resolutions, by client group, then by the
+  // set's key: the collection whose scope declares it and its name, so two
+  // collections that declare different sets under one name never share an
+  // entry.
+  const setCache = yield* Ref.make(HashMap.empty<string, SessionSets>());
+  const sessionSetsOf = (all: HashMap.HashMap<string, SessionSets>, clientGroupId: string) =>
+    Option.getOrElse(HashMap.get(all, clientGroupId), () => HashMap.empty<string, CachedSet>());
+  // How many writes each source collection has seen. A resolution that
+  // overlaps a write to its source is cached as stale, so the write's hint,
+  // which found no entry to mark while the resolution was in flight, is not
+  // lost until the set's maxAge passes.
+  const sourceWrites = yield* Ref.make(HashMap.empty<string, number>());
+  const writesTo = (source: string) =>
+    Effect.map(Ref.get(sourceWrites), (counts) =>
+      Option.getOrElse(HashMap.get(counts, source), () => 0)
+    );
+
+  // Bind a named set for a pull, from the session's cache while it is fresh:
+  // not marked stale by a write to its source, and younger than its maxAge.
+  // Otherwise the set is resolved again and cached; a failed resolution binds
+  // nothing (it narrows). Every set bound is recorded in `bound`, which the
+  // pull's scope epoch is computed from.
+  const cachedBinder =
+    (bound: Ref.Ref<HashMap.HashMap<string, BoundSet>>): SetBinder =>
+    (context, collection, name, set) =>
+      Effect.gen(function* () {
+        const now = yield* Clock.currentTimeMillis;
+        const key = setKey(collection, name);
+        // A session's cache holds one identity's resolutions. When the identity
+        // behind the client group changes (a sign-out, another user), every
+        // entry resolved for the previous one is dropped, never served.
+        const identity = Hash.canonicalJson(context.identity ?? null);
+        const sessionSets = sessionSetsOf(yield* Ref.get(setCache), context.clientGroupId);
+        const sameIdentity = HashMap.every(sessionSets, (entry) => entry.identity === identity);
+        const cached = sameIdentity
+          ? Option.getOrUndefined(HashMap.get(sessionSets, key))
+          : undefined;
+        const fresh =
+          cached !== undefined &&
+          !cached.stale &&
+          cached.source === set.source &&
+          now - cached.resolvedAt < cached.maxAgeMillis;
+        const writesBefore = yield* writesTo(set.source);
+        const values = fresh ? cached.values : yield* set.resolve(context).pipe(Effect.option);
+        if (!fresh) {
+          // A write to the source landed while the set resolved: the members may
+          // predate it. Cache them as stale, so the next pull resolves again,
+          // and poke the session, whose windows do not yet lease the source.
+          const overlapped = (yield* writesTo(set.source)) !== writesBefore;
+          const entry: CachedSet = {
+            identity,
+            values,
+            resolvedAt: now,
+            maxAgeMillis: Duration.toMillis(set.maxAge),
+            source: set.source,
+            stale: overlapped,
+          };
+          yield* Ref.update(setCache, (all) => {
+            const current = sessionSetsOf(all, context.clientGroupId);
+            const kept = HashMap.every(current, (other) => other.identity === identity)
+              ? current
+              : HashMap.empty<string, CachedSet>();
+            return HashMap.set(all, context.clientGroupId, HashMap.set(kept, key, entry));
+          });
+          if (overlapped) {
+            yield* pokeHub.publish(context.clientGroupId, { reason: undefined });
+            yield* Metric.update(Telemetry.pokesTotal, 1);
+          }
+        }
+        yield* Ref.update(bound, HashMap.set(key, values));
+        return values;
+      });
+
+  // Mark every cached set whose source a hint touched stale, and return the
+  // client groups that held one, so they are poked: their next pull
+  // resolves the set again, and resets if its members moved.
+  const staleSets = (touched: HashSet.HashSet<string>) =>
+    Ref.modify(
+      setCache,
+      (all): readonly [HashSet.HashSet<string>, HashMap.HashMap<string, SessionSets>] => {
+        const groups = HashSet.fromIterable(
+          HashMap.keys(
+            HashMap.filter(all, (sets) =>
+              HashMap.some(sets, (cached) => HashSet.has(touched, cached.source))
+            )
           )
+        );
+        const next = HashMap.map(all, (sets) =>
+          HashMap.map(sets, (cached) =>
+            HashSet.has(touched, cached.source) ? { ...cached, stale: true } : cached
+          )
+        );
+        return [groups, HashSet.isEmpty(groups) ? all : next];
+      }
+    );
+  // Record writes to these collections: count them, so a named set
+  // whose resolution overlapped a write is cached as stale, and mark every
+  // cached set over one of them stale. Returns the client groups that held
+  // one, which the fan-out pokes. A push records its own writes before it
+  // answers, so a pull it races can never bind a set's members from before
+  // the write; the fan-out records them again from the hints (idempotent),
+  // which is how another server's writes reach this one.
+  const recordWrites = (sources: HashSet.HashSet<string>) =>
+    Ref.update(sourceWrites, (counts) =>
+      HashSet.reduce(sources, counts, (next, collection) =>
+        HashMap.set(next, collection, Option.getOrElse(HashMap.get(next, collection), () => 0) + 1)
+      )
+    ).pipe(Effect.andThen(staleSets(sources)));
+  // Active subscriptions per client group, for fan-out matching.
+  const activeSubsets = yield* Ref.make(new Map<string, ReadonlyArray<Subset>>());
+  // Each group's last-synced view (collection → id → version), for matching a
+  // delete against the rows a group actually holds.
+  const activeCvrs = yield* Ref.make(new Map<string, Cvr.Cvr>());
+
+  // Monotonic cookie minting, scoped to this handler instead of a module
+  // global. The Clock makes the timestamp injectable (TestClock in tests).
+  const cookieCounter = yield* Ref.make(0);
+  const freshCookie = Effect.fnUntraced(function* () {
+    const now = yield* Clock.currentTimeMillis;
+    const seq = yield* Ref.updateAndGet(cookieCounter, (n) => n + 1);
+    const body = `cvr-${now}-${seq}`;
+    // Tag the cookie with the fleet namespace so a later namespace bump makes
+    // every pre-bump cookie unknown → a reset patch on its next pull.
+    return cookieNamespace === "" ? body : `${cookieNamespace}${COOKIE_NAMESPACE_SEP}${body}`;
+  });
+
+  // Fan-out loop: hints → poke each group some hinted change plausibly
+  // affects. A group the collection-level match would poke but predicate
+  // matching rules out is suppressed (counted, never dropped for
+  // correctness). Poke-then-pull; correctness never depends on it.
+  // Subscribing before `make` returns guarantees the loop sees every hint
+  // published after construction, even ones racing the forked fiber's start.
+  // The exception is a Redis Streams broker while Redis is unreachable, which
+  // may miss a publish that races `subscribe`; a hint so missed only delays the
+  // next pull.
+  const hintSubscription = yield* bus.subscribe;
+  yield* Effect.forkScoped(
+    Effect.forever(
+      hintSubscription.take.pipe(
+        Effect.flatMap((hints) =>
+          Effect.gen(function* () {
+            const start = yield* Clock.currentTimeMillis;
+            const touched = new Set(hints.map((hint) => hint.collection));
+            const groups = yield* Ref.get(activeSubsets);
+            const cvrs = yield* Ref.get(activeCvrs);
+            // A write to a named set's source may move the set: those
+            // sessions are poked whatever their windows hold.
+            const scoped = yield* recordWrites(HashSet.fromIterable(touched));
+            yield* Effect.forEach(
+              groups,
+              ([clientGroupId, subsets]) =>
+                Effect.gen(function* () {
+                  if (HashSet.has(scoped, clientGroupId)) {
+                    yield* pokeHub.publish(clientGroupId, { reason: undefined });
+                    yield* Metric.update(Telemetry.pokesTotal, 1);
+                    return;
+                  }
+                  if (!collectionMatch(touched, subsets)) return;
+                  if (
+                    predicateMatch(hints, subsets, Option.fromUndefinedOr(cvrs.get(clientGroupId)))
+                  ) {
+                    yield* pokeHub.publish(clientGroupId, { reason: undefined });
+                    yield* Metric.update(Telemetry.pokesTotal, 1);
+                  } else {
+                    yield* Metric.update(Telemetry.pokesSuppressedTotal, 1);
+                  }
+                }),
+              { concurrency: 1, discard: true }
+            );
+            yield* Metric.update(
+              Telemetry.fanoutLatencyMs,
+              (yield* Clock.currentTimeMillis) - start
+            );
+          })
         )
       )
+    )
+  );
+
+  const handlePush = (
+    request: PushRequest,
+    handleOptions?: HandleOptions
+  ): Effect.Effect<PushResponse, TransportError | VersionNotSupportedError> =>
+    checkVersion(request.schemaVersion).pipe(
+      Effect.andThen(
+        Effect.gen(function* () {
+          const context = yield* contextFor(request.clientGroupId, handleOptions);
+          const checked = yield* middleware.onPush(context, request);
+          // The push's one acquisition, opened after the middleware so a
+          // refused push opens none: `applyMutations` is one transaction, so its
+          // mutation-id claims and the handlers' writes share its connection.
+          const backend = yield* forRequest(configured);
+          // The commit and the fan-out of its hints are one uninterruptible
+          // region: an interrupt landing after the backend commits must
+          // not skip the publish, because a replayed retry carries no hints and
+          // would never repair the loss. The Backend contract cannot tell
+          // "committed" from "not yet", so the whole applyMutations call is
+          // protected. Trade-off: a slow applyMutations cannot be cancelled
+          // mid-push; an interrupt waits for the commit and its publish. The
+          // publish's broker I/O is uninterruptible too, but every broker call is
+          // bounded, so a hung broker drops its poke instead of holding the region
+          // open: the FanoutBus (its publish and lease registration), the Durable
+          // Object shard calls (DurableFanoutBroker), the Redis broker's XADD, and
+          // the publish of a custom BusBroker under makeSerialized each take a
+          // `timeout` (default 5 seconds). Middleware
+          // above stays interruptible, since nothing has been committed there.
+          const result = yield* Effect.uninterruptible(
+            backend
+              .applyMutations(context, checked.mutations)
+              .pipe(
+                Effect.tap((applied) =>
+                  recordWrites(
+                    HashSet.fromIterable(applied.hints.map((hint) => hint.collection))
+                  ).pipe(Effect.andThen(bus.publish(applied.hints)))
+                )
+              )
+          );
+          return {
+            lastMutationIds: result.lastMutationIds,
+            ...Defined.fields({
+              rejected:
+                result.rejected !== undefined && Arr.isReadonlyArrayNonEmpty(result.rejected)
+                  ? result.rejected
+                  : undefined,
+            }),
+          };
+        }).pipe(Effect.scoped, Effect.mapError(asTransportError))
+      ),
+      Effect.withSpan(Telemetry.span.serverPush)
     );
 
-    const handlePush = (
-      request: PushRequest,
-      handleOptions?: HandleOptions
-    ): Effect.Effect<PushResponse, TransportError | VersionNotSupportedError> =>
-      checkVersion(request.schemaVersion).pipe(
-        Effect.andThen(
-          Effect.gen(function* () {
-            const context = yield* contextFor(request.clientGroupId, handleOptions);
-            const checked = yield* middleware.onPush(context, request);
-            // The push's one acquisition, opened after the middleware so a
-            // refused push opens none: `applyMutations` is one transaction, so its
-            // mutation-id claims and the handlers' writes share its connection.
-            const backend = yield* forRequest(configured);
-            // The commit and the fan-out of its hints are one uninterruptible
-            // region: an interrupt landing after the backend commits must
-            // not skip the publish, because a replayed retry carries no hints and
-            // would never repair the loss. The Backend contract cannot tell
-            // "committed" from "not yet", so the whole applyMutations call is
-            // protected. Trade-off: a slow applyMutations cannot be cancelled
-            // mid-push; an interrupt waits for the commit and its publish. The
-            // publish's broker I/O is uninterruptible too, but every broker call is
-            // bounded, so a hung broker drops its poke instead of holding the region
-            // open: the FanoutBus (its publish and lease registration), the Durable
-            // Object shard calls (DurableFanoutBroker), the Redis broker's XADD, and
-            // the publish of a custom BusBroker under makeSerialized each take a
-            // `timeout` (default 5 seconds). Middleware
-            // above stays interruptible, since nothing has been committed there.
-            const result = yield* Effect.uninterruptible(
-              backend
-                .applyMutations(context, checked.mutations)
-                .pipe(
-                  Effect.tap((applied) =>
-                    recordWrites(
-                      HashSet.fromIterable(applied.hints.map((hint) => hint.collection))
-                    ).pipe(Effect.andThen(bus.publish(applied.hints)))
-                  )
-                )
-            );
-            return {
-              lastMutationIds: result.lastMutationIds,
-              ...Defined.fields({
-                rejected:
-                  result.rejected !== undefined && Arr.isReadonlyArrayNonEmpty(result.rejected)
-                    ? result.rejected
-                    : undefined,
-              }),
-            };
-          }).pipe(Effect.scoped, Effect.mapError(asTransportError))
-        ),
-        Effect.withSpan(Telemetry.span.serverPush)
-      );
+  // Resolve a named subscription to a subset, or fail if no resolver is set.
+  const resolveNamed = (
+    context: SyncContext,
+    named: { readonly name: string; readonly args: unknown }
+  ) =>
+    Option.isNone(resolverOption)
+      ? new TransportError({
+          message: `No QueryResolver registered for named subscription "${named.name}"`,
+        })
+      : resolverOption.value.resolve(named.name, named.args, context);
 
-    // Resolve a named subscription to a subset, or fail if no resolver is set.
-    const resolveNamed = (
-      context: SyncContext,
-      named: { readonly name: string; readonly args: unknown }
-    ) =>
-      Option.isNone(resolverOption)
-        ? new TransportError({
-            message: `No QueryResolver registered for named subscription "${named.name}"`,
-          })
-        : resolverOption.value.resolve(named.name, named.args, context);
-
-    // The filterable set is checked against the client's OWN text —
-    // the request as it arrived, before middleware may rewrite it — so what
-    // a tenancy middleware ANDs in (a scoping key, an `Exists`) stays
-    // server-authored, like the auth filter and a named query's resolution.
-    const checkClientSubsets = (
-      subsets: ReadonlyArray<Subset>
-    ): Effect.Effect<void, AuthorizationError> =>
-      Effect.forEach(subsets, (subset) => checkFilterable(authPolicy, subset), {
-        concurrency: 1,
-        discard: true,
-      });
-
-    // Authorize middleware-checked subsets and server-resolved named queries
-    // alike: AND each with its collection's mandatory filter. Both are
-    // server-authored by now (the client's text was checked above), so
-    // `authorize` narrows without re-checking.
-    const authorizeAll = (
-      context: SyncContext,
-      request: PullRequest,
-      bindSet: SetBinder
-    ): Effect.Effect<ReadonlyArray<Subset>, AuthorizationError | TransportError | QueryError> =>
-      Effect.gen(function* () {
-        const direct = yield* Effect.forEach(
-          request.subscriptions,
-          (subset) => authorize(authPolicy, context, subset, "server", bindSet),
-          { concurrency: 1 }
-        );
-        const named = yield* Effect.forEach(
-          request.namedSubscriptions ?? [],
-          (entry) =>
-            Effect.gen(function* () {
-              return yield* authorize(
-                authPolicy,
-                context,
-                yield* resolveNamed(context, entry),
-                "server",
-                bindSet
-              );
-            }),
-          { concurrency: 1 }
-        );
-        return [...direct, ...named];
-      });
-
-    // Resolve the CVR the presented cookie names. A cookie minted under a
-    // different fleet namespace (a bumped deploy) is treated as unknown, so the
-    // pull degrades to a reset patch exactly as an unrecognised cookie does.
-    // So is a cookie minted under another scope epoch: its CVR was
-    // computed under another scope, so no patch is computed against it, and a
-    // narrowed scope can never leave a row behind on the client.
-    const resolvePrevious = (
-      cookie: Option.Option<string>,
-      epoch: string
-    ): Effect.Effect<Option.Option<Cvr.Cvr>, StoreError> => {
-      if (Option.isNone(cookie)) return Effect.succeedNone;
-      if (cookieNamespaceOf(cookie.value) !== cookieNamespace) return Effect.succeedNone;
-      if (cookieEpochOf(cookie.value) !== epoch) return Effect.succeedNone;
-      return cvrStore.get(cookie.value).pipe(Effect.map(Option.fromUndefinedOr));
-    };
-
-    // How many passes a pull makes over its view before it stops retrying a
-    // moving watermark. A pass only repeats when a push committed during
-    // it, so a bound of 3 is ample under normal load.
-    const PULL_VIEW_ATTEMPTS = 3;
-
-    // One pass over a pull's view: the watermark, the evaluated rows and the
-    // patch, then the watermark again. `consistent` is true when the two
-    // watermarks agree. Writes nothing: the CVR is recorded once, by the caller,
-    // for the view it returns.
-    const readPullOnce = (
-      backend: Backend,
-      context: SyncContext,
-      authorized: ReadonlyArray<Subset>,
-      cookie: Option.Option<string>,
-      epoch: string
-    ) =>
-      Effect.gen(function* () {
-        const before = yield* backend.lastMutationIds(context);
-        const { view: next, totals } = yield* evaluateView(backend, context, authorized);
-        const previous = yield* resolvePrevious(cookie, epoch);
-        const isReset = Option.isSome(cookie) && Option.isNone(previous);
-        const patch = yield* assemblePatch(
-          backend,
-          context,
-          Cvr.diff(
-            Option.getOrElse(previous, () => Cvr.empty),
-            next
-          ),
-          isReset
-        );
-        const after = yield* backend.lastMutationIds(context);
-        return {
-          next,
-          totals,
-          patch,
-          lastMutationIds: after,
-          consistent: sameWatermark(before, after),
-        };
-      });
-
-    // The pull's view as one snapshot, for a backend that meets Backend
-    // guarantee 1: a client's `lastMutationId` bumped in the same commit as its
-    // effects. Then a watermark that reads the same before and after the rows
-    // means no push committed in between: every push the watermark covers is in
-    // the rows, and no push is in the rows without being covered. That is the
-    // invariant the client's overlay relies on to release an acknowledged
-    // mutation without a revert or a double application. A backend that exposes
-    // effects before the bump (MemoryBackend today; SqlBackend on D1)
-    // can still hand a pull an effect its watermark does not cover; this check
-    // cannot see that window.
-    //
-    // A push that lands mid-read moves the watermark, so the view is read again,
-    // up to PULL_VIEW_ATTEMPTS passes. Each pass costs a full evaluation (for
-    // JsonApiBackend, an HTTP list per subset, plus its `getRows` cache refresh,
-    // which is harmless because a pass evaluates before it fetches). If every
-    // pass is disturbed, the last pass's watermark is returned, read after its
-    // patch. It may then cover a push whose effects the patch lacks, which is a
-    // transient revert until the next pull; it never covers less than the patch
-    // carries, so it cannot double-apply.
-    const readPullView = (
-      backend: Backend,
-      context: SyncContext,
-      authorized: ReadonlyArray<Subset>,
-      cookie: Option.Option<string>,
-      epoch: string
-    ) =>
-      Effect.gen(function* () {
-        // Read again while a push commits mid-read, up to PULL_VIEW_ATTEMPTS reads.
-        const read = (
-          attempt: number
-        ): Effect.Effect<
-          Effect.Success<ReturnType<typeof readPullOnce>>,
-          Effect.Error<ReturnType<typeof readPullOnce>>
-        > =>
-          Effect.filterOrElse(
-            readPullOnce(backend, context, authorized, cookie, epoch),
-            (view) => view.consistent || attempt >= PULL_VIEW_ATTEMPTS,
-            () => read(attempt + 1)
-          );
-        const view = yield* read(1);
-        if (!view.consistent) {
-          yield* Effect.logWarning(
-            "SyncServer.handlePull: a push committed on every view pass; returning the watermark read after the patch, so a client may briefly revert an acknowledged mutation",
-            { attempts: PULL_VIEW_ATTEMPTS, clientGroupId: context.clientGroupId }
-          );
-        }
-        return view;
-      });
-
-    const handlePull = (
-      request: PullRequest,
-      handleOptions?: HandleOptions
-    ): Effect.Effect<PullResponse, TransportError | VersionNotSupportedError> =>
-      checkVersion(request.schemaVersion).pipe(
-        Effect.andThen(
-          Effect.gen(function* () {
-            const context = yield* contextFor(request.clientGroupId, handleOptions);
-            yield* checkClientSubsets(request.subscriptions);
-            const checked = yield* middleware.onPull(context, request);
-
-            // The named sets this pull binds, for its scope epoch.
-            const binding = yield* Ref.make(HashMap.empty<string, BoundSet>());
-            const authorized = yield* authorizeAll(context, checked, cachedBinder(binding));
-            const bound = yield* Ref.get(binding);
-            const epoch = scopeEpochOf(bound);
-            // The session holds a lease on each bound set's source as it does on
-            // a window (ADR-0015 amendment): the source's collection rides
-            // with the group's windows, so a room's fan-out registration (from
-            // introspection) leases its topic too.
-            const sources = HashMap.toValues(
-              HashMap.filter(
-                sessionSetsOf(yield* Ref.get(setCache), request.clientGroupId),
-                (_, key) => HashMap.has(bound, key)
-              )
-            ).map((cached) => cached.source);
-            const leased = Arr.dedupe(sources).map((collection) => Subsets.make({ collection }));
-            yield* Ref.update(activeSubsets, (m) =>
-              new Map(m).set(request.clientGroupId, [...authorized, ...leased])
-            );
-
-            // The pull's one acquisition: every pass over its view, and the
-            // rejections read after, go through it.
-            const backend = yield* forRequest(configured);
-            const { next, totals, patch, lastMutationIds } = yield* readPullView(
-              backend,
-              context,
-              authorized,
-              Option.fromUndefinedOr(checked.cookie),
-              epoch
-            );
-
-            // The permanent rejections this pull's watermark covers. A
-            // rejected id is bumped into the watermark, so the client must learn
-            // its outcome here, or it would settle the mutation as applied. Each
-            // rejection is committed with its id's bump, so it is covered once the
-            // watermark reaches the id; the filter keeps the response to that view,
-            // even when a push commits between the watermark read and this one.
-            const rejected = (yield* backend.rejections(context)).filter(
-              (entry) => entry.mutationId <= (lastMutationIds[entry.clientId] ?? 0)
-            );
-
-            const minted = yield* freshCookie();
-            const cookie = epoch === "" ? minted : `${minted}${COOKIE_EPOCH_SEP}${epoch}`;
-            yield* cvrStore.set(cookie, { rows: next.rows });
-            // Track this group's latest view so fan-out can match a delete against
-            // the rows the group actually holds (CVR-precise deletes).
-            yield* Ref.update(activeCvrs, (m) =>
-              new Map(m).set(request.clientGroupId, { rows: next.rows })
-            );
-            yield* Metric.update(Telemetry.patchOps, patch.length);
-            yield* Metric.update(Telemetry.serverPullsTotal, 1);
-            // The client's subscriptions' totals, in its order. `authorized`
-            // holds the direct subscriptions first, one per entry of the request the
-            // middleware returned; when that is not the client's own count, no total
-            // can be placed against the client's list, and none is sent.
-            const direct = totals.slice(0, checked.subscriptions.length);
-            const placed =
-              checked.subscriptions.length === request.subscriptions.length &&
-              Arr.isReadonlyArrayNonEmpty(direct) &&
-              direct.every(P.isNumber)
-                ? direct
-                : undefined;
-            const response: PullResponse = {
-              cookie,
-              patch,
-              lastMutationIds,
-              ...Defined.fields({
-                rejected: Arr.isReadonlyArrayNonEmpty(rejected) ? rejected : undefined,
-              }),
-            };
-            return placed === undefined ? response : { ...response, totals: placed };
-          }).pipe(Effect.scoped, Effect.mapError(asTransportError))
-        ),
-        Effect.withSpan(Telemetry.span.serverPull)
-      );
-
-    // The fallthrough read (ADR-0025): identity, then `readSubsets` — pull's
-    // front half (filterable check, middleware, deny-by-default auth), then
-    // evaluate + fetch. No cookie, no CVR read or write, no lastMutationIds:
-    // a read never perturbs sync state, so the worst it can be is stale
-    // (pull stays the correctness path).
-    const handleRead = (
-      request: ReadRequest,
-      handleOptions?: HandleOptions
-    ): Effect.Effect<ReadResponse, TransportError | VersionNotSupportedError> =>
-      checkVersion(request.schemaVersion).pipe(
-        Effect.andThen(
-          Effect.gen(function* () {
-            const context = yield* contextFor(request.clientGroupId, handleOptions);
-            const rows = yield* readSubsets(
-              { backend: configured, authPolicy, middleware },
-              context,
-              request
-            );
-            return { rows };
-          }).pipe(Effect.mapError(asTransportError))
-        ),
-        Effect.withSpan(Telemetry.span.serverRead)
-      );
-
-    const handler = ServerHandler.of({
-      handlePush,
-      handlePull,
-      handleRead,
-      pokes: (clientGroupId) => pokeHub.subscribe(clientGroupId),
+  // The filterable set is checked against the client's OWN text —
+  // the request as it arrived, before middleware may rewrite it — so what
+  // a tenancy middleware ANDs in (a scoping key, an `Exists`) stays
+  // server-authored, like the auth filter and a named query's resolution.
+  const checkClientSubsets = (
+    subsets: ReadonlyArray<Subset>
+  ): Effect.Effect<void, AuthorizationError> =>
+    Effect.forEach(subsets, (subset) => checkFilterable(authPolicy, subset), {
+      concurrency: 1,
+      discard: true,
     });
 
-    const introspection: ServerIntrospection = {
-      groups: Effect.gen(function* () {
-        const subs = yield* Ref.get(activeSubsets);
-        const cvrs = yield* Ref.get(activeCvrs);
-        const result: Array<ServerGroup> = [];
-        Arr.forEach(subs, ([clientGroupId, subsets]) => {
-          const cvr = cvrs.get(clientGroupId);
-          result.push({ clientGroupId, subsets, cvrSize: cvr === undefined ? 0 : cvrSize(cvr) });
-        });
-        return result;
-      }),
-      pokesPublished: Metric.value(Telemetry.pokesTotal).pipe(Effect.map((state) => state.count)),
-      pokesSuppressed: Metric.value(Telemetry.pokesSuppressedTotal).pipe(
-        Effect.map((state) => state.count)
-      ),
-    };
-
-    return { handler, introspection };
+  // Authorize middleware-checked subsets and server-resolved named queries
+  // alike: AND each with its collection's mandatory filter. Both are
+  // server-authored by now (the client's text was checked above), so
+  // `authorize` narrows without re-checking.
+  const authorizeAll = Effect.fnUntraced(function* (
+    context: SyncContext,
+    request: PullRequest,
+    bindSet: SetBinder
+  ): Effect.fn.Return<ReadonlyArray<Subset>, AuthorizationError | TransportError | QueryError> {
+    const direct = yield* Effect.forEach(
+      request.subscriptions,
+      (subset) => authorize(authPolicy, context, subset, "server", bindSet),
+      { concurrency: 1 }
+    );
+    const named = yield* Effect.forEach(
+      request.namedSubscriptions ?? [],
+      (entry) =>
+        Effect.gen(function* () {
+          return yield* authorize(
+            authPolicy,
+            context,
+            yield* resolveNamed(context, entry),
+            "server",
+            bindSet
+          );
+        }),
+      { concurrency: 1 }
+    );
+    return [...direct, ...named];
   });
+
+  // Resolve the CVR the presented cookie names. A cookie minted under a
+  // different fleet namespace (a bumped deploy) is treated as unknown, so the
+  // pull degrades to a reset patch exactly as an unrecognised cookie does.
+  // So is a cookie minted under another scope epoch: its CVR was
+  // computed under another scope, so no patch is computed against it, and a
+  // narrowed scope can never leave a row behind on the client.
+  const resolvePrevious = (
+    cookie: Option.Option<string>,
+    epoch: string
+  ): Effect.Effect<Option.Option<Cvr.Cvr>, StoreError> => {
+    if (Option.isNone(cookie)) return Effect.succeedNone;
+    if (cookieNamespaceOf(cookie.value) !== cookieNamespace) return Effect.succeedNone;
+    if (cookieEpochOf(cookie.value) !== epoch) return Effect.succeedNone;
+    return cvrStore.get(cookie.value).pipe(Effect.map(Option.fromUndefinedOr));
+  };
+
+  // How many passes a pull makes over its view before it stops retrying a
+  // moving watermark. A pass only repeats when a push committed during
+  // it, so a bound of 3 is ample under normal load.
+  const PULL_VIEW_ATTEMPTS = 3;
+
+  // One pass over a pull's view: the watermark, the evaluated rows and the
+  // patch, then the watermark again. `consistent` is true when the two
+  // watermarks agree. Writes nothing: the CVR is recorded once, by the caller,
+  // for the view it returns.
+  const readPullOnce = Effect.fn("legation/SyncServer.readPullOnce")(function* (
+    backend: Backend,
+    context: SyncContext,
+    authorized: ReadonlyArray<Subset>,
+    cookie: Option.Option<string>,
+    epoch: string
+  ) {
+    const before = yield* backend.lastMutationIds(context);
+    const { view: next, totals } = yield* evaluateView(backend, context, authorized);
+    const previous = yield* resolvePrevious(cookie, epoch);
+    const isReset = Option.isSome(cookie) && Option.isNone(previous);
+    const patch = yield* assemblePatch(
+      backend,
+      context,
+      Cvr.diff(
+        Option.getOrElse(previous, () => Cvr.empty),
+        next
+      ),
+      isReset
+    );
+    const after = yield* backend.lastMutationIds(context);
+    return {
+      next,
+      totals,
+      patch,
+      lastMutationIds: after,
+      consistent: sameWatermark(before, after),
+    };
+  });
+
+  // The pull's view as one snapshot, for a backend that meets Backend
+  // guarantee 1: a client's `lastMutationId` bumped in the same commit as its
+  // effects. Then a watermark that reads the same before and after the rows
+  // means no push committed in between: every push the watermark covers is in
+  // the rows, and no push is in the rows without being covered. That is the
+  // invariant the client's overlay relies on to release an acknowledged
+  // mutation without a revert or a double application. A backend that exposes
+  // effects before the bump (MemoryBackend today; SqlBackend on D1)
+  // can still hand a pull an effect its watermark does not cover; this check
+  // cannot see that window.
+  //
+  // A push that lands mid-read moves the watermark, so the view is read again,
+  // up to PULL_VIEW_ATTEMPTS passes. Each pass costs a full evaluation (for
+  // JsonApiBackend, an HTTP list per subset, plus its `getRows` cache refresh,
+  // which is harmless because a pass evaluates before it fetches). If every
+  // pass is disturbed, the last pass's watermark is returned, read after its
+  // patch. It may then cover a push whose effects the patch lacks, which is a
+  // transient revert until the next pull; it never covers less than the patch
+  // carries, so it cannot double-apply.
+  const readPullView = Effect.fnUntraced(function* (
+    backend: Backend,
+    context: SyncContext,
+    authorized: ReadonlyArray<Subset>,
+    cookie: Option.Option<string>,
+    epoch: string
+  ) {
+    // Read again while a push commits mid-read, up to PULL_VIEW_ATTEMPTS reads.
+    const read = (
+      attempt: number
+    ): Effect.Effect<
+      Effect.Success<ReturnType<typeof readPullOnce>>,
+      Effect.Error<ReturnType<typeof readPullOnce>>
+    > =>
+      Effect.filterOrElse(
+        readPullOnce(backend, context, authorized, cookie, epoch),
+        (view) => view.consistent || attempt >= PULL_VIEW_ATTEMPTS,
+        () => read(attempt + 1)
+      );
+    const view = yield* read(1);
+    if (!view.consistent) {
+      yield* Effect.logWarning(
+        "SyncServer.handlePull: a push committed on every view pass; returning the watermark read after the patch, so a client may briefly revert an acknowledged mutation",
+        { attempts: PULL_VIEW_ATTEMPTS, clientGroupId: context.clientGroupId }
+      );
+    }
+    return view;
+  });
+
+  const handlePull = (
+    request: PullRequest,
+    handleOptions?: HandleOptions
+  ): Effect.Effect<PullResponse, TransportError | VersionNotSupportedError> =>
+    checkVersion(request.schemaVersion).pipe(
+      Effect.andThen(
+        Effect.gen(function* () {
+          const context = yield* contextFor(request.clientGroupId, handleOptions);
+          yield* checkClientSubsets(request.subscriptions);
+          const checked = yield* middleware.onPull(context, request);
+
+          // The named sets this pull binds, for its scope epoch.
+          const binding = yield* Ref.make(HashMap.empty<string, BoundSet>());
+          const authorized = yield* authorizeAll(context, checked, cachedBinder(binding));
+          const bound = yield* Ref.get(binding);
+          const epoch = scopeEpochOf(bound);
+          // The session holds a lease on each bound set's source as it does on
+          // a window (ADR-0015 amendment): the source's collection rides
+          // with the group's windows, so a room's fan-out registration (from
+          // introspection) leases its topic too.
+          const sources = HashMap.toValues(
+            HashMap.filter(
+              sessionSetsOf(yield* Ref.get(setCache), request.clientGroupId),
+              (_, key) => HashMap.has(bound, key)
+            )
+          ).map((cached) => cached.source);
+          const leased = Arr.dedupe(sources).map((collection) => Subsets.make({ collection }));
+          yield* Ref.update(activeSubsets, (m) =>
+            new Map(m).set(request.clientGroupId, [...authorized, ...leased])
+          );
+
+          // The pull's one acquisition: every pass over its view, and the
+          // rejections read after, go through it.
+          const backend = yield* forRequest(configured);
+          const { next, totals, patch, lastMutationIds } = yield* readPullView(
+            backend,
+            context,
+            authorized,
+            Option.fromUndefinedOr(checked.cookie),
+            epoch
+          );
+
+          // The permanent rejections this pull's watermark covers. A
+          // rejected id is bumped into the watermark, so the client must learn
+          // its outcome here, or it would settle the mutation as applied. Each
+          // rejection is committed with its id's bump, so it is covered once the
+          // watermark reaches the id; the filter keeps the response to that view,
+          // even when a push commits between the watermark read and this one.
+          const rejected = (yield* backend.rejections(context)).filter(
+            (entry) => entry.mutationId <= (lastMutationIds[entry.clientId] ?? 0)
+          );
+
+          const minted = yield* freshCookie();
+          const cookie = epoch === "" ? minted : `${minted}${COOKIE_EPOCH_SEP}${epoch}`;
+          yield* cvrStore.set(cookie, { rows: next.rows });
+          // Track this group's latest view so fan-out can match a delete against
+          // the rows the group actually holds (CVR-precise deletes).
+          yield* Ref.update(activeCvrs, (m) =>
+            new Map(m).set(request.clientGroupId, { rows: next.rows })
+          );
+          yield* Metric.update(Telemetry.patchOps, patch.length);
+          yield* Metric.update(Telemetry.serverPullsTotal, 1);
+          // The client's subscriptions' totals, in its order. `authorized`
+          // holds the direct subscriptions first, one per entry of the request the
+          // middleware returned; when that is not the client's own count, no total
+          // can be placed against the client's list, and none is sent.
+          const direct = totals.slice(0, checked.subscriptions.length);
+          const placed =
+            checked.subscriptions.length === request.subscriptions.length &&
+            Arr.isReadonlyArrayNonEmpty(direct) &&
+            direct.every(P.isNumber)
+              ? direct
+              : undefined;
+          const response: PullResponse = {
+            cookie,
+            patch,
+            lastMutationIds,
+            ...Defined.fields({
+              rejected: Arr.isReadonlyArrayNonEmpty(rejected) ? rejected : undefined,
+            }),
+          };
+          return placed === undefined ? response : { ...response, totals: placed };
+        }).pipe(Effect.scoped, Effect.mapError(asTransportError))
+      ),
+      Effect.withSpan(Telemetry.span.serverPull)
+    );
+
+  // The fallthrough read (ADR-0025): identity, then `readSubsets` — pull's
+  // front half (filterable check, middleware, deny-by-default auth), then
+  // evaluate + fetch. No cookie, no CVR read or write, no lastMutationIds:
+  // a read never perturbs sync state, so the worst it can be is stale
+  // (pull stays the correctness path).
+  const handleRead = (
+    request: ReadRequest,
+    handleOptions?: HandleOptions
+  ): Effect.Effect<ReadResponse, TransportError | VersionNotSupportedError> =>
+    checkVersion(request.schemaVersion).pipe(
+      Effect.andThen(
+        Effect.gen(function* () {
+          const context = yield* contextFor(request.clientGroupId, handleOptions);
+          const rows = yield* readSubsets(
+            { backend: configured, authPolicy, middleware },
+            context,
+            request
+          );
+          return { rows };
+        }).pipe(Effect.mapError(asTransportError))
+      ),
+      Effect.withSpan(Telemetry.span.serverRead)
+    );
+
+  const handler = ServerHandler.of({
+    handlePush,
+    handlePull,
+    handleRead,
+    pokes: (clientGroupId) => pokeHub.subscribe(clientGroupId),
+  });
+
+  const introspection: ServerIntrospection = {
+    groups: Effect.gen(function* () {
+      const subs = yield* Ref.get(activeSubsets);
+      const cvrs = yield* Ref.get(activeCvrs);
+      const result: Array<ServerGroup> = [];
+      Arr.forEach(subs, ([clientGroupId, subsets]) => {
+        const cvr = cvrs.get(clientGroupId);
+        result.push({ clientGroupId, subsets, cvrSize: cvr === undefined ? 0 : cvrSize(cvr) });
+      });
+      return result;
+    }),
+    pokesPublished: Metric.value(Telemetry.pokesTotal).pipe(Effect.map((state) => state.count)),
+    pokesSuppressed: Metric.value(Telemetry.pokesSuppressedTotal).pipe(
+      Effect.map((state) => state.count)
+    ),
+  };
+
+  return { handler, introspection };
+});
 
 /** Build the ServerHandler together with its introspection view (default options). */
 export const makeWithIntrospection: Effect.Effect<

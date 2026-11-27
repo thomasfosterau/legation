@@ -276,58 +276,57 @@ const hydrate = (
  * lookup the engine's secondary index can resolve without a full scan when
  * `target.field` is indexed. A target with no pinned ids needs no query.
  */
-const primeIndex = (
+const primeIndex = Effect.fnUntraced(function* (
   view: ClientView.Reader,
   targets: ReadonlyMap<string, Target>
-): Effect.Effect<
+): Effect.fn.Return<
   Map<string, ReadonlyMap<Predicate.Literal, ReadonlyArray<LocalRow>>>,
   ClientView.ClientViewError
-> =>
-  Effect.gen(function* () {
-    const index = new Map<string, ReadonlyMap<Predicate.Literal, ReadonlyArray<LocalRow>>>();
-    yield* Effect.forEach(
-      targets,
-      ([collection, target]) =>
-        (target.ids.size === 0
-          ? Effect.succeed<ReadonlyArray<LocalRow>>([])
-          : view.query(
-              Subset.make({ collection, where: Predicate.isIn(target.field, [...target.ids]) })
-            )
-        ).pipe(Effect.map((rows) => index.set(collection, groupByField(rows, target.field)))),
-      { concurrency: 1, discard: true }
-    );
-    return index;
-  });
+> {
+  const index = new Map<string, ReadonlyMap<Predicate.Literal, ReadonlyArray<LocalRow>>>();
+  yield* Effect.forEach(
+    targets,
+    ([collection, target]) =>
+      (target.ids.size === 0
+        ? Effect.succeed<ReadonlyArray<LocalRow>>([])
+        : view.query(
+            Subset.make({ collection, where: Predicate.isIn(target.field, [...target.ids]) })
+          )
+      ).pipe(Effect.map((rows) => index.set(collection, groupByField(rows, target.field)))),
+    { concurrency: 1, discard: true }
+  );
+  return index;
+});
 
 /**
  * Resolve a subset's rows together with their relationships, reading the
  * targeted collections from the engine's local view (one-shot). A failing
  * read of the view fails the effect with the view's error.
  */
-export const queryWith = (
+export const queryWith: (
   view: ClientView.Reader,
   strategy: Strategy,
   subset: Subset.Subset
-): Effect.Effect<ReadonlyArray<RelatedRow>, ClientView.ClientViewError> =>
-  Effect.gen(function* () {
+) => Effect.Effect<ReadonlyArray<RelatedRow>, ClientView.ClientViewError> = Effect.fnUntraced(
+  function* (view, strategy, subset) {
     const base = yield* view.query(subset);
     return yield* joinRowsWith(view, strategy, base);
-  });
+  }
+);
 
 /**
  * The join of base rows already read: the foreign collections the rows pin
  * are read from the view, and the rows hydrated. {@link queryWith} is this
  * over a fresh read of the subset.
  */
-const joinRowsWith = (
+const joinRowsWith = Effect.fnUntraced(function* (
   view: ClientView.Reader,
   strategy: Strategy,
   base: ReadonlyArray<LocalRow>
-): Effect.Effect<ReadonlyArray<RelatedRow>, ClientView.ClientViewError> =>
-  Effect.gen(function* () {
-    const index = yield* primeIndex(view, strategy.targets(base));
-    return hydrate(strategy, base, index);
-  });
+): Effect.fn.Return<ReadonlyArray<RelatedRow>, ClientView.ClientViewError> {
+  const index = yield* primeIndex(view, strategy.targets(base));
+  return hydrate(strategy, base, index);
+});
 
 /**
  * The delta-maintained join engine behind {@link observeWith}.
@@ -789,26 +788,25 @@ const hasSubset = (list: ReadonlyArray<Subset.Subset>, subset: Subset.Subset): b
   list.some((other) => Subset.hash(other) === Subset.hash(subset));
 
 /** Diff subscribed vs desired foreign subsets; returns whether anything changed. */
-const reconcile = (
+const reconcile = Effect.fnUntraced(function* (
   engine: ClientEngine,
   subscribed: Ref.Ref<ReadonlyArray<Subset.Subset>>,
   desired: ReadonlyArray<Subset.Subset>
-): Effect.Effect<boolean> =>
-  Effect.gen(function* () {
-    const previous = yield* Ref.get(subscribed);
-    const stale = Arr.filter(previous, (subset) => !hasSubset(desired, subset));
-    const fresh = Arr.filter(desired, (subset) => !hasSubset(previous, subset));
-    yield* Effect.forEach(stale, (subset) => engine.unsubscribe(subset), {
-      concurrency: 1,
-      discard: true,
-    });
-    yield* Effect.forEach(fresh, (subset) => engine.subscribe(subset), {
-      concurrency: 1,
-      discard: true,
-    });
-    yield* Ref.set(subscribed, desired);
-    return Arr.isReadonlyArrayNonEmpty(stale) || Arr.isReadonlyArrayNonEmpty(fresh);
+): Effect.fn.Return<boolean> {
+  const previous = yield* Ref.get(subscribed);
+  const stale = Arr.filter(previous, (subset) => !hasSubset(desired, subset));
+  const fresh = Arr.filter(desired, (subset) => !hasSubset(previous, subset));
+  yield* Effect.forEach(stale, (subset) => engine.unsubscribe(subset), {
+    concurrency: 1,
+    discard: true,
   });
+  yield* Effect.forEach(fresh, (subset) => engine.subscribe(subset), {
+    concurrency: 1,
+    discard: true,
+  });
+  yield* Ref.set(subscribed, desired);
+  return Arr.isReadonlyArrayNonEmpty(stale) || Arr.isReadonlyArrayNonEmpty(fresh);
+});
 
 /** Whether a background pull is running, and whether another is wanted after it. */
 interface PullState {
@@ -857,52 +855,51 @@ const makePullSoon = (
  * rows in run in the background ({@link makePullSoon}), so a stalled
  * transport delays rows and never blocks the caller.
  */
-const trackWith = (
+const trackWith = Effect.fnUntraced(function* (
   engine: ClientEngine,
   strategy: Strategy,
   subset: Subset.Subset
-): Effect.Effect<void, never, Scope.Scope> =>
-  Effect.gen(function* () {
-    const scope = yield* Effect.scope;
-    const subscribed = yield* Ref.make<ReadonlyArray<Subset.Subset>>([]);
-    yield* engine.subscribe(subset);
-    yield* Effect.addFinalizer(() =>
-      Ref.get(subscribed).pipe(
-        Effect.flatMap((subs) =>
-          Effect.forEach([subset, ...subs], (s) => engine.unsubscribe(s), {
-            concurrency: 1,
-            discard: true,
-          })
-        )
+): Effect.fn.Return<void, never, Scope.Scope> {
+  const scope = yield* Effect.scope;
+  const subscribed = yield* Ref.make<ReadonlyArray<Subset.Subset>>([]);
+  yield* engine.subscribe(subset);
+  yield* Effect.addFinalizer(() =>
+    Ref.get(subscribed).pipe(
+      Effect.flatMap((subs) =>
+        Effect.forEach([subset, ...subs], (s) => engine.unsubscribe(s), {
+          concurrency: 1,
+          discard: true,
+        })
       )
-    );
-    const pullSoon = yield* makePullSoon(engine, scope);
-    // A replica read that fails leaves the foreign subscriptions as they
-    // were; the next change to the base rows reconciles them again.
-    const refresh = Effect.fnUntraced(
-      function* () {
-        const base = yield* engine.query(subset);
-        const changed = yield* reconcile(engine, subscribed, desiredSubsets(strategy, base));
-        if (changed) yield* pullSoon;
-      },
-      Effect.catch((error) =>
-        Effect.logWarning(
-          "Related: reading the base rows to reconcile the foreign windows failed",
-          error
-        )
+    )
+  );
+  const pullSoon = yield* makePullSoon(engine, scope);
+  // A replica read that fails leaves the foreign subscriptions as they
+  // were; the next change to the base rows reconciles them again.
+  const refresh = Effect.fnUntraced(
+    function* () {
+      const base = yield* engine.query(subset);
+      const changed = yield* reconcile(engine, subscribed, desiredSubsets(strategy, base));
+      if (changed) yield* pullSoon;
+    },
+    Effect.catch((error) =>
+      Effect.logWarning(
+        "Related: reading the base rows to reconcile the foreign windows failed",
+        error
       )
-    );
-    // The base syncs in the background; the derivation runs over what the
-    // replica holds now and again on every change to the base rows.
-    yield* pullSoon;
-    yield* refresh();
-    yield* Effect.forkIn(
-      Stream.runForEach(engine.observe(subset).pipe(Stream.orDie), () => refresh()).pipe(
-        Background.reported("Related: the linkage tracker")
-      ),
-      scope
-    );
-  });
+    )
+  );
+  // The base syncs in the background; the derivation runs over what the
+  // replica holds now and again on every change to the base rows.
+  yield* pullSoon;
+  yield* refresh();
+  yield* Effect.forkIn(
+    Stream.runForEach(engine.observe(subset).pipe(Stream.orDie), () => refresh()).pipe(
+      Background.reported("Related: the linkage tracker")
+    ),
+    scope
+  );
+});
 
 /**
  * Auto-subscribing relational read: subscribes the base subset and, from its
@@ -934,37 +931,40 @@ export interface SourcedRow {
  * the join with the same field-mapping resolution. Nothing is subscribed
  * and nothing enters the replica.
  */
-export const queryVia = <E>(
+export const queryVia: <E>(
   fetchRows: (subsets: ReadonlyArray<Subset.Subset>) => Effect.Effect<ReadonlyArray<SourcedRow>, E>,
   registry: Collection.CollectionRegistry,
   collectionName: string,
   subset: Subset.Subset,
   edges: ReadonlyArray<string | EdgeSelect>
-): Effect.Effect<ReadonlyArray<RelatedRow>, E> =>
-  Effect.gen(function* () {
-    const strategy = fieldMappingStrategy(selectRelationships(registry, collectionName, edges));
-    const base = (yield* fetchRows([subset]))
-      .filter((row) => row.collection === subset.collection)
-      .map(({ id, value }) => ({ id, value }));
-    const targets = strategy.targets(base);
-    const foreignSubsets = subsetsForTargets(targets);
-    const foreign = Arr.isReadonlyArrayEmpty(foreignSubsets)
-      ? []
-      : yield* fetchRows(foreignSubsets);
-    const index = new Map<string, ReadonlyMap<Predicate.Literal, ReadonlyArray<LocalRow>>>();
-    Arr.forEach(targets, ([collection, target]) =>
-      index.set(
-        collection,
-        groupByField(
-          foreign
-            .filter((row) => row.collection === collection)
-            .map(({ id, value }) => ({ id, value })),
-          target.field
-        )
+) => Effect.Effect<ReadonlyArray<RelatedRow>, E> = Effect.fnUntraced(function* <E>(
+  fetchRows: (subsets: ReadonlyArray<Subset.Subset>) => Effect.Effect<ReadonlyArray<SourcedRow>, E>,
+  registry: Collection.CollectionRegistry,
+  collectionName: string,
+  subset: Subset.Subset,
+  edges: ReadonlyArray<string | EdgeSelect>
+) {
+  const strategy = fieldMappingStrategy(selectRelationships(registry, collectionName, edges));
+  const base = (yield* fetchRows([subset]))
+    .filter((row) => row.collection === subset.collection)
+    .map(({ id, value }) => ({ id, value }));
+  const targets = strategy.targets(base);
+  const foreignSubsets = subsetsForTargets(targets);
+  const foreign = Arr.isReadonlyArrayEmpty(foreignSubsets) ? [] : yield* fetchRows(foreignSubsets);
+  const index = new Map<string, ReadonlyMap<Predicate.Literal, ReadonlyArray<LocalRow>>>();
+  Arr.forEach(targets, ([collection, target]) =>
+    index.set(
+      collection,
+      groupByField(
+        foreign
+          .filter((row) => row.collection === collection)
+          .map(({ id, value }) => ({ id, value })),
+        target.field
       )
-    );
-    return hydrate(strategy, base, index);
-  });
+    )
+  );
+  return hydrate(strategy, base, index);
+});
 
 // ─── Public API (declared field mappings) ────────────────────────────────────
 

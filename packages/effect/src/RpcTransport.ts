@@ -189,37 +189,36 @@ export interface FromOriginOptions {
  * Wrap with `BrowserConnectivity.withBrowserConnectivity`
  * (`@thomasfosterau/legation-browser`) for navigator-aware status in browsers.
  */
-export const fromOrigin = (
+export const fromOrigin: (
   options: FromOriginOptions
-): Effect.Effect<ClientTransport, never, Scope.Scope> =>
-  Effect.gen(function* () {
-    const httpUrl = `${options.origin}${options.httpPath ?? "/sync"}`;
-    const wsUrl = `${options.origin.replace(/^http/, "ws")}${options.wsPath ?? "/sync-ws"}`;
-    // Layer.build ties each protocol's resources to the enclosing scope
-    // (Effect.provide here would finalize them on return).
-    const wsContext = yield* Layer.build(
-      RpcClient.layerProtocolSocket().pipe(
-        Layer.provide(Socket.layerWebSocket(wsUrl)),
-        Layer.provide(Socket.layerWebSocketConstructorGlobal),
-        Layer.provide(RpcSerialization.layerNdjson)
-      )
-    );
-    const ws = yield* make({ clientGroupId: options.clientGroupId }).pipe(
-      Effect.provide(wsContext)
-    );
-    const httpContext = yield* Layer.build(
-      RpcClient.layerProtocolHttp({ url: httpUrl }).pipe(
-        Layer.provide(RpcSerialization.layerNdjson),
-        Layer.provide(FetchHttpClient.layer)
-      )
-    );
-    const http = yield* make({ clientGroupId: options.clientGroupId }).pipe(
-      Effect.provide(httpContext)
-    );
-    // primaryTimeout: a hanging WebSocket must not stall sync — time it
-    // out, sideline it, serve through HTTP.
-    return yield* Transport.withFallback(ws, http, {
-      restoreAfter: options.fallback?.restoreAfter ?? "30 seconds",
-      primaryTimeout: options.fallback?.primaryTimeout ?? "10 seconds",
-    });
+) => Effect.Effect<ClientTransport, never, Scope.Scope> = Effect.fn(
+  "legation/RpcTransport.fromOrigin"
+)(function* (options) {
+  const httpUrl = `${options.origin}${options.httpPath ?? "/sync"}`;
+  const wsUrl = `${options.origin.replace(/^http/, "ws")}${options.wsPath ?? "/sync-ws"}`;
+  // Layer.build ties each protocol's resources to the enclosing scope
+  // (Effect.provide here would finalize them on return).
+  const wsContext = yield* Layer.build(
+    RpcClient.layerProtocolSocket().pipe(
+      Layer.provide(Socket.layerWebSocket(wsUrl)),
+      Layer.provide(Socket.layerWebSocketConstructorGlobal),
+      Layer.provide(RpcSerialization.layerNdjson)
+    )
+  );
+  const ws = yield* make({ clientGroupId: options.clientGroupId }).pipe(Effect.provide(wsContext));
+  const httpContext = yield* Layer.build(
+    RpcClient.layerProtocolHttp({ url: httpUrl }).pipe(
+      Layer.provide(RpcSerialization.layerNdjson),
+      Layer.provide(FetchHttpClient.layer)
+    )
+  );
+  const http = yield* make({ clientGroupId: options.clientGroupId }).pipe(
+    Effect.provide(httpContext)
+  );
+  // primaryTimeout: a hanging WebSocket must not stall sync — time it
+  // out, sideline it, serve through HTTP.
+  return yield* Transport.withFallback(ws, http, {
+    restoreAfter: options.fallback?.restoreAfter ?? "30 seconds",
+    primaryTimeout: options.fallback?.primaryTimeout ?? "10 seconds",
   });
+});

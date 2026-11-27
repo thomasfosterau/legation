@@ -138,35 +138,36 @@ const storeError = (message: string) => (cause: unknown) => new StoreError({ mes
  * another. CVR storage may be ephemeral (an unrecognized cookie degrades to
  * a reset), so eviction/TTL is the backing store's concern.
  */
-export const makeKeyValueStore = (
+export const makeKeyValueStore: (
   options?: KeyValueCvrOptions
-): Effect.Effect<CvrStore, never, KeyValueStore.KeyValueStore> =>
-  Effect.gen(function* () {
-    const store = KeyValueStore.prefix(
-      yield* KeyValueStore.KeyValueStore,
-      options?.prefix ?? "legation/cvr/"
-    );
-    return CvrStore.of({
-      get: (cookie) =>
-        store.get(cookie).pipe(
-          Effect.mapError(storeError(`Failed to read CVR "${cookie}"`)),
-          Effect.flatMap((raw) =>
-            raw === undefined
-              ? Effect.undefined
-              : decodeCvr(raw).pipe(
-                  Effect.map(fromWire),
-                  Effect.mapError(storeError(`Corrupt CVR at "${cookie}"`))
-                )
-          )
-        ),
-      set: (cookie, cvr) =>
-        store
-          .set(cookie, Json.stringify(toWire(cvr)))
-          .pipe(Effect.mapError(storeError(`Failed to write CVR "${cookie}"`))),
-      remove: (cookie) =>
-        store.remove(cookie).pipe(Effect.mapError(storeError(`Failed to remove CVR "${cookie}"`))),
-    });
+) => Effect.Effect<CvrStore, never, KeyValueStore.KeyValueStore> = Effect.fn(
+  "legation/Cvr.makeKeyValueStore"
+)(function* (options) {
+  const store = KeyValueStore.prefix(
+    yield* KeyValueStore.KeyValueStore,
+    options?.prefix ?? "legation/cvr/"
+  );
+  return CvrStore.of({
+    get: (cookie) =>
+      store.get(cookie).pipe(
+        Effect.mapError(storeError(`Failed to read CVR "${cookie}"`)),
+        Effect.flatMap((raw) =>
+          raw === undefined
+            ? Effect.undefined
+            : decodeCvr(raw).pipe(
+                Effect.map(fromWire),
+                Effect.mapError(storeError(`Corrupt CVR at "${cookie}"`))
+              )
+        )
+      ),
+    set: (cookie, cvr) =>
+      store
+        .set(cookie, Json.stringify(toWire(cvr)))
+        .pipe(Effect.mapError(storeError(`Failed to write CVR "${cookie}"`))),
+    remove: (cookie) =>
+      store.remove(cookie).pipe(Effect.mapError(storeError(`Failed to remove CVR "${cookie}"`))),
   });
+});
 
 /** Layer providing the KeyValueStore-backed CVR store. */
 export const layerKeyValueStore = (

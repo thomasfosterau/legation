@@ -232,22 +232,21 @@ const hostRequestKey = (mirrorId: string, requestId: number) => `${mirrorId}:${r
  * `hydrate` (through a gate holding the pulls for `hydrationWindow`), then
  * `requests`.
  */
-const requestRegistryOf = (
+const requestRegistryOf = Effect.fnUntraced(function* (
   options: EngineHostOptions
-): Effect.Effect<HostRequest.Registry, never, Scope.Scope> =>
-  Effect.gen(function* () {
-    const { store } = options;
-    const served =
-      store === undefined
-        ? []
-        : [
-            ...Introspection.handlers(Introspection.make(options.engine, store)),
-            Hydration.handler(
-              yield* Hydration.makeGate(options.engine, store, { hold: options.hydrationWindow })
-            ),
-          ];
-    return HostRequest.registry([...served, ...(options.requests ?? [])]);
-  });
+): Effect.fn.Return<HostRequest.Registry, never, Scope.Scope> {
+  const { store } = options;
+  const served =
+    store === undefined
+      ? []
+      : [
+          ...Introspection.handlers(Introspection.make(options.engine, store)),
+          Hydration.handler(
+            yield* Hydration.makeGate(options.engine, store, { hold: options.hydrationWindow })
+          ),
+        ];
+  return HostRequest.registry([...served, ...(options.requests ?? [])]);
+});
 
 /** A `Mutate` or `Read`: what its replies are addressed by. */
 interface Request {
@@ -276,8 +275,8 @@ const decodeFormSender = Schema.decodeUnknownEffect(Schema.Struct({ mirrorId: Sc
  * established before this effect completes; message handling runs on a
  * scoped background fiber.
  */
-export const run = (options: EngineHostOptions): Effect.Effect<Host, never, Scope.Scope> =>
-  Effect.gen(function* () {
+export const run: (options: EngineHostOptions) => Effect.Effect<Host, never, Scope.Scope> =
+  Effect.fn("legation/EngineHost.run")(function* (options) {
     const { channel } = options;
     const engine = Subscriptions.counted(options.engine);
     const inbox = yield* channel.subscribe;
@@ -302,12 +301,11 @@ export const run = (options: EngineHostOptions): Effect.Effect<Host, never, Scop
     // stop its broadcast loop, post its current rows, and start the loop again
     // from a fresh observation. Every update the registration broadcasts after
     // this reflects at least the rows the replica holds now.
-    const restart = (entry: Active) =>
-      Effect.gen(function* () {
-        yield* Fiber.interrupt(yield* Ref.get(entry.fiber));
-        yield* entry.hydrate;
-        yield* Ref.set(entry.fiber, yield* entry.loop.pipe(Effect.forkIn(hostScope)));
-      });
+    const restart = Effect.fn("legation/EngineHost.restart")(function* (entry: Active) {
+      yield* Fiber.interrupt(yield* Ref.get(entry.fiber));
+      yield* entry.hydrate;
+      yield* Ref.set(entry.fiber, yield* entry.loop.pipe(Effect.forkIn(hostScope)));
+    });
 
     // Tell the mirrors which registrations are pulled, rows first.
     // A pull marks its windows only after its rows are in the replica, but a
@@ -394,7 +392,7 @@ export const run = (options: EngineHostOptions): Effect.Effect<Host, never, Scop
      * succeeded — the engine holds the windows — and its URL identity while
      * some mirror holds the key by URL.
      */
-    const acquire = <E, LE>(
+    const acquire = Effect.fnUntraced(function* <E, LE>(
       mirrorId: string,
       key: string,
       start: Effect.Effect<
@@ -407,80 +405,78 @@ export const run = (options: EngineHostOptions): Effect.Effect<Host, never, Scop
         Scope.Scope
       >,
       registered?: Registered
-    ): Effect.Effect<void, E, Scope.Scope> =>
-      Effect.gen(function* () {
-        const byUrl = registered?.url !== undefined;
-        const existing = (yield* Ref.get(active)).get(key);
-        if (existing !== undefined) {
-          // A URL identity learnt later (a `SubscribeUrl` joining a plain
-          // `Subscribe` of the same window) is kept on the entry.
-          const known = existing.registered?.url === undefined ? registered : existing.registered;
-          yield* Ref.update(active, (map) =>
-            new Map(map).set(key, {
-              ...existing,
-              mirrors: HashSet.add(existing.mirrors, mirrorId),
-              urlMirrors: byUrl ? HashSet.add(existing.urlMirrors, mirrorId) : existing.urlMirrors,
-              ...Defined.fields({ registered: known }),
-            })
-          );
-          return yield* existing.hydrate;
-        }
-        // A failed start (an unknown named query, an undeclared edge) registers
-        // nothing and records nothing; the message loop swallows the error and
-        // the mirror simply never hydrates.
-        const started = yield* start;
-        const loop = Effect.ignore(started.loop);
-        const { teardown, hydrate } = started;
-        yield* Semaphore.withPermit(
-          registryLock,
-          Effect.gen(function* () {
-            const fiber = yield* Ref.make(yield* Effect.forkIn(loop, hostScope));
-            yield* Ref.update(active, (map) =>
-              new Map(map).set(key, {
-                mirrors: HashSet.make(mirrorId),
-                urlMirrors: byUrl ? HashSet.make(mirrorId) : HashSet.empty<string>(),
-                loop,
-                fiber,
-                teardown,
-                hydrate,
-                ...Defined.fields({ registered }),
-              })
-            );
+    ): Effect.fn.Return<void, E, Scope.Scope> {
+      const byUrl = registered?.url !== undefined;
+      const existing = (yield* Ref.get(active)).get(key);
+      if (existing !== undefined) {
+        // A URL identity learnt later (a `SubscribeUrl` joining a plain
+        // `Subscribe` of the same window) is kept on the entry.
+        const known = existing.registered?.url === undefined ? registered : existing.registered;
+        yield* Ref.update(active, (map) =>
+          new Map(map).set(key, {
+            ...existing,
+            mirrors: HashSet.add(existing.mirrors, mirrorId),
+            urlMirrors: byUrl ? HashSet.add(existing.urlMirrors, mirrorId) : existing.urlMirrors,
+            ...Defined.fields({ registered: known }),
           })
         );
-        return yield* announce;
-      });
+        return yield* existing.hydrate;
+      }
+      // A failed start (an unknown named query, an undeclared edge) registers
+      // nothing and records nothing; the message loop swallows the error and
+      // the mirror simply never hydrates.
+      const started = yield* start;
+      const loop = Effect.ignore(started.loop);
+      const { teardown, hydrate } = started;
+      yield* Semaphore.withPermit(
+        registryLock,
+        Effect.gen(function* () {
+          const fiber = yield* Ref.make(yield* Effect.forkIn(loop, hostScope));
+          yield* Ref.update(active, (map) =>
+            new Map(map).set(key, {
+              mirrors: HashSet.make(mirrorId),
+              urlMirrors: byUrl ? HashSet.make(mirrorId) : HashSet.empty<string>(),
+              loop,
+              fiber,
+              teardown,
+              hydrate,
+              ...Defined.fields({ registered }),
+            })
+          );
+        })
+      );
+      return yield* announce;
+    });
 
     /** Drop one mirror from one registration; tear it down if it was the last. */
-    const release = (mirrorId: string, key: string) =>
-      Effect.gen(function* () {
-        const entry = (yield* Ref.get(active)).get(key);
-        if (entry === undefined || !HashSet.has(entry.mirrors, mirrorId)) return;
-        const mirrors = HashSet.remove(entry.mirrors, mirrorId);
-        if (HashSet.size(mirrors) > 0) {
-          yield* Ref.update(active, (map) =>
-            new Map(map).set(key, {
-              ...entry,
-              mirrors,
-              urlMirrors: HashSet.remove(entry.urlMirrors, mirrorId),
-            })
-          );
-          return;
-        }
-        yield* Semaphore.withPermit(
-          registryLock,
-          Effect.gen(function* () {
-            yield* Fiber.interrupt(yield* Ref.get(entry.fiber));
-            yield* entry.teardown.pipe(Effect.ignore);
-            yield* Ref.update(active, (map) => {
-              const next = new Map(map);
-              next.delete(key);
-              return next;
-            });
+    const release = Effect.fnUntraced(function* (mirrorId: string, key: string) {
+      const entry = (yield* Ref.get(active)).get(key);
+      if (entry === undefined || !HashSet.has(entry.mirrors, mirrorId)) return;
+      const mirrors = HashSet.remove(entry.mirrors, mirrorId);
+      if (HashSet.size(mirrors) > 0) {
+        yield* Ref.update(active, (map) =>
+          new Map(map).set(key, {
+            ...entry,
+            mirrors,
+            urlMirrors: HashSet.remove(entry.urlMirrors, mirrorId),
           })
         );
-        yield* announce;
-      });
+        return;
+      }
+      yield* Semaphore.withPermit(
+        registryLock,
+        Effect.gen(function* () {
+          yield* Fiber.interrupt(yield* Ref.get(entry.fiber));
+          yield* entry.teardown.pipe(Effect.ignore);
+          yield* Ref.update(active, (map) => {
+            const next = new Map(map);
+            next.delete(key);
+            return next;
+          });
+        })
+      );
+      yield* announce;
+    });
 
     const handleSubscribe = (mirrorId: string, subset: Subset.Subset, url?: string) => {
       const key = Subset.hash(subset);
@@ -835,19 +831,20 @@ export const run = (options: EngineHostOptions): Effect.Effect<Host, never, Scop
         )
       );
 
-    const handleDisconnect = (mirrorId: string) =>
-      Effect.gen(function* () {
-        const keys = [...(yield* Ref.get(active))]
-          .filter(([, entry]) => HashSet.has(entry.mirrors, mirrorId))
-          .map(([key]) => key);
-        yield* Effect.forEach(keys, (key) => release(mirrorId, key), {
-          concurrency: 1,
-          discard: true,
-        });
-        yield* abandonForms(mirrorId);
-        yield* takeHostRequests((key) => key.startsWith(`${mirrorId}:`));
-        yield* forget(mirrorId);
+    const handleDisconnect = Effect.fn("legation/EngineHost.handleDisconnect")(function* (
+      mirrorId: string
+    ) {
+      const keys = [...(yield* Ref.get(active))]
+        .filter(([, entry]) => HashSet.has(entry.mirrors, mirrorId))
+        .map(([key]) => key);
+      yield* Effect.forEach(keys, (key) => release(mirrorId, key), {
+        concurrency: 1,
+        discard: true,
       });
+      yield* abandonForms(mirrorId);
+      yield* takeHostRequests((key) => key.startsWith(`${mirrorId}:`));
+      yield* forget(mirrorId);
+    });
 
     // The backend's authoritative outcome for a forwarded mutation, posted back
     // to the mirror so `Mirror.mutateWithAck` can resolve. Runs on a scoped
