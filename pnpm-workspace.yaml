@@ -49,7 +49,7 @@ catalog:
   "@thomasfosterau/effect-auth": 0.5.2
   "@thomasfosterau/effect-svelte": ^0.8.0
   "@types/better-sqlite3": ^9.6.0
-  "@types/node": ^26.6.7
+  "@types/node": ^26.6.11
   # Must equal the vitest vite-plus bundles.
   "@vitest/coverage-v8": 5.1.1
   better-auth: ^1.7.28
