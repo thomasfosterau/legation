@@ -11,7 +11,8 @@
  * The in-process implementation is the single-process reference (and the
  * semantics a Durable Object or Redis shard must match). A poke here is a
  * batch of matched topics; a dropped poke only delays the next interval
- * pull, never prevents convergence.
+ * pull, never prevents convergence, and counts towards
+ * `legation_fanout_pokes_dropped_total`.
  */
 
 import * as Arr from "effect/Array";
@@ -20,11 +21,13 @@ import * as Context from "effect/Context";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as HashMap from "effect/HashMap";
+import * as Metric from "effect/Metric";
 import * as Option from "effect/Option";
 import * as PubSub from "effect/PubSub";
 import * as Ref from "effect/Ref";
 import * as Scope from "effect/Scope";
 import type { Topic } from "./FanoutTopics.js";
+import * as Telemetry from "./Telemetry.js";
 
 /** A live subscription to a room's topic pokes. */
 export interface TopicPokes {
@@ -107,7 +110,9 @@ export const makeInProcess: Effect.Effect<FanoutBroker, never, Scope.Scope> = Ef
                 const matched = wanted.filter((topic) => lease.topics.has(topic));
                 if (Arr.isReadonlyArrayEmpty(matched)) return;
                 const hub = HashMap.get(hubMap, roomId);
-                if (Option.isSome(hub)) yield* PubSub.publish(hub.value, matched);
+                if (Option.isNone(hub)) return;
+                const published = yield* PubSub.publish(hub.value, matched);
+                if (!published) yield* Metric.update(Telemetry.fanoutPokesDroppedTotal, 1);
               }),
             { concurrency: 1, discard: true }
           );

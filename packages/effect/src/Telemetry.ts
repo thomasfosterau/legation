@@ -100,6 +100,16 @@ export const hintsDroppedTotal = Metric.counter("legation_hints_dropped_total", 
 });
 
 /**
+ * Topic batches the in-process fan-out broker dropped because a room's bounded
+ * poke hub was full while the room was behind. The room still holds the
+ * batches it took, and its clients' next pull converges, so this counts
+ * delayed pokes, not lost data.
+ */
+export const fanoutPokesDroppedTotal = Metric.counter("legation_fanout_pokes_dropped_total", {
+  incremental: true,
+});
+
+/**
  * Times a stalled engine observer's bounded change hub dropped a view-change,
  * forcing the consumer to collapse the gap into a full `Rebuild`. A Rebuild
  * subsumes any dropped `Patch`es (ADR-0008), so the view stays correct; this
