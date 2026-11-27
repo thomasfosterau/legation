@@ -155,30 +155,30 @@ export const listen = (options: ListenOptions): Listener => {
           { concurrency: 1 }
         ).pipe(Effect.map(([current, stamped]) => current !== undefined && stamped === current));
 
-  const act = (engine: ClientEngine.ClientEngine): Effect.Effect<PokeOutcome> =>
-    Effect.gen(function* () {
-      if (!(yield* sameIdentity(engine))) {
-        yield* Effect.logDebug(
-          "Push-poke skipped: the replica is not stamped for the current identity"
-        );
-        return "IdentityChanged" as const;
-      }
-      if (options.action === "pull") {
-        return yield* engine.pull.pipe(
-          Effect.as("Pulled" as const),
-          Effect.catch((error) =>
-            Effect.logDebug(
-              "Push-poke pull failed; the next connectivity signal pulls",
-              error
-            ).pipe(Effect.as("PullFailed" as const))
+  const act = Effect.fn("legation-browser/PushPoke.act")(function* (
+    engine: ClientEngine.ClientEngine
+  ): Effect.fn.Return<PokeOutcome> {
+    if (!(yield* sameIdentity(engine))) {
+      yield* Effect.logDebug(
+        "Push-poke skipped: the replica is not stamped for the current identity"
+      );
+      return "IdentityChanged" as const;
+    }
+    if (options.action === "pull") {
+      return yield* engine.pull.pipe(
+        Effect.as("Pulled" as const),
+        Effect.catch((error) =>
+          Effect.logDebug("Push-poke pull failed; the next connectivity signal pulls", error).pipe(
+            Effect.as("PullFailed" as const)
           )
-        );
-      }
-      return yield* BackgroundSync.register({
-        tag,
-        registration: Effect.sync(() => scope.registration),
-      });
+        )
+      );
+    }
+    return yield* BackgroundSync.register({
+      tag,
+      registration: Effect.sync(() => scope.registration),
     });
+  });
 
   // Act through the attached host, waiting for one up to the ready timeout.
   const handle = (): Promise<PokeOutcome | "HostNotReady"> =>

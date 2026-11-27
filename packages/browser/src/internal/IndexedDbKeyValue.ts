@@ -55,39 +55,36 @@ interface Connection {
  * connection's upgrade (`onversionchange`); after that, its calls fail with
  * {@link UPGRADED_MESSAGE}.
  */
-const openDatabase = (
+const openDatabase = Effect.fn("legation-browser/IndexedDbKeyValue.openDatabase")(function* (
   database: string
-): Effect.Effect<Connection, StoreError, IndexedDb.IndexedDb> =>
-  Effect.gen(function* () {
-    const idb = (yield* IndexedDb.IndexedDb).indexedDB;
-    return yield* Effect.callback<Connection, StoreError>((resume) => {
-      const fail = (cause: unknown) =>
-        resume(
-          Effect.fail(new StoreError({ message: "Failed to open the IndexedDB store", cause }))
-        );
-      const opened = Result.try(() => idb.open(database));
-      if (Result.isFailure(opened)) {
-        fail(opened.failure);
-        return;
+): Effect.fn.Return<Connection, StoreError, IndexedDb.IndexedDb> {
+  const idb = (yield* IndexedDb.IndexedDb).indexedDB;
+  return yield* Effect.callback<Connection, StoreError>((resume) => {
+    const fail = (cause: unknown) =>
+      resume(Effect.fail(new StoreError({ message: "Failed to open the IndexedDB store", cause })));
+    const opened = Result.try(() => idb.open(database));
+    if (Result.isFailure(opened)) {
+      fail(opened.failure);
+      return;
+    }
+    const request = opened.success;
+    request.addEventListener("upgradeneeded", () => {
+      const db = request.result;
+      if (!db.objectStoreNames.contains(ENTRIES_STORE)) {
+        db.createObjectStore(ENTRIES_STORE, { keyPath: "key" });
       }
-      const request = opened.success;
-      request.addEventListener("upgradeneeded", () => {
-        const db = request.result;
-        if (!db.objectStoreNames.contains(ENTRIES_STORE)) {
-          db.createObjectStore(ENTRIES_STORE, { keyPath: "key" });
-        }
-      });
-      request.addEventListener("success", () => {
-        const connection: Connection = { db: request.result, upgraded: false };
-        connection.db.addEventListener("versionchange", () => {
-          connection.upgraded = true;
-          connection.db.close();
-        });
-        resume(Effect.succeed(connection));
-      });
-      request.addEventListener("error", () => fail(request.error));
     });
+    request.addEventListener("success", () => {
+      const connection: Connection = { db: request.result, upgraded: false };
+      connection.db.addEventListener("versionchange", () => {
+        connection.upgraded = true;
+        connection.db.close();
+      });
+      resume(Effect.succeed(connection));
+    });
+    request.addEventListener("error", () => fail(request.error));
   });
+});
 
 /**
  * Abort `transaction`, ignoring the `InvalidStateError` an already-finished
