@@ -13,6 +13,8 @@
  * Seeded through Effect's `Random.withSeed`; `LEGATION_CORPUS_SEED`
  * overrides the seed to reproduce a failure.
  */
+import { identity } from "effect/Function";
+import * as Result from "effect/Result";
 import * as Defined from "../Defined.js";
 import { describeWrapped, expect, layer } from "@effect/vitest";
 import * as Arr from "effect/Array";
@@ -27,7 +29,7 @@ import * as Subset from "../Subset.js";
 import { defined } from "./defined.js";
 import * as Env from "./env.js";
 
-const seed = FilterCorpus.resolveSeed(Env.corpusSeed);
+const seed = Result.getOrThrowWith(FilterCorpus.resolveSeed(Env.corpusSeed), identity);
 /** Rows in the generated set (the pinned sweep plus random rows). */
 const ROWS = 64;
 /** Conjunct-built pairs per run. */
@@ -150,7 +152,7 @@ interface Generated {
   readonly coverage: FilterCorpus.Coverage;
 }
 
-const generate: Effect.Effect<Generated> = Effect.suspend(() => {
+const generate: Effect.Effect<Generated, FilterCorpus.InvalidCorpusInput> = Effect.suspend(() => {
   const coverage = FilterCorpus.emptyCoverage();
   return Effect.gen(function* () {
     const rows = yield* FilterCorpus.generateRows(ROWS);

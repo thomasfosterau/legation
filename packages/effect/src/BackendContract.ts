@@ -632,7 +632,10 @@ const contractCorpus = Effect.suspend(() => {
     predicates: 40,
     orderBys: 40,
     ...options,
-  });
+  }).pipe(
+    // `rows` is at least `minimumRows` by construction, so the corpus is never refused.
+    Effect.orDie
+  );
 });
 
 /** The corpus's subsets over the evaluation collection: one per predicate, some with a limit. */

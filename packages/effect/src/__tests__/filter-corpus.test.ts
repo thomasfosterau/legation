@@ -5,13 +5,12 @@
  * `Exists`, and the minimiser shrinks a disagreement to its smallest
  * reproducing predicate/row pair.
  */
+import * as Result from "effect/Result";
 import { expect, layer } from "@effect/vitest";
-import * as Cause from "effect/Cause";
 import * as Context from "effect/Context";
 import * as Layer from "effect/Layer";
 import * as Arr from "effect/Array";
 import * as Effect from "effect/Effect";
-import * as Exit from "effect/Exit";
 import * as HashMap from "effect/HashMap";
 import * as MutableHashSet from "effect/MutableHashSet";
 import * as Option from "effect/Option";
@@ -102,10 +101,11 @@ layer(DefaultCorpus.layer)("FilterCorpus", (it) => {
   );
 
   it("resolves the seed from LEGATION_CORPUS_SEED", () => {
-    expect(FilterCorpus.resolveSeed(undefined)).toBe(FilterCorpus.DEFAULT_SEED);
-    expect(FilterCorpus.resolveSeed("")).toBe(FilterCorpus.DEFAULT_SEED);
-    expect(FilterCorpus.resolveSeed("42")).toBe(42);
-    expect(() => FilterCorpus.resolveSeed("nope")).toThrow(/LEGATION_CORPUS_SEED/);
+    expect(FilterCorpus.resolveSeed(undefined)).toEqual(Result.succeed(FilterCorpus.DEFAULT_SEED));
+    expect(FilterCorpus.resolveSeed("")).toEqual(Result.succeed(FilterCorpus.DEFAULT_SEED));
+    expect(FilterCorpus.resolveSeed("42")).toEqual(Result.succeed(42));
+    const refused = FilterCorpus.resolveSeed("nope");
+    expect(Result.isFailure(refused) && refused.failure.message).toMatch(/LEGATION_CORPUS_SEED/);
   });
 
   it.effect("covers every operator at the default seed", () =>
@@ -195,13 +195,11 @@ layer(DefaultCorpus.layer)("FilterCorpus", (it) => {
       const minimum = FilterCorpus.minimumRows();
       // Two pinned rows plus the widest pool (the string column with astral text).
       expect(minimum).toBeGreaterThan(2);
-      const refused = yield* Effect.exit(
+      const refused = yield* Effect.flip(
         generate({ seed: FilterCorpus.DEFAULT_SEED, rows: minimum - 1 })
       );
-      expect(Exit.isFailure(refused) && Cause.hasDies(refused.cause)).toBe(true);
-      expect(Exit.isFailure(refused) ? Cause.pretty(refused.cause) : "").toMatch(
-        new RegExp(`at least ${minimum} rows`)
-      );
+      expect(refused._tag).toBe("InvalidCorpusInput");
+      expect(refused.message).toMatch(new RegExp(`at least ${minimum} rows`));
       const swept = yield* generate({ seed: FilterCorpus.DEFAULT_SEED, rows: minimum });
       expect(swept.rows).toHaveLength(minimum);
       expect(FilterCorpus.minimumRows(corpus.columns, { nulls: false })).toBe(minimum - 2);

@@ -254,6 +254,8 @@ export const make = (
         // Strict, as `JSON.stringify` threw: a lossy key would merge two queries.
         `@query:${name}:${args === undefined ? "undefined" : Json.stringify(args)}`,
         engine.subscribeQuery(name, args),
+        // Runs only after `subscribeQuery` of the same name succeeded, so the
+        // name resolves and this cannot fail with an unknown-query error.
         engine.unsubscribeQuery(name, args).pipe(Effect.orDie)
       );
 

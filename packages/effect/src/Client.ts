@@ -598,6 +598,8 @@ export const fromView = <Graph extends Node.NodeRegistry>(
       const count = Option.getOrElse(HashMap.get(map, key), () => 0);
       return [count === 0, HashMap.set(map, key, count + 1)] as const;
     }).pipe(
+      // The ledger already counts this window, so a failed registration
+      // cannot be handed back without unwinding it: a defect for now.
       Effect.flatMap((first) => (first ? view.subscribe(root).pipe(Effect.orDie) : Effect.void))
     );
 
@@ -820,12 +822,14 @@ export const fromView = <Graph extends Node.NodeRegistry>(
   // read, which the answer is joined from, so a root row whose edge windows
   // were not pulled when the marks were read uncovers the read; edge
   // rows `answerOf` reads come after the marks too. The root is read once,
-  // and a failed read of it is uncovered.
+  // and a failed read of it, or of the edge rows, is uncovered.
   const coveredAnswer = <R extends ClientEngine.LocalRow>(
     compiled: Query.Plan,
     own: Option.Option<Coverage.Registration>,
     rowsNow: Effect.Effect<ReadonlyArray<R>, ClientView.ClientViewError>,
-    answerOf: (rows: ReadonlyArray<R>) => Effect.Effect<ReadonlyArray<Related.RelatedRow>>
+    answerOf: (
+      rows: ReadonlyArray<R>
+    ) => Effect.Effect<ReadonlyArray<Related.RelatedRow>, ClientView.ClientViewError>
   ): Effect.Effect<Option.Option<ReadonlyArray<Related.RelatedRow>>> =>
     entriesOf(Option.getOrUndefined(own)).pipe(
       Effect.flatMap((entries) =>
@@ -844,7 +848,7 @@ export const fromView = <Graph extends Node.NodeRegistry>(
                     Option.exists(requested, (request) =>
                       P.isTagged(Coverage.verdictOf(entries, request), "Covered")
                     )
-                      ? answerOf(rows).pipe(Effect.asSome)
+                      ? Effect.option(answerOf(rows))
                       : Effect.succeedNone
                   )
                 ),
@@ -912,27 +916,31 @@ export const fromView = <Graph extends Node.NodeRegistry>(
   // snapshot of the root rows it is joined from.
   const answerOnce = (
     read: QueryModule.Read
-  ): Effect.Effect<UntypedAnswer, ClientView.ClientViewError> => {
-    const readThrough = view.read;
-    const compiled = Query.plan(nodes, read);
-    // Uncovered and answered from the replica: never wider than the policy,
-    // but possibly short of what the server holds.
-    const local = Effect.suspend(() => Query.run(view, nodes, read)).pipe(Effect.map(partial));
-    const uncovered =
-      readThrough === undefined
-        ? local
-        : Query.runPlanVia(readThrough, nodes, compiled).pipe(
-            Effect.map(complete),
-            Effect.catch(() => local)
-          );
-    return coveredAnswer(compiled, Option.none(), view.query(compiled.root), (rows) =>
-      Query.runRows(view, nodes, read, rows)
-    ).pipe(
-      Effect.flatMap(
-        Option.match({ onNone: () => uncovered, onSome: (rows) => Effect.succeed(complete(rows)) })
-      )
-    );
-  };
+  ): Effect.Effect<UntypedAnswer, ClientView.ClientViewError> =>
+    Effect.suspend(() => {
+      const readThrough = view.read;
+      const compiled = Query.plan(nodes, read);
+      // Uncovered and answered from the replica: never wider than the policy,
+      // but possibly short of what the server holds.
+      const local = Query.run(view, nodes, read).pipe(Effect.map(partial));
+      const uncovered =
+        readThrough === undefined
+          ? local
+          : Query.runPlanVia(readThrough, nodes, compiled).pipe(
+              Effect.map(complete),
+              Effect.catch(() => local)
+            );
+      return coveredAnswer(compiled, Option.none(), view.query(compiled.root), (rows) =>
+        Query.runRows(view, nodes, read, rows)
+      ).pipe(
+        Effect.flatMap(
+          Option.match({
+            onNone: () => uncovered,
+            onSome: (rows) => Effect.succeed(complete(rows)),
+          })
+        )
+      );
+    });
 
   const queryOnce = (
     read: QueryModule.Read
@@ -942,14 +950,24 @@ export const fromView = <Graph extends Node.NodeRegistry>(
   // A live read: its windows registered for the stream's lifetime and its
   // rows streamed, which `finish` turns into what the caller observes, given
   // the read's covered answer now (`coveredAnswer` over the same rows).
+  // Observed reads carry no typed error (`ObserveOf`): a view that fails
+  // ends the stream with a defect.
   const live = <A>(
     read: QueryModule.Read,
     finish: (
       rows: Stream.Stream<ReadonlyArray<Related.RelatedRow>>,
       covered: Effect.Effect<Option.Option<ReadonlyArray<Related.RelatedRow>>>
     ) => Stream.Stream<A>
+  ): Stream.Stream<A> => Stream.suspend(() => liveOf(read, Query.plan(nodes, read), finish));
+
+  const liveOf = <A>(
+    read: QueryModule.Read,
+    compiled: Query.Plan,
+    finish: (
+      rows: Stream.Stream<ReadonlyArray<Related.RelatedRow>>,
+      covered: Effect.Effect<Option.Option<ReadonlyArray<Related.RelatedRow>>>
+    ) => Stream.Stream<A>
   ): Stream.Stream<A> => {
-    const compiled = Query.plan(nodes, read);
     if (Arr.isReadonlyArrayEmpty(compiled.edges)) {
       const registration = Coverage.ofPlan(compiled);
       return Stream.unwrap(
@@ -1025,15 +1043,15 @@ export const fromView = <Graph extends Node.NodeRegistry>(
         )
       )
     ),
-    coverageOf: (read, coverageOptions) => {
-      const plan = Query.plan(nodes, read);
-      return verdictOf(
-        plan,
-        coverageOptions?.snapshot === undefined
-          ? view.query
-          : Coverage.snapshotOf(coverageOptions.snapshot, view.query)
-      );
-    },
+    coverageOf: (read, coverageOptions) =>
+      Effect.suspend(() =>
+        verdictOf(
+          Query.plan(nodes, read),
+          coverageOptions?.snapshot === undefined
+            ? view.query
+            : Coverage.snapshotOf(coverageOptions.snapshot, view.query)
+        )
+      ),
     totalOf: (subset) => view.totalOf?.(subset) ?? Effect.undefined,
     reset,
     identity: boundary === undefined ? noBoundary() : boundary.current,
@@ -1215,7 +1233,7 @@ export const make = <Graph extends Node.NodeRegistry>(
     // — a Client that reported an identity it never actually scoped its
     // replica to is the bug this whole boundary exists to prevent.
     if (options.identity !== undefined) yield* engine.reset(options.identity).pipe(Effect.orDie);
-    if (sync) yield* Effect.forkScoped(engine.runSync.pipe(Effect.orDie));
+    if (sync) yield* engine.runSync;
     return {
       client: fromView(options.nodes, ClientView.fromEngine(engine), viewOptions(options)),
       engine,

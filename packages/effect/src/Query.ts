@@ -39,6 +39,7 @@ import * as Option from "effect/Option";
 import * as Order from "effect/Order";
 import * as P from "effect/Predicate";
 import * as R from "effect/Record";
+import { identity } from "effect/Function";
 import * as Result from "effect/Result";
 import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
@@ -282,11 +283,14 @@ export interface Plan {
 }
 
 /**
- * Compile a read against the node graph: the root window as a `Subset`,
- * each `include`d edge resolved through the registry (its kind, target,
- * declared order) plus the read's per-edge window.
+ * {@link plan} as a `Result`: the compiled read, or a `QueryError` for an
+ * unknown collection or edge. {@link plan} and {@link tryPlan} are this one
+ * check, thrown and failed.
  */
-export const plan = (nodes: Node.NodeRegistry, read: Read): Plan => {
+export const planResult = (
+  nodes: Node.NodeRegistry,
+  read: Read
+): Result.Result<Plan, QueryError> => {
   const limit = Option.getOrUndefined(rootLimit(read));
   const root = Subset.make({
     collection: read.collection,
@@ -294,46 +298,59 @@ export const plan = (nodes: Node.NodeRegistry, read: Read): Plan => {
     orderBy: orderBy(read.order),
     ...Defined.fields({ limit, cursor: read.after }),
   });
+  const includes = R.toEntries(read.include ?? {});
+  if (Arr.isReadonlyArrayEmpty(includes)) return Result.succeed({ root, edges: [] });
   const node = nodes.nodes.get(read.collection);
-  const edges: Array<EdgePlan> = [];
-  Arr.forEach(R.toEntries(read.include ?? {}), ([name, options]) => {
-    if (node === undefined) {
-      throw new QueryError({
+  if (node === undefined) {
+    return Result.fail(
+      new QueryError({
         message: `Unknown collection for include: ${read.collection}`,
         query: read.collection,
+      })
+    );
+  }
+  return Result.all(
+    Arr.map(includes, ([name, options]): Result.Result<EdgePlan, QueryError> => {
+      const edge = node.edges[name];
+      if (edge === undefined) {
+        return Result.fail(
+          new QueryError({
+            message: `Unknown edge "${name}" on ${read.collection}`,
+            query: read.collection,
+          })
+        );
+      }
+      const window = options === true ? {} : options;
+      return Result.succeed({
+        edge: name,
+        kind: edge.kind,
+        target: edge.target,
+        ...Defined.fields({ first: window.first }),
+        order: edge.kind === "paginated" ? orderBy(edge.order) : [],
       });
-    }
-    const edge = node.edges[name];
-    if (edge === undefined) {
-      throw new QueryError({
-        message: `Unknown edge "${name}" on ${read.collection}`,
-        query: read.collection,
-      });
-    }
-    const window = options === true ? {} : options;
-    edges.push({
-      edge: name,
-      kind: edge.kind,
-      target: edge.target,
-      ...Defined.fields({ first: window.first }),
-      order: edge.kind === "paginated" ? orderBy(edge.order) : [],
-    });
-  });
-  return { root, edges };
+    })
+  ).pipe(Result.map((edges) => ({ root, edges })));
 };
 
 /**
- * {@link plan} as an effect: the `QueryError` it throws for an unknown
- * collection or edge becomes a typed failure, for callers that compile a
- * read they did not write (a URL, a message off a channel).
+ * Compile a read against the node graph: the root window as a `Subset`,
+ * each `include`d edge resolved through the registry (its kind, target,
+ * declared order) plus the read's per-edge window. For a read checked
+ * against the graph's types (`Validate`), where an unknown collection or
+ * edge cannot be written: one that names either throws its `QueryError`,
+ * a defect inside an effect. A read built at runtime goes through
+ * {@link tryPlan}.
+ */
+export const plan = (nodes: Node.NodeRegistry, read: Read): Plan =>
+  Result.getOrThrowWith(planResult(nodes, read), identity);
+
+/**
+ * {@link plan} as an effect: an unknown collection or edge is a typed
+ * `QueryError`, for callers that compile a read they did not write (a URL,
+ * a message off a channel).
  */
 export const tryPlan = (nodes: Node.NodeRegistry, read: Read): Effect.Effect<Plan, QueryError> =>
-  Effect.suspend(() => {
-    const compiled = Result.try(() => plan(nodes, read));
-    if (Result.isSuccess(compiled)) return Effect.succeed(compiled.success);
-    const error = compiled.failure;
-    return error instanceof QueryError ? Effect.fail(error) : Effect.die(error);
-  });
+  Effect.suspend(() => Effect.fromResult(planResult(nodes, read)));
 
 /** The order an edge's terms put its resolved rows in (the first term that differs decides). */
 const edgeOrder =
@@ -387,28 +404,30 @@ const windowRow = (row: Related.RelatedRow, edges: ReadonlyArray<EdgePlan>): Rel
 
 /**
  * Run a read once over the local view: the root window's rows, with every
- * `include`d edge resolved (and windowed) onto each row.
+ * `include`d edge resolved (and windowed) onto each row. A failing read of
+ * the view fails the effect with the view's error. The read is compiled when
+ * the effect runs ({@link plan}).
  */
 export const run = (
   view: ClientView.Reader,
   nodes: Node.NodeRegistry,
   read: Read
-): Effect.Effect<ReadonlyArray<Related.RelatedRow>> => {
-  const compiled = plan(nodes, read);
-  if (Arr.isReadonlyArrayEmpty(compiled.edges)) {
-    return view.query(compiled.root).pipe(
-      Effect.orDie,
-      Effect.map((rows) => rows.map((row) => ({ ...row, related: {} })))
-    );
-  }
-  return Related.query(
-    view,
-    nodes.collections,
-    read.collection,
-    compiled.root,
-    edgeSelects(compiled)
-  ).pipe(Effect.map((rows) => rows.map((row) => windowRow(row, compiled.edges))));
-};
+): Effect.Effect<ReadonlyArray<Related.RelatedRow>, ClientView.ClientViewError> =>
+  Effect.suspend(() => {
+    const compiled = plan(nodes, read);
+    if (Arr.isReadonlyArrayEmpty(compiled.edges)) {
+      return view
+        .query(compiled.root)
+        .pipe(Effect.map((rows) => rows.map((row) => ({ ...row, related: {} }))));
+    }
+    return Related.query(
+      view,
+      nodes.collections,
+      read.collection,
+      compiled.root,
+      edgeSelects(compiled)
+    ).pipe(Effect.map((rows) => rows.map((row) => windowRow(row, compiled.edges))));
+  });
 
 /**
  * {@link run} over the root rows already read from the view: the same
@@ -420,19 +439,20 @@ export const runRows = (
   nodes: Node.NodeRegistry,
   read: Read,
   rows: ReadonlyArray<LocalRow>
-): Effect.Effect<ReadonlyArray<Related.RelatedRow>> => {
-  const compiled = plan(nodes, read);
-  if (Arr.isReadonlyArrayEmpty(compiled.edges)) {
-    return Effect.succeed(rows.map((row) => ({ ...row, related: {} })));
-  }
-  return Related.queryRows(
-    view,
-    nodes.collections,
-    read.collection,
-    rows,
-    edgeSelects(compiled)
-  ).pipe(Effect.map((joined) => joined.map((row) => windowRow(row, compiled.edges))));
-};
+): Effect.Effect<ReadonlyArray<Related.RelatedRow>, ClientView.ClientViewError> =>
+  Effect.suspend(() => {
+    const compiled = plan(nodes, read);
+    if (Arr.isReadonlyArrayEmpty(compiled.edges)) {
+      return Effect.succeed(rows.map((row) => ({ ...row, related: {} })));
+    }
+    return Related.queryRows(
+      view,
+      nodes.collections,
+      read.collection,
+      rows,
+      edgeSelects(compiled)
+    ).pipe(Effect.map((joined) => joined.map((row) => windowRow(row, compiled.edges))));
+  });
 
 /**
  * Run a read once over an **external row source** — the server-fallthrough
@@ -475,28 +495,31 @@ export const runPlanVia = <E>(
 
 /**
  * Observe a read over the local view: emits current rows now and re-emits
- * as the root window or any included edge's rows change.
+ * as the root window or any included edge's rows change. The stream carries
+ * no typed error, as every observed read in the engine: a failing view
+ * ends it with a defect.
  */
 export const observe = (
   view: ClientView.Reader,
   nodes: Node.NodeRegistry,
   read: Read
-): Stream.Stream<ReadonlyArray<Related.RelatedRow>> => {
-  const compiled = plan(nodes, read);
-  if (Arr.isReadonlyArrayEmpty(compiled.edges)) {
-    return view.observe(compiled.root).pipe(
-      Stream.orDie,
-      Stream.map((rows) => rows.map((row) => ({ ...row, related: {} })))
-    );
-  }
-  return Related.observe(
-    view,
-    nodes.collections,
-    read.collection,
-    compiled.root,
-    edgeSelects(compiled)
-  ).pipe(Stream.map((rows) => rows.map((row) => windowRow(row, compiled.edges))));
-};
+): Stream.Stream<ReadonlyArray<Related.RelatedRow>> =>
+  Stream.suspend(() => {
+    const compiled = plan(nodes, read);
+    if (Arr.isReadonlyArrayEmpty(compiled.edges)) {
+      return view.observe(compiled.root).pipe(
+        Stream.orDie,
+        Stream.map((rows) => rows.map((row) => ({ ...row, related: {} })))
+      );
+    }
+    return Related.observe(
+      view,
+      nodes.collections,
+      read.collection,
+      compiled.root,
+      edgeSelects(compiled)
+    ).pipe(Stream.map((rows) => rows.map((row) => windowRow(row, compiled.edges))));
+  });
 
 // ─── Client side ─────────────────────────────────────────────────────────────
 

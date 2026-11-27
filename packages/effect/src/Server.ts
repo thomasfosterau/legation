@@ -228,6 +228,8 @@ export const make = (options: MakeOptions): Effect.Effect<Server, never, Scope.S
       request: MutateRequest<Args, ArgsEncoded>
     ): Effect.Effect<Receipt, TransportError | VersionNotSupportedError> =>
       Effect.gen(function* () {
+        // Args that do not encode are a defect of the form layer's hand-over
+        // (see `mutate` on the interface), not a field error.
         const args = yield* Schema.encodeEffect(request.mutation.args)(request.args).pipe(
           Effect.orDie
         );

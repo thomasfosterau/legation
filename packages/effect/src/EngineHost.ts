@@ -594,7 +594,7 @@ export const run = (options: EngineHostOptions): Effect.Effect<Host, never, Scop
           };
         }).pipe(
           Effect.tapError((error) =>
-            Effect.logWarning(`EngineHost: SubscribeRelated rejected: ${String(error)}`)
+            Effect.logWarning("EngineHost: SubscribeRelated rejected", error)
           )
         ),
         { registration: { root: subset, edges }, ...Defined.fields({ url }) }

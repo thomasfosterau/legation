@@ -260,7 +260,7 @@ export interface FetchHandler {
    * the façade's business, is uncovered and online, or is a write to
    * forward, for the caller to forward unchanged. A write's body is read
    * from a clone, so the request itself can still be forwarded. A store
-   * failure while reading the replica is a defect, as `Query.run` treats it.
+   * failure while reading the replica is a defect.
    */
   readonly handle: (request: Request) => Effect.Effect<Option.Option<Response>>;
   /**

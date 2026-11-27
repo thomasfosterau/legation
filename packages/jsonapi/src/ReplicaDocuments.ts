@@ -160,8 +160,9 @@ export interface ReplicaDocuments {
  * (confirmed rows with the optimistic overlay), rows tagged with their
  * collection, batches concatenated in subset order — the shape
  * `SyncServer.readSubsets` gives the REST tier. The subsets of a batch are
- * independent, so they run concurrently. A store failure is a defect, as
- * `Query.run` treats it.
+ * independent, so they run concurrently. A store failure is a defect: the
+ * façade answers what the replica holds, and a replica it cannot read is a
+ * server error (500), not a request error.
  */
 export const fetchOf =
   (view: ClientView.Reader): Linkage.Fetch<never> =>

@@ -38,6 +38,8 @@
  * TanStack DB's `topKWithFractionalIndex` does for its own maintained window.
  */
 
+import { identity } from "effect/Function";
+import * as Result from "effect/Result";
 import * as Defined from "./Defined.js";
 import type * as Index from "./CollectionIndex.js";
 import * as FractionalIndex from "./FractionalIndex.js";
@@ -161,7 +163,13 @@ const fillGaps = (
     let j = i;
     while (j < n && reused[j] === undefined) j++;
     const right = j < n ? reused[j] : undefined;
-    const fresh = FractionalIndex.generateNBetween(left, right, j - i);
+    // A change moves at most one row and every other row keeps its relative
+    // order, so the reused positions either side of a gap are in window
+    // order: a refusal of the bounds is a defect.
+    const fresh = Result.getOrThrowWith(
+      FractionalIndex.generateNBetween(left, right, j - i),
+      identity
+    );
     fresh.forEach((position, offset) => {
       const row = windowRows[i + offset];
       if (row !== undefined) next.set(row.id, position);

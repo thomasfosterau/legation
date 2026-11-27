@@ -21,6 +21,7 @@
 
 import * as Defined from "./Defined.js";
 import * as Arr from "effect/Array";
+import * as Cause from "effect/Cause";
 import * as R from "effect/Record";
 import * as Effect from "effect/Effect";
 import * as FiberMap from "effect/FiberMap";
@@ -31,6 +32,7 @@ import * as Ref from "effect/Ref";
 import * as Scope from "effect/Scope";
 import * as Stream from "effect/Stream";
 import * as Collection from "./Collection.js";
+import * as Background from "./internal/Background.js";
 import type { ClientEngine, LocalRow } from "./ClientEngine.js";
 import type * as ClientView from "./ClientView.js";
 import * as Predicate from "./Predicate.js";
@@ -277,7 +279,10 @@ const hydrate = (
 const primeIndex = (
   view: ClientView.Reader,
   targets: ReadonlyMap<string, Target>
-): Effect.Effect<Map<string, ReadonlyMap<Predicate.Literal, ReadonlyArray<LocalRow>>>> =>
+): Effect.Effect<
+  Map<string, ReadonlyMap<Predicate.Literal, ReadonlyArray<LocalRow>>>,
+  ClientView.ClientViewError
+> =>
   Effect.gen(function* () {
     const index = new Map<string, ReadonlyMap<Predicate.Literal, ReadonlyArray<LocalRow>>>();
     yield* Effect.forEach(
@@ -285,11 +290,9 @@ const primeIndex = (
       ([collection, target]) =>
         (target.ids.size === 0
           ? Effect.succeed<ReadonlyArray<LocalRow>>([])
-          : view
-              .query(
-                Subset.make({ collection, where: Predicate.isIn(target.field, [...target.ids]) })
-              )
-              .pipe(Effect.orDie)
+          : view.query(
+              Subset.make({ collection, where: Predicate.isIn(target.field, [...target.ids]) })
+            )
         ).pipe(Effect.map((rows) => index.set(collection, groupByField(rows, target.field)))),
       { concurrency: 1, discard: true }
     );
@@ -298,15 +301,16 @@ const primeIndex = (
 
 /**
  * Resolve a subset's rows together with their relationships, reading the
- * targeted collections from the engine's local view (one-shot).
+ * targeted collections from the engine's local view (one-shot). A failing
+ * read of the view fails the effect with the view's error.
  */
 export const queryWith = (
   view: ClientView.Reader,
   strategy: Strategy,
   subset: Subset.Subset
-): Effect.Effect<ReadonlyArray<RelatedRow>> =>
+): Effect.Effect<ReadonlyArray<RelatedRow>, ClientView.ClientViewError> =>
   Effect.gen(function* () {
-    const base = yield* view.query(subset).pipe(Effect.orDie);
+    const base = yield* view.query(subset);
     return yield* joinRowsWith(view, strategy, base);
   });
 
@@ -319,7 +323,7 @@ const joinRowsWith = (
   view: ClientView.Reader,
   strategy: Strategy,
   base: ReadonlyArray<LocalRow>
-): Effect.Effect<ReadonlyArray<RelatedRow>> =>
+): Effect.Effect<ReadonlyArray<RelatedRow>, ClientView.ClientViewError> =>
   Effect.gen(function* () {
     const index = yield* primeIndex(view, strategy.targets(base));
     return hydrate(strategy, base, index);
@@ -676,6 +680,14 @@ export const observeWith = (
   Stream.callback<ReadonlyArray<RelatedRow>>((output) => {
     const emit = (result: ReadonlyArray<RelatedRow> | undefined) =>
       result === undefined ? Effect.void : Effect.asVoid(Queue.offer(output, result));
+    // The observers run in forked fibers: one that dies ends the join's stream
+    // with its defect, where it would otherwise stop the join without a word.
+    const endOnDefect = <A, R>(self: Effect.Effect<A, never, R>): Effect.Effect<A, never, R> =>
+      self.pipe(
+        Effect.tapCause((cause) =>
+          Cause.hasInterruptsOnly(cause) ? Effect.void : Queue.failCause(output, cause)
+        )
+      );
 
     return Effect.gen(function* () {
       const engine = makeJoinEngine(strategy);
@@ -689,7 +701,7 @@ export const observeWith = (
           collection,
           Stream.runForEach(view.observe(Subset.make({ collection })).pipe(Stream.orDie), (rows) =>
             Queue.offer(events, { _tag: "foreign", collection, rows })
-          )
+          ).pipe(endOnDefect)
         );
 
       const stopCollection = (collection: string) => FiberMap.remove(collectionFibers, collection);
@@ -699,7 +711,7 @@ export const observeWith = (
       yield* Effect.forkScoped(
         Stream.runForEach(view.observe(subset).pipe(Stream.orDie), (rows) =>
           Queue.offer(events, { _tag: "base", rows })
-        )
+        ).pipe(endOnDefect)
       );
 
       yield* Effect.forkScoped(
@@ -722,7 +734,7 @@ export const observeWith = (
                 : emit(engine.applyForeign(event.collection, event.rows).result)
             )
           )
-        )
+        ).pipe(endOnDefect)
       );
     });
   }).pipe(Stream.changesWith(sameJoin));
@@ -865,17 +877,29 @@ const trackWith = (
       )
     );
     const pullSoon = yield* makePullSoon(engine, scope);
-    const refresh = Effect.fnUntraced(function* () {
-      const base = yield* engine.query(subset).pipe(Effect.orDie);
-      const changed = yield* reconcile(engine, subscribed, desiredSubsets(strategy, base));
-      if (changed) yield* pullSoon;
-    });
+    // A replica read that fails leaves the foreign subscriptions as they
+    // were; the next change to the base rows reconciles them again.
+    const refresh = Effect.fnUntraced(
+      function* () {
+        const base = yield* engine.query(subset);
+        const changed = yield* reconcile(engine, subscribed, desiredSubsets(strategy, base));
+        if (changed) yield* pullSoon;
+      },
+      Effect.catch((error) =>
+        Effect.logWarning(
+          "Related: reading the base rows to reconcile the foreign windows failed",
+          error
+        )
+      )
+    );
     // The base syncs in the background; the derivation runs over what the
     // replica holds now and again on every change to the base rows.
     yield* pullSoon;
     yield* refresh();
     yield* Effect.forkIn(
-      Stream.runForEach(engine.observe(subset).pipe(Stream.orDie), () => refresh()),
+      Stream.runForEach(engine.observe(subset).pipe(Stream.orDie), () => refresh()).pipe(
+        Background.reported("Related: the linkage tracker")
+      ),
       scope
     );
   });
@@ -951,7 +975,7 @@ export const query = (
   collectionName: string,
   subset: Subset.Subset,
   edges: ReadonlyArray<string | EdgeSelect>
-): Effect.Effect<ReadonlyArray<RelatedRow>> =>
+): Effect.Effect<ReadonlyArray<RelatedRow>, ClientView.ClientViewError> =>
   queryWith(
     view,
     fieldMappingStrategy(selectRelationships(registry, collectionName, edges)),
@@ -970,7 +994,7 @@ export const queryRows = (
   collectionName: string,
   base: ReadonlyArray<LocalRow>,
   edges: ReadonlyArray<string | EdgeSelect>
-): Effect.Effect<ReadonlyArray<RelatedRow>> =>
+): Effect.Effect<ReadonlyArray<RelatedRow>, ClientView.ClientViewError> =>
   joinRowsWith(
     view,
     fieldMappingStrategy(selectRelationships(registry, collectionName, edges)),
@@ -1038,7 +1062,7 @@ export const related = (
 export const resolveExistsLocally = (
   view: ClientView.Reader,
   predicate: Predicate.Predicate
-): Effect.Effect<Predicate.Predicate> =>
+): Effect.Effect<Predicate.Predicate, ClientView.ClientViewError> =>
   Predicate.resolveExists(predicate, (node) =>
     view.query(Subset.make({ collection: node.collection })).pipe(
       Effect.map((rows) =>
@@ -1046,7 +1070,6 @@ export const resolveExistsLocally = (
           node,
           rows.map((row) => row.value)
         )
-      ),
-      Effect.orDie
+      )
     )
   );

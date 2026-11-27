@@ -36,6 +36,7 @@ import * as Semaphore from "effect/Semaphore";
 import * as Stream from "effect/Stream";
 import * as SubscriptionRef from "effect/SubscriptionRef";
 import * as Aggregate from "./Aggregate.js";
+import * as Background from "./internal/Background.js";
 import * as Coverage from "./Coverage.js";
 import type { RowId, RowVersion } from "./Collection.js";
 import { ClientStore, NO_COMPACTION, freezePending, type CompactionResult } from "./ClientStore.js";
@@ -1041,8 +1042,14 @@ export interface ClientEngine {
   readonly readThrough?: (
     subsets: ReadonlyArray<Subset.Subset>
   ) => Effect.Effect<ReadonlyArray<ReadRow>, TransportError | VersionNotSupportedError>;
-  /** Run the sync loop: pull on poke; push+pull on reconnect. */
-  readonly runSync: Effect.Effect<void, TransportError | StoreError | MutatorError, Scope.Scope>;
+  /**
+   * Run the sync loop: pull on poke; push+pull on reconnect. The loop's legs
+   * are forked into the given scope and run until it closes. It never fails:
+   * a leg's typed failures are retried by its policy and then surfaced
+   * ({@link syncFailures}); a leg that dies is logged at `Error` with its
+   * cause and reported to any installed `ErrorReporter`.
+   */
+  readonly runSync: Effect.Effect<void, never, Scope.Scope>;
   /**
    * Terminal sync failures surfaced after the retry policy is exhausted — so
    * bindings can show a "sync degraded" state. Also counted in
@@ -3022,11 +3029,7 @@ export const make = (
       })
     );
 
-    const runSync = Effect.fnUntraced(function* (): Effect.fn.Return<
-      void,
-      TransportError | StoreError | MutatorError,
-      Scope.Scope
-    > {
+    const runSync = Effect.fnUntraced(function* (): Effect.fn.Return<void, never, Scope.Scope> {
       // Subscribe to the push trigger here, before anything is forked.
       // `Stream.fromPubSub` would subscribe only once the debounce's forked
       // upstream fibre first pulls, a few scheduler turns after this returns,
@@ -3058,27 +3061,36 @@ export const make = (
             Stream.buffer({ capacity: 1, strategy: "sliding" })
           ),
           () => attemptPull
-        ).pipe(Effect.catch((error) => surfaceFailure("pokes", error)))
+        ).pipe(
+          Effect.catch((error) => surfaceFailure("pokes", error)),
+          Background.reported("ClientEngine: the sync loop's poke leg")
+        )
       );
       // Push + pull on (re)connect.
       yield* Effect.forkScoped(
         Stream.runForEach(transport.statusChanges, (status) =>
           status === "connected" ? attemptPush.pipe(Effect.andThen(attemptPull)) : Effect.void
-        )
+        ).pipe(Background.reported("ClientEngine: the sync loop's reconnect leg"))
       );
       // Auto-push after mutations, debounced so a burst coalesces into one push.
       if (pushDebounce !== undefined && pushTriggers !== undefined) {
         yield* Effect.forkScoped(
           Stream.fromSubscription(pushTriggers).pipe(
             Stream.debounce(pushDebounce),
-            Stream.runForEach(() => attemptPush)
+            Stream.runForEach(() => attemptPush),
+            Background.reported("ClientEngine: the sync loop's push leg")
           )
         );
       }
       // Periodic pull: the correctness backstop when no pokes arrive.
       const pullInterval = options.syncLoop?.pullInterval;
       if (pullInterval !== undefined) {
-        yield* Effect.forkScoped(attemptPull.pipe(Effect.repeat(Schedule.spaced(pullInterval))));
+        yield* Effect.forkScoped(
+          attemptPull.pipe(
+            Effect.repeat(Schedule.spaced(pullInterval)),
+            Background.reported("ClientEngine: the sync loop's interval leg")
+          )
+        );
       }
     });
 

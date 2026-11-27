@@ -5,41 +5,60 @@
  * trip up naive lexicographic-string implementations (module doc).
  */
 import * as Arr from "effect/Array";
+import { identity } from "effect/Function";
+import * as Result from "effect/Result";
 import { describe, expect, it } from "vite-plus/test";
 import * as FractionalIndex from "../FractionalIndex.js";
 
+/** A key between ordered bounds (the tests' bounds always are). */
+const between = (lo?: string, hi?: string): string =>
+  Result.getOrThrowWith(FractionalIndex.generateBetween(lo, hi), identity);
+
+const nBetween = (count: number, lo?: string, hi?: string) =>
+  Result.getOrThrowWith(FractionalIndex.generateNBetween(lo, hi, count), identity);
+
+/** The message of the `InvalidBounds` a refused pair of bounds fails with. */
+const refusal = <A>(result: Result.Result<A, FractionalIndex.InvalidBounds>): string =>
+  Result.match(result, { onSuccess: () => "", onFailure: (error) => error.message });
+
 describe("FractionalIndex", () => {
   it("generates a key with no bounds", () => {
-    const key = FractionalIndex.generateBetween();
+    const key = between();
     expect(key).toBeTypeOf("string");
     expect(key.length).toBeGreaterThan(0);
   });
 
   it("generates a key strictly after a lower bound only", () => {
-    const first = FractionalIndex.generateBetween();
-    const after = FractionalIndex.generateBetween(first, undefined);
+    const first = between();
+    const after = between(first, undefined);
     expect(FractionalIndex.compare(first, after)).toBeLessThan(0);
   });
 
   it("generates a key strictly before an upper bound only", () => {
-    const first = FractionalIndex.generateBetween();
-    const before = FractionalIndex.generateBetween(undefined, first);
+    const first = between();
+    const before = between(undefined, first);
     expect(FractionalIndex.compare(before, first)).toBeLessThan(0);
   });
 
   it("generates a key strictly between two bounds", () => {
-    const lo = FractionalIndex.generateBetween();
-    const hi = FractionalIndex.generateBetween(lo, undefined);
-    const mid = FractionalIndex.generateBetween(lo, hi);
+    const lo = between();
+    const hi = between(lo, undefined);
+    const mid = between(lo, hi);
     expect(FractionalIndex.compare(lo, mid)).toBeLessThan(0);
     expect(FractionalIndex.compare(mid, hi)).toBeLessThan(0);
   });
 
   it("rejects a lower bound that does not sort before the upper bound", () => {
-    const a = FractionalIndex.generateBetween();
-    expect(() => FractionalIndex.generateBetween(a, a)).toThrow(/must sort before/);
-    const before = FractionalIndex.generateBetween(undefined, a);
-    expect(() => FractionalIndex.generateBetween(a, before)).toThrow(/must sort before/);
+    const a = between();
+    expect(refusal(FractionalIndex.generateBetween(a, a))).toMatch(/must sort before/);
+    const before = between(undefined, a);
+    expect(refusal(FractionalIndex.generateBetween(a, before))).toMatch(/must sort before/);
+  });
+
+  it("generateNBetween refuses unordered bounds, whatever the count", () => {
+    const a = between();
+    expect(refusal(FractionalIndex.generateNBetween(a, a, 3))).toMatch(/generateNBetween/);
+    expect(refusal(FractionalIndex.generateNBetween(a, a, 0))).toMatch(/must sort before/);
   });
 
   it("handles the adjacent-digit case that traps naive lexicographic schemes", () => {
@@ -49,13 +68,11 @@ describe("FractionalIndex", () => {
     // pair can never arise from `generateBetween` in the first place. Assert
     // that directly: the module's own value semantics, not the string trap.
     expect(FractionalIndex.compare("A", "A0")).toBe(0);
-    expect(() => FractionalIndex.generateBetween("A", "A0")).toThrow(/must sort before/);
+    expect(refusal(FractionalIndex.generateBetween("A", "A0"))).toMatch(/must sort before/);
   });
 
   it("repeated insertion at the same boundary keeps splitting correctly", () => {
-    const keys = Arr.scan(Arr.range(1, 50), FractionalIndex.generateBetween(), (hi) =>
-      FractionalIndex.generateBetween(undefined, hi)
-    );
+    const keys = Arr.scan(Arr.range(1, 50), between(), (hi) => between(undefined, hi));
     // Strictly decreasing (each new key is the tightest lower neighbor so far).
     Arr.forEach(Arr.zip(keys, Arr.drop(keys, 1)), ([previous, key]) => {
       expect(FractionalIndex.compare(key, previous)).toBeLessThan(0);
@@ -63,9 +80,9 @@ describe("FractionalIndex", () => {
   });
 
   it("generateNBetween produces N strictly increasing keys within bounds", () => {
-    const lo = FractionalIndex.generateBetween();
-    const hi = FractionalIndex.generateBetween(lo, undefined);
-    const keys = FractionalIndex.generateNBetween(lo, hi, 25);
+    const lo = between();
+    const hi = between(lo, undefined);
+    const keys = nBetween(25, lo, hi);
     expect(keys.length).toBe(25);
     let previous = lo;
     Arr.forEach(keys, (key) => {
@@ -76,7 +93,7 @@ describe("FractionalIndex", () => {
   });
 
   it("generateNBetween with no bounds still produces N increasing keys", () => {
-    const keys = FractionalIndex.generateNBetween(undefined, undefined, 10);
+    const keys = nBetween(10, undefined, undefined);
     expect(keys.length).toBe(10);
     Arr.forEach(Arr.zip(keys, Arr.drop(keys, 1)), ([previous, key]) => {
       expect(FractionalIndex.compare(previous, key)).toBeLessThan(0);
@@ -84,8 +101,8 @@ describe("FractionalIndex", () => {
   });
 
   it("generateNBetween(0) is empty and (1) matches generateBetween", () => {
-    expect(FractionalIndex.generateNBetween(undefined, undefined, 0)).toEqual([]);
-    const [single] = FractionalIndex.generateNBetween(undefined, undefined, 1);
+    expect(nBetween(0, undefined, undefined)).toEqual([]);
+    const [single] = nBetween(1, undefined, undefined);
     expect(single).toBeTypeOf("string");
   });
 
@@ -103,11 +120,11 @@ describe("FractionalIndex", () => {
       state ^= state << 5;
       return (state >>> 0) / 0xffffffff;
     };
-    const keys = Arr.reduce(Arr.range(0, 299), [FractionalIndex.generateBetween()], (current) => {
+    const keys = Arr.reduce(Arr.range(0, 299), [between()], (current) => {
       const index = Math.floor(next() * current.length);
       const lo = index > 0 ? current[index - 1] : undefined;
       const hi = current[index];
-      const inserted = FractionalIndex.generateBetween(lo, hi);
+      const inserted = between(lo, hi);
       return [...current.slice(0, index), inserted, ...current.slice(index)];
     });
     Arr.forEach(Arr.zip(keys, Arr.drop(keys, 1)), ([previous, key]) => {

@@ -38,13 +38,14 @@ import * as Match from "effect/Match";
 import * as Option from "effect/Option";
 import * as Random from "effect/Random";
 import * as R from "effect/Record";
+import * as Result from "effect/Result";
 import * as Predicate from "./Predicate.js";
 import * as Json from "./internal/Json.js";
 import type * as Subset from "./Subset.js";
 import * as Schema from "effect/Schema";
 
-/** Thrown for a corpus seed or row count the generator cannot honour. */
-class InvalidCorpusInput extends Schema.TaggedError<
+/** The failure for a corpus seed or row count the generator cannot honour. */
+export class InvalidCorpusInput extends Schema.TaggedError<
   InvalidCorpusInput,
   { readonly brand: unique symbol }
 >()("InvalidCorpusInput", { message: Schema.String }) {}
@@ -54,7 +55,11 @@ class InvalidCorpusInput extends Schema.TaggedError<
 /** A uniform integer in `[0, max)`. */
 const int = (max: number): Effect.Effect<number> =>
   Random.nextIntBetween(0, max, { halfOpen: true });
-/** A uniform pick from a non-empty list (an empty one is a generator bug). */
+/**
+ * A uniform pick from a non-empty list. Every list the generators pick from
+ * is a non-empty constant or a fixture column list, so the empty-list
+ * failure of `Random.choice` is a generator bug: a defect.
+ */
 const pick = <A>(xs: ReadonlyArray<A>): Effect.Effect<A> => Random.choice(xs).pipe(Effect.orDie);
 /** `true` with probability `p`. */
 const chance = (p: number): Effect.Effect<boolean> => Effect.map(Random.next, (roll) => roll < p);
@@ -68,15 +73,18 @@ export const DEFAULT_SEED = 20260902;
  * stays free of `process` (it ships in the engine core, which also runs in
  * browsers).
  */
-export const resolveSeed = (override: string | undefined): number => {
-  if (override === undefined || override.trim() === "") return DEFAULT_SEED;
+export const resolveSeed = (
+  override: string | undefined
+): Result.Result<number, InvalidCorpusInput> => {
+  if (override === undefined || override.trim() === "") return Result.succeed(DEFAULT_SEED);
   const seed = Number(override);
-  if (!Number.isInteger(seed)) {
-    throw new InvalidCorpusInput({
-      message: `LEGATION_CORPUS_SEED must be an integer, got ${Json.stringify(override)}`,
-    });
-  }
-  return seed;
+  return Number.isInteger(seed)
+    ? Result.succeed(seed)
+    : Result.fail(
+        new InvalidCorpusInput({
+          message: `LEGATION_CORPUS_SEED must be an integer, got ${Json.stringify(override)}`,
+        })
+      );
 };
 
 // ─── Fixture schema ──────────────────────────────────────────────────────────
@@ -325,8 +333,8 @@ export const minimumRows = (
  * 1 all-absent; then one row per pool position sweeps every pool value into
  * every column (int4 bounds, `-0`, `2^53±1`, the empty string, U+FFFF, the
  * astral characters, …); the remaining rows are random with NULL/absent
- * rolls. `count` below {@link minimumRows} is an error rather than a
- * truncated sweep. Ids are zero-padded ASCII (`r000`, `r001`, …) so their
+ * rolls. `count` below {@link minimumRows} fails with
+ * {@link InvalidCorpusInput} rather than truncating the sweep. Ids are zero-padded ASCII (`r000`, `r001`, …) so their
  * order is the same in JS, SQLite `BINARY`, and Postgres `COLLATE "C"`,
  * keeping the id tie-break comparable across legs.
  */
@@ -334,13 +342,15 @@ export const generateRows = (
   count: number,
   columns: ReadonlyArray<Column> = corpusColumns,
   options?: CorpusOptions
-): Effect.Effect<ReadonlyArray<CorpusRow>> => {
+): Effect.Effect<ReadonlyArray<CorpusRow>, InvalidCorpusInput> => {
   const plan = planRows(columns, resolveOptions(options));
   const minimum = plan.pinned + plan.sweep;
   if (count < minimum) {
-    throw new InvalidCorpusInput({
-      message: `generateRows needs at least ${minimum} rows for these columns (the pinned rows plus the pool sweep), got ${count}`,
-    });
+    return Effect.fail(
+      new InvalidCorpusInput({
+        message: `generateRows needs at least ${minimum} rows for these columns (the pinned rows plus the pool sweep), got ${count}`,
+      })
+    );
   }
   return Effect.forEach(
     Array.from({ length: count }, (_, index) => index),
@@ -568,9 +578,11 @@ export interface Corpus {
  * Generate a whole corpus deterministically from a seed. The generators run
  * under `Random.withSeed(options.seed)`; the seeding is suspended so every
  * run of the returned effect starts the sequence afresh and yields the same
- * corpus.
+ * corpus. Fails with {@link InvalidCorpusInput} as {@link generateRows} does.
  */
-export const generateCorpus = (options: GenerateOptions): Effect.Effect<Corpus> =>
+export const generateCorpus = (
+  options: GenerateOptions
+): Effect.Effect<Corpus, InvalidCorpusInput> =>
   Effect.suspend(() => {
     const columns = options.columns ?? corpusColumns;
     const coverage = emptyCoverage();
