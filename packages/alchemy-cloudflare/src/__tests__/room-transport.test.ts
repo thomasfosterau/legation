@@ -154,17 +154,21 @@ const runPokes = (options: Partial<RoomTransport.MakeOptions> = {}) =>
       return socket;
     };
     const pokes = yield* Ref.make(0);
-    const fiber = yield* RoomTransport.make({
-      url: "https://rooms.example.com/sync",
-      ...options,
-    }).pokes.pipe(
+    const room = RoomTransport.make({ url: "https://rooms.example.com/sync", ...options });
+    const statuses = yield* Ref.make<ReadonlyArray<string>>([]);
+    yield* room.statusChanges.pipe(
+      Stream.runForEach((status) => Ref.update(statuses, Arr.append(status))),
+      Effect.forkChild
+    );
+    yield* settle;
+    const fiber = yield* room.pokes.pipe(
       Stream.runForEach(() => Ref.update(pokes, (n) => n + 1)),
       Effect.provideService(Socket.WebSocketConstructor, construct),
       Effect.forkChild
     );
     yield* settle;
     const last = () => defined(sockets.at(-1));
-    return { sockets, pokes, fiber, last };
+    return { sockets, pokes, fiber, last, room, statuses };
   });
 
 /** Advance the clock by `millis` and let the stream react. */
@@ -245,6 +249,64 @@ describe("RoomTransport poke socket", () => {
       expect(Exit.isFailure(exit)).toBe(true);
       const error = yield* Effect.flip(exit);
       expect(error).toBeInstanceOf(TransportError);
+    })
+  );
+
+  it.effect("status follows the socket: connecting until open, connecting while re-dialling", () =>
+    Effect.gen(function* () {
+      const run = yield* runPokes();
+      expect(yield* run.room.status).toBe("connecting");
+      run.last().open();
+      yield* settle;
+      expect(yield* run.room.status).toBe("connected");
+      run.last().drop();
+      yield* settle;
+      expect(yield* run.room.status).toBe("connecting");
+      yield* advance(1000);
+      expect(yield* run.room.status).toBe("connecting");
+      run.last().open();
+      yield* settle;
+      expect(yield* run.room.status).toBe("connected");
+      expect(yield* Ref.get(run.statuses)).toEqual([
+        "connecting",
+        "connected",
+        "connecting",
+        "connected",
+      ]);
+      yield* Fiber.interrupt(run.fiber);
+      expect(yield* run.room.status).toBe("connecting");
+    })
+  );
+
+  it.effect("status reads disconnected once the reconnect schedule ends", () =>
+    Effect.gen(function* () {
+      const run = yield* runPokes({ reconnect: Schedule.recurs(1) });
+      run.last().drop();
+      yield* advance(0);
+      run.last().drop();
+      yield* advance(0);
+      yield* Fiber.await(run.fiber);
+      expect(yield* run.room.status).toBe("disconnected");
+      expect(yield* Ref.get(run.statuses)).toEqual(["connecting", "disconnected"]);
+    })
+  );
+
+  it.effect("HTTP calls still answer while the socket is down", () =>
+    Effect.gen(function* () {
+      const run = yield* runPokes();
+      run.last().open();
+      yield* settle;
+      run.last().drop();
+      yield* settle;
+      expect(yield* run.room.status).toBe("connecting");
+      const sent: Array<Sent> = [];
+      const fetch = recordingFetch(sent, () => Response.json({ lastMutationIds: { c1: 1 } }));
+      const response = yield* run.room
+        .push({ clientGroupId: Protocol.ClientGroupId.make("g1"), mutations: [] })
+        .pipe(Effect.provideService(FetchHttpClient.Fetch, fetch));
+      expect(response).toEqual({ lastMutationIds: { c1: 1 } });
+      expect(sent).toHaveLength(1);
+      yield* Fiber.interrupt(run.fiber);
     })
   );
 });

@@ -29,7 +29,7 @@ import * as Layer from "effect/Layer";
 import * as P from "effect/Predicate";
 import * as Scope from "effect/Scope";
 import * as Stream from "effect/Stream";
-import { ClientEngine, type LocalRow, type MutationOutcome } from "./ClientEngine.js";
+import { ClientEngine, EngineEvent, type LocalRow, type MutationOutcome } from "./ClientEngine.js";
 import type * as ClientEngineModule from "./ClientEngine.js";
 import type * as Collection from "./Collection.js";
 import type * as Coverage from "./Coverage.js";
@@ -145,7 +145,11 @@ export interface ClientView {
     collectionName: string,
     subset: Subset.Subset,
     edges: ReadonlyArray<string | Related.EdgeSelect>
-  ) => Effect.Effect<Stream.Stream<ReadonlyArray<Related.RelatedRow>>, never, Scope.Scope>;
+  ) => Effect.Effect<
+    Stream.Stream<ReadonlyArray<Related.RelatedRow>, ClientViewError>,
+    never,
+    Scope.Scope
+  >;
   /**
    * The current resolved rows of a relational read this view holds through
    * {@link related} or {@link pinEdges}, read once. A `Mirror` answers
@@ -252,7 +256,7 @@ export const fromEngine = (raw: ClientEngine): ClientView => {
     // `PullCompleted` is published once the pull counts move, so the marks read
     // after it see the pull.
     pulledChanges: raw.engineEvents.pipe(
-      Stream.filter((event) => P.isTagged(event, "PullCompleted")),
+      Stream.filter(EngineEvent.$is("PullCompleted")),
       Stream.as(undefined)
     ),
     totalOf: (subset) => engine.totalOf(subset),

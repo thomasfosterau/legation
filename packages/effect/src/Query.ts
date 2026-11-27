@@ -495,22 +495,20 @@ export const runPlanVia = <E>(
 
 /**
  * Observe a read over the local view: emits current rows now and re-emits
- * as the root window or any included edge's rows change. The stream carries
- * no typed error, as every observed read in the engine: a failing view
- * ends it with a defect.
+ * as the root window or any included edge's rows change. A read of the
+ * view that fails ends the stream with its {@link ClientView.ClientViewError}.
  */
 export const observe = (
   view: ClientView.Reader,
   nodes: Node.NodeRegistry,
   read: Read
-): Stream.Stream<ReadonlyArray<Related.RelatedRow>> =>
+): Stream.Stream<ReadonlyArray<Related.RelatedRow>, ClientView.ClientViewError> =>
   Stream.suspend(() => {
     const compiled = plan(nodes, read);
     if (Arr.isReadonlyArrayEmpty(compiled.edges)) {
-      return view.observe(compiled.root).pipe(
-        Stream.orDie,
-        Stream.map((rows) => rows.map((row) => ({ ...row, related: {} })))
-      );
+      return view
+        .observe(compiled.root)
+        .pipe(Stream.map((rows) => rows.map((row) => ({ ...row, related: {} }))));
     }
     return Related.observe(
       view,

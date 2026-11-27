@@ -29,6 +29,7 @@
  * identical page transitions (module the `position`/`move` gap above).
  */
 import * as Arr from "effect/Array";
+import * as Data from "effect/Data";
 import * as P from "effect/Predicate";
 import type { RowId } from "./Collection.js";
 
@@ -49,6 +50,23 @@ export type RowChange<Row> =
     }
   | { readonly _tag: "exit"; readonly id: RowId; readonly previous: Row }
   | { readonly _tag: "reset" };
+
+interface RowChangeDefinition extends Data.TaggedEnum.WithGenerics<1> {
+  readonly taggedEnum: RowChange<this["A"]>;
+}
+
+const matchers: Data.TaggedEnum.GenericMatchers<RowChangeDefinition> =
+  Data.taggedEnum<RowChangeDefinition>();
+
+/** A type guard for one `RowChange` tag: `RowChange.$is("exit")(change)`. */
+export const $is: Data.TaggedEnum.GenericMatchers<RowChangeDefinition>["$is"] = matchers.$is;
+
+/**
+ * Exhaustive match on a `RowChange`'s tag, data-first or data-last. Allocates
+ * the cases object per call, so a per-row loop keeps its `switch`.
+ */
+export const $match: Data.TaggedEnum.GenericMatchers<RowChangeDefinition>["$match"] =
+  matchers.$match;
 
 interface Identified {
   readonly id: RowId;

@@ -25,6 +25,7 @@ import {
 import * as PollingHintSource from "../../sql/PollingHintSource.js";
 import type * as SqlBackend from "../../sql/SqlBackend.js";
 import { ClientGroupId } from "../../Protocol.js";
+import { takes } from "../takes.js";
 
 /** A detector reading the test drives between polls (an out-of-band write). */
 interface Detector {
@@ -55,7 +56,7 @@ describe("PollingHintSource", () => {
   it.live("emits a value-less hint only when the version-detector moves", () =>
     Effect.gen(function* () {
       const bus = yield* InvalidationBus.makeInProcess;
-      const subscription = yield* bus.subscribe;
+      const subscription = yield* takes(bus.subscribe);
       const detector: Detector = { n: 1, v: "a" };
 
       const source = PollingHintSource.make({
@@ -85,7 +86,7 @@ describe("PollingHintSource", () => {
   it.live("detects a row-count change when no version column is mapped", () =>
     Effect.gen(function* () {
       const bus = yield* InvalidationBus.makeInProcess;
-      const subscription = yield* bus.subscribe;
+      const subscription = yield* takes(bus.subscribe);
       const detector: Detector = { n: 1, v: null };
 
       const source = PollingHintSource.make({

@@ -1011,9 +1011,8 @@ export const run: (options: EngineHostOptions) => Effect.Effect<Host, never, Sco
     );
 
     yield* Effect.forkScoped(
-      Effect.forever(
-        inbox.take.pipe(
-          Effect.flatMap(MirrorProtocol.decodeMirrorMessage),
+      Stream.runForEach(inbox, (raw) =>
+        MirrorProtocol.decodeMirrorMessage(raw).pipe(
           Effect.flatMap((message) =>
             message === undefined ? Effect.void : handle(message).pipe(Effect.ignore)
           )

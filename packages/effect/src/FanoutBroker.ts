@@ -26,14 +26,9 @@ import * as Option from "effect/Option";
 import * as PubSub from "effect/PubSub";
 import * as Ref from "effect/Ref";
 import * as Scope from "effect/Scope";
+import * as Stream from "effect/Stream";
 import type { Topic } from "./FanoutTopics.js";
 import * as Telemetry from "./Telemetry.js";
-
-/** A live subscription to a room's topic pokes. */
-export interface TopicPokes {
-  /** The next batch of matched topics; suspends until one arrives. */
-  readonly take: Effect.Effect<ReadonlyArray<Topic>>;
-}
 
 /**
  * Topic pub/sub with leased registrations: rooms lease the topics their windows compile to, and
@@ -52,8 +47,13 @@ export interface FanoutBroker {
   ) => Effect.Effect<void>;
   /** Route derived topics to every room whose live lease intersects them. */
   readonly publish: (topics: Iterable<Topic>) => Effect.Effect<void>;
-  /** A room's poke feed. Established once the effect completes. */
-  readonly pokes: (roomId: string) => Effect.Effect<TopicPokes, never, Scope.Scope>;
+  /**
+   * A room's poke feed: each batch of matched topics, in order. Established once the effect
+   * completes; the stream is single-use and ends when the scope closes.
+   */
+  readonly pokes: (
+    roomId: string
+  ) => Effect.Effect<Stream.Stream<ReadonlyArray<Topic>>, never, Scope.Scope>;
 }
 
 /**
@@ -116,8 +116,7 @@ export const makeInProcess: Effect.Effect<FanoutBroker, never, Scope.Scope> = Ef
       }),
       pokes: Effect.fnUntraced(function* (roomId) {
         const hub = yield* hubFor(roomId);
-        const subscription = yield* PubSub.subscribe(hub);
-        return { take: PubSub.take(subscription) };
+        return Stream.fromSubscription(yield* PubSub.subscribe(hub));
       }),
     };
   }

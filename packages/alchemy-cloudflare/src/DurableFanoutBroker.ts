@@ -32,6 +32,7 @@ import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
 import * as PubSub from "effect/PubSub";
 import * as R from "effect/Record";
+import * as Stream from "effect/Stream";
 import type * as Scope from "effect/Scope";
 import type { Backend, Node } from "@thomasfosterau/legation";
 import { type FanoutBroker, FanoutTopics } from "@thomasfosterau/legation/internal";
@@ -163,10 +164,7 @@ export const make: (
           { discard: true, concurrency: CONCURRENCY }
         );
       }),
-      pokes: Effect.fnUntraced(function* () {
-        const subscription = yield* PubSub.subscribe(hub);
-        return { take: PubSub.take(subscription) };
-      }),
+      pokes: () => Effect.map(PubSub.subscribe(hub), Stream.fromSubscription),
     },
     notify: (topics) => PubSub.publish(hub, topics).pipe(Effect.asVoid),
   };

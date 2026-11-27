@@ -196,10 +196,12 @@ export type QueryOf<Graph extends Node.NodeRegistry> =
 /** {@link Client.observe} over a graph: as {@link QueryOf}, streaming the rows. */
 export type ObserveOf<Graph extends Node.NodeRegistry> =
   Node.IsTyped<Graph> extends false
-    ? (read: QueryModule.Read) => Stream.Stream<ReadonlyArray<Related.RelatedRow>>
+    ? (
+        read: QueryModule.Read
+      ) => Stream.Stream<ReadonlyArray<Related.RelatedRow>, ClientView.ClientViewError>
     : <const R extends QueryModule.Read>(
         read: R & QueryModule.Validate<Graph, R>
-      ) => Stream.Stream<ReadonlyArray<ResolvedRow<R, Graph>>>;
+      ) => Stream.Stream<ReadonlyArray<ResolvedRow<R, Graph>>, ClientView.ClientViewError>;
 
 /**
  * How completely an answer holds the rows its read selects: `"complete"` when
@@ -248,10 +250,12 @@ export type AnswerOf<Graph extends Node.NodeRegistry> =
  */
 export type ObserveAnswersOf<Graph extends Node.NodeRegistry> =
   Node.IsTyped<Graph> extends false
-    ? (read: QueryModule.Read) => Stream.Stream<Answer<QueryModule.Read, Graph>>
+    ? (
+        read: QueryModule.Read
+      ) => Stream.Stream<Answer<QueryModule.Read, Graph>, ClientView.ClientViewError>
     : <const R extends QueryModule.Read>(
         read: R & QueryModule.Validate<Graph, R>
-      ) => Stream.Stream<Answer<R, Graph>>;
+      ) => Stream.Stream<Answer<R, Graph>, ClientView.ClientViewError>;
 
 /**
  * The one-per-thread object an app reads and writes through (ADR-0022): queries, observed reads,
@@ -275,7 +279,9 @@ export interface Client<Graph extends Node.NodeRegistry = Node.NodeRegistry> {
   /**
    * Observe a read: current rows now, re-emitting as they change. The
    * read's windows are registered for the stream's lifetime — observing
-   * IS subscribing. Checked and typed as {@link Client.query} is.
+   * IS subscribing. Checked and typed as {@link Client.query} is. A
+   * registration the view refuses, or a read of it that fails, ends the
+   * stream with that {@link ClientView.ClientViewError}.
    */
   readonly observe: ObserveOf<Graph>;
   /**
@@ -924,9 +930,9 @@ export const fromView = <Graph extends Node.NodeRegistry>(
   // only when the completeness moved: a fresh complete answer, or the last
   // complete answer's rows, out again as partial once they are uncovered.
   const answersOf = (
-    sources: Stream.Stream<ReadonlyArray<Related.RelatedRow>>,
+    sources: Stream.Stream<ReadonlyArray<Related.RelatedRow>, ClientView.ClientViewError>,
     covered: Effect.Effect<Option.Option<ReadonlyArray<Related.RelatedRow>>>
-  ): Stream.Stream<UntypedAnswer> =>
+  ): Stream.Stream<UntypedAnswer, ClientView.ClientViewError> =>
     Stream.merge(
       sources.pipe(Stream.map(Option.some)),
       (view.pulledChanges ?? Stream.empty).pipe(
@@ -1008,39 +1014,39 @@ export const fromView = <Graph extends Node.NodeRegistry>(
   // A live read: its windows registered for the stream's lifetime and its
   // rows streamed, which `finish` turns into what the caller observes, given
   // the read's covered answer now (`coveredAnswer` over the same rows).
-  // Observed reads carry no typed error (`ObserveOf`): a view that fails
-  // ends the stream with a defect.
+  // A view that fails, or refuses the registration, ends the stream with
+  // its `ClientViewError` (`ObserveOf`).
   const live = <A>(
     read: QueryModule.Read,
     finish: (
-      rows: Stream.Stream<ReadonlyArray<Related.RelatedRow>>,
+      rows: Stream.Stream<ReadonlyArray<Related.RelatedRow>, ClientView.ClientViewError>,
       covered: Effect.Effect<Option.Option<ReadonlyArray<Related.RelatedRow>>>
-    ) => Stream.Stream<A>
-  ): Stream.Stream<A> => Stream.suspend(() => liveOf(read, Query.plan(nodes, read), finish));
+    ) => Stream.Stream<A, ClientView.ClientViewError>
+  ): Stream.Stream<A, ClientView.ClientViewError> =>
+    Stream.suspend(() => liveOf(read, Query.plan(nodes, read), finish));
 
   const liveOf = <A>(
     read: QueryModule.Read,
     compiled: Query.Plan,
     finish: (
-      rows: Stream.Stream<ReadonlyArray<Related.RelatedRow>>,
+      rows: Stream.Stream<ReadonlyArray<Related.RelatedRow>, ClientView.ClientViewError>,
       covered: Effect.Effect<Option.Option<ReadonlyArray<Related.RelatedRow>>>
-    ) => Stream.Stream<A>
-  ): Stream.Stream<A> => {
+    ) => Stream.Stream<A, ClientView.ClientViewError>
+  ): Stream.Stream<A, ClientView.ClientViewError> => {
     if (Arr.isReadonlyArrayEmpty(compiled.edges)) {
       const registration = Coverage.ofPlan(compiled);
       return Stream.unwrap(
         Effect.acquireRelease(
-          // Observed reads carry no typed error: a refused registration ends
-          // the stream with a defect, the ledger already rolled back.
-          acquire(registration, "observer").pipe(Effect.orDie),
+          // A refused registration fails the stream, the ledger already
+          // rolled back.
+          acquire(registration, "observer"),
           () => release(registration, "observer")
         ).pipe(
           Effect.as(
             finish(
-              view.observe(compiled.root).pipe(
-                Stream.orDie,
-                Stream.map((rows) => rows.map((row) => ({ ...row, related: {} })))
-              ),
+              view
+                .observe(compiled.root)
+                .pipe(Stream.map((rows) => rows.map((row) => ({ ...row, related: {} })))),
               coveredAnswer(
                 compiled,
                 Option.some(registration),
@@ -1074,11 +1080,14 @@ export const fromView = <Graph extends Node.NodeRegistry>(
     );
   };
 
-  const observe = (read: QueryModule.Read): Stream.Stream<ReadonlyArray<Related.RelatedRow>> =>
+  const observe = (
+    read: QueryModule.Read
+  ): Stream.Stream<ReadonlyArray<Related.RelatedRow>, ClientView.ClientViewError> =>
     live(read, (rows) => rows);
 
-  const observeAnswers = (read: QueryModule.Read): Stream.Stream<UntypedAnswer> =>
-    live(read, answersOf);
+  const observeAnswers = (
+    read: QueryModule.Read
+  ): Stream.Stream<UntypedAnswer, ClientView.ClientViewError> => live(read, answersOf);
 
   return {
     nodes,

@@ -22,6 +22,7 @@
 import * as Arr from "effect/Array";
 import * as Effect from "effect/Effect";
 import type * as Scope from "effect/Scope";
+import * as Stream from "effect/Stream";
 import type { ChangeHint } from "./Backend.js";
 import type { Touched } from "./HttpCache.js";
 import { InvalidationBus } from "./InvalidationBus.js";
@@ -84,15 +85,11 @@ export const run: (
   "legation/InvalidationSink.run"
 )(function* (sink) {
   const bus = yield* InvalidationBus;
-  const subscription = yield* bus.subscribe;
+  const hints = yield* bus.subscribe;
   yield* Effect.forkScoped(
-    Effect.forever(
-      subscription.take.pipe(
-        Effect.flatMap((hints) => {
-          const touched = touchedBy(hints);
-          return isEmpty(touched) ? Effect.void : guarded(sink, touched);
-        })
-      )
-    )
+    Stream.runForEach(hints, (batch) => {
+      const touched = touchedBy(batch);
+      return isEmpty(touched) ? Effect.void : guarded(sink, touched);
+    })
   );
 });

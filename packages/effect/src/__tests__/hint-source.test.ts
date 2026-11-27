@@ -17,13 +17,14 @@ import type { ChangeHint } from "../Backend.js";
 import * as HintSource from "../HintSource.js";
 import * as InvalidationBus from "../InvalidationBus.js";
 import { RowId } from "../Protocol.js";
+import { takes } from "./takes.js";
 
 describe("HintSource.fromStream", () => {
   it.effect("publishes each hint batch from the stream to the bus", () =>
     Effect.gen(function* () {
       const bus = yield* InvalidationBus.makeInProcess;
       // Subscribe before running so no batch is missed.
-      const subscription = yield* bus.subscribe;
+      const subscription = yield* takes(bus.subscribe);
       const batches: ReadonlyArray<ReadonlyArray<ChangeHint>> = [
         [{ collection: "todos", ids: [RowId.make("1")] }],
         [{ collection: "lists", ids: [] }],
@@ -41,7 +42,7 @@ describe("HintSource.fromStream", () => {
   it.effect("stops publishing when its scope closes", () =>
     Effect.gen(function* () {
       const bus = yield* InvalidationBus.makeInProcess;
-      const subscription = yield* bus.subscribe;
+      const subscription = yield* takes(bus.subscribe);
       const queue = yield* Queue.unbounded<ReadonlyArray<ChangeHint>>();
       // Completes when the consumer's stream is finalized, which happens exactly
       // when its fibre is interrupted.

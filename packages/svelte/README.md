@@ -245,6 +245,24 @@ stream rejects it into the boundary's `failed` snippet.
 </svelte:boundary>
 ```
 
+### Read errors
+
+The read hooks (`useQuery`, `useAnswer`, `useConnection`, `useNamedQuery`,
+`useAggregate`, `useAggregateGrouped`) are typed `Live<A, ReadError>`, where
+`ReadError` is the Client view's `ClientViewError` (`StoreError`,
+`TransportError`, `MutatorError` or `QueryError`). A registration the view
+refuses, or a read of it that fails, ends the stream: `current` becomes an
+`AsyncResult.Failure` whose cause carries the error, and `promise` rejects with
+the error itself, so a `failed` snippet can match on its `_tag`. A changed input
+subscribes again. A defect (no Client in context, a read the graph cannot plan)
+is a `Failure` over a die instead.
+
+```svelte
+{#if AsyncResult.isFailure(todos.current)}
+  <p>Couldn't read todos: {Cause.pretty(todos.current.cause)}</p>
+{/if}
+```
+
 The root entry ships as an uncompiled `.svelte.js` module (compiled by your
 bundler's Svelte plugin, the standard Svelte-library convention — the package
 carries a `svelte` export condition so the plugin picks it up). It requires

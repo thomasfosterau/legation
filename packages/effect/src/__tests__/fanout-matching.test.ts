@@ -32,6 +32,7 @@ import * as Telemetry from "../Telemetry.js";
 import type { ServerHandler } from "../Transport.js";
 import { idOf } from "./shapes.js";
 import { ClientGroupId, MutationId, RowId } from "../Protocol.js";
+import { takes } from "./takes.js";
 
 interface Todo {
   readonly id: string;
@@ -235,7 +236,7 @@ describe("predicate-aware fan-out matching", () => {
     Effect.gen(function* () {
       const broker = yield* InvalidationBus.makeMemoryBroker;
       const bus = InvalidationBus.makeSerialized(broker);
-      const subscription = yield* bus.subscribe;
+      const subscription = yield* takes(bus.subscribe);
 
       // An old, value-less hint must decode and behave exactly as before.
       const valueLess: ReadonlyArray<ChangeHint> = [

@@ -44,7 +44,8 @@ are Alchemy Durable Objects, their state, storage and sockets are the provider's
 - **`RoomTransport`** — the browser-side `ClientTransport`: push/pull/read as
   HTTP POSTs plus one reconnecting poke socket. Sync stays correct over HTTP
   alone — a dead socket only delays pokes, and the pull interval is the safety
-  net.
+  net — and its `status` follows the socket (`connecting` while it dials or
+  re-dials, `connected` while open), so a UI can show live updates as degraded.
 - **`BindingTransport`** — the same protocol over a **service binding**
   (`env.API.fetch`), for the two-Worker shape where the Worker rendering the
   page is not the Worker holding the backend. It forwards the inbound cookie

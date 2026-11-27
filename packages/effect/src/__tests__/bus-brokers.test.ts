@@ -15,6 +15,7 @@ import * as MutableHashSet from "effect/MutableHashSet";
 import * as PubSub from "effect/PubSub";
 import * as Queue from "effect/Queue";
 import * as References from "effect/References";
+import * as Stream from "effect/Stream";
 import * as Ref from "effect/Ref";
 import { Redis } from "effect/persistence";
 import * as TestClock from "effect/testing/TestClock";
@@ -25,6 +26,7 @@ import { defined } from "./defined.js";
 import { TestFailure } from "./test-failure.js";
 import * as Json from "../internal/Json.js";
 import { RowId } from "../Protocol.js";
+import { takes } from "./takes.js";
 
 const hint: ChangeHint = { collection: "todos", ids: [RowId.make("1")] };
 
@@ -52,7 +54,7 @@ describe("makeWebSocketBroker (Durable Object relay pattern)", () => {
       const busA = InvalidationBus.makeSerialized(BusBrokers.makeWebSocketBroker(hub.connect()));
       const busB = InvalidationBus.makeSerialized(BusBrokers.makeWebSocketBroker(hub.connect()));
 
-      const subscription = yield* busB.subscribe;
+      const subscription = yield* takes(busB.subscribe);
       yield* busA.publish([hint]);
       expect(yield* subscription.take).toEqual([hint]);
     }).pipe(Effect.scoped)
@@ -63,12 +65,24 @@ describe("makeWebSocketBroker (Durable Object relay pattern)", () => {
       const hub = makeHub();
       const raw = hub.connect();
       const busB = InvalidationBus.makeSerialized(BusBrokers.makeWebSocketBroker(hub.connect()));
-      const subscription = yield* busB.subscribe;
+      const subscription = yield* takes(busB.subscribe);
 
       raw.send("not json at all");
       raw.send(Json.stringify({ not: "an array of hints" }));
       raw.send(Json.stringify([hint]));
       expect(yield* subscription.take).toEqual([hint]);
+    }).pipe(Effect.scoped)
+  );
+
+  it.effect("delivers frames sent after subscribe completes but before the stream runs", () =>
+    Effect.gen(function* () {
+      const hub = makeHub();
+      const raw = hub.connect();
+      const frames = yield* BusBrokers.makeWebSocketBroker(hub.connect()).subscribe;
+
+      raw.send("first");
+      raw.send("second");
+      expect(yield* Stream.runCollect(Stream.take(frames, 2))).toEqual(["first", "second"]);
     }).pipe(Effect.scoped)
   );
 });
@@ -243,7 +257,7 @@ describe("makeRedisBroker (Redis Streams)", () => {
 
       // Subscribe first ("$" = only future). Publish only once the reader has
       // resolved its start position, so the hint is past it.
-      const subscription = yield* busB.subscribe;
+      const subscription = yield* takes(busB.subscribe);
       yield* Deferred.await(readerParked);
       yield* busA.publish([hint]);
       expect(yield* subscription.take).toEqual([hint]);
@@ -261,7 +275,7 @@ describe("makeRedisBroker (Redis Streams)", () => {
       const busA = InvalidationBus.makeSerialized(yield* make);
       const busB = InvalidationBus.makeSerialized(yield* make);
 
-      const subscription = yield* busB.subscribe;
+      const subscription = yield* takes(busB.subscribe);
       yield* busA.publish([hint]);
       expect(yield* subscription.take).toEqual([hint]);
     }).pipe(Effect.scoped)
@@ -279,7 +293,7 @@ describe("makeRedisBroker (Redis Streams)", () => {
       const busA = InvalidationBus.makeSerialized(yield* make);
       const busB = InvalidationBus.makeSerialized(yield* make);
 
-      const subscription = yield* busB.subscribe;
+      const subscription = yield* takes(busB.subscribe);
       expect(yield* Queue.take(fake.events)).toBe("parked");
       yield* TestClock.adjust("200 millis");
       expect(yield* Queue.take(fake.events)).toBe("timedOut");
@@ -307,7 +321,7 @@ describe("makeRedisBroker (Redis Streams)", () => {
       const busA = InvalidationBus.makeSerialized(yield* make);
       const busB = InvalidationBus.makeSerialized(yield* make);
 
-      const subscription = yield* busB.subscribe;
+      const subscription = yield* takes(busB.subscribe);
       // Refused: subscribe's bounded attempt, then the reader's first step, which backs off on the TestClock.
       expect(yield* Queue.take(fake.events)).toBe("refused");
       expect(yield* Queue.take(fake.events)).toBe("refused");
@@ -346,7 +360,7 @@ describe("makeRedisBroker (Redis Streams)", () => {
       const make = BusBrokers.makeRedisBroker({ stream: "test:hints", block: "200 millis" }).pipe(
         Effect.provideService(Redis.Redis, fake.redis)
       );
-      yield* InvalidationBus.makeSerialized(yield* make).subscribe;
+      yield* Effect.asVoid(InvalidationBus.makeSerialized(yield* make).subscribe);
       // subscribe's bounded attempt, then the reader's first step.
       expect(yield* Queue.take(fake.events)).toBe("refused");
       expect(yield* Queue.take(fake.events)).toBe("refused");
@@ -381,7 +395,7 @@ describe("makeRedisBroker (Redis Streams)", () => {
       const make = BusBrokers.makeRedisBroker({ stream: "test:hints", block: "200 millis" }).pipe(
         Effect.provideService(Redis.Redis, fake.redis)
       );
-      yield* InvalidationBus.makeSerialized(yield* make).subscribe;
+      yield* Effect.asVoid(InvalidationBus.makeSerialized(yield* make).subscribe);
       expect(yield* Queue.take(fake.events)).toBe("refused");
       expect(yield* Queue.take(fake.events)).toBe("refused");
       yield* TestClock.adjust("200 millis");
@@ -423,7 +437,7 @@ describe("makeRedisBroker (Redis Streams)", () => {
       const busB = InvalidationBus.makeSerialized(yield* make);
 
       // Outage 1 (t=0): subscribe's attempt and the reader's first two steps are refused.
-      const subscription = yield* busB.subscribe;
+      const subscription = yield* takes(busB.subscribe);
       expect(yield* Queue.take(fake.events)).toBe("refused");
       expect(yield* Queue.take(fake.events)).toBe("refused");
       yield* TestClock.adjust("200 millis");
@@ -550,7 +564,7 @@ describe("makeRedisBroker (Redis Streams)", () => {
       const busB = InvalidationBus.makeSerialized(yield* make);
 
       // The start lookup answers; the reader's first XREAD is the one that hangs.
-      const subscription = yield* busB.subscribe;
+      const subscription = yield* takes(busB.subscribe);
       expect(yield* Queue.take(fake.events)).toBe("hung");
       yield* fake.setXreadHung(false);
       yield* TestClock.adjust("2200 millis");
@@ -600,7 +614,7 @@ describe("makeRedisBroker (Redis Streams)", () => {
         const busA = InvalidationBus.makeSerialized(yield* make);
         const busB = InvalidationBus.makeSerialized(yield* make);
 
-        const subscription = yield* busB.subscribe;
+        const subscription = yield* takes(busB.subscribe);
         expect(yield* Queue.take(fake.events)).toBe("hung");
         yield* busA.publish([hint]);
         yield* fake.setXreadHung(false);
@@ -628,7 +642,7 @@ describe("makeRedisBroker (Redis Streams)", () => {
       const busA = InvalidationBus.makeSerialized(yield* make);
       const busB = InvalidationBus.makeSerialized(yield* make);
 
-      const subscription = yield* busB.subscribe;
+      const subscription = yield* takes(busB.subscribe);
       expect(yield* Queue.take(fake.events)).toBe("parked");
       yield* TestClock.adjust("200 millis");
       expect(yield* Queue.take(fake.events)).toBe("timedOut");
@@ -663,7 +677,7 @@ describe("makeRedisBroker (Redis Streams)", () => {
       const busA = InvalidationBus.makeSerialized(yield* make);
       const busB = InvalidationBus.makeSerialized(yield* make);
 
-      const subscription = yield* busB.subscribe;
+      const subscription = yield* takes(busB.subscribe);
       expect(yield* Queue.take(fake.events)).toBe("parked");
       yield* TestClock.adjust("1 hour");
 

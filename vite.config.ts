@@ -221,6 +221,11 @@ export default defineConfig({
       // encoded args, a caught failure. Parsing them earlier would decode
       // twice or change the wire shape.
       "effect/no-unknown-parameters": "warn",
+      // Its last sites are exported `Effect` values, not functions
+      // (`ClientStore.makeMemory`, `PokeHub.make`, `JsonApiSync.start`, …):
+      // a thunk would only make callers write `make()`. A new function
+      // returning `Effect.gen` is still a finding.
+      "effect/prefer-effect-fn": "warn",
       "effect/no-unknown-returns": "error",
       "effect/no-unsafe-dictionary-type": "warn",
       "effect/no-runtime-typeof": "error",
@@ -233,7 +238,6 @@ export default defineConfig({
       "effect/yield-in-for-loop": "warn", // 39 sites: per-row writes in src, the op-count-sensitive journal race tests
       "effect/avoid-direct-tag-checks": "warn", // 6 sites, the measured switches in internal/RowDispatch.ts
       "effect/avoid-direct-json": "warn", // 4 sites: Hash.ts (measured hot), a JSON.parse bench, a Svelte panel
-      "effect/prefer-effect-fn": "warn", // 7 sites, exported effect values (public API)
       "effect/no-known-value-widening": "warn", // 3 sites, exported return types (public API)
 
       // ---- Type-aware rules (tsrs) ------------------------------------------

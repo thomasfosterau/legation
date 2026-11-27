@@ -145,16 +145,18 @@ export const query = (
  * Live version of {@link query} as an incrementally-maintained join. Delegates
  * to {@link Related.observeWith}: a write to a referenced row re-hydrates the
  * join without re-querying the base; a base change that shifts referenced
- * collections re-establishes the observers.
+ * collections re-establishes the observers. A failed read ends the stream
+ * with its error.
  */
 export const observe = (
   engine: ClientEngine.ClientEngine,
   subset: Subset.Subset,
   names: ReadonlyArray<string>
-): Stream.Stream<ReadonlyArray<RelatedRow>> =>
+): Stream.Stream<ReadonlyArray<RelatedRow>, ClientView.ClientViewError> =>
   // SAFETY: as in `query`.
   Related.observeWith(engine, linkageStrategy(names), subset) as Stream.Stream<
-    ReadonlyArray<RelatedRow>
+    ReadonlyArray<RelatedRow>,
+    ClientView.ClientViewError
   >;
 
 /**
@@ -168,10 +170,14 @@ export const related = (
   engine: ClientEngine.ClientEngine,
   subset: Subset.Subset,
   names: ReadonlyArray<string>
-): Effect.Effect<Stream.Stream<ReadonlyArray<RelatedRow>>, never, Scope.Scope> =>
+): Effect.Effect<
+  Stream.Stream<ReadonlyArray<RelatedRow>, ClientView.ClientViewError>,
+  never,
+  Scope.Scope
+> =>
   // SAFETY: as in `query`.
   Related.relatedWith(engine, linkageStrategy(names), subset) as Effect.Effect<
-    Stream.Stream<ReadonlyArray<RelatedRow>>,
+    Stream.Stream<ReadonlyArray<RelatedRow>, ClientView.ClientViewError>,
     never,
     Scope.Scope
   >;

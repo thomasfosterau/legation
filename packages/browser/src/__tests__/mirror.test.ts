@@ -48,6 +48,7 @@ import * as TestClock from "effect/testing/TestClock";
 import * as BroadcastMirrorChannel from "../BroadcastMirrorChannel.js";
 import { defined } from "./defined.js";
 import { TestFailure } from "./test-failure.js";
+import * as Stream from "effect/Stream";
 
 const decodeIdentified = Schema.decodeUnknownSync(Schema.Struct({ id: Schema.String }));
 const decodeTitled = Schema.decodeUnknownSync(Schema.Struct({ title: Schema.String }));
@@ -938,9 +939,8 @@ describe("pulled marks follow their rows over a mirror", () => {
         const inbox = yield* channel.subscribe;
         const seen = yield* Ref.make<ReadonlyArray<MirrorProtocol.HostMessage>>([]);
         yield* Effect.forkScoped(
-          Effect.forever(
-            inbox.take.pipe(
-              Effect.flatMap(MirrorProtocol.decodeHostMessage),
+          Stream.runForEach(inbox, (raw) =>
+            MirrorProtocol.decodeHostMessage(raw).pipe(
               Effect.flatMap((message) =>
                 message === undefined ? Effect.void : Ref.update(seen, Arr.append(message))
               )

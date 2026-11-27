@@ -747,9 +747,8 @@ export const make: (options: MirrorOptions) => Effect.Effect<Mirror, never, Scop
 
     // Mirror update loop: established before `make` returns.
     yield* Effect.forkScoped(
-      Effect.forever(
-        inbox.take.pipe(
-          Effect.flatMap(MirrorProtocol.decodeHostMessage),
+      Stream.runForEach(inbox, (raw) =>
+        MirrorProtocol.decodeHostMessage(raw).pipe(
           Effect.flatMap((message) =>
             message === undefined ? Effect.void : onHostMessage(message)
           )

@@ -64,7 +64,7 @@ import * as MemoryBackend from "../MemoryBackend.js";
 import * as MirrorChannel from "../MirrorChannel.js";
 import * as MirrorModule from "../Mirror.js";
 import * as Mutator from "../Mutator.js";
-import type * as RowChange from "../RowChange.js";
+import * as RowChange from "../RowChange.js";
 import * as Subset from "../Subset.js";
 import * as SyncServer from "../SyncServer.js";
 import { ClientTransport, makeInMemory, type ServerHandler } from "../Transport.js";
@@ -185,23 +185,22 @@ const idValue = (row: { readonly id: string; readonly value: unknown }) => ({
   value: row.value,
 });
 const stripPositions = (batch: ReadonlyArray<RowChange.RowChange<ClientEngineModule.LocalRow>>) =>
-  batch.map((change) =>
-    Match.value(change).pipe(
-      Match.tag("exit", (exit) => ({
+  batch.map(
+    RowChange.$match({
+      exit: (exit) => ({
         _tag: "exit" as const,
         id: exit.id,
         previous: idValue(exit.previous),
-      })),
-      Match.tag("update", (update) => ({
+      }),
+      update: (update) => ({
         _tag: "update" as const,
         row: idValue(update.row),
         previous: idValue(update.previous),
-      })),
-      Match.tag("enter", (enter) => ({ _tag: "enter" as const, row: idValue(enter.row) })),
-      Match.tag("move", (move) => ({ _tag: "move" as const, row: idValue(move.row) })),
-      Match.tag("reset", (reset) => reset),
-      Match.exhaustive
-    )
+      }),
+      enter: (enter) => ({ _tag: "enter" as const, row: idValue(enter.row) }),
+      move: (move) => ({ _tag: "move" as const, row: idValue(move.row) }),
+      reset: (reset) => reset,
+    })
   );
 
 /** Poll until `read` passes `until`, bounded — never a fixed-duration guess. */
@@ -473,7 +472,7 @@ describe("ClientEngine.observeChanges", () => {
         );
 
         const seen = yield* Ref.get(batches);
-        expect(seen.some((batch) => batch[0]?._tag === "reset")).toBe(true);
+        expect(seen.some((batch) => RowChange.$is("reset")(batch[0]))).toBe(true);
       }),
     10000
   );
