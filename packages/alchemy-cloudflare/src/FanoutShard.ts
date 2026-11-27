@@ -49,18 +49,17 @@ export const leases = {
   ): Effect.Effect<void, never, RuntimeContext> =>
     storage.put(`${LEASE_PREFIX}${roomId}`, now + ttlMillis),
   /** The unexpired room ids, in listing order; expired entries are deleted as a side effect. */
-  live: (
+  live: Effect.fnUntraced(function* (
     storage: Workers.DurableObjectStorage,
     now: number
-  ): Effect.Effect<ReadonlyArray<string>, never, RuntimeContext> =>
-    Effect.gen(function* () {
-      const entries = [...(yield* storage.list<number>({ prefix: LEASE_PREFIX }))];
-      const expired = entries.filter(([, expiresAt]) => expiresAt <= now).map(([key]) => key);
-      if (Arr.isReadonlyArrayNonEmpty(expired)) yield* storage.delete(expired);
-      return entries
-        .filter(([, expiresAt]) => expiresAt > now)
-        .map(([key]) => key.slice(LEASE_PREFIX.length));
-    }),
+  ): Effect.fn.Return<ReadonlyArray<string>, never, RuntimeContext> {
+    const entries = [...(yield* storage.list<number>({ prefix: LEASE_PREFIX }))];
+    const expired = entries.filter(([, expiresAt]) => expiresAt <= now).map(([key]) => key);
+    if (Arr.isReadonlyArrayNonEmpty(expired)) yield* storage.delete(expired);
+    return entries
+      .filter(([, expiresAt]) => expiresAt > now)
+      .map(([key]) => key.slice(LEASE_PREFIX.length));
+  }),
 };
 
 /**
