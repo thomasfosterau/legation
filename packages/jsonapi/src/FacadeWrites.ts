@@ -134,20 +134,21 @@ const linkageOf = (
 };
 
 /** The body's `data` member as an object, or the refusal for a body that has none. */
-const dataOf = <E>(body: Effect.Effect<string, E>): Effect.Effect<Schema.JsonObject, Refusal> =>
-  Effect.gen(function* () {
-    const text = yield* body.pipe(
-      Effect.catch(() => invalid("the request body could not be read", ""))
-    );
-    const document = yield* decodeJson(text).pipe(
-      Effect.catch(() => invalid("the request body is not JSON", ""))
-    );
-    if (!isRecord(document) || !("data" in document)) {
-      return yield* invalid('a write document needs a "data" member', "");
-    }
-    const data = document["data"];
-    return isRecord(data) ? data : yield* invalid('"data" must be a resource object', "/data");
-  });
+const dataOf = Effect.fnUntraced(function* <E>(
+  body: Effect.Effect<string, E>
+): Effect.fn.Return<Schema.JsonObject, Refusal> {
+  const text = yield* body.pipe(
+    Effect.catch(() => invalid("the request body could not be read", ""))
+  );
+  const document = yield* decodeJson(text).pipe(
+    Effect.catch(() => invalid("the request body is not JSON", ""))
+  );
+  if (!isRecord(document) || !("data" in document)) {
+    return yield* invalid('a write document needs a "data" member', "");
+  }
+  const data = document["data"];
+  return isRecord(data) ? data : yield* invalid('"data" must be a resource object', "/data");
+});
 
 const clientIdRequired: Refusal = {
   status: 503,

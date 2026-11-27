@@ -821,12 +821,12 @@ const readOf = (
  * fail with a `QueryError` naming the parameter) and mapped onto the read;
  * `fields[]` rides beside it as the projection.
  */
-export const parseParams = (
+export const parseParams: (
   nodes: Node.NodeRegistry,
   collection: string,
   params: URLSearchParams | Readonly<Record<string, string | ReadonlyArray<string>>>
-): Effect.Effect<ParsedRead, QueryError> =>
-  Effect.gen(function* () {
+) => Effect.Effect<ParsedRead, QueryError> = Effect.fnUntraced(
+  function* (nodes, collection, params) {
     const node = yield* nodeOf(nodes, collection);
     const record = recordOf(params);
     yield* checkInclude(node, Option.fromUndefinedOr(record["include"]));
@@ -837,7 +837,8 @@ export const parseParams = (
     );
     const read = yield* Effect.fromResult(readOf(collection, decoded));
     return { read, fields: Option.fromUndefinedOr(decoded.fields), id: Option.none() };
-  });
+  }
+);
 
 /** A path segment percent-decoded, or a `QueryError` naming `id` when it is malformed. */
 const decodeId = (collection: string, segment: string): Effect.Effect<string, QueryError> =>
@@ -922,20 +923,19 @@ export const singleRowParams = (
  * segment before a row id (`/api/products/p-1?…`, which reads as
  * `filter[id]=p-1` with `first` 1). The query is then {@link parseParams}.
  */
-export const parseRead = (
+export const parseRead: (
   nodes: Node.NodeRegistry,
   url: string | URL
-): Effect.Effect<ParsedRead, QueryError> =>
-  Effect.gen(function* () {
-    const parsed = P.isString(url) ? new URL(url, "http://localhost") : url;
-    const located = yield* locate(nodes, parsed);
-    const params = yield* Option.match(located.id, {
-      onNone: () => Effect.succeed(parsed.searchParams),
-      onSome: (id) => singleRowParams(located.collection, id, parsed.searchParams),
-    });
-    const result = yield* parseParams(nodes, located.collection, params);
-    return { ...result, id: located.id };
+) => Effect.Effect<ParsedRead, QueryError> = Effect.fnUntraced(function* (nodes, url) {
+  const parsed = P.isString(url) ? new URL(url, "http://localhost") : url;
+  const located = yield* locate(nodes, parsed);
+  const params = yield* Option.match(located.id, {
+    onNone: () => Effect.succeed(parsed.searchParams),
+    onSome: (id) => singleRowParams(located.collection, id, parsed.searchParams),
   });
+  const result = yield* parseParams(nodes, located.collection, params);
+  return { ...result, id: located.id };
+});
 
 // ─── Query.Read → canonical string ───────────────────────────────────────────
 
