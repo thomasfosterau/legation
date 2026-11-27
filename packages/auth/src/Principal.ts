@@ -21,47 +21,43 @@ import * as P from "effect/Predicate";
 import type { Session as AuthSession, User } from "@thomasfosterau/effect-auth";
 import type { Backend } from "@thomasfosterau/legation";
 
-/**
- * Who a request was verified to come from: the type of `SyncContext.identity`
- * under this package's resolver. A `Data.TaggedEnum`: build a case with
- * {@link Principal}'s constructors, test it with `Principal.$is`.
- */
-export type Principal = Data.TaggedEnum<{
-  /** A request that carried no credential that verified. */
-  Anonymous: Record<never, never>;
-  /** A request whose session token effect-auth validated. */
-  Session: {
-    /** The signed-in user's id (`user.id`). */
-    readonly userId: string;
-    /** The user record effect-auth returned with the session. */
-    readonly user: User;
-    /** The session's stored attributes (for example an active organization id). */
-    readonly sessionAttributes: AuthSession["attributes"];
-    /** When the validated session expires. */
-    readonly expiresAt: Date;
-  };
-  /** A request whose API key effect-auth verified. */
-  ApiKey: {
-    /** The id of the user the key belongs to. */
-    readonly userId: string;
-    /** The key's record id: never the key, never its hash. */
-    readonly keyId: string;
-    /** The key's per-resource permissions; `None` when the key is unrestricted. */
-    readonly permissions: Option.Option<Readonly<Record<string, ReadonlyArray<string>>>>;
-  };
-}>;
-
-/** The constructors, guards (`$is`) and matcher (`$match`) of {@link Principal}. */
-export const Principal = Data.taggedEnum<Principal>();
-
 /** The principal of a request that carried no credential that verified. */
-export type Anonymous = Data.TaggedEnum.Value<Principal, "Anonymous">;
+export interface Anonymous {
+  readonly _tag: "Anonymous";
+}
 
 /** The principal of a request whose session token effect-auth validated. */
-export type Session = Data.TaggedEnum.Value<Principal, "Session">;
+export interface Session {
+  readonly _tag: "Session";
+  /** The signed-in user's id (`user.id`). */
+  readonly userId: string;
+  /** The user record effect-auth returned with the session. */
+  readonly user: User;
+  /** The session's stored attributes (for example an active organization id). */
+  readonly sessionAttributes: AuthSession["attributes"];
+  /** When the validated session expires. */
+  readonly expiresAt: Date;
+}
 
 /** The principal of a request whose API key effect-auth verified. */
-export type ApiKey = Data.TaggedEnum.Value<Principal, "ApiKey">;
+export interface ApiKey {
+  readonly _tag: "ApiKey";
+  /** The id of the user the key belongs to. */
+  readonly userId: string;
+  /** The key's record id: never the key, never its hash. */
+  readonly keyId: string;
+  /** The key's per-resource permissions; `None` when the key is unrestricted. */
+  readonly permissions: Option.Option<Readonly<Record<string, ReadonlyArray<string>>>>;
+}
+
+/** Who a request was verified to come from: the type of `SyncContext.identity` under this package's resolver. */
+export type Principal = Anonymous | Session | ApiKey;
+
+/**
+ * The {@link Principal} cases as a `Data.TaggedEnum`: their constructors
+ * (`Principal.Session({ … })`), guards (`$is`) and matcher (`$match`).
+ */
+export const Principal = Data.taggedEnum<Principal>();
 
 /** The anonymous principal, which every failed or absent credential resolves to. */
 export const anonymous: Principal = Principal.Anonymous();
