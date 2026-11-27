@@ -77,17 +77,13 @@ const makeServer = Effect.fn("makeServer")(function* (): Effect.fn.Return<
 const allTodos = Subset.make({ collection: "todos" });
 
 const makeEngine = (handler: ServerHandler, store: ClientStore) =>
-  makeInMemory(handler, "group-a").pipe(
-    Effect.flatMap((transport) =>
-      ClientEngineModule.make({
-        clientId: "client-a",
-        clientGroupId: "group-a",
-        mutators,
-      }).pipe(
-        Effect.provideService(ClientStore, store),
-        Effect.provideService(ClientTransport, transport)
-      )
-    )
+  ClientEngineModule.make({
+    clientId: "client-a",
+    clientGroupId: "group-a",
+    mutators,
+  }).pipe(
+    Effect.provideService(ClientStore, store),
+    Effect.provideServiceEffect(ClientTransport, makeInMemory(handler, "group-a"))
   );
 
 describe("per-mutation outcome", () => {

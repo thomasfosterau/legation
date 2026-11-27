@@ -541,15 +541,11 @@ export interface CompilerOptions {
 export const compiler =
   (options: CompilerOptions): Compile =>
   (context, binding) =>
-    options
-      .policies(context)
-      .pipe(
-        Effect.flatMap((policies) =>
-          Effect.map(options.request(Principal.fromContext(context), context), (request) =>
-            AuthScope.compile(policies, binding, request)
-          )
-        )
-      );
+    Effect.zipWith(
+      options.policies(context),
+      options.request(Principal.fromContext(context), context),
+      (policies, request) => AuthScope.compile(policies, binding, request)
+    );
 
 // ─── Compile requests from a principal ───────────────────────────────────────
 

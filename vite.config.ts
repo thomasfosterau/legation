@@ -41,12 +41,112 @@ const source = (path: string) => fileURLToPath(new URL(path, import.meta.url));
 const alias = {
   "@thomasfosterau/legation/internal": source("packages/effect/src/internal.ts"),
   "@thomasfosterau/legation/sql": source("packages/effect/src/sql/index.ts"),
+  "@thomasfosterau/legation/Node": source("packages/effect/src/Node.ts"),
+  "@thomasfosterau/legation/Edge": source("packages/effect/src/Edge.ts"),
+  "@thomasfosterau/legation/Collection": source("packages/effect/src/Collection.ts"),
+  "@thomasfosterau/legation/Query": source("packages/effect/src/Query.ts"),
+  "@thomasfosterau/legation/Aggregate": source("packages/effect/src/Aggregate.ts"),
+  "@thomasfosterau/legation/Mutation": source("packages/effect/src/Mutator.ts"),
+  "@thomasfosterau/legation/CrudMutation": source("packages/effect/src/CrudMutation.ts"),
+  "@thomasfosterau/legation/Client": source("packages/effect/src/Client.ts"),
+  "@thomasfosterau/legation/ClientStore": source("packages/effect/src/ClientStore.ts"),
+  "@thomasfosterau/legation/Identity": source("packages/effect/src/Identity.ts"),
+  "@thomasfosterau/legation/Transport": source("packages/effect/src/Transport.ts"),
+  "@thomasfosterau/legation/Hydration": source("packages/effect/src/Hydration.ts"),
+  "@thomasfosterau/legation/Server": source("packages/effect/src/Server.ts"),
+  "@thomasfosterau/legation/Backend": source("packages/effect/src/Backend.ts"),
+  "@thomasfosterau/legation/MemoryBackend": source("packages/effect/src/MemoryBackend.ts"),
+  "@thomasfosterau/legation/Authorization": source("packages/effect/src/Authorization.ts"),
+  "@thomasfosterau/legation/FilterPolicy": source("packages/effect/src/FilterPolicy.ts"),
+  "@thomasfosterau/legation/Predicate": source("packages/effect/src/Predicate.ts"),
   "@thomasfosterau/legation": source("packages/effect/src/index.ts"),
   "@thomasfosterau/legation-browser/http-cache": source("packages/browser/src/http-cache.ts"),
+  "@thomasfosterau/legation-browser/IndexedDbClientStore": source(
+    "packages/browser/src/IndexedDbClientStore.ts"
+  ),
+  "@thomasfosterau/legation-browser/BroadcastMirrorChannel": source(
+    "packages/browser/src/BroadcastMirrorChannel.ts"
+  ),
+  "@thomasfosterau/legation-browser/ServiceWorkerHost": source(
+    "packages/browser/src/ServiceWorkerHost.ts"
+  ),
+  "@thomasfosterau/legation-browser/ElectedHost": source("packages/browser/src/ElectedHost.ts"),
+  "@thomasfosterau/legation-browser/CacheApiHttpCache": source(
+    "packages/browser/src/CacheApiHttpCache.ts"
+  ),
+  "@thomasfosterau/legation-browser/HttpCacheInvalidation": source(
+    "packages/browser/src/HttpCacheInvalidation.ts"
+  ),
+  "@thomasfosterau/legation-browser/BrowserConnectivity": source(
+    "packages/browser/src/BrowserConnectivity.ts"
+  ),
+  "@thomasfosterau/legation-browser/BackgroundSync": source(
+    "packages/browser/src/BackgroundSync.ts"
+  ),
+  "@thomasfosterau/legation-browser/PushPoke": source("packages/browser/src/PushPoke.ts"),
   "@thomasfosterau/legation-browser": source("packages/browser/src/index.ts"),
+  "@thomasfosterau/legation-alchemy-cloudflare/BindingTransport": source(
+    "packages/alchemy-cloudflare/src/BindingTransport.ts"
+  ),
+  "@thomasfosterau/legation-alchemy-cloudflare/D1Executor": source(
+    "packages/alchemy-cloudflare/src/D1Executor.ts"
+  ),
+  "@thomasfosterau/legation-alchemy-cloudflare/DurableCvrStore": source(
+    "packages/alchemy-cloudflare/src/DurableCvrStore.ts"
+  ),
+  "@thomasfosterau/legation-alchemy-cloudflare/DurableFanoutBroker": source(
+    "packages/alchemy-cloudflare/src/DurableFanoutBroker.ts"
+  ),
+  "@thomasfosterau/legation-alchemy-cloudflare/EdgeInvalidation": source(
+    "packages/alchemy-cloudflare/src/EdgeInvalidation.ts"
+  ),
+  "@thomasfosterau/legation-alchemy-cloudflare/FanoutShard": source(
+    "packages/alchemy-cloudflare/src/FanoutShard.ts"
+  ),
+  "@thomasfosterau/legation-alchemy-cloudflare/Room": source(
+    "packages/alchemy-cloudflare/src/Room.ts"
+  ),
+  "@thomasfosterau/legation-alchemy-cloudflare/RoomProtocol": source(
+    "packages/alchemy-cloudflare/src/RoomProtocol.ts"
+  ),
+  "@thomasfosterau/legation-alchemy-cloudflare/RoomTransport": source(
+    "packages/alchemy-cloudflare/src/RoomTransport.ts"
+  ),
+  "@thomasfosterau/legation-alchemy-cloudflare/Worker": source(
+    "packages/alchemy-cloudflare/src/Worker.ts"
+  ),
   "@thomasfosterau/legation-alchemy-cloudflare": source("packages/alchemy-cloudflare/src/index.ts"),
   "@thomasfosterau/legation-auth/client": source("packages/auth/src/client.ts"),
+  "@thomasfosterau/legation-auth/Principal": source("packages/auth/src/Principal.ts"),
+  "@thomasfosterau/legation-auth/ReadScopes": source("packages/auth/src/ReadScopes.ts"),
+  "@thomasfosterau/legation-auth/Resolver": source("packages/auth/src/Resolver.ts"),
   "@thomasfosterau/legation-auth": source("packages/auth/src/index.ts"),
+  "@thomasfosterau/legation-jsonapi/JsonApiSchema": source("packages/jsonapi/src/schema.ts"),
+  "@thomasfosterau/legation-jsonapi/CollectionLoader": source(
+    "packages/jsonapi/src/CollectionLoader.ts"
+  ),
+  "@thomasfosterau/legation-jsonapi/Convention": source("packages/jsonapi/src/Convention.ts"),
+  "@thomasfosterau/legation-jsonapi/Derive": source("packages/jsonapi/src/Derive.ts"),
+  "@thomasfosterau/legation-jsonapi/DocumentWriter": source(
+    "packages/jsonapi/src/DocumentWriter.ts"
+  ),
+  "@thomasfosterau/legation-jsonapi/JsonApiBackend": source(
+    "packages/jsonapi/src/JsonApiBackend.ts"
+  ),
+  "@thomasfosterau/legation-jsonapi/JsonApiFacade": source("packages/jsonapi/src/JsonApiFacade.ts"),
+  "@thomasfosterau/legation-jsonapi/FacadeWrites": source("packages/jsonapi/src/FacadeWrites.ts"),
+  "@thomasfosterau/legation-jsonapi/JsonApiQuery": source("packages/jsonapi/src/JsonApiQuery.ts"),
+  "@thomasfosterau/legation-jsonapi/JsonApiSync": source("packages/jsonapi/src/JsonApiSync.ts"),
+  "@thomasfosterau/legation-jsonapi/MutationStatus": source(
+    "packages/jsonapi/src/MutationStatus.ts"
+  ),
+  "@thomasfosterau/legation-jsonapi/Ledger": source("packages/jsonapi/src/Ledger.ts"),
+  "@thomasfosterau/legation-jsonapi/NodeBridge": source("packages/jsonapi/src/NodeBridge.ts"),
+  "@thomasfosterau/legation-jsonapi/Relationships": source("packages/jsonapi/src/Relationships.ts"),
+  "@thomasfosterau/legation-jsonapi/ReplicaDocuments": source(
+    "packages/jsonapi/src/ReplicaDocuments.ts"
+  ),
+  "@thomasfosterau/legation-jsonapi/RestHandlers": source("packages/jsonapi/src/RestHandlers.ts"),
   "@thomasfosterau/legation-jsonapi": source("packages/jsonapi/src/index.ts"),
   "@thomasfosterau/legation-svelte/kit": source("packages/svelte/src/kit/index.ts"),
   "@thomasfosterau/legation-svelte": source("packages/svelte/src/index.svelte.ts"),
@@ -129,7 +229,6 @@ export default defineConfig({
       // At `warn` with the count left when the preset was adopted: a new site
       // is a defect. Delete a line once its count reaches zero.
       "effect/avoid-native-object-helpers": "warn", // 343 sites: per-row and per-change maps, public ReadonlyMap/ReadonlySet types, insertion-order and reference-identity collections, benches
-      "effect/require-safety-comment-for-type-assertion": "warn", // 2 sites
       "effect/imperative-loops": "warn", // 110 sites, per-row and per-change paths in src
       "effect/yield-in-for-loop": "warn", // 39 sites: per-row writes in src, the op-count-sensitive journal race tests
       "effect/avoid-direct-tag-checks": "warn", // 6 sites, the measured switches in internal/RowDispatch.ts

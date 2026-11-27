@@ -112,17 +112,13 @@ const makeServer = Effect.fn("makeServer")(function* (): Effect.fn.Return<
 });
 
 const makeEngine = (handler: ServerHandler, store: ClientStore, group: string) =>
-  makeInMemory(handler, group).pipe(
-    Effect.flatMap((transport) =>
-      ClientEngineModule.make({
-        clientId: group,
-        clientGroupId: group,
-        mutators,
-      }).pipe(
-        Effect.provideService(ClientStore, store),
-        Effect.provideService(ClientTransport, transport)
-      )
-    )
+  ClientEngineModule.make({
+    clientId: group,
+    clientGroupId: group,
+    mutators,
+  }).pipe(
+    Effect.provideService(ClientStore, store),
+    Effect.provideServiceEffect(ClientTransport, makeInMemory(handler, group))
   );
 
 const allTodos = Subset.make({ collection: "todos" });

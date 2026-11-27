@@ -141,7 +141,7 @@ import type { EndpointRef, Operation, ResourceMap } from "./Convention.js";
 import { toRow, type JsonApiRow, type OperationInfo } from "./Derive.js";
 import { defaultEncoder, type QueryEncoder } from "./JsonApiQuery.js";
 import * as Ledger from "./Ledger.js";
-import { type JsonApiDocument, ResourceObject } from "./schema.js";
+import { type JsonApiDocument, Relationship, ResourceObject } from "./schema.js";
 
 /**
  * One JSON:API write — the unit both delivery paths speak: a create (`POST`,
@@ -402,13 +402,19 @@ const writeBody = (
   },
 });
 
-/** A write's relationships in the row's linkage shape, as `toRow` gives a server document. */
+const decodeRelationship = Schema.decodeUnknownResult(Relationship);
+
+/**
+ * A write's relationships in the row's linkage shape, as `toRow` gives a
+ * server document. A member that is not a JSON:API relationship object has
+ * no linkage to give, so it is left out, as a relationship without `data` is.
+ */
 const linkageOf = (write: Write): Record<string, RelationshipRef> =>
   resourceToRow({
     type: write.type,
     id: write.id,
-    relationships: write.relationships ?? {},
-  } as ResourceObject).value.relationships;
+    relationships: R.filterMap(write.relationships ?? {}, (value) => decodeRelationship(value)),
+  }).value.relationships;
 
 /**
  * The value a create/update writes, as the hint carries it — the same shape

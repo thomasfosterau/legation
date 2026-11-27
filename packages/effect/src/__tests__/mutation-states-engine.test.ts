@@ -90,18 +90,14 @@ const makeEngine = (
   store: ClientStore,
   options?: { readonly mutationStateRetention?: MutationState.RetentionOptions }
 ) =>
-  makeInMemory(handler, "group-a").pipe(
-    Effect.flatMap((transport) =>
-      ClientEngineModule.make({
-        clientId: "client-a",
-        clientGroupId: "group-a",
-        mutators,
-        ...options,
-      }).pipe(
-        Effect.provideService(ClientStore, store),
-        Effect.provideService(ClientTransport, transport)
-      )
-    )
+  ClientEngineModule.make({
+    clientId: "client-a",
+    clientGroupId: "group-a",
+    mutators,
+    ...options,
+  }).pipe(
+    Effect.provideService(ClientStore, store),
+    Effect.provideServiceEffect(ClientTransport, makeInMemory(handler, "group-a"))
   );
 
 /** The current mutation-state map: `SubscriptionRef.changes` replays the
@@ -629,19 +625,13 @@ describe("hydrated journal entries in a running engine", () => {
         const transport = {
           ...inner,
           push: (request: Parameters<typeof inner.push>[0]) =>
-            inner.push(request).pipe(
-              Effect.flatMap((response) =>
-                Ref.get(contradict).pipe(
-                  Effect.map((on) =>
-                    on
-                      ? {
-                          ...response,
-                          rejected: [{ clientId: "client-a", mutationId: 1, reason: "late" }],
-                        }
-                      : response
-                  )
-                )
-              )
+            Effect.zipWith(inner.push(request), Ref.get(contradict), (response, on) =>
+              on
+                ? {
+                    ...response,
+                    rejected: [{ clientId: "client-a", mutationId: 1, reason: "late" }],
+                  }
+                : response
             ),
         };
         const engine = yield* ClientEngineModule.make({

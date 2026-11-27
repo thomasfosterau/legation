@@ -805,9 +805,7 @@ export const fromView = <Graph extends Node.NodeRegistry>(
     rowsOf: Coverage.RowsOf<ClientView.ClientViewError> = view.query
   ): Effect.Effect<Coverage.Verdict> =>
     Coverage.requestedOf(nodes.collections, plan, rowsOf).pipe(
-      Effect.flatMap((requested) =>
-        entriesOf().pipe(Effect.map((entries) => Coverage.verdictOf(entries, requested)))
-      ),
+      Effect.zipWith(entriesOf(), (requested, entries) => Coverage.verdictOf(entries, requested)),
       Effect.catchTag(["MutatorError", "StoreError", "TransportError", "QueryError"], () =>
         Effect.succeed<Coverage.Verdict>({ _tag: "Uncovered" })
       )
