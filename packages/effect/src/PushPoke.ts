@@ -106,10 +106,10 @@ type Decision = "send" | "trail" | "skip" | "over-budget";
  * `InvalidationSink.run` where the bus is. Its trailing pushes run on fibres
  * of the scope it is built in.
  */
-export const sink = <Target>(
+export const sink: <Target>(
   options: SinkOptions<Target>
-): Effect.Effect<InvalidationSink, never, Scope.Scope> =>
-  Effect.gen(function* () {
+) => Effect.Effect<InvalidationSink, never, Scope.Scope> = Effect.fn("legation/PushPoke.sink")(
+  function* <Target>(options: SinkOptions<Target>) {
     const window = Duration.toMillis(Duration.fromInputUnsafe(options.coalesce));
     const period = Duration.toMillis(Duration.fromInputUnsafe(options.budget.per));
     const limit = Math.max(0, options.budget.pushes);
@@ -153,24 +153,23 @@ export const sink = <Target>(
         return ["trail", HashMap.set(all, key, { ...state, trailing: true })];
       });
 
-    const poke = (target: Target): Effect.Effect<void> =>
-      Effect.gen(function* () {
-        const key = options.keyOf(target);
-        const now = yield* Clock.currentTimeMillis;
-        const decision = yield* decide(key, now);
-        if (decision === "send") return yield* push(target, key, now);
-        if (decision !== "trail") return undefined;
-        const state = stateOf(yield* Ref.get(states), key);
-        const wait = Math.max(0, state.lastSent + window - now);
-        yield* Effect.forkIn(
-          Effect.sleep(Duration.millis(wait)).pipe(
-            Effect.andThen(Clock.currentTimeMillis),
-            Effect.flatMap((at) => push(target, key, at))
-          ),
-          scope
-        );
-        return undefined;
-      });
+    const poke = Effect.fnUntraced(function* (target: Target): Effect.fn.Return<void> {
+      const key = options.keyOf(target);
+      const now = yield* Clock.currentTimeMillis;
+      const decision = yield* decide(key, now);
+      if (decision === "send") return yield* push(target, key, now);
+      if (decision !== "trail") return undefined;
+      const state = stateOf(yield* Ref.get(states), key);
+      const wait = Math.max(0, state.lastSent + window - now);
+      yield* Effect.forkIn(
+        Effect.sleep(Duration.millis(wait)).pipe(
+          Effect.andThen(Clock.currentTimeMillis),
+          Effect.flatMap((at) => push(target, key, at))
+        ),
+        scope
+      );
+      return undefined;
+    });
 
     return {
       invalidate: (touched) =>
@@ -192,4 +191,5 @@ export const sink = <Target>(
           )
         ),
     };
-  });
+  }
+);

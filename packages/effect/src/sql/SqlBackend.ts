@@ -587,24 +587,23 @@ export const make = (config: SqlBackendConfig): Backend.Backend => {
 
   const NO_ROWS: Backend.CountedEntries = { entries: [], total: 0 };
 
-  const evaluateOne = (
+  const evaluateOne = Effect.fnUntraced(function* (
     subset: Subset.Subset
-  ): Effect.Effect<Backend.CountedEntries, BackendError> =>
-    Effect.gen(function* () {
-      const mapping = config.tables[subset.collection];
-      if (mapping === undefined) return NO_ROWS;
-      const where = yield* Predicate.resolveExists(subset.where, resolveExistsNode);
-      const rows = yield* executor.query(
-        Sql.compileSelect({
-          table: readTableOf(mapping),
-          where,
-          dialect,
-          kinds: mapping.kinds,
-          foreignKinds,
-        })
-      );
-      return countedOf(subset, where, rows);
-    });
+  ): Effect.fn.Return<Backend.CountedEntries, BackendError> {
+    const mapping = config.tables[subset.collection];
+    if (mapping === undefined) return NO_ROWS;
+    const where = yield* Predicate.resolveExists(subset.where, resolveExistsNode);
+    const rows = yield* executor.query(
+      Sql.compileSelect({
+        table: readTableOf(mapping),
+        where,
+        dialect,
+        kinds: mapping.kinds,
+        foreignKinds,
+      })
+    );
+    return countedOf(subset, where, rows);
+  });
 
   const evaluate: Backend.Backend["evaluate"] = (_context, subset) =>
     Effect.map(evaluateOne(subset), (answer) => answer.entries);
@@ -914,40 +913,41 @@ export const make = (config: SqlBackendConfig): Backend.Backend => {
   // bump), so a copy that reads the row afterwards sees the outcome with the id.
   // The row is created at 0 first if it does not exist yet: a D1 push records the
   // rejection before the bump that would otherwise create the row.
-  const recordRejection = (
+  const recordRejection = Effect.fnUntraced(function* (
     clientGroupId: string,
     clientId: string,
     mutationId: number,
     reason: string
-  ) =>
-    Effect.gen(function* () {
-      yield* ensureLedgerRow(clientGroupId, clientId);
-      const row = (yield* readLedger(clientGroupId)).get(clientId);
-      const rejections = new Map(row?.rejections ?? []);
-      rejections.set(mutationId, reason);
-      yield* writeRejections(clientGroupId, clientId, rejections);
-    });
+  ) {
+    yield* ensureLedgerRow(clientGroupId, clientId);
+    const row = (yield* readLedger(clientGroupId)).get(clientId);
+    const rejections = new Map(row?.rejections ?? []);
+    rejections.set(mutationId, reason);
+    yield* writeRejections(clientGroupId, clientId, rejections);
+  });
 
   // Forget the rejections a push has moved past: for each client in the push, the
   // remembered rejections below its lowest id in the push (as MemoryBackend).
-  const forgetRejections = (clientGroupId: string, floors: ReadonlyMap<string, number>) =>
-    Effect.gen(function* () {
-      if (floors.size === 0) return;
-      const ledger = yield* readLedger(clientGroupId);
-      yield* Effect.forEach(
-        floors,
-        ([clientId, floor]) =>
-          Effect.gen(function* () {
-            const row = ledger.get(clientId);
-            if (row === undefined || row.rejections.size === 0) return;
-            const kept = new Map([...row.rejections].filter(([mutationId]) => mutationId >= floor));
-            if (kept.size !== row.rejections.size) {
-              yield* writeRejections(clientGroupId, clientId, kept);
-            }
-          }),
-        { concurrency: 1, discard: true }
-      );
-    });
+  const forgetRejections = Effect.fnUntraced(function* (
+    clientGroupId: string,
+    floors: ReadonlyMap<string, number>
+  ) {
+    if (floors.size === 0) return;
+    const ledger = yield* readLedger(clientGroupId);
+    yield* Effect.forEach(
+      floors,
+      ([clientId, floor]) =>
+        Effect.gen(function* () {
+          const row = ledger.get(clientId);
+          if (row === undefined || row.rejections.size === 0) return;
+          const kept = new Map([...row.rejections].filter(([mutationId]) => mutationId >= floor));
+          if (kept.size !== row.rejections.size) {
+            yield* writeRejections(clientGroupId, clientId, kept);
+          }
+        }),
+      { concurrency: 1, discard: true }
+    );
+  });
 
   // Create the client's ledger row at 0 when it has none. `DO NOTHING` leaves a
   // row another transaction inserted alone (on PostgreSQL the insert waits for
@@ -994,23 +994,22 @@ export const make = (config: SqlBackendConfig): Backend.Backend => {
   // so a stale claim cannot move the watermark back, and reports the watermark
   // with the committed rejection, if there is one: `Backend.transaction`
   // classifies it as a replay or a gap.
-  const openClaimFirst = (
+  const openClaimFirst = Effect.fnUntraced(function* (
     batch: SqlBatch,
     mutation: Mutation
-  ): Effect.Effect<Backend.Opened<SqlUnit>, BackendError> =>
-    Effect.gen(function* () {
-      const { clientGroupId } = batch.context;
-      yield* ensureLedgerRow(clientGroupId, mutation.clientId);
-      if (yield* claimLedger(clientGroupId, mutation.clientId, mutation.mutationId)) {
-        return { _tag: "Opened", unit: unitOf(batch, mutation, false) };
-      }
-      const row = (yield* readLedger(clientGroupId)).get(mutation.clientId);
-      return {
-        _tag: "Watermark",
-        lastMutationId: row?.last ?? 0,
-        rejection: Option.fromUndefinedOr(row?.rejections.get(mutation.mutationId)),
-      };
-    });
+  ): Effect.fn.Return<Backend.Opened<SqlUnit>, BackendError> {
+    const { clientGroupId } = batch.context;
+    yield* ensureLedgerRow(clientGroupId, mutation.clientId);
+    if (yield* claimLedger(clientGroupId, mutation.clientId, mutation.mutationId)) {
+      return { _tag: "Opened", unit: unitOf(batch, mutation, false) };
+    }
+    const row = (yield* readLedger(clientGroupId)).get(mutation.clientId);
+    return {
+      _tag: "Watermark",
+      lastMutationId: row?.last ?? 0,
+      rejection: Option.fromUndefinedOr(row?.rejections.get(mutation.mutationId)),
+    };
+  });
 
   // Open `mutationId` handler-then-bump (executors without transactions, D1):
   // the ledger is read and nothing is claimed, so a crash cannot leave an id
@@ -1078,18 +1077,17 @@ export const make = (config: SqlBackendConfig): Backend.Backend => {
   // Run one mutation's handler inside a savepoint, so a permanent rejection
   // drops its writes (at commit) while the id's ledger write (the claim, or the
   // bump after it) stays. A transient BackendError propagates and aborts the batch.
-  const runHandler = (
+  const runHandler = Effect.fnUntraced(function* (
     unit: SqlUnit,
     handler: SqlHandler,
     mutation: Mutation
-  ): Effect.Effect<ReadonlyArray<Backend.ChangeHint>, BackendError | MutationRejected> =>
-    Effect.gen(function* () {
-      const definition = config.mutators.get(mutation.mutator);
-      if (definition === undefined) return yield* UnknownMutator.make(mutation.mutator);
-      const args = yield* decodeArgs(definition, mutation.args, mutation.mutator);
-      yield* executor.run({ text: `SAVEPOINT ${unit.savepoint}`, params: [] });
-      return yield* handler(args, executor, unit.context);
-    });
+  ): Effect.fn.Return<ReadonlyArray<Backend.ChangeHint>, BackendError | MutationRejected> {
+    const definition = config.mutators.get(mutation.mutator);
+    if (definition === undefined) return yield* UnknownMutator.make(mutation.mutator);
+    const args = yield* decodeArgs(definition, mutation.args, mutation.mutator);
+    yield* executor.run({ text: `SAVEPOINT ${unit.savepoint}`, params: [] });
+    return yield* handler(args, executor, unit.context);
+  });
 
   // Commit one mutation's outcome with its ledger write. An applied mutation
   // keeps its savepoint's writes; a rejected one rolls them back, and its
@@ -1097,34 +1095,33 @@ export const make = (config: SqlBackendConfig): Backend.Backend => {
   // without transactions, before the bump, so a copy that sees the id as covered
   // also sees its rejection. Without transactions the bump comes last and takes
   // the larger id (`bumpLastId`); it is not atomic with the handler's writes.
-  const commitOutcome = (
+  const commitOutcome = Effect.fnUntraced(function* (
     unit: SqlUnit,
     outcome: Backend.Outcome<ReadonlyArray<Backend.ChangeHint>>
-  ): Effect.Effect<Backend.Commit, BackendError> =>
-    Effect.gen(function* () {
-      const { clientGroupId } = unit.context;
-      const { clientId, mutationId } = unit.mutation;
-      if (P.isTagged(outcome, "Rejected")) {
-        yield* executor.run({ text: `ROLLBACK TO SAVEPOINT ${unit.savepoint}`, params: [] });
-        yield* executor.run({ text: `RELEASE SAVEPOINT ${unit.savepoint}`, params: [] });
-        yield* recordRejection(clientGroupId, clientId, mutationId, outcome.reason);
-      } else {
-        yield* executor.run({ text: `RELEASE SAVEPOINT ${unit.savepoint}`, params: [] });
-        if (!transactional && unit.staleRejection) {
-          // An earlier copy was rejected and recorded it, but its bump failed, so
-          // the id was never acknowledged and this copy applies it. The stale
-          // rejection goes before the bump: a bump that then fails leaves the id
-          // unacknowledged with no rejection to report, and a replay after the
-          // bump must not report one for an applied mutation.
-          const row = (yield* readLedger(clientGroupId)).get(clientId);
-          const rejections = new Map(row?.rejections ?? []);
-          rejections.delete(mutationId);
-          yield* writeRejections(clientGroupId, clientId, rejections);
-        }
+  ): Effect.fn.Return<Backend.Commit, BackendError> {
+    const { clientGroupId } = unit.context;
+    const { clientId, mutationId } = unit.mutation;
+    if (P.isTagged(outcome, "Rejected")) {
+      yield* executor.run({ text: `ROLLBACK TO SAVEPOINT ${unit.savepoint}`, params: [] });
+      yield* executor.run({ text: `RELEASE SAVEPOINT ${unit.savepoint}`, params: [] });
+      yield* recordRejection(clientGroupId, clientId, mutationId, outcome.reason);
+    } else {
+      yield* executor.run({ text: `RELEASE SAVEPOINT ${unit.savepoint}`, params: [] });
+      if (!transactional && unit.staleRejection) {
+        // An earlier copy was rejected and recorded it, but its bump failed, so
+        // the id was never acknowledged and this copy applies it. The stale
+        // rejection goes before the bump: a bump that then fails leaves the id
+        // unacknowledged with no rejection to report, and a replay after the
+        // bump must not report one for an applied mutation.
+        const row = (yield* readLedger(clientGroupId)).get(clientId);
+        const rejections = new Map(row?.rejections ?? []);
+        rejections.delete(mutationId);
+        yield* writeRejections(clientGroupId, clientId, rejections);
       }
-      if (!transactional) yield* bumpLastId(clientGroupId, clientId, mutationId);
-      return { _tag: "Committed" } as const;
-    });
+    }
+    if (!transactional) yield* bumpLastId(clientGroupId, clientId, mutationId);
+    return { _tag: "Committed" } as const;
+  });
 
   // The transaction's isolation, set before any read so every read in it sees
   // the snapshot SERIALIZABLE gives. An executor without transactions has

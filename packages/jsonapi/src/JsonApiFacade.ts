@@ -260,7 +260,7 @@ export interface FetchHandler {
    * the façade's business, is uncovered and online, or is a write to
    * forward, for the caller to forward unchanged. A write's body is read
    * from a clone, so the request itself can still be forwarded. A store
-   * failure while reading the replica is a defect, as `Query.run` treats it.
+   * failure while reading the replica is a defect.
    */
   readonly handle: (request: Request) => Effect.Effect<Option.Option<Response>>;
   /**
@@ -710,38 +710,43 @@ export const fetchHandler = <Id extends string, Groups extends HttpApiGroup.Cons
    * total. A root that cannot be read, an uncovered read, or a listing
    * whose total is unknown is {@link uncovered}.
    */
-  const coveredRows = (needed: ReadonlyArray<Query.Read>, root: Subset.Subset, listing: boolean) =>
-    Effect.gen(function* () {
-      const rows = yield* view.query(root).pipe(Effect.catch(() => uncovered));
-      const verdict = yield* covered(needed, { subset: root, rows });
-      if (Option.isNone(verdict)) return yield* uncovered;
-      if (!listing) return { rows, meta: Option.none<DocumentWriter.CollectionMeta>() };
-      const total = yield* totalFor(verdict.value, root, rows);
-      return Option.isNone(total)
-        ? yield* uncovered
-        : { rows, meta: Option.some({ total: total.value }) };
-    });
+  const coveredRows = Effect.fnUntraced(function* (
+    needed: ReadonlyArray<Query.Read>,
+    root: Subset.Subset,
+    listing: boolean
+  ) {
+    const rows = yield* view.query(root).pipe(Effect.catch(() => uncovered));
+    const verdict = yield* covered(needed, { subset: root, rows });
+    if (Option.isNone(verdict)) return yield* uncovered;
+    if (!listing) return { rows, meta: Option.none<DocumentWriter.CollectionMeta>() };
+    const total = yield* totalFor(verdict.value, root, rows);
+    return Option.isNone(total)
+      ? yield* uncovered
+      : { rows, meta: Option.some({ total: total.value }) };
+  });
 
-  const answer = ({ route, url }: Candidate) =>
-    Effect.gen(function* () {
-      const writer = MutableHashMap.get(writers, prefixFor(route));
-      // Every route's prefix has a writer (built above); an unknown one is the server's to answer.
-      if (Option.isNone(writer)) return yield* Effect.fail(forward);
-      const docs = writer.value;
-      const parsed = yield* JsonApiQuery.parseRead(nodes, url).pipe(Effect.catch(rejected));
-      // A collection no bound resource declares: the server rules on it.
-      const needed = yield* docs.toCover(parsed.read).pipe(Effect.mapError(() => forward));
-      const root = yield* Query.tryPlan(nodes, parsed.read).pipe(Effect.mapError(() => forward));
-      const { rows, meta } = yield* coveredRows(needed, root.root, Option.isNone(parsed.id));
-      const replica = pinned(view, root.root, rows);
-      const write: Effect.Effect<ReplicaDocuments.Document, QueryError> = Option.isNone(parsed.id)
-        ? docs.collection(replica, parsed, Option.getOrUndefined(meta))
-        : docs.data(replica, parsed);
-      const document = yield* write.pipe(Effect.catch(rejected));
-      // No such row in a faithful replica: the 404 is the endpoint's own.
-      if (Option.isSome(parsed.id) && document.data === null) return yield* Effect.fail(forward);
-      return respondWith(200, document, yield* cookie);
-    });
+  const answer = Effect.fn("legation-jsonapi/JsonApiFacade.answer")(function* ({
+    route,
+    url,
+  }: Candidate) {
+    const writer = MutableHashMap.get(writers, prefixFor(route));
+    // Every route's prefix has a writer (built above); an unknown one is the server's to answer.
+    if (Option.isNone(writer)) return yield* Effect.fail(forward);
+    const docs = writer.value;
+    const parsed = yield* JsonApiQuery.parseRead(nodes, url).pipe(Effect.catch(rejected));
+    // A collection no bound resource declares: the server rules on it.
+    const needed = yield* docs.toCover(parsed.read).pipe(Effect.mapError(() => forward));
+    const root = yield* Query.tryPlan(nodes, parsed.read).pipe(Effect.mapError(() => forward));
+    const { rows, meta } = yield* coveredRows(needed, root.root, Option.isNone(parsed.id));
+    const replica = pinned(view, root.root, rows);
+    const write: Effect.Effect<ReplicaDocuments.Document, QueryError> = Option.isNone(parsed.id)
+      ? docs.collection(replica, parsed, Option.getOrUndefined(meta))
+      : docs.data(replica, parsed);
+    const document = yield* write.pipe(Effect.catch(rejected));
+    // No such row in a faithful replica: the 404 is the endpoint's own.
+    if (Option.isSome(parsed.id) && document.data === null) return yield* Effect.fail(forward);
+    return respondWith(200, document, yield* cookie);
+  });
 
   const readHandle = (request: Request): Effect.Effect<Option.Option<Response>> =>
     Option.match(candidateOf(request), {
@@ -824,47 +829,46 @@ export const fetchHandler = <Id extends string, Groups extends HttpApiGroup.Cons
    * it cannot be journaled (the caller forwards it online, or answers
    * offline). The body is read from a clone.
    */
-  const journal = (
+  const journal = Effect.fn("legation-jsonapi/JsonApiFacade.journal")(function* (
     request: Request,
     candidate: WriteCandidate,
     preferences: FacadeWrites.Preferences
-  ): Effect.Effect<Response, Unjournaled> =>
-    Effect.gen(function* () {
-      const body = Effect.tryPromise({
-        try: () => request.clone().text(),
-        catch: (cause) => new RequestBodyUnreadable({ cause }),
-      });
-      const write = yield* FacadeWrites.decodeWrite(
-        candidate.route.node,
-        candidate.target,
-        body
-      ).pipe(Effect.mapError((refusal): Unjournaled => ({ _tag: "Refused", refusal })));
-      const intent = intentOf(write);
-      if (Option.isNone(intent) || Option.isNone(mutate)) {
-        return yield* Effect.fail<Unjournaled>({ _tag: "Unmapped" });
-      }
-      const handle = yield* mutate
-        .value(intent.value.mutator, intent.value.args)
-        .pipe(
-          Effect.mapError((error): Unjournaled =>
-            P.isTagged(error, "MutatorError")
-              ? { _tag: "NotJournalable", detail: error.message }
-              : { _tag: "Unmapped" }
-          )
-        );
-      const location = statusUrl(candidate.route, handle.mutationId);
-      const meta = {
-        legation: { status: "pending", mutationId: handle.mutationId, mutation: location },
-      };
-      const document =
-        write.operation === "delete"
-          ? { meta }
-          : { data: yield* receiptData(candidate, write), meta };
-      const headers = preferences.respondAsync
-        ? { location, "preference-applied": "respond-async" }
-        : { location };
-      return respondWith(202, document, yield* cookie, headers);
+  ): Effect.fn.Return<Response, Unjournaled> {
+    const body = Effect.tryPromise({
+      try: () => request.clone().text(),
+      catch: (cause) => new RequestBodyUnreadable({ cause }),
     });
+    const write = yield* FacadeWrites.decodeWrite(
+      candidate.route.node,
+      candidate.target,
+      body
+    ).pipe(Effect.mapError((refusal): Unjournaled => ({ _tag: "Refused", refusal })));
+    const intent = intentOf(write);
+    if (Option.isNone(intent) || Option.isNone(mutate)) {
+      return yield* Effect.fail<Unjournaled>({ _tag: "Unmapped" });
+    }
+    const handle = yield* mutate
+      .value(intent.value.mutator, intent.value.args)
+      .pipe(
+        Effect.mapError((error): Unjournaled =>
+          P.isTagged(error, "MutatorError")
+            ? { _tag: "NotJournalable", detail: error.message }
+            : { _tag: "Unmapped" }
+        )
+      );
+    const location = statusUrl(candidate.route, handle.mutationId);
+    const meta = {
+      legation: { status: "pending", mutationId: handle.mutationId, mutation: location },
+    };
+    const document =
+      write.operation === "delete"
+        ? { meta }
+        : { data: yield* receiptData(candidate, write), meta };
+    const headers = preferences.respondAsync
+      ? { location, "preference-applied": "respond-async" }
+      : { location };
+    return respondWith(202, document, yield* cookie, headers);
+  });
 
   const offlineNow: Effect.Effect<Response> = Effect.map(cookie, (served) =>
     offlineResponse(Option.getOrUndefined(served))
@@ -924,36 +928,38 @@ export const fetchHandler = <Id extends string, Groups extends HttpApiGroup.Cons
     });
   };
 
-  const statusHandle = (request: Request, candidate: StatusCandidate): Effect.Effect<Response> =>
-    Effect.gen(function* () {
-      const { states } = candidate;
-      const links = `${Option.getOrElse(base.origin, () => "")}${base.path}${candidate.prefix}`;
-      const mutationId = MutationStatus.parseId(candidate.id);
-      if (Option.isNone(mutationId)) {
-        return respondWith(404, MutationStatus.unknownDocument(candidate.id), yield* cookie);
-      }
-      const now = yield* MutationStatus.current(states, mutationId.value);
-      const asked = FacadeWrites.preferencesOf(request.headers).wait;
-      const wait =
-        Option.isNone(asked) || Option.isNone(now) || now.value.phase !== "pending"
-          ? Option.none<Duration.Duration>()
-          : Option.some(Duration.min(Duration.seconds(asked.value), maxWait));
-      const state = Option.isNone(wait)
-        ? now
-        : yield* MutationStatus.settled(states, mutationId.value, wait.value);
-      const served = yield* cookie;
-      if (Option.isNone(state)) {
-        return respondWith(404, MutationStatus.unknownDocument(candidate.id), served);
-      }
-      const document = MutationStatus.document(nodes, links, state.value);
-      return Option.match(wait, {
-        onNone: () => respondWith(200, document, served),
-        onSome: (held) =>
-          respondWith(200, document, served, {
-            "preference-applied": `wait=${Math.floor(Duration.toSeconds(held))}`,
-          }),
-      });
+  const statusHandle = Effect.fn("legation-jsonapi/JsonApiFacade.statusHandle")(function* (
+    request: Request,
+    candidate: StatusCandidate
+  ): Effect.fn.Return<Response> {
+    const { states } = candidate;
+    const links = `${Option.getOrElse(base.origin, () => "")}${base.path}${candidate.prefix}`;
+    const mutationId = MutationStatus.parseId(candidate.id);
+    if (Option.isNone(mutationId)) {
+      return respondWith(404, MutationStatus.unknownDocument(candidate.id), yield* cookie);
+    }
+    const now = yield* MutationStatus.current(states, mutationId.value);
+    const asked = FacadeWrites.preferencesOf(request.headers).wait;
+    const wait =
+      Option.isNone(asked) || Option.isNone(now) || now.value.phase !== "pending"
+        ? Option.none<Duration.Duration>()
+        : Option.some(Duration.min(Duration.seconds(asked.value), maxWait));
+    const state = Option.isNone(wait)
+      ? now
+      : yield* MutationStatus.settled(states, mutationId.value, wait.value);
+    const served = yield* cookie;
+    if (Option.isNone(state)) {
+      return respondWith(404, MutationStatus.unknownDocument(candidate.id), served);
+    }
+    const document = MutationStatus.document(nodes, links, state.value);
+    return Option.match(wait, {
+      onNone: () => respondWith(200, document, served),
+      onSome: (held) =>
+        respondWith(200, document, served, {
+          "preference-applied": `wait=${Math.floor(Duration.toSeconds(held))}`,
+        }),
     });
+  });
 
   const handle: FetchHandler["handle"] = (request) =>
     Option.match(statusCandidateOf(request), {

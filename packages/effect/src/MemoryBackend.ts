@@ -165,17 +165,19 @@ interface MemoryState {
  * nodes resolved against the stored rows, then filter, sort and window, the
  * total counted before the window.
  */
-const countedOver = (s: MemoryState, subset: Subset.Subset): Effect.Effect<CountedEntries> =>
-  Effect.gen(function* () {
-    const collectionValues = (collection: string) =>
-      Arr.map(Arr.fromIterable(s.rows.get(collection)?.values() ?? []), (r) => r.value);
-    const where = yield* Predicate.resolveExists(subset.where, (node) =>
-      Effect.succeed(Predicate.existsValues(node, collectionValues(node.collection)))
-    );
-    const rows = Arr.fromIterable(s.rows.get(subset.collection)?.values() ?? []);
-    const { rows: windowed, total } = Subset.applyCounted(rows, { ...subset, where });
-    return { entries: windowed.map((row) => ({ id: row.id, version: row.version })), total };
-  });
+const countedOver = Effect.fnUntraced(function* (
+  s: MemoryState,
+  subset: Subset.Subset
+): Effect.fn.Return<CountedEntries> {
+  const collectionValues = (collection: string) =>
+    Arr.map(Arr.fromIterable(s.rows.get(collection)?.values() ?? []), (r) => r.value);
+  const where = yield* Predicate.resolveExists(subset.where, (node) =>
+    Effect.succeed(Predicate.existsValues(node, collectionValues(node.collection)))
+  );
+  const rows = Arr.fromIterable(s.rows.get(subset.collection)?.values() ?? []);
+  const { rows: windowed, total } = Subset.applyCounted(rows, { ...subset, where });
+  return { entries: windowed.map((row) => ({ id: row.id, version: row.version })), total };
+});
 
 const emptyState: MemoryState = {
   rows: new Map(),
@@ -403,8 +405,8 @@ interface MemoryBatch {
  * ledger rules (order, skip, gap, the bump with each outcome, reporting) are
  * the combinator's.
  */
-export const make = (handlers: Readonly<Record<string, BackendHandler>>): Effect.Effect<Backend> =>
-  Effect.gen(function* () {
+export const make: (handlers: Readonly<Record<string, BackendHandler>>) => Effect.Effect<Backend> =
+  Effect.fn("legation/MemoryBackend.make")(function* (handlers) {
     const state = yield* Ref.make(emptyState);
 
     // The writer a handler sees. Writes land in the mutation's stage, not in

@@ -159,129 +159,127 @@ const electLeader = (locks: LockManager, name: string): Effect.Effect<void, neve
  * redo that for them, so this keeps its own ledger and replays it onto
  * every newly-active view.
  */
-const switchingView = (
+const switchingView = Effect.fnUntraced(function* (
   viewRef: SubscriptionRef.SubscriptionRef<ClientView.ClientView>
-): Effect.Effect<ClientView.ClientView, never, Scope.Scope> =>
-  Effect.gen(function* () {
-    const pinnedSubsets = MutableHashMap.empty<string, Subset.Subset>();
-    const pinnedNamed = MutableHashMap.empty<
-      string,
-      { readonly name: string; readonly args: unknown }
-    >();
+): Effect.fn.Return<ClientView.ClientView, never, Scope.Scope> {
+  const pinnedSubsets = MutableHashMap.empty<string, Subset.Subset>();
+  const pinnedNamed = MutableHashMap.empty<
+    string,
+    { readonly name: string; readonly args: unknown }
+  >();
 
-    // Skip the CURRENT value (already active) and replay pins onto every
-    // view this switches to AFTER that.
-    yield* Effect.forkScoped(
-      Stream.runForEach(Stream.drop(SubscriptionRef.changes(viewRef), 1), (view) =>
-        Effect.gen(function* () {
-          const subsets = Arr.fromIterable(MutableHashMap.values(pinnedSubsets));
-          const named = Arr.fromIterable(MutableHashMap.values(pinnedNamed));
-          yield* Effect.forEach(subsets, (subset) => view.subscribe(subset).pipe(Effect.ignore), {
-            concurrency: 1,
-            discard: true,
-          });
-          yield* Effect.forEach(
-            named,
-            (entry) => view.subscribeQuery(entry.name, entry.args).pipe(Effect.ignore),
-            { concurrency: 1, discard: true }
-          );
-        })
-      ).pipe(Effect.ignore)
-    );
+  // Skip the CURRENT value (already active) and replay pins onto every
+  // view this switches to AFTER that.
+  yield* Effect.forkScoped(
+    Stream.runForEach(Stream.drop(SubscriptionRef.changes(viewRef), 1), (view) =>
+      Effect.gen(function* () {
+        const subsets = Arr.fromIterable(MutableHashMap.values(pinnedSubsets));
+        const named = Arr.fromIterable(MutableHashMap.values(pinnedNamed));
+        yield* Effect.forEach(subsets, (subset) => view.subscribe(subset).pipe(Effect.ignore), {
+          concurrency: 1,
+          discard: true,
+        });
+        yield* Effect.forEach(
+          named,
+          (entry) => view.subscribeQuery(entry.name, entry.args).pipe(Effect.ignore),
+          { concurrency: 1, discard: true }
+        );
+      })
+    ).pipe(Effect.ignore)
+  );
 
-    const current = SubscriptionRef.get(viewRef);
-    const withCurrent = <A, E>(f: (view: ClientView.ClientView) => Effect.Effect<A, E>) =>
-      Effect.flatMap(current, f);
+  const current = SubscriptionRef.get(viewRef);
+  const withCurrent = <A, E>(f: (view: ClientView.ClientView) => Effect.Effect<A, E>) =>
+    Effect.flatMap(current, f);
 
-    return {
-      query: (subset) => withCurrent((view) => view.query(subset)),
-      observe: (subset) =>
-        SubscriptionRef.changes(viewRef).pipe(Stream.switchMap((view) => view.observe(subset))),
-      observeChanges: (subset, changeOptions) =>
+  return {
+    query: (subset) => withCurrent((view) => view.query(subset)),
+    observe: (subset) =>
+      SubscriptionRef.changes(viewRef).pipe(Stream.switchMap((view) => view.observe(subset))),
+    observeChanges: (subset, changeOptions) =>
+      SubscriptionRef.changes(viewRef).pipe(
+        Stream.switchMap((view) => view.observeChanges(subset, changeOptions))
+      ),
+    subscribe: (subset) =>
+      Effect.sync(() => MutableHashMap.set(pinnedSubsets, Subset.hash(subset), subset)).pipe(
+        Effect.andThen(withCurrent((view) => view.subscribe(subset)))
+      ),
+    unsubscribe: (subset) =>
+      Effect.sync(() => MutableHashMap.remove(pinnedSubsets, Subset.hash(subset))).pipe(
+        Effect.andThen(withCurrent((view) => view.unsubscribe(subset)))
+      ),
+    subscribeQuery: (name, args) =>
+      Effect.sync(() =>
+        MutableHashMap.set(pinnedNamed, MirrorProtocol.namedKey(name, args), { name, args })
+      ).pipe(Effect.andThen(withCurrent((view) => view.subscribeQuery(name, args)))),
+    unsubscribeQuery: (name, args) =>
+      Effect.sync(() =>
+        MutableHashMap.remove(pinnedNamed, MirrorProtocol.namedKey(name, args))
+      ).pipe(Effect.andThen(withCurrent((view) => view.unsubscribeQuery(name, args)))),
+    queryNamed: (name, args) => withCurrent((view) => view.queryNamed(name, args)),
+    pulled: (key) => withCurrent((view) => view.pulled(key)),
+    // A switch of tier moves every summary, so it is a change of its own.
+    pulledChanges: SubscriptionRef.changes(viewRef).pipe(
+      Stream.switchMap((view) =>
+        Stream.concat(Stream.succeed(undefined), view.pulledChanges ?? Stream.empty)
+      )
+    ),
+    observeNamed: (name, args) =>
+      SubscriptionRef.changes(viewRef).pipe(
+        Stream.switchMap((view) => view.observeNamed(name, args))
+      ),
+    related: (registry, collectionName, subset, edges) =>
+      Effect.succeed(
         SubscriptionRef.changes(viewRef).pipe(
-          Stream.switchMap((view) => view.observeChanges(subset, changeOptions))
-        ),
-      subscribe: (subset) =>
-        Effect.sync(() => MutableHashMap.set(pinnedSubsets, Subset.hash(subset), subset)).pipe(
-          Effect.andThen(withCurrent((view) => view.subscribe(subset)))
-        ),
-      unsubscribe: (subset) =>
-        Effect.sync(() => MutableHashMap.remove(pinnedSubsets, Subset.hash(subset))).pipe(
-          Effect.andThen(withCurrent((view) => view.unsubscribe(subset)))
-        ),
-      subscribeQuery: (name, args) =>
-        Effect.sync(() =>
-          MutableHashMap.set(pinnedNamed, MirrorProtocol.namedKey(name, args), { name, args })
-        ).pipe(Effect.andThen(withCurrent((view) => view.subscribeQuery(name, args)))),
-      unsubscribeQuery: (name, args) =>
-        Effect.sync(() =>
-          MutableHashMap.remove(pinnedNamed, MirrorProtocol.namedKey(name, args))
-        ).pipe(Effect.andThen(withCurrent((view) => view.unsubscribeQuery(name, args)))),
-      queryNamed: (name, args) => withCurrent((view) => view.queryNamed(name, args)),
-      pulled: (key) => withCurrent((view) => view.pulled(key)),
-      // A switch of tier moves every summary, so it is a change of its own.
-      pulledChanges: SubscriptionRef.changes(viewRef).pipe(
-        Stream.switchMap((view) =>
-          Stream.concat(Stream.succeed(undefined), view.pulledChanges ?? Stream.empty)
+          Stream.switchMap((view) =>
+            Stream.unwrap(view.related(registry, collectionName, subset, edges))
+          )
         )
       ),
-      observeNamed: (name, args) =>
-        SubscriptionRef.changes(viewRef).pipe(
-          Stream.switchMap((view) => view.observeNamed(name, args))
-        ),
-      related: (registry, collectionName, subset, edges) =>
-        Effect.succeed(
-          SubscriptionRef.changes(viewRef).pipe(
-            Stream.switchMap((view) =>
-              Stream.unwrap(view.related(registry, collectionName, subset, edges))
-            )
-          )
-        ),
-      queryRelated: (registry, collectionName, subset, edges) =>
-        withCurrent((view) =>
-          view.queryRelated === undefined
-            ? Related.query(view, registry, collectionName, subset, edges)
-            : view.queryRelated(registry, collectionName, subset, edges)
-        ),
-      // A held edge registration has no stream to redo the switch for it:
-      // re-pin on every view this switches to (the current one first —
-      // `changes` replays it), releasing the previous tier's hold.
-      pinEdges: (registry, collectionName, subset, edges) =>
-        Effect.gen(function* () {
-          const scope = yield* Effect.scope;
-          const held = yield* Ref.make(Option.none<Scope.Closeable>());
-          yield* Effect.forkIn(
-            Stream.runForEach(SubscriptionRef.changes(viewRef), (view) =>
-              Effect.gen(function* () {
-                const previous = yield* Ref.getAndSet(held, Option.none());
-                if (Option.isSome(previous)) yield* Scope.close(previous.value, Exit.void);
-                const child = yield* Scope.fork(scope);
-                yield* view
-                  .pinEdges(registry, collectionName, subset, edges)
-                  .pipe(Scope.provide(child));
-                yield* Ref.set(held, Option.some(child));
-              })
-            ).pipe(Effect.ignore),
-            scope
-          );
-        }),
-      read: (subsets) =>
-        withCurrent((view) =>
-          view.read === undefined
-            ? Effect.fail(
-                new TransportError({
-                  message: "ElectedHost: no fallthrough read available on this tier",
-                })
-              )
-            : view.read(subsets)
-        ),
-      mutate: (mutator, args) => withCurrent((view) => view.mutate(mutator, args)),
-      mutateWithAck: (mutator, args) => withCurrent((view) => view.mutateWithAck(mutator, args)),
-      mutationStates: SubscriptionRef.changes(viewRef).pipe(
-        Stream.switchMap((view) => view.mutationStates)
+    queryRelated: (registry, collectionName, subset, edges) =>
+      withCurrent((view) =>
+        view.queryRelated === undefined
+          ? Related.query(view, registry, collectionName, subset, edges)
+          : view.queryRelated(registry, collectionName, subset, edges)
       ),
-    };
-  });
+    // A held edge registration has no stream to redo the switch for it:
+    // re-pin on every view this switches to (the current one first —
+    // `changes` replays it), releasing the previous tier's hold.
+    pinEdges: Effect.fnUntraced(function* (registry, collectionName, subset, edges) {
+      const scope = yield* Effect.scope;
+      const held = yield* Ref.make(Option.none<Scope.Closeable>());
+      yield* Effect.forkIn(
+        Stream.runForEach(SubscriptionRef.changes(viewRef), (view) =>
+          Effect.gen(function* () {
+            const previous = yield* Ref.getAndSet(held, Option.none());
+            if (Option.isSome(previous)) yield* Scope.close(previous.value, Exit.void);
+            const child = yield* Scope.fork(scope);
+            yield* view
+              .pinEdges(registry, collectionName, subset, edges)
+              .pipe(Scope.provide(child));
+            yield* Ref.set(held, Option.some(child));
+          })
+        ).pipe(Effect.ignore),
+        scope
+      );
+    }),
+    read: (subsets) =>
+      withCurrent((view) =>
+        view.read === undefined
+          ? Effect.fail(
+              new TransportError({
+                message: "ElectedHost: no fallthrough read available on this tier",
+              })
+            )
+          : view.read(subsets)
+      ),
+    mutate: (mutator, args) => withCurrent((view) => view.mutate(mutator, args)),
+    mutateWithAck: (mutator, args) => withCurrent((view) => view.mutateWithAck(mutator, args)),
+    mutationStates: SubscriptionRef.changes(viewRef).pipe(
+      Stream.switchMap((view) => view.mutationStates)
+    ),
+  };
+});
 
 /**
  * Elect this tab into hosting `clientGroupId`'s engine — full main-thread
@@ -289,86 +287,87 @@ const switchingView = (
  * otherwise — and hand back one `Client` that works unchanged across the
  * transition, plus a `role` stream for observability.
  */
-export const run = <Graph extends Node.NodeRegistry>(
+export const run: <Graph extends Node.NodeRegistry>(
   options: ElectedHostOptions<Graph>
-): Effect.Effect<ElectedHost<Graph>, never, Scope.Scope> =>
-  Effect.gen(function* () {
-    const channelName = options.channelName ?? ServiceWorkerHost.defaultChannelName;
-    const locks = options.locks ?? globalLocks();
+) => Effect.Effect<ElectedHost<Graph>, never, Scope.Scope> = Effect.fn(
+  "legation-browser/ElectedHost.run"
+)(function* <Graph extends Node.NodeRegistry>(options: ElectedHostOptions<Graph>) {
+  const channelName = options.channelName ?? ServiceWorkerHost.defaultChannelName;
+  const locks = options.locks ?? globalLocks();
 
-    const mirrorScope = yield* Scope.make();
-    const mirrorChannel = yield* BroadcastMirrorChannel.make(channelName).pipe(
-      Scope.provide(mirrorScope)
+  const mirrorScope = yield* Scope.make();
+  const mirrorChannel = yield* BroadcastMirrorChannel.make(channelName).pipe(
+    Scope.provide(mirrorScope)
+  );
+  const mirror = yield* Mirror.make({ channel: mirrorChannel, mutators: options.mutations }).pipe(
+    Scope.provide(mirrorScope)
+  );
+
+  const viewRef = yield* SubscriptionRef.make<ClientView.ClientView>(mirror);
+  const roleRef = yield* SubscriptionRef.make<Role>("mirror");
+
+  const becomeHost = Effect.fnUntraced(function* () {
+    const hostClientId = options.hostClientId ?? `host-${options.clientGroupId}`;
+    // One counted voice for both fronts over this engine — the host
+    // serving other tabs and this tab's own view — so a mirror releasing
+    // a window never drops one this tab's Client still pins.
+    // The dependencies are built here, not provided to the engine alone, so the
+    // host is handed the same store the engine runs over: given it, the host
+    // serves the introspection and `hydrate` request kinds.
+    const dependencies = yield* Layer.build(options.dependencies);
+    const store = Context.get(dependencies, ClientStore.ClientStore);
+    const engine = Subscriptions.counted(
+      yield* ClientEngine.make({
+        clientId: hostClientId,
+        clientGroupId: options.clientGroupId,
+        mutators: options.mutations,
+        ...Defined.fields({ queries: options.queries, syncLoop: options.syncLoop }),
+      }).pipe(Effect.provideContext(dependencies))
     );
-    const mirror = yield* Mirror.make({ channel: mirrorChannel, mutators: options.mutations }).pipe(
-      Scope.provide(mirrorScope)
-    );
-
-    const viewRef = yield* SubscriptionRef.make<ClientView.ClientView>(mirror);
-    const roleRef = yield* SubscriptionRef.make<Role>("mirror");
-
-    const becomeHost = Effect.fnUntraced(function* () {
-      const hostClientId = options.hostClientId ?? `host-${options.clientGroupId}`;
-      // One counted voice for both fronts over this engine — the host
-      // serving other tabs and this tab's own view — so a mirror releasing
-      // a window never drops one this tab's Client still pins.
-      // The dependencies are built here, not provided to the engine alone, so the
-      // host is handed the same store the engine runs over: given it, the host
-      // serves the introspection and `hydrate` request kinds.
-      const dependencies = yield* Layer.build(options.dependencies);
-      const store = Context.get(dependencies, ClientStore.ClientStore);
-      const engine = Subscriptions.counted(
-        yield* ClientEngine.make({
-          clientId: hostClientId,
-          clientGroupId: options.clientGroupId,
-          mutators: options.mutations,
-          ...Defined.fields({ queries: options.queries, syncLoop: options.syncLoop }),
-        }).pipe(Effect.provideContext(dependencies))
-      );
-      const hostChannel = yield* BroadcastMirrorChannel.make(channelName);
-      yield* EngineHost.run({
-        channel: hostChannel,
-        engine,
-        store,
-        requests: options.requests ?? [],
-        hydrationWindow: options.hydrationWindow,
-        nodes: options.nodes,
-        ...Defined.fields({ registry: options.registry, urls: options.urls }),
-      });
-      yield* Effect.forkScoped(engine.runSync.pipe(Effect.ignore));
-      yield* SubscriptionRef.set(viewRef, ClientView.fromEngine(engine));
-      yield* SubscriptionRef.set(roleRef, "host");
-      // The mirror is no longer reachable through the switching view (and,
-      // being the same tab, could never mirror its own broadcast anyway) —
-      // release its heartbeat/channel rather than leave it running inert.
-      yield* Scope.close(mirrorScope, Exit.void);
+    const hostChannel = yield* BroadcastMirrorChannel.make(channelName);
+    yield* EngineHost.run({
+      channel: hostChannel,
+      engine,
+      store,
+      requests: options.requests ?? [],
+      hydrationWindow: options.hydrationWindow,
+      nodes: options.nodes,
+      ...Defined.fields({ registry: options.registry, urls: options.urls }),
     });
-
-    if (locks === undefined) {
-      yield* Effect.logWarning(
-        "ElectedHost: navigator.locks is unavailable — becoming host immediately. " +
-          "This is only correct for a single tab; see the README's topology docs."
-      );
-      yield* becomeHost();
-    } else {
-      // A failure here (e.g. the durable store or transport failing to
-      // construct) leaves this tab mirroring forever rather than crashing
-      // the fiber silently — logged so it's visible, not asserted against,
-      // since there's nothing more useful to do with it from here.
-      yield* Effect.forkScoped(
-        electLeader(locks, options.clientGroupId).pipe(
-          Effect.andThen(becomeHost()),
-          Effect.tapCause((cause) => Effect.logError("ElectedHost: failed to become host", cause)),
-          Effect.ignore
-        )
-      );
-    }
-
-    const view = yield* switchingView(viewRef);
-    const client = Client.fromView(
-      options.nodes,
-      view,
-      options.urls === undefined ? {} : { urls: options.urls }
-    );
-    return { client, role: SubscriptionRef.changes(roleRef) };
+    yield* Effect.forkScoped(engine.runSync);
+    yield* SubscriptionRef.set(viewRef, ClientView.fromEngine(engine));
+    yield* SubscriptionRef.set(roleRef, "host");
+    // The mirror is no longer reachable through the switching view (and,
+    // being the same tab, could never mirror its own broadcast anyway) —
+    // release its heartbeat/channel rather than leave it running inert.
+    yield* Scope.close(mirrorScope, Exit.void);
   });
+
+  if (locks === undefined) {
+    yield* Effect.logWarning(
+      "ElectedHost: navigator.locks is unavailable — becoming host immediately. " +
+        "This is only correct for a single tab; see the README's topology docs."
+    );
+    yield* becomeHost();
+  } else {
+    // A failure here (e.g. the durable store or transport failing to
+    // construct) leaves this tab mirroring forever rather than crashing
+    // the fiber silently — logged so it's visible, not asserted against,
+    // since there's nothing more useful to do with it from here.
+    yield* Effect.forkScoped(
+      electLeader(locks, options.clientGroupId).pipe(
+        Effect.andThen(becomeHost()),
+        Effect.tapCause((cause) => Effect.logError("ElectedHost: failed to become host", cause)),
+        Effect.ignore
+      )
+    );
+  }
+
+  const view = yield* switchingView(viewRef);
+  const client = Client.fromView(
+    options.nodes,
+    view,
+    options.urls === undefined ? {} : { urls: options.urls }
+  );
+  return { client, role: SubscriptionRef.changes(roleRef) };
+});

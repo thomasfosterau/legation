@@ -95,32 +95,31 @@ export const make = (config: PollingHintSourceConfig): HintSource.HintSource => 
   // each whose signature moved since the last poll (batched into one publish),
   // and remember the new signatures. The first poll only establishes the
   // baseline — a collection not yet in `state` never emits a hint.
-  const tick = (
+  const tick = Effect.fnUntraced(function* (
     bus: InvalidationBus.InvalidationBus,
     state: Ref.Ref<HashMap.HashMap<string, string>>
-  ): Effect.Effect<void, BackendError> =>
-    Effect.gen(function* () {
-      const previous = yield* Ref.get(state);
-      let next = previous;
-      const changed: Array<Backend.ChangeHint> = [];
-      yield* Effect.forEach(
-        collections,
-        (collection) =>
-          Effect.gen(function* () {
-            const current = yield* signatureFor(collection);
-            if (Option.isNone(current)) return;
-            const signature = current.value;
-            const before = HashMap.get(previous, collection);
-            if (Option.isSome(before) && before.value !== signature) {
-              changed.push({ collection, ids: [] });
-            }
-            next = HashMap.set(next, collection, signature);
-          }),
-        { concurrency: 1, discard: true }
-      );
-      yield* Ref.set(state, next);
-      yield* bus.publish(changed);
-    });
+  ): Effect.fn.Return<void, BackendError> {
+    const previous = yield* Ref.get(state);
+    let next = previous;
+    const changed: Array<Backend.ChangeHint> = [];
+    yield* Effect.forEach(
+      collections,
+      (collection) =>
+        Effect.gen(function* () {
+          const current = yield* signatureFor(collection);
+          if (Option.isNone(current)) return;
+          const signature = current.value;
+          const before = HashMap.get(previous, collection);
+          if (Option.isSome(before) && before.value !== signature) {
+            changed.push({ collection, ids: [] });
+          }
+          next = HashMap.set(next, collection, signature);
+        }),
+      { concurrency: 1, discard: true }
+    );
+    yield* Ref.set(state, next);
+    yield* bus.publish(changed);
+  });
 
   return {
     run: Effect.flatMap(InvalidationBus.InvalidationBus, (bus) =>

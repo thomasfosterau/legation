@@ -24,6 +24,8 @@
  *
  * Seed: `LEGATION_CORPUS_SEED` overrides the default.
  */
+import { identity } from "effect/Function";
+import * as Result from "effect/Result";
 import { Predicate } from "@thomasfosterau/legation";
 import { FilterCorpus, Subset } from "@thomasfosterau/legation/internal";
 import * as Arr from "effect/Array";
@@ -41,7 +43,7 @@ import * as Env from "../env.js";
 import { TestFailure } from "../test-failure.js";
 import * as Json from "../../internal/Json.js";
 
-const seed = FilterCorpus.resolveSeed(Env.corpusSeed);
+const seed = Result.getOrThrowWith(FilterCorpus.resolveSeed(Env.corpusSeed), identity);
 
 type Ids = ReadonlyArray<string>;
 type Rows = ReadonlyArray<FilterCorpus.CorpusRow>;

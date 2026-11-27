@@ -151,27 +151,28 @@ const storeError = (message: string) => (cause: unknown) => new StoreError({ mes
  * The replica read member by member: the path for a store without `snapshot`. Its reads are not one
  * state, so a pull or a push acknowledgement can land between them.
  */
-const readMembers = (store: ClientStore): Effect.Effect<ReplicaState, StoreError> =>
-  Effect.gen(function* () {
-    const rows: Array<{ readonly collection: string; readonly row: StoredRow }> = [];
-    yield* Effect.forEach(
-      yield* store.listCollections,
-      (collection) =>
-        Effect.gen(function* () {
-          Arr.forEach(yield* store.listRows(collection), (row) => {
-            rows.push({ collection, row });
-          });
-        }),
-      { concurrency: 1, discard: true }
-    );
-    return {
-      rows,
-      cookie: yield* store.getCookie,
-      journal: yield* store.pendingMutations,
-      unpulled: yield* store.unpulled,
-      counters: yield* store.mutationCounters,
-    };
-  });
+const readMembers = Effect.fnUntraced(function* (
+  store: ClientStore
+): Effect.fn.Return<ReplicaState, StoreError> {
+  const rows: Array<{ readonly collection: string; readonly row: StoredRow }> = [];
+  yield* Effect.forEach(
+    yield* store.listCollections,
+    (collection) =>
+      Effect.gen(function* () {
+        Arr.forEach(yield* store.listRows(collection), (row) => {
+          rows.push({ collection, row });
+        });
+      }),
+    { concurrency: 1, discard: true }
+  );
+  return {
+    rows,
+    cookie: yield* store.getCookie,
+    journal: yield* store.pendingMutations,
+    unpulled: yield* store.unpulled,
+    counters: yield* store.mutationCounters,
+  };
+});
 
 /**
  * Read a {@link ClientStore} into a {@link Snapshot}: enumerate the collections,
@@ -184,24 +185,25 @@ const readMembers = (store: ClientStore): Effect.Effect<ReplicaState, StoreError
  * (the memory and key-value stores do): a pull or a push acknowledgement lands wholly
  * before or wholly after the read. A store without it is read member by member.
  */
-export const dehydrate = (store: ClientStore): Effect.Effect<Snapshot, StoreError> =>
-  Effect.gen(function* () {
-    const state = yield* store.snapshot ?? readMembers(store);
-    const base: Snapshot = {
-      rows: state.rows.map(({ collection, row }) => ({
-        collection,
-        id: row.id,
-        version: row.version,
-        value: row.value,
-      })),
-      ...Defined.fields({ cookie: state.cookie }),
-      journal: state.journal,
-      ...Defined.fields({
-        unpulled: Arr.isReadonlyArrayNonEmpty(state.unpulled) ? state.unpulled : undefined,
-      }),
-    };
-    return R.isEmptyRecord(state.counters) ? base : { ...base, counters: state.counters };
-  });
+export const dehydrate: (store: ClientStore) => Effect.Effect<Snapshot, StoreError> = Effect.fn(
+  "legation/Hydration.dehydrate"
+)(function* (store) {
+  const state = yield* store.snapshot ?? readMembers(store);
+  const base: Snapshot = {
+    rows: state.rows.map(({ collection, row }) => ({
+      collection,
+      id: row.id,
+      version: row.version,
+      value: row.value,
+    })),
+    ...Defined.fields({ cookie: state.cookie }),
+    journal: state.journal,
+    ...Defined.fields({
+      unpulled: Arr.isReadonlyArrayNonEmpty(state.unpulled) ? state.unpulled : undefined,
+    }),
+  };
+  return R.isEmptyRecord(state.counters) ? base : { ...base, counters: state.counters };
+});
 
 /**
  * Write a {@link Snapshot} into a {@link ClientStore}: validate it through
@@ -236,8 +238,8 @@ export const dehydrate = (store: ClientStore): Effect.Effect<Snapshot, StoreErro
  * If that release is a live pull's, the pull's remaining row writes then land over
  * the snapshot's rows. Hydrate before the engine starts, or while it is stopped.
  */
-export const hydrate = (store: ClientStore, snapshot: Snapshot): Effect.Effect<void, StoreError> =>
-  Effect.gen(function* () {
+export const hydrate: (store: ClientStore, snapshot: Snapshot) => Effect.Effect<void, StoreError> =
+  Effect.fn("legation/Hydration.hydrate")(function* (store, snapshot) {
     const decoded = yield* Schema.decodeEffect(Snapshot)(snapshot).pipe(
       Effect.mapError(storeError("Invalid snapshot"))
     );
@@ -285,16 +287,17 @@ export const hydrate = (store: ClientStore, snapshot: Snapshot): Effect.Effect<v
  * Whether a store holds nothing: no rows, no cookie, no journalled or unpulled mutations.
  * The "fresh browser" test {@link hydrateIfEmpty} gates on.
  */
-export const isEmpty = (store: ClientStore): Effect.Effect<boolean, StoreError> =>
-  Effect.gen(function* () {
-    if ((yield* store.getCookie) !== undefined) return false;
-    if (Arr.isReadonlyArrayNonEmpty(yield* store.pendingMutations)) return false;
-    if (Arr.isReadonlyArrayNonEmpty(yield* store.unpulled)) return false;
-    const holding = yield* Effect.findFirst(yield* store.listCollections, (collection) =>
-      Effect.map(store.listRows(collection), Arr.isReadonlyArrayNonEmpty)
-    );
-    return Option.isNone(holding);
-  });
+export const isEmpty: (store: ClientStore) => Effect.Effect<boolean, StoreError> = Effect.fn(
+  "legation/Hydration.isEmpty"
+)(function* (store) {
+  if ((yield* store.getCookie) !== undefined) return false;
+  if (Arr.isReadonlyArrayNonEmpty(yield* store.pendingMutations)) return false;
+  if (Arr.isReadonlyArrayNonEmpty(yield* store.unpulled)) return false;
+  const holding = yield* Effect.findFirst(yield* store.listCollections, (collection) =>
+    Effect.map(store.listRows(collection), Arr.isReadonlyArrayNonEmpty)
+  );
+  return Option.isNone(holding);
+});
 
 /**
  * {@link hydrate}, but only into an empty store; returns whether it hydrated.
@@ -306,15 +309,16 @@ export const isEmpty = (store: ClientStore): Effect.Effect<boolean, StoreError> 
  * clobber newer confirmed rows. An empty store (first visit, cleared storage)
  * takes the snapshot wholesale.
  */
-export const hydrateIfEmpty = (
+export const hydrateIfEmpty: (
   store: ClientStore,
   snapshot: Snapshot
-): Effect.Effect<boolean, StoreError> =>
-  Effect.gen(function* () {
+) => Effect.Effect<boolean, StoreError> = Effect.fn("legation/Hydration.hydrateIfEmpty")(
+  function* (store, snapshot) {
     if (!(yield* isEmpty(store))) return false;
     yield* hydrate(store, snapshot);
     return true;
-  });
+  }
+);
 
 /**
  * Why a host declined a snapshot (ADR-0021 amendment §6): its store already
@@ -440,51 +444,53 @@ const RELEASED: Hold = { holding: false, job: Option.none() };
  * Returns once the hold (if any) is in place, so a pull that starts after the
  * gate is made waits for it. The hold ends with the scope.
  */
-export const makeGate = (
+export const makeGate: (
   engine: ClientEngineModule.ClientEngine,
   store: ClientStore,
-  options: GateOptions = {}
-): Effect.Effect<Gate, never, Scope.Scope> =>
-  Effect.gen(function* () {
-    const { hold } = options;
-    const direct = (snapshot: Snapshot) => hydrateUnpulled(engine, store, snapshot);
-    if (hold === undefined) return { hydrate: direct };
-    const state = yield* Ref.make<Hold>({ holding: true, job: Option.none() });
-    const arrived = yield* Deferred.make<void>();
-    const holding = yield* Deferred.make<void>();
-    yield* Effect.forkScoped(
-      engine.withPullsHeld((counts) =>
-        Effect.gen(function* () {
-          yield* Deferred.succeed(holding, undefined);
-          const eligible =
-            counts.started === 0 && (yield* isEmpty(store).pipe(Effect.orElseSucceed(() => false)));
-          if (eligible) yield* Deferred.await(arrived).pipe(Effect.timeoutOption(hold));
-          // Close the hold and take whatever job was handed over, as one step: a
-          // snapshot that arrives after this goes through the pulls like any other.
-          const claimed = yield* Ref.getAndSet(state, RELEASED);
-          if (Option.isSome(claimed.job)) {
-            const { snapshot, reply } = claimed.job.value;
-            yield* Deferred.done(reply, yield* Effect.exit(hydrateHeld(counts, store, snapshot)));
-          }
-        })
-      )
-    );
-    yield* Deferred.await(holding);
-    return {
-      hydrate: (snapshot) =>
-        Effect.gen(function* () {
-          const reply = yield* Deferred.make<HydrateOutcome, StoreError>();
-          const handedOver = yield* Ref.modify(state, (current): readonly [boolean, Hold] =>
-            current.holding && Option.isNone(current.job)
-              ? [true, { holding: true, job: Option.some({ snapshot, reply }) }]
-              : [false, current]
-          );
-          if (!handedOver) return yield* direct(snapshot);
-          yield* Deferred.succeed(arrived, undefined);
-          return yield* Deferred.await(reply);
-        }),
-    };
-  });
+  options?: GateOptions
+) => Effect.Effect<Gate, never, Scope.Scope> = Effect.fn("legation/Hydration.makeGate")(function* (
+  engine,
+  store,
+  options = {}
+) {
+  const { hold } = options;
+  const direct = (snapshot: Snapshot) => hydrateUnpulled(engine, store, snapshot);
+  if (hold === undefined) return { hydrate: direct };
+  const state = yield* Ref.make<Hold>({ holding: true, job: Option.none() });
+  const arrived = yield* Deferred.make<void>();
+  const holding = yield* Deferred.make<void>();
+  yield* Effect.forkScoped(
+    engine.withPullsHeld((counts) =>
+      Effect.gen(function* () {
+        yield* Deferred.succeed(holding, undefined);
+        const eligible =
+          counts.started === 0 && (yield* isEmpty(store).pipe(Effect.orElseSucceed(() => false)));
+        if (eligible) yield* Deferred.await(arrived).pipe(Effect.timeoutOption(hold));
+        // Close the hold and take whatever job was handed over, as one step: a
+        // snapshot that arrives after this goes through the pulls like any other.
+        const claimed = yield* Ref.getAndSet(state, RELEASED);
+        if (Option.isSome(claimed.job)) {
+          const { snapshot, reply } = claimed.job.value;
+          yield* Deferred.done(reply, yield* Effect.exit(hydrateHeld(counts, store, snapshot)));
+        }
+      })
+    )
+  );
+  yield* Deferred.await(holding);
+  return {
+    hydrate: Effect.fn("legation/Hydration.makeGate.hydrate")(function* (snapshot) {
+      const reply = yield* Deferred.make<HydrateOutcome, StoreError>();
+      const handedOver = yield* Ref.modify(state, (current): readonly [boolean, Hold] =>
+        current.holding && Option.isNone(current.job)
+          ? [true, { holding: true, job: Option.some({ snapshot, reply }) }]
+          : [false, current]
+      );
+      if (!handedOver) return yield* direct(snapshot);
+      yield* Deferred.succeed(arrived, undefined);
+      return yield* Deferred.await(reply);
+    }),
+  };
+});
 
 /** The host-side handler serving {@link requests}' `hydrate` kind through a {@link Gate}. */
 export const handler = (gate: Gate): HostRequest.Handler =>
@@ -584,24 +590,21 @@ export type SnapshotError = StoreError | TransportError | MutatorError | Version
  * render's own: `Layer.fresh` builds a new one even under a parent that
  * memoizes `layerMemory`, so no two requests share it.
  */
-const renderOver = (
-  options: SnapshotOptions
-): Effect.Effect<Snapshot, SnapshotError, ClientTransport> =>
-  Effect.gen(function* () {
-    const store = Context.get(yield* Layer.build(Layer.fresh(layerMemory)), ClientStore);
-    const engine = yield* ClientEngineModule.make({
-      clientId: options.clientId ?? "ssr",
-      clientGroupId: options.clientGroupId,
-      mutators: options.mutations ?? Mutator.registry([]),
-    }).pipe(Effect.provideService(ClientStore, store));
-    yield* Effect.forEach(
-      options.reads,
-      (read) => engine.subscribe(Query.plan(options.nodes, read).root),
-      { concurrency: 1, discard: true }
-    );
-    yield* engine.pull;
-    return yield* dehydrate(store);
-  }).pipe(Effect.scoped);
+const renderOver = Effect.fn("legation/Hydration.renderOver")(function* (options: SnapshotOptions) {
+  const store = Context.get(yield* Layer.build(Layer.fresh(layerMemory)), ClientStore);
+  const engine = yield* ClientEngineModule.make({
+    clientId: options.clientId ?? "ssr",
+    clientGroupId: options.clientGroupId,
+    mutators: options.mutations ?? Mutator.registry([]),
+  }).pipe(Effect.provideService(ClientStore, store));
+  yield* Effect.forEach(
+    options.reads,
+    (read) => engine.subscribe(Query.plan(options.nodes, read).root),
+    { concurrency: 1, discard: true }
+  );
+  yield* engine.pull;
+  return yield* dehydrate(store);
+}, Effect.scoped);
 
 /**
  * Produce an SSR snapshot over a request-scoped engine: build an in-memory

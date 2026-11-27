@@ -15,7 +15,7 @@
  * the API key, not its hash.
  */
 
-import * as Match from "effect/Match";
+import * as Data from "effect/Data";
 import * as Option from "effect/Option";
 import * as P from "effect/Predicate";
 import type { Session as AuthSession, User } from "@thomasfosterau/effect-auth";
@@ -53,24 +53,28 @@ export interface ApiKey {
 /** Who a request was verified to come from: the type of `SyncContext.identity` under this package's resolver. */
 export type Principal = Anonymous | Session | ApiKey;
 
+/**
+ * The {@link Principal} cases as a `Data.TaggedEnum`: their constructors
+ * (`Principal.Session({ … })`), guards (`$is`) and matcher (`$match`).
+ */
+export const Principal = Data.taggedEnum<Principal>();
+
 /** The anonymous principal, which every failed or absent credential resolves to. */
-export const anonymous: Principal = { _tag: "Anonymous" };
+export const anonymous: Principal = Principal.Anonymous();
 
 /** Whether a principal is the anonymous one. */
-export const isAnonymous = (principal: Principal): principal is Anonymous =>
-  P.isTagged(principal, "Anonymous");
+export const isAnonymous: (principal: Principal) => principal is Anonymous =
+  Principal.$is("Anonymous");
 
 /** Whether a principal is a validated session's. */
-export const isSession = (principal: Principal): principal is Session =>
-  P.isTagged(principal, "Session");
+export const isSession: (principal: Principal) => principal is Session = Principal.$is("Session");
 
 /** The user a principal acts for: `None` for the anonymous principal. */
-export const userId = (principal: Principal): Option.Option<string> =>
-  Match.valueTags(principal, {
-    Anonymous: () => Option.none(),
-    Session: (session) => Option.some(session.userId),
-    ApiKey: (key) => Option.some(key.userId),
-  });
+export const userId: (principal: Principal) => Option.Option<string> = Principal.$match({
+  Anonymous: () => Option.none(),
+  Session: (session) => Option.some(session.userId),
+  ApiKey: (key) => Option.some(key.userId),
+});
 
 /** Whether a value is a principal this package's resolver produced. */
 const isPrincipal = (value: unknown): value is Principal =>

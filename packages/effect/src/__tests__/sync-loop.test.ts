@@ -8,11 +8,14 @@
  * cannot make a case time out.
  */
 import * as Defined from "../Defined.js";
-import { describe, expect, it } from "@effect/vitest";
+import { describe, expect, it, layer } from "@effect/vitest";
 import * as Arr from "effect/Array";
+import * as Cause from "effect/Cause";
 import * as Duration from "effect/Duration";
+import * as ErrorReporter from "effect/ErrorReporter";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
+import * as Logger from "effect/Logger";
 import * as Ref from "effect/Ref";
 import * as Schema from "effect/Schema";
 import * as Scope from "effect/Scope";
@@ -344,4 +347,41 @@ describe("sync-loop scheduling", () => {
       expect(yield* Ref.get(pull)).toBe(before);
     })
   );
+});
+
+// The reasons the installed `ErrorReporter` was handed, in order.
+const reported: Array<string> = [];
+const reporter = ErrorReporter.make(({ error }) => {
+  reported.push(error.message);
+});
+
+layer(ErrorReporter.layer([reporter]))("sync-loop failure reporting", (reporting) => {
+  reporting.effect("reports a sync-loop leg that dies, with its cause", () => {
+    const lines: Array<{
+      readonly level: string;
+      readonly message: string;
+      readonly cause: string;
+    }> = [];
+    const collector = Logger.make((options) => {
+      lines.push({
+        level: options.logLevel,
+        message: String(options.message),
+        cause: Cause.pretty(options.cause),
+      });
+    });
+    return Effect.gen(function* () {
+      const handler = yield* makeServer();
+      const { engine } = yield* makeClient(handler, "a", undefined, {
+        pokes: Stream.die(new TestFailure({ message: "the poke stream broke" })),
+      });
+      yield* engine.runSync;
+      yield* settle(Effect.sync(() => Arr.isReadonlyArrayNonEmpty(reported)));
+      const stopped = lines.filter(
+        (line) => line.level === "Error" && line.message.includes("poke leg stopped")
+      );
+      expect(stopped).toHaveLength(1);
+      expect(stopped[0]?.cause).toContain("the poke stream broke");
+      expect(reported).toEqual(["the poke stream broke"]);
+    }).pipe(Effect.withLogger(collector));
+  });
 });

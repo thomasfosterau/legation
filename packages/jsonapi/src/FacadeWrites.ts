@@ -89,8 +89,8 @@ const refuse = (refusal: Refusal): Effect.Effect<never, Refusal> => Effect.fail(
 const invalid = (detail: string, pointer: string): Effect.Effect<never, Refusal> =>
   refuse({ status: 400, code: "invalid_document", title: "Invalid document", detail, pointer });
 
-const isRecord = (value: Schema.Json): value is Schema.JsonObject =>
-  P.isObject(value) && !Array.isArray(value);
+// `P.isObject` already excludes arrays; the guard narrows `Json` to its object member.
+const isRecord = (value: Schema.Json): value is Schema.JsonObject => P.isObject(value);
 
 const decodeJson = Schema.decodeUnknownEffect(Schema.fromJsonString(Schema.Json));
 
@@ -134,20 +134,21 @@ const linkageOf = (
 };
 
 /** The body's `data` member as an object, or the refusal for a body that has none. */
-const dataOf = <E>(body: Effect.Effect<string, E>): Effect.Effect<Schema.JsonObject, Refusal> =>
-  Effect.gen(function* () {
-    const text = yield* body.pipe(
-      Effect.catch(() => invalid("the request body could not be read", ""))
-    );
-    const document = yield* decodeJson(text).pipe(
-      Effect.catch(() => invalid("the request body is not JSON", ""))
-    );
-    if (!isRecord(document) || !("data" in document)) {
-      return yield* invalid('a write document needs a "data" member', "");
-    }
-    const data = document["data"];
-    return isRecord(data) ? data : yield* invalid('"data" must be a resource object', "/data");
-  });
+const dataOf = Effect.fnUntraced(function* <E>(
+  body: Effect.Effect<string, E>
+): Effect.fn.Return<Schema.JsonObject, Refusal> {
+  const text = yield* body.pipe(
+    Effect.catch(() => invalid("the request body could not be read", ""))
+  );
+  const document = yield* decodeJson(text).pipe(
+    Effect.catch(() => invalid("the request body is not JSON", ""))
+  );
+  if (!isRecord(document) || !("data" in document)) {
+    return yield* invalid('a write document needs a "data" member', "");
+  }
+  const data = document["data"];
+  return isRecord(data) ? data : yield* invalid('"data" must be a resource object', "/data");
+});
 
 const clientIdRequired: Refusal = {
   status: 503,

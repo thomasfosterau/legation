@@ -61,23 +61,22 @@ const takeHandle = <A>(
  * `publish` that tallies overflows — the backpressure primitive shared by the
  * in-process bus and the memory broker.
  */
-const droppingHub = <A>(
+const droppingHub = Effect.fnUntraced(function* <A>(
   capacity?: number
-): Effect.Effect<
+): Effect.fn.Return<
   { readonly pubsub: PubSub.PubSub<A>; readonly publish: (value: A) => Effect.Effect<void> },
   never,
   Scope.Scope
-> =>
-  Effect.gen(function* () {
-    const pubsub = yield* Effect.acquireRelease(
-      PubSub.dropping<A>({ capacity: capacity ?? DEFAULT_CAPACITY }),
-      (hub) => PubSub.shutdown(hub)
-    );
-    return {
-      pubsub,
-      publish: (value) => PubSub.publish(pubsub, value).pipe(Effect.flatMap(countIfDropped)),
-    };
-  });
+> {
+  const pubsub = yield* Effect.acquireRelease(
+    PubSub.dropping<A>({ capacity: capacity ?? DEFAULT_CAPACITY }),
+    (hub) => PubSub.shutdown(hub)
+  );
+  return {
+    pubsub,
+    publish: (value) => PubSub.publish(pubsub, value).pipe(Effect.flatMap(countIfDropped)),
+  };
+});
 
 /** A live subscription to the bus. */
 export interface HintSubscription {
@@ -117,16 +116,17 @@ export const InvalidationBus = Context.Service<InvalidationBus>(
  * correctness never depends on the bus. Capacity is configurable; the default
  * is generous ({@link DEFAULT_CAPACITY}).
  */
-export const makeInProcessWith = (
+export const makeInProcessWith: (
   options?: BusCapacityOptions
-): Effect.Effect<InvalidationBus, never, Scope.Scope> =>
-  Effect.gen(function* () {
-    const hub = yield* droppingHub<ReadonlyArray<ChangeHint>>(options?.capacity);
-    return InvalidationBus.of({
-      publish: (hints) => (Arr.isReadonlyArrayEmpty(hints) ? Effect.void : hub.publish(hints)),
-      subscribe: takeHandle(hub.pubsub),
-    });
+) => Effect.Effect<InvalidationBus, never, Scope.Scope> = Effect.fn(
+  "legation/InvalidationBus.makeInProcessWith"
+)(function* (options) {
+  const hub = yield* droppingHub<ReadonlyArray<ChangeHint>>(options?.capacity);
+  return InvalidationBus.of({
+    publish: (hints) => (Arr.isReadonlyArrayEmpty(hints) ? Effect.void : hub.publish(hints)),
+    subscribe: takeHandle(hub.pubsub),
   });
+});
 
 /** In-process bus with the default capacity. */
 export const makeInProcess: Effect.Effect<InvalidationBus, never, Scope.Scope> =
@@ -252,13 +252,14 @@ export const layerSerialized = (
  * `legation_hints_dropped_total`; the next pull repairs any missed hint
  * (ADR-0009). Capacity is configurable, defaulting to {@link DEFAULT_CAPACITY}.
  */
-export const makeMemoryBrokerWith = (
+export const makeMemoryBrokerWith: (
   options?: BusCapacityOptions
-): Effect.Effect<BusBroker, never, Scope.Scope> =>
-  Effect.gen(function* () {
-    const hub = yield* droppingHub<string>(options?.capacity);
-    return { publish: hub.publish, subscribe: takeHandle(hub.pubsub) };
-  });
+) => Effect.Effect<BusBroker, never, Scope.Scope> = Effect.fn(
+  "legation/InvalidationBus.makeMemoryBrokerWith"
+)(function* (options) {
+  const hub = yield* droppingHub<string>(options?.capacity);
+  return { publish: hub.publish, subscribe: takeHandle(hub.pubsub) };
+});
 
 /** In-memory broker with the default capacity. */
 export const makeMemoryBroker: Effect.Effect<BusBroker, never, Scope.Scope> =

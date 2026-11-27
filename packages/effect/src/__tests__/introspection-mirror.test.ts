@@ -15,6 +15,7 @@ import * as Schedule from "effect/Schedule";
 import * as Schema from "effect/Schema";
 import * as Scope from "effect/Scope";
 import * as Stream from "effect/Stream";
+import * as TestClock from "effect/testing/TestClock";
 import * as Authorization from "../Authorization.js";
 import { Backend } from "../Backend.js";
 import * as ClientEngine from "../ClientEngine.js";
@@ -132,7 +133,7 @@ describe("Introspection.fromMirror", () => {
     })
   );
 
-  it.live("reads the host's sync failures, their errors decoded", () =>
+  it.effect("reads the host's sync failures, their errors decoded", () =>
     Effect.gen(function* () {
       const { engine, owned, remote } = yield* setup((transport) => ({
         ...transport,
@@ -145,12 +146,9 @@ describe("Introspection.fromMirror", () => {
       // every loop, so no failure is recorded after the wait and both reads see the same set.
       const syncScope = yield* Scope.make();
       yield* Scope.provide(engine.runSync, syncScope);
-      yield* owned.syncFailures.pipe(
-        Effect.repeat({
-          until: Arr.isReadonlyArrayNonEmpty,
-          schedule: Schedule.spaced(Duration.millis(10)),
-        })
-      );
+      // Two periodic pulls (at 0 and 20ms), each failing on its first attempt.
+      yield* TestClock.adjust(Duration.millis(25));
+      expect(Arr.isReadonlyArrayNonEmpty(yield* owned.syncFailures)).toBe(true);
       yield* Scope.close(syncScope, Exit.void);
       const failures = yield* remote.syncFailures;
       const ownedFailures = yield* owned.syncFailures;

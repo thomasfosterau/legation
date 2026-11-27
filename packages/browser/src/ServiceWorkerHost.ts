@@ -131,37 +131,38 @@ export interface Host {
  * as it serves (`Effect.never`, as {@link run} does); closing it stops
  * serving.
  */
-export const start = (
-  options: ServiceWorkerHostOptions = {}
-): Effect.Effect<Host, never, ClientEngine.ClientEngine | Scope.Scope> =>
-  Effect.gen(function* () {
-    const {
-      channelName = defaultChannelName,
-      registry,
-      nodes,
-      urls,
-      backgroundSync,
-      pushPoke,
-    } = options;
-    const engine = yield* ClientEngine.ClientEngine;
-    // The engine's store, when it is still in context (as it is under
-    // `ClientEngine.layer`): given it, the host serves the introspection kinds,
-    // so a tab's `Introspection.fromMirror` (and devtools) can read this engine.
-    const store = yield* Effect.serviceOption(ClientStore.ClientStore);
-    const channel = yield* BroadcastMirrorChannel.make(channelName);
-    const host = yield* EngineHost.run({
-      channel,
-      engine,
-      ...Option.match(store, { onNone: () => ({}), onSome: (value) => ({ store: value }) }),
-      requests: options.requests ?? [],
-      hydrationWindow: options.hydrationWindow,
-      ...Defined.fields({ registry, nodes, urls }),
-    });
-    yield* engine.runSync.pipe(Effect.ignore);
-    if (backgroundSync !== undefined) yield* backgroundSync.serve(engine);
-    if (pushPoke !== undefined) yield* pushPoke.serve(engine);
-    return { engine, registrations: host.registrations };
+export const start: (
+  options?: ServiceWorkerHostOptions
+) => Effect.Effect<Host, never, ClientEngine.ClientEngine | Scope.Scope> = Effect.fn(
+  "legation-browser/ServiceWorkerHost.start"
+)(function* (options = {}) {
+  const {
+    channelName = defaultChannelName,
+    registry,
+    nodes,
+    urls,
+    backgroundSync,
+    pushPoke,
+  } = options;
+  const engine = yield* ClientEngine.ClientEngine;
+  // The engine's store, when it is still in context (as it is under
+  // `ClientEngine.layer`): given it, the host serves the introspection kinds,
+  // so a tab's `Introspection.fromMirror` (and devtools) can read this engine.
+  const store = yield* Effect.serviceOption(ClientStore.ClientStore);
+  const channel = yield* BroadcastMirrorChannel.make(channelName);
+  const host = yield* EngineHost.run({
+    channel,
+    engine,
+    ...Option.match(store, { onNone: () => ({}), onSome: (value) => ({ store: value }) }),
+    requests: options.requests ?? [],
+    hydrationWindow: options.hydrationWindow,
+    ...Defined.fields({ registry, nodes, urls }),
   });
+  yield* engine.runSync;
+  if (backgroundSync !== undefined) yield* backgroundSync.serve(engine);
+  if (pushPoke !== undefined) yield* pushPoke.serve(engine);
+  return { engine, registrations: host.registrations };
+});
 
 /**
  * Run the host: {@link start}, then serve forever. NEVER returns — both the

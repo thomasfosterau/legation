@@ -6,7 +6,10 @@
  * group, on a hot path. This module is private: `Aggregate`, `Incremental`
  * and `Predicate` call into it, and its functions keep their public names
  * there. `effect/prefer-match-over-switch` is off for this module alone, in
- * the root `vite.config.ts`, which records the measurements.
+ * the root `vite.config.ts`, which records the measurements. Re-measured on
+ * Effect 4.1.4 against matchers built once at module scope (Node, 100k rows):
+ * `bucketValue` 14 ns vs 35 ns (`Match.tagsExhaustive`), `addNumber` 3.5 ns
+ * vs 20 ns, `holds` 5.4 ns vs 21 ns (`Match.when`).
  */
 
 import * as Arr from "effect/Array";

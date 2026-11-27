@@ -229,6 +229,5 @@ export const layer = <Id extends string, Groups extends HttpApiGroup.Constraint>
 export const start: Effect.Effect<void, never, ClientEngine.ClientEngine | Scope.Scope> =
   Effect.gen(function* () {
     const engine = yield* ClientEngine.ClientEngine;
-    // Forking never surfaces the loop's errors; die on the impossible.
-    yield* engine.runSync.pipe(Effect.orDie);
+    yield* engine.runSync;
   });

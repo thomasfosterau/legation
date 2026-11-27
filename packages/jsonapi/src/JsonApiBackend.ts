@@ -107,6 +107,7 @@
  */
 
 import * as Arr from "effect/Array";
+import * as Order from "effect/Order";
 import * as Effect from "effect/Effect";
 import * as HashMap from "effect/HashMap";
 import * as HashSet from "effect/HashSet";
@@ -648,843 +649,830 @@ const countedFrom = (
 };
 
 /** Build the JsonApiBackend from its config; requires an `HttpClient`. */
-export const make = (
+export const make: (
   config: JsonApiBackendConfig
-): Effect.Effect<Backend.Backend, never, HttpClient.HttpClient> =>
-  Effect.gen(function* () {
-    const client = yield* HttpClient.HttpClient;
-    /** A resource's endpoint for a CRUD role; `None` when it has no such resource or role. */
-    const endpointOf = (type: string, operation: Operation): Option.Option<EndpointRef> =>
-      Option.flatMap(
-        Option.fromUndefinedOr(config.resources.get(type)),
-        (endpoints) => endpoints[operation]
-      );
-    const encoder = config.query ?? defaultEncoder;
-    const includes = config.includes ?? {};
-    const writes = Option.fromUndefinedOr(config.writes);
-    const atomicEndpoint = Option.fromUndefinedOr(config.atomic);
-    // collection → id → the latest value this backend listed or wrote (warms getRows).
-    const cache = yield* Ref.make(new Map<string, Map<string, JsonApiRow>>());
-    // collection → ids known complete in cache via a compound `included` harvest.
-    const includedIds = yield* Ref.make(new Map<string, Set<string>>());
-    // clientGroupId → the group's ledger: read from the store on first use,
-    // then kept current with each change written to it.
-    const groups = yield* Ref.make(HashMap.empty<string, Group>());
-    const ledgerStore = config.ledger ?? Ledger.memory;
-    // Every ledger read-modify-write runs under this lock, so the store is never
-    // written with a group that a concurrent change has already moved past.
-    const ledgerLock = yield* Semaphore.make(1);
+) => Effect.Effect<Backend.Backend, never, HttpClient.HttpClient> = Effect.fn(
+  "legation-jsonapi/JsonApiBackend.make"
+)(function* (config) {
+  const client = yield* HttpClient.HttpClient;
+  /** A resource's endpoint for a CRUD role; `None` when it has no such resource or role. */
+  const endpointOf = (type: string, operation: Operation): Option.Option<EndpointRef> =>
+    Option.flatMap(
+      Option.fromUndefinedOr(config.resources.get(type)),
+      (endpoints) => endpoints[operation]
+    );
+  const encoder = config.query ?? defaultEncoder;
+  const includes = config.includes ?? {};
+  const writes = Option.fromUndefinedOr(config.writes);
+  const atomicEndpoint = Option.fromUndefinedOr(config.atomic);
+  // collection → id → the latest value this backend listed or wrote (warms getRows).
+  const cache = yield* Ref.make(new Map<string, Map<string, JsonApiRow>>());
+  // collection → ids known complete in cache via a compound `included` harvest.
+  const includedIds = yield* Ref.make(new Map<string, Set<string>>());
+  // clientGroupId → the group's ledger: read from the store on first use,
+  // then kept current with each change written to it.
+  const groups = yield* Ref.make(HashMap.empty<string, Group>());
+  const ledgerStore = config.ledger ?? Ledger.memory;
+  // Every ledger read-modify-write runs under this lock, so the store is never
+  // written with a group that a concurrent change has already moved past.
+  const ledgerLock = yield* Semaphore.make(1);
 
-    const getJson = (url: string) =>
-      Effect.scoped(
-        client.execute(
-          HttpClientRequest.get(url).pipe(HttpClientRequest.setHeaders(jsonApiHeaders))
-        )
-      );
+  const getJson = (url: string) =>
+    Effect.scoped(
+      client.execute(HttpClientRequest.get(url).pipe(HttpClientRequest.setHeaders(jsonApiHeaders)))
+    );
 
-    // A transport-level failure (connection lost) or a 5xx is transient — a
-    // BackendError that aborts the push. A 4xx is a permanent rejection (bad
-    // request, forbidden, conflict): the server did not apply the write, so it
-    // is a MutationRejected that skips the mutation without poisoning the queue.
-    // 408/429 are the transient exceptions in the 4xx band (timeout, rate limit).
-    const transientStatuses = HashSet.make(408, 429);
-    const isPermanentStatus = (status: number): boolean =>
-      status >= 400 && status < 500 && !HashSet.has(transientStatuses, status);
-    /** Send one write; the resource document it answers with, if it answers with one. */
-    const sendWrite = (request: HttpClientRequest.HttpClientRequest) =>
-      Effect.scoped(client.execute(request)).pipe(
-        Effect.mapError(backendError("JSON:API write failed")),
-        Effect.flatMap(
-          (response): Effect.Effect<Option.Option<JsonApiRow>, BackendError | MutationRejected> => {
-            if (response.status >= 200 && response.status < 300)
-              return response.json.pipe(
-                Effect.orElseSucceed(() => undefined),
-                Effect.map(resultRow)
-              );
-            const message = `JSON:API write returned HTTP ${response.status}`;
-            return isPermanentStatus(response.status)
-              ? Effect.fail(new MutationRejected({ reason: message }))
-              : Effect.fail(new BackendError({ message }));
-          }
-        )
-      );
+  // A transport-level failure (connection lost) or a 5xx is transient — a
+  // BackendError that aborts the push. A 4xx is a permanent rejection (bad
+  // request, forbidden, conflict): the server did not apply the write, so it
+  // is a MutationRejected that skips the mutation without poisoning the queue.
+  // 408/429 are the transient exceptions in the 4xx band (timeout, rate limit).
+  const transientStatuses = HashSet.make(408, 429);
+  const isPermanentStatus = (status: number): boolean =>
+    status >= 400 && status < 500 && !HashSet.has(transientStatuses, status);
+  /** Send one write; the resource document it answers with, if it answers with one. */
+  const sendWrite = (request: HttpClientRequest.HttpClientRequest) =>
+    Effect.scoped(client.execute(request)).pipe(
+      Effect.mapError(backendError("JSON:API write failed")),
+      Effect.flatMap(
+        (response): Effect.Effect<Option.Option<JsonApiRow>, BackendError | MutationRejected> => {
+          if (response.status >= 200 && response.status < 300)
+            return response.json.pipe(
+              Effect.orElseSucceed(() => undefined),
+              Effect.map(resultRow)
+            );
+          const message = `JSON:API write returned HTTP ${response.status}`;
+          return isPermanentStatus(response.status)
+            ? Effect.fail(new MutationRejected({ reason: message }))
+            : Effect.fail(new BackendError({ message }));
+        }
+      )
+    );
 
-    /**
-     * The `getOne` route an update or delete reads its row through. A resource
-     * with no such route cannot be written by update or delete, so the write
-     * fails with BackendError before anything is sent.
-     */
-    const getOneFor = (type: string): Effect.Effect<{ readonly path: string }, BackendError> =>
-      Effect.fromOption(endpointOf(type, "getOne")).pipe(
-        Effect.mapError(
-          () =>
-            new BackendError({
-              message: `"${type}" has no getOne route, so its updates and deletes cannot read the row before writing it`,
-            })
-        )
-      );
-
-    /**
-     * Read a row before the push writes it: the value the server holds now. Every
-     * failed read fails the push with BackendError, a 404 and any other 4xx
-     * included, and so does a 2xx whose document carries no resource: an update
-     * or delete that went out without its old value would hint no `oldValues`, so
-     * it is not sent instead. On the atomic path every read precedes the one
-     * request, so nothing is written on a read the push cannot complete. On the
-     * per-resource path the writes before the failed read have already applied,
-     * and their hints are lost (see the module header's delivery note).
-     *
-     * The cache is never consulted here: it has no freshness signal for a write
-     * made elsewhere (a version token would be needed), and this backend's own
-     * writes keep it current for `getRows` only. So each push reads the row.
-     */
-    const readBefore = (type: string, id: string): Effect.Effect<JsonApiRow, BackendError> =>
-      Effect.gen(function* () {
-        const getOne = yield* getOneFor(type);
-        const response = yield* getJson(urlFor(config.baseUrl, getOne.path, id)).pipe(
-          Effect.mapError(backendError(`Failed to read ${type}/${id} before writing it`))
-        );
-        if (response.status < 200 || response.status >= 300)
-          return yield* new BackendError({
-            message: `JSON:API read of ${type}/${id} returned HTTP ${response.status}`,
-          });
-        const document = yield* parseResponse(response).pipe(
-          Effect.mapError(backendError(`Invalid JSON:API resource ${type}/${id}`))
-        );
-        const resource = documentToRows(document).rows[0]?.value;
-        if (resource === undefined)
-          return yield* new BackendError({
-            message: `JSON:API read of ${type}/${id} returned no resource`,
-          });
-        return toRow(resource);
-      });
-
-    /**
-     * Enter a row the write touches. An update or delete reads the row on the
-     * push's first write to it, so the pre-push value is kept for the hint (the
-     * read is `readBefore`, where a cache hit would replace it). A row
-     * already entered is not read again. A create reads nothing and enters no
-     * row: its row is entered when the create applies, or up front for the
-     * atomic path's batch (`enterBatchCreate`).
-     */
-    const enterRow = (acc: WriteAccumulator, write: Write): Effect.Effect<void, BackendError> => {
-      if (write.operation === "create" || Option.isSome(entryOf(acc, write.type, write.id)))
-        return Effect.void;
-      return readBefore(write.type, write.id).pipe(
-        Effect.map((before) =>
-          setEntry(acc, write.type, write.id, {
-            before: Option.some(before),
-            current: Option.some(before),
+  /**
+   * The `getOne` route an update or delete reads its row through. A resource
+   * with no such route cannot be written by update or delete, so the write
+   * fails with BackendError before anything is sent.
+   */
+  const getOneFor = (type: string): Effect.Effect<{ readonly path: string }, BackendError> =>
+    Effect.fromOption(endpointOf(type, "getOne")).pipe(
+      Effect.mapError(
+        () =>
+          new BackendError({
+            message: `"${type}" has no getOne route, so its updates and deletes cannot read the row before writing it`,
           })
-        )
-      );
-    };
+      )
+    );
 
-    /**
-     * Refuse a write that cannot be read before it is sent: an update or delete
-     * of a resource with no `getOne` route. Checked for a whole push before its
-     * first write, so a push that cannot be read sends nothing on either path.
-     */
-    const checkReadable = (write: Write): Effect.Effect<void, BackendError> =>
-      write.operation === "create" ? Effect.void : getOneFor(write.type).pipe(Effect.asVoid);
-
-    /** Enter one write of an atomic batch before its request: a create as absent, others by reading the row. */
-    const enterBatchWrite = (
-      acc: WriteAccumulator,
-      write: Write
-    ): Effect.Effect<void, BackendError> =>
-      write.operation === "create"
-        ? Effect.sync(() => enterBatchCreate(acc, write))
-        : enterRow(acc, write);
-
-    /**
-     * Read the rows the batch's refused creates would have made absent.
-     * The batch entered each row a create touches as absent, which is right only
-     * while the create applies. The server refused these creates, so the row may
-     * exist: when a later update or delete of it is still to be sent, read it
-     * now, before the resend, so that write carries its pre-push value. Each row
-     * is read at most once, and a row no remaining update or delete touches is
-     * not read, so a create that applies never makes a read that can fail the push.
-     */
-    const readRefusedCreates = (
-      acc: WriteAccumulator,
-      refused: ReadonlyArray<BatchEntry>,
-      remaining: ReadonlyArray<BatchEntry>
-    ): Effect.Effect<void, BackendError> =>
-      Effect.forEach(
-        refused.filter((entry) => entry.write.operation === "create"),
-        (create) => {
-          const { type, id } = create.write;
-          const laterWrite = remaining.some(
-            (entry) =>
-              entry.index > create.index &&
-              entry.write.operation !== "create" &&
-              entry.write.type === type &&
-              entry.write.id === id
-          );
-          const entry = entryOf(acc, type, id);
-          if (!laterWrite || Option.exists(entry, (known) => Option.isSome(known.before)))
-            return Effect.void;
-          return readBefore(type, id).pipe(
-            Effect.map((row) =>
-              setEntry(acc, type, id, { before: Option.some(row), current: Option.some(row) })
-            )
-          );
-        },
-        { concurrency: 1, discard: true }
-      );
-
-    const cacheRows = (collection: string, rows: ReadonlyArray<JsonApiRow>) =>
-      Ref.update(cache, (current) => {
-        const next = new Map(current);
-        const map = new Map(next.get(collection) ?? []);
-        rows.forEach((value) => map.set(value.id, value));
-        next.set(collection, map);
-        return next;
+  /**
+   * Read a row before the push writes it: the value the server holds now. Every
+   * failed read fails the push with BackendError, a 404 and any other 4xx
+   * included, and so does a 2xx whose document carries no resource: an update
+   * or delete that went out without its old value would hint no `oldValues`, so
+   * it is not sent instead. On the atomic path every read precedes the one
+   * request, so nothing is written on a read the push cannot complete. On the
+   * per-resource path the writes before the failed read have already applied,
+   * and their hints are lost (see the module header's delivery note).
+   *
+   * The cache is never consulted here: it has no freshness signal for a write
+   * made elsewhere (a version token would be needed), and this backend's own
+   * writes keep it current for `getRows` only. So each push reads the row.
+   */
+  const readBefore = Effect.fnUntraced(function* (
+    type: string,
+    id: string
+  ): Effect.fn.Return<JsonApiRow, BackendError> {
+    const getOne = yield* getOneFor(type);
+    const response = yield* getJson(urlFor(config.baseUrl, getOne.path, id)).pipe(
+      Effect.mapError(backendError(`Failed to read ${type}/${id} before writing it`))
+    );
+    if (response.status < 200 || response.status >= 300)
+      return yield* new BackendError({
+        message: `JSON:API read of ${type}/${id} returned HTTP ${response.status}`,
       });
-
-    /**
-     * Bring the cache into line with a write the server has applied: the
-     * row's value after the push's writes so far, or no row once a delete has
-     * applied, so `getRows` never serves a value the push has superseded.
-     */
-    const cacheApplied = (acc: WriteAccumulator, write: Write) => {
-      const current = Option.flatMap(entryOf(acc, write.type, write.id), (entry) => entry.current);
-      return Ref.update(cache, (rows) => {
-        const next = new Map(rows);
-        const map = new Map(next.get(write.type) ?? []);
-        if (Option.isSome(current)) map.set(write.id, current.value);
-        else map.delete(write.id);
-        next.set(write.type, map);
-        return next;
+    const document = yield* parseResponse(response).pipe(
+      Effect.mapError(backendError(`Invalid JSON:API resource ${type}/${id}`))
+    );
+    const resource = documentToRows(document).rows[0]?.value;
+    if (resource === undefined)
+      return yield* new BackendError({
+        message: `JSON:API read of ${type}/${id} returned no resource`,
       });
-    };
+    return toRow(resource);
+  });
 
-    /** Harvest a compound document's `included` rows; record their ids complete. */
-    const harvestIncluded = (
-      included: ReadonlyArray<JsonApiRow & { readonly $collection: string }>
-    ) =>
-      Effect.gen(function* () {
-        const byCollection = Arr.groupBy(included, (row) => row.$collection);
-        yield* Effect.forEach(
-          R.toEntries(byCollection),
-          ([collection, rows]) =>
-            cacheRows(collection, rows).pipe(
-              Effect.andThen(
-                Ref.update(includedIds, (current) => {
-                  const next = new Map(current);
-                  const ids = new Set(next.get(collection) ?? []);
-                  rows.forEach((row) => ids.add(row.id));
-                  next.set(collection, ids);
-                  return next;
-                })
-              )
-            ),
-          { concurrency: 1, discard: true }
-        );
-      });
-
-    const NO_ROWS: Backend.CountedEntries = { entries: [], total: 0 };
-
-    const evaluateOne = (
-      subset: Subset.Subset
-    ): Effect.Effect<Backend.CountedEntries, BackendError> =>
-      Effect.gen(function* () {
-        const list = endpointOf(subset.collection, "list");
-        if (Option.isNone(list)) return NO_ROWS;
-        // Correlated Exists is a relational join this REST backend can't resolve;
-        // fail closed rather than silently skip the filter (denormalize, or use a
-        // backend that resolves Exists).
-        if (Predicate.hasExists(subset.where)) {
-          return yield* new BackendError({
-            message: `JSON:API backend does not support Exists predicates on "${subset.collection}"`,
-          });
-        }
-
-        // Include fast-path: an auto-subscribed `id IN (...)` subset whose ids
-        // were all delivered by a prior compound `included` harvest is served
-        // from cache — the related rows arrived with their parent, no round trip.
-        const pinned = pinnedIds(subset.where);
-        if (Option.isSome(pinned)) {
-          const ids = pinned.value;
-          const complete = (yield* Ref.get(includedIds)).get(subset.collection);
-          if (complete !== undefined && [...ids].every((id) => complete.has(id))) {
-            const cached = (yield* Ref.get(cache)).get(subset.collection);
-            if (cached !== undefined && [...ids].every((id) => cached.has(id))) {
-              return countedFrom([...cached.values()], subset, Option.none());
-            }
-          }
-        }
-
-        // The exact filter goes to the server; a predicate no row can match
-        // (an empty allow-set) is answered here without a request. A
-        // predicate with no URL form fails closed.
-        const encoded = yield* encoder
-          .encode(subset)
-          .pipe(Effect.mapError(backendError(`Subset on "${subset.collection}" has no URL form`)));
-        if (Option.isNone(encoded)) return NO_ROWS;
-        const includeParam = (includes[subset.collection] ?? []).join(",");
-        const query = appendQuery(
-          encoded.value,
-          includeParam === "" ? "" : `include=${encodeURIComponent(includeParam)}`
-        );
-        const url = urlFor(config.baseUrl, list.value.path) + query;
-        const response = yield* getJson(url).pipe(
-          Effect.mapError(backendError(`Failed to list "${subset.collection}"`))
-        );
-        const document = yield* parseResponse(response).pipe(
-          Effect.mapError(backendError(`Invalid JSON:API listing "${subset.collection}"`))
-        );
-        const loaded = documentToRows(document);
-        const values = loaded.rows.map((row) => toRow(row.value));
-        yield* cacheRows(subset.collection, values);
-        yield* harvestIncluded(
-          loaded.included.map((row) =>
-            Object.assign(toRow(row.value), { $collection: row.collection })
-          )
-        );
-        return countedFrom(values, subset, reportedTotal(document));
-      });
-
-    const evaluate: Backend.Backend["evaluate"] = (_context, subset) =>
-      Effect.map(evaluateOne(subset), (answer) => answer.entries);
-
-    // Each subset is the listing `evaluate` makes; the total comes with it.
-    const evaluateCounted: NonNullable<Backend.Backend["evaluateCounted"]> = (_context, subsets) =>
-      Effect.forEach(subsets, evaluateOne, { concurrency: 1 });
-
-    const getRows: Backend.Backend["getRows"] = (_context, collection, ids) =>
-      Effect.gen(function* () {
-        const cached = (yield* Ref.get(cache)).get(collection);
-        const getOne = endpointOf(collection, "getOne");
-        const found = yield* Effect.forEach(
-          ids,
-          (id) =>
-            Effect.gen(function* () {
-              const hit = cached?.get(id);
-              if (hit !== undefined) return [{ id, version: versionOf(hit), value: hit }];
-              if (Option.isNone(getOne)) return [];
-              const response = yield* getJson(urlFor(config.baseUrl, getOne.value.path, id)).pipe(
-                Effect.mapError(backendError(`Failed to fetch ${collection}/${id}`))
-              );
-              // A 404 is an absent row: omitted, as the contract requires.
-              if (response.status === 404) return [];
-              const document = yield* parseResponse(response).pipe(
-                Effect.mapError(backendError(`Invalid JSON:API resource ${collection}/${id}`))
-              );
-              const resource = documentToRows(document).rows[0]?.value;
-              if (resource === undefined) return [];
-              const value = toRow(resource);
-              return [{ id, version: versionOf(value), value }];
-            }),
-          { concurrency: 1 }
-        );
-        return found.flat();
-      });
-
-    /** Decode a pushed mutation's args and express it as one JSON:API write. */
-    const writeFor = (mutation: PushedMutation): Effect.Effect<Write, BackendError> =>
-      Effect.gen(function* () {
-        const definition = config.mutators.get(mutation.mutator);
-        const custom = Option.flatMap(writes, (byName) =>
-          Option.fromUndefinedOr(byName.get(mutation.mutator))
-        );
-        const operation = config.operations.get(mutation.mutator);
-        if (definition === undefined || (Option.isNone(custom) && operation === undefined))
-          return yield* UnknownMutator.make(mutation.mutator);
-        const args = yield* Schema.decodeUnknownEffect(definition.args)(mutation.args).pipe(
-          Effect.mapError(backendError(`Invalid args for mutator "${mutation.mutator}"`))
-        );
-        // A `writes` function that refuses its args (it throws, as
-        // `FacadeWrites.writesOf` does for args naming another type) fails as
-        // args that do not decode do, never as a defect.
-        if (Option.isSome(custom)) {
-          const express = custom.value;
-          return yield* Effect.try({
-            try: () => express(args),
-            catch: backendError(`Invalid args for mutator "${mutation.mutator}"`),
-          });
-        }
-        if (operation === undefined) return yield* UnknownMutator.make(mutation.mutator);
-        return yield* writeOf(operation, args);
-      });
-
-    // Apply one write as its own request. Resolves to the resource document the
-    // server answered a create or update with, if it sent one.
-    const applyOne = (
-      write: Write
-    ): Effect.Effect<Option.Option<JsonApiRow>, BackendError | MutationRejected> =>
-      Match.value(write.operation).pipe(
-        Match.withReturnType<
-          Effect.Effect<Option.Option<JsonApiRow>, BackendError | MutationRejected>
-        >(),
-        Match.when("create", () => {
-          const endpoint = endpointOf(write.type, "create");
-          if (Option.isNone(endpoint))
-            return Effect.fail(
-              new BackendError({ message: `No create endpoint for "${write.type}"` })
-            );
-          return sendWrite(
-            HttpClientRequest.post(urlFor(config.baseUrl, endpoint.value.path)).pipe(
-              HttpClientRequest.setHeaders(jsonApiHeaders),
-              HttpClientRequest.bodyJsonUnsafe(
-                writeBody(write.type, write.id, write.attributes ?? {}, write.relationships)
-              )
-            )
-          );
-        }),
-        Match.when("update", () => {
-          const endpoint = endpointOf(write.type, "update");
-          if (Option.isNone(endpoint))
-            return Effect.fail(
-              new BackendError({ message: `No update endpoint for "${write.type}"` })
-            );
-          return sendWrite(
-            HttpClientRequest.patch(urlFor(config.baseUrl, endpoint.value.path, write.id)).pipe(
-              HttpClientRequest.setHeaders(jsonApiHeaders),
-              HttpClientRequest.bodyJsonUnsafe(
-                writeBody(write.type, write.id, write.attributes ?? {}, write.relationships)
-              )
-            )
-          );
-        }),
-        Match.when("delete", () => {
-          const endpoint = endpointOf(write.type, "delete");
-          if (Option.isNone(endpoint))
-            return Effect.fail(
-              new BackendError({ message: `No delete endpoint for "${write.type}"` })
-            );
-          return sendWrite(
-            HttpClientRequest.make("DELETE")(
-              urlFor(config.baseUrl, endpoint.value.path, write.id)
-            ).pipe(HttpClientRequest.setHeaders(jsonApiHeaders))
-          ).pipe(Effect.as(Option.none()));
-        }),
-        Match.exhaustive
-      );
-
-    /** The group's ledger, filled from the store on first use. Callers hold `ledgerLock`. */
-    const fillGroup = (clientGroupId: string): Effect.Effect<Group, BackendError> =>
-      Effect.gen(function* () {
-        const cached = HashMap.get(yield* Ref.get(groups), clientGroupId);
-        if (Option.isSome(cached)) return cached.value;
-        const group = groupOf(yield* ledgerStore.read(clientGroupId));
-        yield* Ref.update(groups, HashMap.set(clientGroupId, group));
-        return group;
-      });
-
-    /** A client group's ledger, read under `ledgerLock` so a first read cannot race an update. */
-    const readGroup = (clientGroupId: string): Effect.Effect<Group, BackendError> =>
-      Semaphore.withPermit(ledgerLock, fillGroup(clientGroupId));
-
-    /**
-     * Change a client group's ledger. `change` returns the group it becomes, or
-     * the group it was when nothing changes, and then nothing is written. The
-     * store is written before the new group is kept, so a failed write leaves the
-     * store and this instance agreeing on the old group.
-     */
-    const updateGroup = (clientGroupId: string, change: (group: Group) => Group) =>
-      Semaphore.withPermit(
-        ledgerLock,
-        Effect.gen(function* () {
-          const current = yield* fillGroup(clientGroupId);
-          const next = change(current);
-          if (next === current) return;
-          yield* ledgerStore.write(clientGroupId, ledgerOf(next));
-          yield* Ref.update(groups, HashMap.set(clientGroupId, next));
+  /**
+   * Enter a row the write touches. An update or delete reads the row on the
+   * push's first write to it, so the pre-push value is kept for the hint (the
+   * read is `readBefore`, where a cache hit would replace it). A row
+   * already entered is not read again. A create reads nothing and enters no
+   * row: its row is entered when the create applies, or up front for the
+   * atomic path's batch (`enterBatchCreate`).
+   */
+  const enterRow = (acc: WriteAccumulator, write: Write): Effect.Effect<void, BackendError> => {
+    if (write.operation === "create" || Option.isSome(entryOf(acc, write.type, write.id)))
+      return Effect.void;
+    return readBefore(write.type, write.id).pipe(
+      Effect.map((before) =>
+        setEntry(acc, write.type, write.id, {
+          before: Option.some(before),
+          current: Option.some(before),
         })
-      );
+      )
+    );
+  };
 
-    /** Acknowledge mutations in the ledger, in the order given, in one update. */
-    const bumpLedger = (
-      context: Backend.SyncContext,
-      mutations: ReadonlyArray<{ readonly clientId: string; readonly mutationId: number }>
-    ) =>
-      Arr.isReadonlyArrayEmpty(mutations)
-        ? Effect.void
-        : updateGroup(context.clientGroupId, (group) => {
-            const acknowledged = new Map(group.acknowledged);
-            mutations.forEach((mutation) =>
-              acknowledged.set(mutation.clientId, mutation.mutationId)
-            );
-            return { ...group, acknowledged };
-          });
+  /**
+   * Refuse a write that cannot be read before it is sent: an update or delete
+   * of a resource with no `getOne` route. Checked for a whole push before its
+   * first write, so a push that cannot be read sends nothing on either path.
+   */
+  const checkReadable = (write: Write): Effect.Effect<void, BackendError> =>
+    write.operation === "create" ? Effect.void : getOneFor(write.type).pipe(Effect.asVoid);
 
-    /** Remember permanent rejections, so a replayed copy of them reports the same outcome. */
-    const rememberRejections = (
-      context: Backend.SyncContext,
-      rejected: ReadonlyArray<Backend.RejectedMutation>
-    ) =>
-      Arr.isReadonlyArrayEmpty(rejected)
-        ? Effect.void
-        : updateGroup(context.clientGroupId, (group) => {
-            const rejections = new Map(group.rejections);
-            rejected.forEach((entry) => {
-              const ids = new Map(rejections.get(entry.clientId) ?? []);
-              ids.set(entry.mutationId, entry.reason);
-              rejections.set(entry.clientId, ids);
-            });
-            return { ...group, rejections };
-          });
+  /** Enter one write of an atomic batch before its request: a create as absent, others by reading the row. */
+  const enterBatchWrite = (
+    acc: WriteAccumulator,
+    write: Write
+  ): Effect.Effect<void, BackendError> =>
+    write.operation === "create"
+      ? Effect.sync(() => enterBatchCreate(acc, write))
+      : enterRow(acc, write);
 
-    /**
-     * Forget the rejections this push's floors have moved past, so the
-     * memory is bounded per client, as MemoryBackend's is.
-     */
-    const forgetRejections = (
-      context: Backend.SyncContext,
-      mutations: ReadonlyArray<PushedMutation>
-    ) =>
-      updateGroup(context.clientGroupId, (group) => {
-        const rejections = RejectionMemory.forgetBelow(
-          group.rejections,
-          RejectionMemory.floorsOf(mutations)
+  /**
+   * Read the rows the batch's refused creates would have made absent.
+   * The batch entered each row a create touches as absent, which is right only
+   * while the create applies. The server refused these creates, so the row may
+   * exist: when a later update or delete of it is still to be sent, read it
+   * now, before the resend, so that write carries its pre-push value. Each row
+   * is read at most once, and a row no remaining update or delete touches is
+   * not read, so a create that applies never makes a read that can fail the push.
+   */
+  const readRefusedCreates = (
+    acc: WriteAccumulator,
+    refused: ReadonlyArray<BatchEntry>,
+    remaining: ReadonlyArray<BatchEntry>
+  ): Effect.Effect<void, BackendError> =>
+    Effect.forEach(
+      refused.filter((entry) => entry.write.operation === "create"),
+      (create) => {
+        const { type, id } = create.write;
+        const laterWrite = remaining.some(
+          (entry) =>
+            entry.index > create.index &&
+            entry.write.operation !== "create" &&
+            entry.write.type === type &&
+            entry.write.id === id
         );
-        return rejections === group.rejections ? group : { ...group, rejections };
-      });
-
-    /**
-     * The rejections a push's replayed copies were committed with (an id the ledger
-     * already covers, with a remembered rejection). They are reported again.
-     */
-    const replayedRejections = (
-      context: Backend.SyncContext,
-      mutations: ReadonlyArray<PushedMutation>
-    ): Effect.Effect<Array<Backend.RejectedMutation>, BackendError> =>
-      Effect.gen(function* () {
-        const group = yield* readGroup(context.clientGroupId);
-        return mutations.flatMap((mutation): Array<Backend.RejectedMutation> => {
-          if (mutation.mutationId > (group.acknowledged.get(mutation.clientId) ?? 0)) return [];
-          const reason = group.rejections.get(mutation.clientId)?.get(mutation.mutationId);
-          return reason === undefined
-            ? []
-            : [{ clientId: mutation.clientId, mutationId: mutation.mutationId, reason }];
-        });
-      });
-
-    const lastMutationIdsOf = (context: Backend.SyncContext) =>
-      readGroup(context.clientGroupId).pipe(
-        Effect.map((group) => R.fromEntries(group.acknowledged))
-      );
-
-    /** The group's remembered rejections, each with its reason. A pull reports those its watermark covers. */
-    const rememberedRejections = (context: Backend.SyncContext) =>
-      readGroup(context.clientGroupId).pipe(
-        Effect.map((group) =>
-          [...group.rejections].flatMap(([clientId, ids]) =>
-            [...ids].map(([mutationId, reason]): Backend.RejectedMutation => ({
-              clientId,
-              mutationId,
-              reason,
-            }))
+        const entry = entryOf(acc, type, id);
+        if (!laterWrite || Option.exists(entry, (known) => Option.isSome(known.before)))
+          return Effect.void;
+        return readBefore(type, id).pipe(
+          Effect.map((row) =>
+            setEntry(acc, type, id, { before: Option.some(row), current: Option.some(row) })
           )
-        )
-      );
-
-    /**
-     * The mutations a push still has to send, in order, each with its write. A
-     * mutation at or below its client's acknowledged id was already applied, so it
-     * is skipped (idempotent, acknowledged). With `strict`, a mutation past the next
-     * expected id is a gap the push cannot apply, so the push is refused.
-     */
-    const unacknowledged = (
-      context: Backend.SyncContext,
-      mutations: ReadonlyArray<PushedMutation>,
-      strict: boolean
-    ): Effect.Effect<
-      Array<{ readonly mutation: PushedMutation; readonly write: Write }>,
-      BackendError
-    > =>
-      Effect.gen(function* () {
-        const group = yield* readGroup(context.clientGroupId);
-        const expected = new Map<string, number>(group.acknowledged);
-        const batch: Array<{ readonly mutation: PushedMutation; readonly write: Write }> = [];
-        yield* Effect.forEach(
-          mutations,
-          (mutation) => {
-            const last = expected.get(mutation.clientId) ?? 0;
-            if (mutation.mutationId <= last) return Effect.void; // idempotent (acknowledged)
-            if (strict && mutation.mutationId > last + 1)
-              return Effect.fail(mutationGap(mutation.clientId, last + 1, mutation.mutationId));
-            expected.set(mutation.clientId, mutation.mutationId);
-            return Effect.map(writeFor(mutation), (write) => {
-              batch.push({ mutation, write });
-            });
-          },
-          { concurrency: 1, discard: true }
         );
-        return batch;
+      },
+      { concurrency: 1, discard: true }
+    );
+
+  const cacheRows = (collection: string, rows: ReadonlyArray<JsonApiRow>) =>
+    Ref.update(cache, (current) => {
+      const next = new Map(current);
+      const map = new Map(next.get(collection) ?? []);
+      rows.forEach((value) => map.set(value.id, value));
+      next.set(collection, map);
+      return next;
+    });
+
+  /**
+   * Bring the cache into line with a write the server has applied: the
+   * row's value after the push's writes so far, or no row once a delete has
+   * applied, so `getRows` never serves a value the push has superseded.
+   */
+  const cacheApplied = (acc: WriteAccumulator, write: Write) => {
+    const current = Option.flatMap(entryOf(acc, write.type, write.id), (entry) => entry.current);
+    return Ref.update(cache, (rows) => {
+      const next = new Map(rows);
+      const map = new Map(next.get(write.type) ?? []);
+      if (Option.isSome(current)) map.set(write.id, current.value);
+      else map.delete(write.id);
+      next.set(write.type, map);
+      return next;
+    });
+  };
+
+  /** Harvest a compound document's `included` rows; record their ids complete. */
+  const harvestIncluded = Effect.fnUntraced(function* (
+    included: ReadonlyArray<JsonApiRow & { readonly $collection: string }>
+  ) {
+    const byCollection = Arr.groupBy(included, (row) => row.$collection);
+    yield* Effect.forEach(
+      R.toEntries(byCollection),
+      ([collection, rows]) =>
+        cacheRows(collection, rows).pipe(
+          Effect.andThen(
+            Ref.update(includedIds, (current) => {
+              const next = new Map(current);
+              const ids = new Set(next.get(collection) ?? []);
+              rows.forEach((row) => ids.add(row.id));
+              next.set(collection, ids);
+              return next;
+            })
+          )
+        ),
+      { concurrency: 1, discard: true }
+    );
+  });
+
+  const NO_ROWS: Backend.CountedEntries = { entries: [], total: 0 };
+
+  const evaluateOne = Effect.fnUntraced(function* (
+    subset: Subset.Subset
+  ): Effect.fn.Return<Backend.CountedEntries, BackendError> {
+    const list = endpointOf(subset.collection, "list");
+    if (Option.isNone(list)) return NO_ROWS;
+    // Correlated Exists is a relational join this REST backend can't resolve;
+    // fail closed rather than silently skip the filter (denormalize, or use a
+    // backend that resolves Exists).
+    if (Predicate.hasExists(subset.where)) {
+      return yield* new BackendError({
+        message: `JSON:API backend does not support Exists predicates on "${subset.collection}"`,
       });
+    }
 
-    /**
-     * The mutations a per-resource push still has to send, in order. A mutation
-     * at or below its client's acknowledged id was already applied, so it is
-     * skipped (idempotent, acknowledged). A mutation past the next expected id is a
-     * gap, refused with a `BackendError` before any write of the push is sent, as
-     * the atomic path refuses it (`unacknowledged`, strict). Unlike
-     * `unacknowledged`, nothing is decoded here: the send loop decodes each write
-     * in turn, so an undecodable mutation still fails at its own place in the push.
-     */
-    const pendingEach = (
-      context: Backend.SyncContext,
-      mutations: ReadonlyArray<PushedMutation>
-    ): Effect.Effect<ReadonlyArray<PushedMutation>, BackendError> =>
-      Effect.gen(function* () {
-        const expected = new Map<string, number>(
-          (yield* readGroup(context.clientGroupId)).acknowledged
-        );
-        const pending: Array<PushedMutation> = [];
-        yield* Effect.forEach(
-          mutations,
-          (mutation) => {
-            const last = expected.get(mutation.clientId) ?? 0;
-            if (mutation.mutationId <= last) return Effect.void; // idempotent (acknowledged)
-            if (mutation.mutationId > last + 1)
-              return Effect.fail(mutationGap(mutation.clientId, last + 1, mutation.mutationId));
-            expected.set(mutation.clientId, mutation.mutationId);
-            pending.push(mutation);
-            return Effect.void;
-          },
-          { concurrency: 1, discard: true }
-        );
-        return pending;
-      });
+    // Include fast-path: an auto-subscribed `id IN (...)` subset whose ids
+    // were all delivered by a prior compound `included` harvest is served
+    // from cache — the related rows arrived with their parent, no round trip.
+    const pinned = pinnedIds(subset.where);
+    if (Option.isSome(pinned)) {
+      const ids = pinned.value;
+      const complete = (yield* Ref.get(includedIds)).get(subset.collection);
+      if (complete !== undefined && [...ids].every((id) => complete.has(id))) {
+        const cached = (yield* Ref.get(cache)).get(subset.collection);
+        if (cached !== undefined && [...ids].every((id) => cached.has(id))) {
+          return countedFrom([...cached.values()], subset, Option.none());
+        }
+      }
+    }
 
-    /**
-     * Replay each write as its own request (at-least-once, in order). Before the
-     * first request, each pending mutation that decodes is checked for a `getOne`
-     * route, so a write that cannot be read sends nothing. A mutation whose args
-     * do not decode is not checked: the loop fails the push at it, after the
-     * writes before it, as it always has.
-     */
-    const applyEach = (
-      context: Backend.SyncContext,
-      mutations: ReadonlyArray<PushedMutation>
-    ): Effect.Effect<Backend.ApplyResult, BackendError> =>
-      Effect.gen(function* () {
-        const acc: WriteAccumulator = {
-          touched: new Map(),
-          puts: new Map(),
-          rejected: [],
-          rows: new Map(),
-        };
-        const replays = yield* replayedRejections(context, mutations);
-        const pending = yield* pendingEach(context, mutations);
-        const decoded = yield* Effect.forEach(
-          pending,
-          (mutation) =>
-            Effect.gen(function* () {
-              const write = yield* writeFor(mutation).pipe(Effect.option);
-              if (Option.isSome(write)) yield* checkReadable(write.value);
-              return { mutation, write };
-            }),
-          { concurrency: 1 }
-        );
+    // The exact filter goes to the server; a predicate no row can match
+    // (an empty allow-set) is answered here without a request. A
+    // predicate with no URL form fails closed.
+    const encoded = yield* encoder
+      .encode(subset)
+      .pipe(Effect.mapError(backendError(`Subset on "${subset.collection}" has no URL form`)));
+    if (Option.isNone(encoded)) return NO_ROWS;
+    const includeParam = (includes[subset.collection] ?? []).join(",");
+    const query = appendQuery(
+      encoded.value,
+      includeParam === "" ? "" : `include=${encodeURIComponent(includeParam)}`
+    );
+    const url = urlFor(config.baseUrl, list.value.path) + query;
+    const response = yield* getJson(url).pipe(
+      Effect.mapError(backendError(`Failed to list "${subset.collection}"`))
+    );
+    const document = yield* parseResponse(response).pipe(
+      Effect.mapError(backendError(`Invalid JSON:API listing "${subset.collection}"`))
+    );
+    const loaded = documentToRows(document);
+    const values = loaded.rows.map((row) => toRow(row.value));
+    yield* cacheRows(subset.collection, values);
+    yield* harvestIncluded(
+      loaded.included.map((row) => Object.assign(toRow(row.value), { $collection: row.collection }))
+    );
+    return countedFrom(values, subset, reportedTotal(document));
+  });
 
-        yield* Effect.forEach(
-          decoded,
-          ({ mutation, write: decodedWrite }) =>
-            Effect.gen(function* () {
-              // An undecodable mutation decodes again here and fails the push with the
-              // same BackendError it always raised, leaving its ledger entry unmoved.
-              const write = Option.isSome(decodedWrite)
-                ? decodedWrite.value
-                : yield* writeFor(mutation);
-              yield* enterRow(acc, write);
-              // A permanent HTTP rejection (4xx) skips this mutation but still bumps
-              // its id, so it is acknowledged and never poisons the queue. A
-              // transient failure propagates and aborts the push.
-              const outcome = yield* applyOne(write).pipe(
-                Effect.map((document) => ({ _tag: "applied", document }) as const),
-                Effect.catchTag("MutationRejected", (error) =>
-                  Effect.succeed({ _tag: "rejected", reason: error.reason } as const)
-                )
-              );
-              if (P.isTagged(outcome, "applied")) {
-                recordApplied(acc, write, outcome.document);
-                yield* cacheApplied(acc, write);
-              } else {
-                const rejection = {
-                  clientId: mutation.clientId,
-                  mutationId: mutation.mutationId,
-                  reason: outcome.reason,
-                };
-                acc.rejected.push(rejection);
-                // Remembered before the id is acknowledged, so a copy that sees the id
-                // as covered also sees its rejection.
-                yield* rememberRejections(context, [rejection]);
-              }
-              yield* bumpLedger(context, [mutation]);
-            }),
-          { concurrency: 1, discard: true }
-        );
+  const evaluate: Backend.Backend["evaluate"] = (_context, subset) =>
+    Effect.map(evaluateOne(subset), (answer) => answer.entries);
 
-        const rejected = [...replays, ...acc.rejected];
-        return {
-          lastMutationIds: yield* lastMutationIdsOf(context),
-          hints: Backend.buildChangeHints(acc.touched, acc.puts, oldsOf(acc)),
-          ...Defined.fields({
-            rejected: Arr.isReadonlyArrayNonEmpty(rejected) ? rejected : undefined,
+  // Each subset is the listing `evaluate` makes; the total comes with it.
+  const evaluateCounted: NonNullable<Backend.Backend["evaluateCounted"]> = (_context, subsets) =>
+    Effect.forEach(subsets, evaluateOne, { concurrency: 1 });
+
+  const getRows: Backend.Backend["getRows"] = Effect.fn("legation-jsonapi/JsonApiBackend.getRows")(
+    function* (_context, collection, ids) {
+      const cached = (yield* Ref.get(cache)).get(collection);
+      const getOne = endpointOf(collection, "getOne");
+      const found = yield* Effect.forEach(
+        ids,
+        (id) =>
+          Effect.gen(function* () {
+            const hit = cached?.get(id);
+            if (hit !== undefined) return [{ id, version: versionOf(hit), value: hit }];
+            if (Option.isNone(getOne)) return [];
+            const response = yield* getJson(urlFor(config.baseUrl, getOne.value.path, id)).pipe(
+              Effect.mapError(backendError(`Failed to fetch ${collection}/${id}`))
+            );
+            // A 404 is an absent row: omitted, as the contract requires.
+            if (response.status === 404) return [];
+            const document = yield* parseResponse(response).pipe(
+              Effect.mapError(backendError(`Invalid JSON:API resource ${collection}/${id}`))
+            );
+            const resource = documentToRows(document).rows[0]?.value;
+            if (resource === undefined) return [];
+            const value = toRow(resource);
+            return [{ id, version: versionOf(value), value }];
           }),
-        };
-      });
+        { concurrency: 1 }
+      );
+      return found.flat();
+    }
+  );
 
-    /** Send one `atomic:operations` request and classify the server's answer. */
-    const sendAtomic = (
-      path: string,
-      operations: ReadonlyArray<AtomicOperation>
-    ): Effect.Effect<AtomicOutcome, BackendError> =>
-      Effect.gen(function* () {
-        const response = yield* Effect.scoped(
-          client.execute(
-            HttpClientRequest.post(urlFor(config.baseUrl, path)).pipe(
-              HttpClientRequest.bodyText(
-                encodeJson({ "atomic:operations": operations }),
-                Atomic.MEDIA_TYPE
-              ),
-              HttpClientRequest.setHeaders(atomicHeaders)
+  /** Decode a pushed mutation's args and express it as one JSON:API write. */
+  const writeFor = Effect.fnUntraced(function* (
+    mutation: PushedMutation
+  ): Effect.fn.Return<Write, BackendError> {
+    const definition = config.mutators.get(mutation.mutator);
+    const custom = Option.flatMap(writes, (byName) =>
+      Option.fromUndefinedOr(byName.get(mutation.mutator))
+    );
+    const operation = config.operations.get(mutation.mutator);
+    if (definition === undefined || (Option.isNone(custom) && operation === undefined))
+      return yield* UnknownMutator.make(mutation.mutator);
+    const args = yield* Schema.decodeUnknownEffect(definition.args)(mutation.args).pipe(
+      Effect.mapError(backendError(`Invalid args for mutator "${mutation.mutator}"`))
+    );
+    // A `writes` function that refuses its args (it throws, as
+    // `FacadeWrites.writesOf` does for args naming another type) fails as
+    // args that do not decode do, never as a defect.
+    if (Option.isSome(custom)) {
+      const express = custom.value;
+      return yield* Effect.try({
+        try: () => express(args),
+        catch: backendError(`Invalid args for mutator "${mutation.mutator}"`),
+      });
+    }
+    if (operation === undefined) return yield* UnknownMutator.make(mutation.mutator);
+    return yield* writeOf(operation, args);
+  });
+
+  // Apply one write as its own request. Resolves to the resource document the
+  // server answered a create or update with, if it sent one.
+  const applyOne = (
+    write: Write
+  ): Effect.Effect<Option.Option<JsonApiRow>, BackendError | MutationRejected> =>
+    Match.value(write.operation).pipe(
+      Match.withReturnType<
+        Effect.Effect<Option.Option<JsonApiRow>, BackendError | MutationRejected>
+      >(),
+      Match.when("create", () => {
+        const endpoint = endpointOf(write.type, "create");
+        if (Option.isNone(endpoint))
+          return Effect.fail(
+            new BackendError({ message: `No create endpoint for "${write.type}"` })
+          );
+        return sendWrite(
+          HttpClientRequest.post(urlFor(config.baseUrl, endpoint.value.path)).pipe(
+            HttpClientRequest.setHeaders(jsonApiHeaders),
+            HttpClientRequest.bodyJsonUnsafe(
+              writeBody(write.type, write.id, write.attributes ?? {}, write.relationships)
             )
           )
-        ).pipe(Effect.mapError(backendError("JSON:API atomic:operations request failed")));
-        const status = response.status;
-        const message = `JSON:API atomic:operations returned HTTP ${status}`;
-        // A 204 (or an unparseable success body) still means every operation applied.
-        const body = yield* response.json.pipe(Effect.orElseSucceed(() => undefined));
-        if (status >= 200 && status < 300) {
-          const results = P.isObject(body) ? body["atomic:results"] : undefined;
-          return { _tag: "applied", results: Array.isArray(results) ? results : [] } as const;
-        }
-        if (isPermanentStatus(status)) {
-          const rejections = rejectionsOf(body, operations.length, message);
-          if (Arr.isReadonlyArrayNonEmpty(rejections))
-            return { _tag: "rejected", rejections } as const;
-        }
-        // 5xx, 408/429, transport, or a 4xx naming no operation: transient.
-        return yield* new BackendError({ message });
-      });
+        );
+      }),
+      Match.when("update", () => {
+        const endpoint = endpointOf(write.type, "update");
+        if (Option.isNone(endpoint))
+          return Effect.fail(
+            new BackendError({ message: `No update endpoint for "${write.type}"` })
+          );
+        return sendWrite(
+          HttpClientRequest.patch(urlFor(config.baseUrl, endpoint.value.path, write.id)).pipe(
+            HttpClientRequest.setHeaders(jsonApiHeaders),
+            HttpClientRequest.bodyJsonUnsafe(
+              writeBody(write.type, write.id, write.attributes ?? {}, write.relationships)
+            )
+          )
+        );
+      }),
+      Match.when("delete", () => {
+        const endpoint = endpointOf(write.type, "delete");
+        if (Option.isNone(endpoint))
+          return Effect.fail(
+            new BackendError({ message: `No delete endpoint for "${write.type}"` })
+          );
+        return sendWrite(
+          HttpClientRequest.make("DELETE")(
+            urlFor(config.baseUrl, endpoint.value.path, write.id)
+          ).pipe(HttpClientRequest.setHeaders(jsonApiHeaders))
+        ).pipe(Effect.as(Option.none()));
+      }),
+      Match.exhaustive
+    );
 
-    /**
-     * Push the batch as one `atomic:operations` request. Nothing is
-     * acknowledged until the server has applied the whole (remaining) batch;
-     * permanently rejected operations are dropped and the rest resent.
-     */
-    const applyAtomic = (
-      context: Backend.SyncContext,
-      mutations: ReadonlyArray<PushedMutation>,
-      atomic: { readonly path: string }
-    ): Effect.Effect<Backend.ApplyResult, BackendError> =>
+  /** The group's ledger, filled from the store on first use. Callers hold `ledgerLock`. */
+  const fillGroup = Effect.fnUntraced(function* (
+    clientGroupId: string
+  ): Effect.fn.Return<Group, BackendError> {
+    const cached = HashMap.get(yield* Ref.get(groups), clientGroupId);
+    if (Option.isSome(cached)) return cached.value;
+    const group = groupOf(yield* ledgerStore.read(clientGroupId));
+    yield* Ref.update(groups, HashMap.set(clientGroupId, group));
+    return group;
+  });
+
+  /** A client group's ledger, read under `ledgerLock` so a first read cannot race an update. */
+  const readGroup = (clientGroupId: string): Effect.Effect<Group, BackendError> =>
+    Semaphore.withPermit(ledgerLock, fillGroup(clientGroupId));
+
+  /**
+   * Change a client group's ledger. `change` returns the group it becomes, or
+   * the group it was when nothing changes, and then nothing is written. The
+   * store is written before the new group is kept, so a failed write leaves the
+   * store and this instance agreeing on the old group.
+   */
+  const updateGroup = (clientGroupId: string, change: (group: Group) => Group) =>
+    Semaphore.withPermit(
+      ledgerLock,
       Effect.gen(function* () {
-        const replays = yield* replayedRejections(context, mutations);
-        const batch = yield* unacknowledged(context, mutations, true);
+        const current = yield* fillGroup(clientGroupId);
+        const next = change(current);
+        if (next === current) return;
+        yield* ledgerStore.write(clientGroupId, ledgerOf(next));
+        yield* Ref.update(groups, HashMap.set(clientGroupId, next));
+      })
+    );
 
-        // Read the rows the batch updates or deletes before the one request that
-        // writes them, so a failed read sends nothing. A row the batch creates is
-        // not read (see enterBatchCreate).
-        const acc: WriteAccumulator = {
-          touched: new Map(),
-          puts: new Map(),
-          rejected: [],
-          rows: new Map(),
-        };
-        yield* Effect.forEach(batch, ({ write }) => enterBatchWrite(acc, write), {
-          concurrency: 1,
-          discard: true,
+  /** Acknowledge mutations in the ledger, in the order given, in one update. */
+  const bumpLedger = (
+    context: Backend.SyncContext,
+    mutations: ReadonlyArray<{ readonly clientId: string; readonly mutationId: number }>
+  ) =>
+    Arr.isReadonlyArrayEmpty(mutations)
+      ? Effect.void
+      : updateGroup(context.clientGroupId, (group) => {
+          const acknowledged = new Map(group.acknowledged);
+          mutations.forEach((mutation) => acknowledged.set(mutation.clientId, mutation.mutationId));
+          return { ...group, acknowledged };
         });
 
-        // Batch index → rejection reason; each round trip drops at least one.
-        const rejectedAt = MutableHashMap.empty<number, string>();
-        type Pending = ReadonlyArray<(typeof batch)[number] & { readonly index: number }>;
-        // One round trip; refused operations are dropped and the rest resent.
-        const round = (
-          pending: Pending
-        ): Effect.Effect<
-          { readonly pending: Pending; readonly results: ReadonlyArray<unknown> },
-          BackendError
-        > =>
-          Effect.gen(function* () {
-            if (Arr.isReadonlyArrayEmpty(pending)) return { pending, results: [] };
-            const outcome = yield* sendAtomic(
-              atomic.path,
-              pending.map((entry) => operationOf(entry.write))
-            );
-            if (P.isTagged(outcome, "applied")) return { pending, results: outcome.results };
-            const refused = outcome.rejections.flatMap(({ index }) => {
-              const entry = pending[index];
-              return entry === undefined ? [] : [entry];
-            });
-            outcome.rejections.forEach(({ index, reason }) => {
-              const entry = pending[index];
-              if (entry !== undefined) MutableHashMap.set(rejectedAt, entry.index, reason);
-            });
-            const next = pending.filter((entry) => !MutableHashMap.has(rejectedAt, entry.index));
-            // A create the server refused may have left its row in place: read it
-            // before the resend when a later write of it still needs the old value.
-            yield* readRefusedCreates(acc, refused, next);
-            return yield* round(next);
+  /** Remember permanent rejections, so a replayed copy of them reports the same outcome. */
+  const rememberRejections = (
+    context: Backend.SyncContext,
+    rejected: ReadonlyArray<Backend.RejectedMutation>
+  ) =>
+    Arr.isReadonlyArrayEmpty(rejected)
+      ? Effect.void
+      : updateGroup(context.clientGroupId, (group) => {
+          const rejections = new Map(group.rejections);
+          rejected.forEach((entry) => {
+            const ids = new Map(rejections.get(entry.clientId) ?? []);
+            ids.set(entry.mutationId, entry.reason);
+            rejections.set(entry.clientId, ids);
           });
-        const { pending, results } = yield* round(
-          batch.map((entry, index) => ({ ...entry, index }))
-        );
+          return { ...group, rejections };
+        });
 
-        // Hints from what applied, in push order: each row's value from the
-        // result document where the server returned one, else as merged or
-        // written. A delete drops an earlier write's value for the row.
-        yield* Effect.forEach(
-          pending,
-          ({ write }, position) => {
-            recordApplied(acc, write, resultRow(results[position]));
-            return cacheApplied(acc, write);
-          },
-          { concurrency: 1, discard: true }
-        );
+  /**
+   * Forget the rejections this push's floors have moved past, so the
+   * memory is bounded per client, as MemoryBackend's is.
+   */
+  const forgetRejections = (
+    context: Backend.SyncContext,
+    mutations: ReadonlyArray<PushedMutation>
+  ) =>
+    updateGroup(context.clientGroupId, (group) => {
+      const rejections = RejectionMemory.forgetBelow(
+        group.rejections,
+        RejectionMemory.floorsOf(mutations)
+      );
+      return rejections === group.rejections ? group : { ...group, rejections };
+    });
 
-        const rejected = [...rejectedAt]
-          .toSorted(([a], [b]) => a - b)
-          .flatMap(([index, reason]) => {
-            const entry = batch[index];
-            return entry === undefined
-              ? []
-              : [
-                  {
-                    clientId: entry.mutation.clientId,
-                    mutationId: entry.mutation.mutationId,
-                    reason,
-                  },
-                ];
-          });
-        // The rejections are remembered before the ids are acknowledged.
-        yield* rememberRejections(context, rejected);
-        // Applied and rejected alike are acknowledged, in original order.
-        yield* bumpLedger(
-          context,
-          batch.map(({ mutation }) => mutation)
-        );
-
-        const reported = [...replays, ...rejected];
-        return {
-          lastMutationIds: yield* lastMutationIdsOf(context),
-          hints: Backend.buildChangeHints(acc.touched, acc.puts, oldsOf(acc)),
-          ...Defined.fields({
-            rejected: Arr.isReadonlyArrayNonEmpty(reported) ? reported : undefined,
-          }),
-        };
-      });
-
-    const applyMutations: Backend.Backend["applyMutations"] = (context, mutations) =>
-      Effect.gen(function* () {
-        // The rejections this push has moved past are forgotten first.
-        yield* forgetRejections(context, mutations);
-        return Option.isNone(atomicEndpoint)
-          ? yield* applyEach(context, mutations)
-          : yield* applyAtomic(context, mutations, atomicEndpoint.value);
-      });
-
-    return Backend.Backend.of({
-      applyMutations,
-      lastMutationIds: lastMutationIdsOf,
-      rejections: rememberedRejections,
-      evaluate,
-      evaluateCounted,
-      getRows,
+  /**
+   * The rejections a push's replayed copies were committed with (an id the ledger
+   * already covers, with a remembered rejection). They are reported again.
+   */
+  const replayedRejections = Effect.fnUntraced(function* (
+    context: Backend.SyncContext,
+    mutations: ReadonlyArray<PushedMutation>
+  ): Effect.fn.Return<Array<Backend.RejectedMutation>, BackendError> {
+    const group = yield* readGroup(context.clientGroupId);
+    return mutations.flatMap((mutation): Array<Backend.RejectedMutation> => {
+      if (mutation.mutationId > (group.acknowledged.get(mutation.clientId) ?? 0)) return [];
+      const reason = group.rejections.get(mutation.clientId)?.get(mutation.mutationId);
+      return reason === undefined
+        ? []
+        : [{ clientId: mutation.clientId, mutationId: mutation.mutationId, reason }];
     });
   });
+
+  const lastMutationIdsOf = (context: Backend.SyncContext) =>
+    readGroup(context.clientGroupId).pipe(Effect.map((group) => R.fromEntries(group.acknowledged)));
+
+  /** The group's remembered rejections, each with its reason. A pull reports those its watermark covers. */
+  const rememberedRejections = (context: Backend.SyncContext) =>
+    readGroup(context.clientGroupId).pipe(
+      Effect.map((group) =>
+        [...group.rejections].flatMap(([clientId, ids]) =>
+          [...ids].map(([mutationId, reason]): Backend.RejectedMutation => ({
+            clientId,
+            mutationId,
+            reason,
+          }))
+        )
+      )
+    );
+
+  /**
+   * The mutations a push still has to send, in order, each with its write. A
+   * mutation at or below its client's acknowledged id was already applied, so it
+   * is skipped (idempotent, acknowledged). With `strict`, a mutation past the next
+   * expected id is a gap the push cannot apply, so the push is refused.
+   */
+  const unacknowledged = Effect.fnUntraced(function* (
+    context: Backend.SyncContext,
+    mutations: ReadonlyArray<PushedMutation>,
+    strict: boolean
+  ): Effect.fn.Return<
+    Array<{ readonly mutation: PushedMutation; readonly write: Write }>,
+    BackendError
+  > {
+    const group = yield* readGroup(context.clientGroupId);
+    const expected = new Map<string, number>(group.acknowledged);
+    const batch: Array<{ readonly mutation: PushedMutation; readonly write: Write }> = [];
+    yield* Effect.forEach(
+      mutations,
+      (mutation) => {
+        const last = expected.get(mutation.clientId) ?? 0;
+        if (mutation.mutationId <= last) return Effect.void; // idempotent (acknowledged)
+        if (strict && mutation.mutationId > last + 1)
+          return Effect.fail(mutationGap(mutation.clientId, last + 1, mutation.mutationId));
+        expected.set(mutation.clientId, mutation.mutationId);
+        return Effect.map(writeFor(mutation), (write) => {
+          batch.push({ mutation, write });
+        });
+      },
+      { concurrency: 1, discard: true }
+    );
+    return batch;
+  });
+
+  /**
+   * The mutations a per-resource push still has to send, in order. A mutation
+   * at or below its client's acknowledged id was already applied, so it is
+   * skipped (idempotent, acknowledged). A mutation past the next expected id is a
+   * gap, refused with a `BackendError` before any write of the push is sent, as
+   * the atomic path refuses it (`unacknowledged`, strict). Unlike
+   * `unacknowledged`, nothing is decoded here: the send loop decodes each write
+   * in turn, so an undecodable mutation still fails at its own place in the push.
+   */
+  const pendingEach = Effect.fnUntraced(function* (
+    context: Backend.SyncContext,
+    mutations: ReadonlyArray<PushedMutation>
+  ): Effect.fn.Return<ReadonlyArray<PushedMutation>, BackendError> {
+    const expected = new Map<string, number>(
+      (yield* readGroup(context.clientGroupId)).acknowledged
+    );
+    const pending: Array<PushedMutation> = [];
+    yield* Effect.forEach(
+      mutations,
+      (mutation) => {
+        const last = expected.get(mutation.clientId) ?? 0;
+        if (mutation.mutationId <= last) return Effect.void; // idempotent (acknowledged)
+        if (mutation.mutationId > last + 1)
+          return Effect.fail(mutationGap(mutation.clientId, last + 1, mutation.mutationId));
+        expected.set(mutation.clientId, mutation.mutationId);
+        pending.push(mutation);
+        return Effect.void;
+      },
+      { concurrency: 1, discard: true }
+    );
+    return pending;
+  });
+
+  /**
+   * Replay each write as its own request (at-least-once, in order). Before the
+   * first request, each pending mutation that decodes is checked for a `getOne`
+   * route, so a write that cannot be read sends nothing. A mutation whose args
+   * do not decode is not checked: the loop fails the push at it, after the
+   * writes before it, as it always has.
+   */
+  const applyEach = Effect.fnUntraced(function* (
+    context: Backend.SyncContext,
+    mutations: ReadonlyArray<PushedMutation>
+  ): Effect.fn.Return<Backend.ApplyResult, BackendError> {
+    const acc: WriteAccumulator = {
+      touched: new Map(),
+      puts: new Map(),
+      rejected: [],
+      rows: new Map(),
+    };
+    const replays = yield* replayedRejections(context, mutations);
+    const pending = yield* pendingEach(context, mutations);
+    const decoded = yield* Effect.forEach(
+      pending,
+      (mutation) =>
+        Effect.gen(function* () {
+          const write = yield* writeFor(mutation).pipe(Effect.option);
+          if (Option.isSome(write)) yield* checkReadable(write.value);
+          return { mutation, write };
+        }),
+      { concurrency: 1 }
+    );
+
+    yield* Effect.forEach(
+      decoded,
+      ({ mutation, write: decodedWrite }) =>
+        Effect.gen(function* () {
+          // An undecodable mutation decodes again here and fails the push with the
+          // same BackendError it always raised, leaving its ledger entry unmoved.
+          const write = Option.isSome(decodedWrite)
+            ? decodedWrite.value
+            : yield* writeFor(mutation);
+          yield* enterRow(acc, write);
+          // A permanent HTTP rejection (4xx) skips this mutation but still bumps
+          // its id, so it is acknowledged and never poisons the queue. A
+          // transient failure propagates and aborts the push.
+          const outcome = yield* applyOne(write).pipe(
+            Effect.map((document) => ({ _tag: "applied", document }) as const),
+            Effect.catchTag("MutationRejected", (error) =>
+              Effect.succeed({ _tag: "rejected", reason: error.reason } as const)
+            )
+          );
+          if (P.isTagged(outcome, "applied")) {
+            recordApplied(acc, write, outcome.document);
+            yield* cacheApplied(acc, write);
+          } else {
+            const rejection = {
+              clientId: mutation.clientId,
+              mutationId: mutation.mutationId,
+              reason: outcome.reason,
+            };
+            acc.rejected.push(rejection);
+            // Remembered before the id is acknowledged, so a copy that sees the id
+            // as covered also sees its rejection.
+            yield* rememberRejections(context, [rejection]);
+          }
+          yield* bumpLedger(context, [mutation]);
+        }),
+      { concurrency: 1, discard: true }
+    );
+
+    const rejected = [...replays, ...acc.rejected];
+    return {
+      lastMutationIds: yield* lastMutationIdsOf(context),
+      hints: Backend.buildChangeHints(acc.touched, acc.puts, oldsOf(acc)),
+      ...Defined.fields({
+        rejected: Arr.isReadonlyArrayNonEmpty(rejected) ? rejected : undefined,
+      }),
+    };
+  });
+
+  /** Send one `atomic:operations` request and classify the server's answer. */
+  const sendAtomic = Effect.fn("legation-jsonapi/JsonApiBackend.sendAtomic")(function* (
+    path: string,
+    operations: ReadonlyArray<AtomicOperation>
+  ): Effect.fn.Return<AtomicOutcome, BackendError> {
+    const response = yield* Effect.scoped(
+      client.execute(
+        HttpClientRequest.post(urlFor(config.baseUrl, path)).pipe(
+          HttpClientRequest.bodyText(
+            encodeJson({ "atomic:operations": operations }),
+            Atomic.MEDIA_TYPE
+          ),
+          HttpClientRequest.setHeaders(atomicHeaders)
+        )
+      )
+    ).pipe(Effect.mapError(backendError("JSON:API atomic:operations request failed")));
+    const status = response.status;
+    const message = `JSON:API atomic:operations returned HTTP ${status}`;
+    // A 204 (or an unparseable success body) still means every operation applied.
+    const body = yield* response.json.pipe(Effect.orElseSucceed(() => undefined));
+    if (status >= 200 && status < 300) {
+      const results = P.isObject(body) ? body["atomic:results"] : undefined;
+      return { _tag: "applied", results: Array.isArray(results) ? results : [] } as const;
+    }
+    if (isPermanentStatus(status)) {
+      const rejections = rejectionsOf(body, operations.length, message);
+      if (Arr.isReadonlyArrayNonEmpty(rejections)) return { _tag: "rejected", rejections } as const;
+    }
+    // 5xx, 408/429, transport, or a 4xx naming no operation: transient.
+    return yield* new BackendError({ message });
+  });
+
+  /**
+   * Push the batch as one `atomic:operations` request. Nothing is
+   * acknowledged until the server has applied the whole (remaining) batch;
+   * permanently rejected operations are dropped and the rest resent.
+   */
+  const applyAtomic = Effect.fn("legation-jsonapi/JsonApiBackend.applyAtomic")(function* (
+    context: Backend.SyncContext,
+    mutations: ReadonlyArray<PushedMutation>,
+    atomic: { readonly path: string }
+  ): Effect.fn.Return<Backend.ApplyResult, BackendError> {
+    const replays = yield* replayedRejections(context, mutations);
+    const batch = yield* unacknowledged(context, mutations, true);
+
+    // Read the rows the batch updates or deletes before the one request that
+    // writes them, so a failed read sends nothing. A row the batch creates is
+    // not read (see enterBatchCreate).
+    const acc: WriteAccumulator = {
+      touched: new Map(),
+      puts: new Map(),
+      rejected: [],
+      rows: new Map(),
+    };
+    yield* Effect.forEach(batch, ({ write }) => enterBatchWrite(acc, write), {
+      concurrency: 1,
+      discard: true,
+    });
+
+    // Batch index → rejection reason; each round trip drops at least one.
+    const rejectedAt = MutableHashMap.empty<number, string>();
+    type Pending = ReadonlyArray<(typeof batch)[number] & { readonly index: number }>;
+    // One round trip; refused operations are dropped and the rest resent.
+    const round = Effect.fnUntraced(function* (
+      pending: Pending
+    ): Effect.fn.Return<
+      { readonly pending: Pending; readonly results: ReadonlyArray<unknown> },
+      BackendError
+    > {
+      if (Arr.isReadonlyArrayEmpty(pending)) return { pending, results: [] };
+      const outcome = yield* sendAtomic(
+        atomic.path,
+        pending.map((entry) => operationOf(entry.write))
+      );
+      if (P.isTagged(outcome, "applied")) return { pending, results: outcome.results };
+      const refused = outcome.rejections.flatMap(({ index }) => {
+        const entry = pending[index];
+        return entry === undefined ? [] : [entry];
+      });
+      outcome.rejections.forEach(({ index, reason }) => {
+        const entry = pending[index];
+        if (entry !== undefined) MutableHashMap.set(rejectedAt, entry.index, reason);
+      });
+      const next = pending.filter((entry) => !MutableHashMap.has(rejectedAt, entry.index));
+      // A create the server refused may have left its row in place: read it
+      // before the resend when a later write of it still needs the old value.
+      yield* readRefusedCreates(acc, refused, next);
+      return yield* round(next);
+    });
+    const { pending, results } = yield* round(batch.map((entry, index) => ({ ...entry, index })));
+
+    // Hints from what applied, in push order: each row's value from the
+    // result document where the server returned one, else as merged or
+    // written. A delete drops an earlier write's value for the row.
+    yield* Effect.forEach(
+      pending,
+      ({ write }, position) => {
+        recordApplied(acc, write, resultRow(results[position]));
+        return cacheApplied(acc, write);
+      },
+      { concurrency: 1, discard: true }
+    );
+
+    const rejected = Arr.sortWith(rejectedAt, ([index]) => index, Order.Number).flatMap(
+      ([index, reason]) => {
+        const entry = batch[index];
+        return entry === undefined
+          ? []
+          : [
+              {
+                clientId: entry.mutation.clientId,
+                mutationId: entry.mutation.mutationId,
+                reason,
+              },
+            ];
+      }
+    );
+    // The rejections are remembered before the ids are acknowledged.
+    yield* rememberRejections(context, rejected);
+    // Applied and rejected alike are acknowledged, in original order.
+    yield* bumpLedger(
+      context,
+      batch.map(({ mutation }) => mutation)
+    );
+
+    const reported = [...replays, ...rejected];
+    return {
+      lastMutationIds: yield* lastMutationIdsOf(context),
+      hints: Backend.buildChangeHints(acc.touched, acc.puts, oldsOf(acc)),
+      ...Defined.fields({
+        rejected: Arr.isReadonlyArrayNonEmpty(reported) ? reported : undefined,
+      }),
+    };
+  });
+
+  const applyMutations: Backend.Backend["applyMutations"] = Effect.fn(
+    "legation-jsonapi/JsonApiBackend.applyMutations"
+  )(function* (context, mutations) {
+    // The rejections this push has moved past are forgotten first.
+    yield* forgetRejections(context, mutations);
+    return Option.isNone(atomicEndpoint)
+      ? yield* applyEach(context, mutations)
+      : yield* applyAtomic(context, mutations, atomicEndpoint.value);
+  });
+
+  return Backend.Backend.of({
+    applyMutations,
+    lastMutationIds: lastMutationIdsOf,
+    rejections: rememberedRejections,
+    evaluate,
+    evaluateCounted,
+    getRows,
+  });
+});

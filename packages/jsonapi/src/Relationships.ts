@@ -24,7 +24,7 @@ import * as P from "effect/Predicate";
 import * as R from "effect/Record";
 import * as Scope from "effect/Scope";
 import * as Stream from "effect/Stream";
-import { ClientEngine, Related, Subset } from "@thomasfosterau/legation/internal";
+import { ClientEngine, type ClientView, Related, Subset } from "@thomasfosterau/legation/internal";
 import type { RelationshipRef } from "./CollectionLoader.js";
 import type { JsonApiRow } from "./Derive.js";
 import type * as ResolvedRelation from "./internal/ResolvedRelation.js";
@@ -133,11 +133,12 @@ export const query = (
   engine: ClientEngine.ClientEngine,
   subset: Subset.Subset,
   names: ReadonlyArray<string>
-): Effect.Effect<ReadonlyArray<RelatedRow>> =>
+): Effect.Effect<ReadonlyArray<RelatedRow>, ClientView.ClientViewError> =>
   // SAFETY: the rows are of a JSON:API collection, so each value is a
   // `JsonApiRow`; only the row type is narrowed.
   Related.queryWith(engine, linkageStrategy(names), subset) as Effect.Effect<
-    ReadonlyArray<RelatedRow>
+    ReadonlyArray<RelatedRow>,
+    ClientView.ClientViewError
   >;
 
 /**

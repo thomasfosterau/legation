@@ -40,6 +40,7 @@
  */
 
 import * as Effect from "effect/Effect";
+import * as P from "effect/Predicate";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 import * as Mutator from "./Mutator.js";
@@ -113,15 +114,11 @@ const nodeEntries = (node: Node.AnyNode, writes: Option.Option<Writes>): Readonl
       operation: "update",
       mutator: Mutator.make(name(type, "update"), WriteArgs),
       local: (args: WriteArgs, writer) =>
+        // An absent row is left absent; a present one is the node's row struct, an object.
         Effect.flatMap(writer.get(type, args.id), (current) =>
-          current === undefined
-            ? Effect.void
-            : writer.put(type, args.id, {
-                // SAFETY: a row of a node collection is the node's row struct, an object.
-                ...(current as object),
-                ...args.attributes,
-                [identity]: args.id,
-              })
+          P.isObject(current)
+            ? writer.put(type, args.id, { ...current, ...args.attributes, [identity]: args.id })
+            : Effect.void
         ),
     });
   }

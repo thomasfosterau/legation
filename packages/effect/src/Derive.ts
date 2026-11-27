@@ -367,15 +367,16 @@ const pagesFromChanges = <A, E>(
  * `Source<unknown, …>`; a `map` over it that decodes the value types
  * everything downstream by what it returns.
  */
-export const observed = (
+export const observed: (
   subscriptions: Subscriptions.Subscriptions,
   view: ClientView.Reader | ClientView.ClientView,
   subset: Subset.Subset
-): Effect.Effect<Source<unknown, ClientView.ClientViewError>, never, Scope.Scope> =>
-  Effect.gen(function* () {
-    const handle = yield* subscriptions.acquire(subset);
-    yield* Effect.addFinalizer(() => handle.release);
-    if (!("observeChanges" in view)) return view.observe(subset);
-    const changes = view.observeChanges(subset, { includeInitial: true });
-    return withChanges(pagesFromChanges(changes), changes);
-  });
+) => Effect.Effect<Source<unknown, ClientView.ClientViewError>, never, Scope.Scope> = Effect.fn(
+  "legation/Derive.observed"
+)(function* (subscriptions, view, subset) {
+  const handle = yield* subscriptions.acquire(subset);
+  yield* Effect.addFinalizer(() => handle.release);
+  if (!("observeChanges" in view)) return view.observe(subset);
+  const changes = view.observeChanges(subset, { includeInitial: true });
+  return withChanges(pagesFromChanges(changes), changes);
+});

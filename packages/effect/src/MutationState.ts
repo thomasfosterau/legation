@@ -24,6 +24,7 @@
 
 import * as Defined from "./Defined.js";
 import * as Arr from "effect/Array";
+import * as Order from "effect/Order";
 import * as HashMap from "effect/HashMap";
 import * as Option from "effect/Option";
 import type { Mutation } from "./Protocol.js";
@@ -140,11 +141,15 @@ export const journaled = (
  * ack sweep) should fold every transition first and evict once — see
  * {@link acknowledgedMany} — rather than evicting after each one.
  */
+/** Oldest-settled first; an unsettled entry sorts as settled at 0. */
+const bySettledAt = Order.mapInput(Order.Number, (state: MutationState) => state.settledAt ?? 0);
+
 const evictTerminal = (map: MutationStateMap, options?: RetentionOptions): MutationStateMap => {
   const maxTerminal = options?.maxTerminal ?? DEFAULT_MAX_TERMINAL;
-  const terminal = [...HashMap.values(map)]
-    .filter((state) => state.phase !== "pending")
-    .toSorted((a, b) => (a.settledAt ?? 0) - (b.settledAt ?? 0));
+  const terminal = Arr.sort(
+    Arr.filter(HashMap.values(map), (state) => state.phase !== "pending"),
+    bySettledAt
+  );
   const excess = terminal.length - maxTerminal;
   if (excess <= 0) return map;
   let next = map;

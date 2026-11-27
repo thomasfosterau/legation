@@ -1,8 +1,8 @@
 /**
  * Retry/backoff policies: the sync loop survives transient
  * transport failures, leaves non-transient errors alone, re-establishes a
- * failed poke stream, and surfaces terminal failures. Backoff *timing* is
- * verified with TestClock; the loop-integration cases use `it.live`.
+ * failed poke stream, and surfaces terminal failures, counting each in the
+ * engine's metrics. Every case runs on the TestClock.
  */
 import * as P from "effect/Predicate";
 import { assert, describe, expect, it } from "@effect/vitest";
@@ -120,8 +120,13 @@ describe("retry/backoff timing", () => {
   );
 });
 
+const pullRetries = Telemetry.syncRetries("pull");
+const pokeRetries = Telemetry.syncRetries("pokes");
+const countOf = (metric: Metric.Metric<number, Metric.CounterState<number>>) =>
+  Metric.value(metric).pipe(Effect.map((state) => state.count));
+
 describe("retry integration", () => {
-  it.live("a pull that fails twice then succeeds converges without app intervention", () =>
+  it.effect("a pull that fails twice then succeeds converges without app intervention", () =>
     Effect.gen(function* () {
       const handler = yield* makeServer();
       // Commit a remote write first so a successful pull has something to bring.
@@ -171,17 +176,19 @@ describe("retry integration", () => {
         Effect.provideService(ClientTransport, flaky)
       );
       yield* reader.subscribe(allTodos);
+      const retriesBefore = yield* countOf(pullRetries);
       yield* reader.runSync;
 
-      // The first interval pull fails twice, retries, then converges.
-      yield* Effect.sleep(Duration.millis(200));
+      // The first pull fails twice, retries 10ms apart, then converges.
+      yield* TestClock.adjust(Duration.millis(200));
       const seen = yield* reader.query(allTodos);
       expect(seen.map((row) => titleOf(row.value))).toEqual(["remote"]);
       expect(yield* Ref.get(failuresLeft)).toBe(0);
+      expect((yield* countOf(pullRetries)) - retriesBefore).toBe(2);
     })
   );
 
-  it.live("retry exhaustion is observable via syncFailures and the metric", () =>
+  it.effect("retry exhaustion is observable via syncFailures and the metrics", () =>
     Effect.gen(function* () {
       const handler = yield* makeServer();
       const store = yield* ClientStoreModule.makeMemory;
@@ -206,11 +213,12 @@ describe("retry integration", () => {
       );
       yield* engine.subscribe(allTodos);
 
-      const before = (yield* Metric.value(Telemetry.syncFailuresTotal)).count;
+      const before = yield* countOf(Telemetry.syncFailuresTotal);
+      const retriesBefore = yield* countOf(pullRetries);
       const collected = yield* Effect.forkChild(Stream.runHead(engine.syncFailures));
       yield* engine.runSync;
 
-      yield* Effect.sleep(Duration.millis(200));
+      yield* TestClock.adjust(Duration.millis(200));
       const failure = yield* Fiber.join(collected);
       expect(failure._tag).toBe("Some");
       assert(Option.isSome(failure), "a sync failure should be reported");
@@ -218,12 +226,15 @@ describe("retry integration", () => {
       // The point-in-time record holds it too.
       const recent = yield* engine.recentSyncFailures;
       expect(recent.map((entry) => entry.operation)).toContain("pull");
-      const after = (yield* Metric.value(Telemetry.syncFailuresTotal)).count;
-      expect(after).toBeGreaterThan(before);
+      const failed = (yield* countOf(Telemetry.syncFailuresTotal)) - before;
+      expect(failed).toBeGreaterThan(0);
+      // Two retries per exhausted pull: the attempt that exhausts the policy is
+      // a failure, not a retry.
+      expect((yield* countOf(pullRetries)) - retriesBefore).toBe(2 * failed);
     })
   );
 
-  it.live("a failed poke stream re-establishes and a later poke triggers a pull", () =>
+  it.effect("a failed poke stream re-establishes and a later poke triggers a pull", () =>
     Effect.gen(function* () {
       const handler = yield* makeServer();
       // Remote write to converge on once the poke lands.
@@ -275,12 +286,18 @@ describe("retry integration", () => {
         Effect.provideService(ClientTransport, flaky)
       );
       yield* reader.subscribe(allTodos);
+      const retriesBefore = yield* countOf(pokeRetries);
+      const pokesBefore = yield* countOf(Telemetry.pokesReceivedTotal);
+      const latencyBefore = (yield* Metric.value(Telemetry.pokeLatencyMs)).count;
       yield* reader.runSync;
 
-      yield* Effect.sleep(Duration.millis(200));
+      yield* TestClock.adjust(Duration.millis(200));
       expect(yield* Ref.get(subs)).toBeGreaterThan(1); // re-established
       const seen = yield* reader.query(allTodos);
       expect(seen.map((row) => titleOf(row.value))).toEqual(["poked"]);
+      expect((yield* countOf(pokeRetries)) - retriesBefore).toBe(1);
+      expect((yield* countOf(Telemetry.pokesReceivedTotal)) - pokesBefore).toBe(1);
+      expect((yield* Metric.value(Telemetry.pokeLatencyMs)).count - latencyBefore).toBe(1);
     })
   );
 });

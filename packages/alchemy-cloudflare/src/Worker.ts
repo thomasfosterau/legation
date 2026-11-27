@@ -110,40 +110,41 @@ export const shardByClientGroup = (
  * {@link RouterConfig.anonymousRoomOf} does not route, otherwise the room's own
  * response.
  */
-export const routeSync = <R = never>(
+export const routeSync: <R = never>(
   config: RouterConfig<R>
-): Effect.Effect<
+) => Effect.Effect<
   Option.Option<HttpServerResponse.HttpServerResponse>,
   HttpServerError,
   HttpServerRequest.HttpServerRequest | R
-> =>
-  Effect.gen(function* () {
-    const request = yield* HttpServerRequest.HttpServerRequest;
-    const base = config.basePath ?? "/sync";
-    const pathname = new URL(request.url, "https://worker").pathname;
-    if (!pathname.startsWith(`${base}/`)) return Option.none();
-    if (routeOf(pathname) === undefined || pathname.lastIndexOf("/") !== base.length) {
-      return Option.some(HttpServerResponse.text("not found", { status: 404 }));
-    }
+> = Effect.fn("legation-alchemy-cloudflare/Worker.routeSync")(function* <R = never>(
+  config: RouterConfig<R>
+) {
+  const request = yield* HttpServerRequest.HttpServerRequest;
+  const base = config.basePath ?? "/sync";
+  const pathname = new URL(request.url, "https://worker").pathname;
+  if (!pathname.startsWith(`${base}/`)) return Option.none();
+  if (routeOf(pathname) === undefined || pathname.lastIndexOf("/") !== base.length) {
+    return Option.some(HttpServerResponse.text("not found", { status: 404 }));
+  }
 
-    const identified = yield* config.roomIdOf(request);
-    if (Option.isSome(identified)) {
-      if (identified.value.startsWith(anonymousRoomPrefix)) {
-        yield* Effect.logError(
-          `routeSync: roomIdOf answered "${identified.value}", which is reserved for anonymous rooms`
-        );
-        return Option.some(HttpServerResponse.text("internal error", { status: 500 }));
-      }
-      return Option.some(yield* config.rooms.getByName(identified.value).fetch(request));
+  const identified = yield* config.roomIdOf(request);
+  if (Option.isSome(identified)) {
+    if (identified.value.startsWith(anonymousRoomPrefix)) {
+      yield* Effect.logError(
+        `routeSync: roomIdOf answered "${identified.value}", which is reserved for anonymous rooms`
+      );
+      return Option.some(HttpServerResponse.text("internal error", { status: 500 }));
     }
-    const anonymous =
-      config.anonymousRoomOf === undefined
-        ? Option.none<string>()
-        : yield* config.anonymousRoomOf(request);
-    if (Option.isNone(anonymous)) {
-      return Option.some(HttpServerResponse.text("unauthorized", { status: 401 }));
-    }
-    return Option.some(
-      yield* config.rooms.getByName(`${anonymousRoomPrefix}${anonymous.value}`).fetch(request)
-    );
-  });
+    return Option.some(yield* config.rooms.getByName(identified.value).fetch(request));
+  }
+  const anonymous =
+    config.anonymousRoomOf === undefined
+      ? Option.none<string>()
+      : yield* config.anonymousRoomOf(request);
+  if (Option.isNone(anonymous)) {
+    return Option.some(HttpServerResponse.text("unauthorized", { status: 401 }));
+  }
+  return Option.some(
+    yield* config.rooms.getByName(`${anonymousRoomPrefix}${anonymous.value}`).fetch(request)
+  );
+});

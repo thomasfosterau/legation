@@ -84,97 +84,93 @@ const CONCURRENCY = 8;
  * lives as long as the scope. Needs the room's `RuntimeContext`, which it
  * captures for its calls.
  */
-export const make = (
+export const make: (
   options: MakeOptions
-): Effect.Effect<DurableBroker, never, Scope.Scope | RuntimeContext> =>
-  Effect.gen(function* () {
-    const runtime = yield* RuntimeContext;
-    const hub = yield* Effect.acquireRelease(
-      PubSub.dropping<ReadonlyArray<FanoutTopics.Topic>>({ capacity: 256 }),
-      (pubsub) => PubSub.shutdown(pubsub)
+) => Effect.Effect<DurableBroker, never, Scope.Scope | RuntimeContext> = Effect.fn(
+  "legation-alchemy-cloudflare/DurableFanoutBroker.make"
+)(function* (options) {
+  const runtime = yield* RuntimeContext;
+  const hub = yield* Effect.acquireRelease(
+    PubSub.dropping<ReadonlyArray<FanoutTopics.Topic>>({ capacity: 256 }),
+    (pubsub) => PubSub.shutdown(pubsub)
+  );
+  const timeout = options.timeout ?? "5 seconds";
+
+  /**
+   * One bounded, fire-and-forget call: a failure (the stub's `RpcCallError`
+   * included, which its types do not show) is dropped, since pull is the
+   * correctness path; a call past the bound is logged and dropped.
+   */
+  const call = <A>(
+    what: string,
+    effect: Effect.Effect<A, never, RuntimeContext>,
+    fallback: A
+  ): Effect.Effect<A> =>
+    effect.pipe(
+      Effect.provideService(RuntimeContext, runtime),
+      Effect.exit,
+      Effect.map(Exit.match({ onFailure: () => fallback, onSuccess: (value) => value })),
+      Effect.timeoutOrElse({
+        duration: timeout,
+        orElse: () =>
+          Effect.as(Effect.logWarning(`DurableFanoutBroker: ${what} timed out; dropped`), fallback),
+      })
     );
-    const timeout = options.timeout ?? "5 seconds";
 
-    /**
-     * One bounded, fire-and-forget call: a failure (the stub's `RpcCallError`
-     * included, which its types do not show) is dropped, since pull is the
-     * correctness path; a call past the bound is logged and dropped.
-     */
-    const call = <A>(
-      what: string,
-      effect: Effect.Effect<A, never, RuntimeContext>,
-      fallback: A
-    ): Effect.Effect<A> =>
-      effect.pipe(
-        Effect.provideService(RuntimeContext, runtime),
-        Effect.exit,
-        Effect.map(Exit.match({ onFailure: () => fallback, onSuccess: (value) => value })),
-        Effect.timeoutOrElse({
-          duration: timeout,
-          orElse: () =>
-            Effect.as(
-              Effect.logWarning(`DurableFanoutBroker: ${what} timed out; dropped`),
-              fallback
+  return {
+    broker: {
+      register: (roomId, topics, ttl) =>
+        Effect.forEach(
+          topics,
+          (topic) =>
+            call(
+              `register to shard "${topic}"`,
+              options.shards.getByName(topic).register(roomId, Duration.toMillis(ttl)),
+              undefined
             ),
-        })
-      );
-
-    return {
-      broker: {
-        register: (roomId, topics, ttl) =>
-          Effect.forEach(
-            topics,
-            (topic) =>
-              call(
-                `register to shard "${topic}"`,
-                options.shards.getByName(topic).register(roomId, Duration.toMillis(ttl)),
-                undefined
-              ),
-            { discard: true, concurrency: CONCURRENCY }
+          { discard: true, concurrency: CONCURRENCY }
+        ),
+      publish: Effect.fnUntraced(function* (topics) {
+        // Each topic's shard answers its leased rooms; a room leased on
+        // several of the topics is poked once, with all of them.
+        const answers = yield* Effect.forEach(
+          [...topics],
+          (topic) =>
+            call(
+              `publish to shard "${topic}"`,
+              options.shards.getByName(topic).publish(),
+              noRooms
+            ).pipe(Effect.map((rooms) => ({ topic, rooms }))),
+          { concurrency: CONCURRENCY }
+        );
+        const matched = Arr.groupBy(
+          Arr.flatMap(answers, ({ topic, rooms }) =>
+            Arr.map(rooms, (roomId) => ({ roomId, topic }))
           ),
-        publish: (topics) =>
-          Effect.gen(function* () {
-            // Each topic's shard answers its leased rooms; a room leased on
-            // several of the topics is poked once, with all of them.
-            const answers = yield* Effect.forEach(
-              [...topics],
-              (topic) =>
-                call(
-                  `publish to shard "${topic}"`,
-                  options.shards.getByName(topic).publish(),
-                  noRooms
-                ).pipe(Effect.map((rooms) => ({ topic, rooms }))),
-              { concurrency: CONCURRENCY }
-            );
-            const matched = Arr.groupBy(
-              Arr.flatMap(answers, ({ topic, rooms }) =>
-                Arr.map(rooms, (roomId) => ({ roomId, topic }))
+          ({ roomId }) => roomId
+        );
+        yield* Effect.forEach(
+          R.toEntries(matched),
+          ([roomId, matches]) =>
+            call(
+              `poke of room "${roomId}"`,
+              options.poke(
+                roomId,
+                Arr.map(matches, ({ topic }) => topic)
               ),
-              ({ roomId }) => roomId
-            );
-            yield* Effect.forEach(
-              R.toEntries(matched),
-              ([roomId, matches]) =>
-                call(
-                  `poke of room "${roomId}"`,
-                  options.poke(
-                    roomId,
-                    Arr.map(matches, ({ topic }) => topic)
-                  ),
-                  undefined
-                ),
-              { discard: true, concurrency: CONCURRENCY }
-            );
-          }),
-        pokes: () =>
-          Effect.gen(function* () {
-            const subscription = yield* PubSub.subscribe(hub);
-            return { take: PubSub.take(subscription) };
-          }),
-      },
-      notify: (topics) => PubSub.publish(hub, topics).pipe(Effect.asVoid),
-    };
-  });
+              undefined
+            ),
+          { discard: true, concurrency: CONCURRENCY }
+        );
+      }),
+      pokes: Effect.fnUntraced(function* () {
+        const subscription = yield* PubSub.subscribe(hub);
+        return { take: PubSub.take(subscription) };
+      }),
+    },
+    notify: (topics) => PubSub.publish(hub, topics).pipe(Effect.asVoid),
+  };
+});
 
 /** Options for {@link publishOutOfBand}. */
 export interface OutOfBandOptions {

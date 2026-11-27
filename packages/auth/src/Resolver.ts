@@ -113,13 +113,14 @@ const sessionPrincipal = (
   closed(
     "session",
     sessions.validateSession(token).pipe(
-      Effect.map(({ session, user }): Principal.Principal => ({
-        _tag: "Session",
-        userId: user.id,
-        user,
-        sessionAttributes: session.attributes,
-        expiresAt: session.expiresAt,
-      }))
+      Effect.map(({ session, user }): Principal.Principal =>
+        Principal.Principal.Session({
+          userId: user.id,
+          user,
+          sessionAttributes: session.attributes,
+          expiresAt: session.expiresAt,
+        })
+      )
     )
   );
 
@@ -133,12 +134,13 @@ const apiKeyPrincipal = (
     apiKeys.verify(key).pipe(
       Effect.flatMap((result) =>
         result.valid && result.apiKey !== undefined
-          ? Effect.succeed<Principal.Principal>({
-              _tag: "ApiKey",
-              userId: result.apiKey.userId,
-              keyId: result.apiKey.id,
-              permissions: Option.fromNullishOr(result.apiKey.permissions),
-            })
+          ? Effect.succeed<Principal.Principal>(
+              Principal.Principal.ApiKey({
+                userId: result.apiKey.userId,
+                keyId: result.apiKey.id,
+                permissions: Option.fromNullishOr(result.apiKey.permissions),
+              })
+            )
           : failedClosed("api-key", "rejected")
       )
     )

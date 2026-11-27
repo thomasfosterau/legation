@@ -8,6 +8,7 @@
 import * as P from "effect/Predicate";
 import { describe, expect, it } from "@effect/vitest";
 import * as Arr from "effect/Array";
+import * as Cause from "effect/Cause";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
 import * as HashSet from "effect/HashSet";
@@ -27,7 +28,8 @@ import * as ClientStoreModule from "../ClientStore.js";
 import { ClientStore } from "../ClientStore.js";
 import * as Collection from "../Collection.js";
 import * as Cvr from "../Cvr.js";
-import { DuplicateNameError, UnknownCollectionError } from "../Errors.js";
+import type * as ClientView from "../ClientView.js";
+import { DuplicateNameError, StoreError, UnknownCollectionError } from "../Errors.js";
 import * as InvalidationBus from "../InvalidationBus.js";
 import * as MemoryBackend from "../MemoryBackend.js";
 import * as Mutator from "../Mutator.js";
@@ -382,6 +384,59 @@ describe("Related.query / observe", () => {
         })
       ),
     10000
+  );
+});
+
+// A view over the engine whose reads of `people` fail as a replica read can.
+const failingPeople = (
+  engine: ClientEngineModule.ClientEngine,
+  fail: { readonly query?: boolean; readonly observe?: boolean }
+): ClientView.Reader => ({
+  query: (subset) =>
+    fail.query === true && subset.collection === "people"
+      ? Effect.fail(new StoreError({ message: "the people store is unreadable" }))
+      : engine.query(subset),
+  observe: (subset) =>
+    fail.observe === true && subset.collection === "people"
+      ? Stream.die(new TestFailure({ message: "the people observer died" }))
+      : engine.observe(subset),
+});
+
+describe("Related reads over a failing view", () => {
+  it.effect("a one-shot join fails with the view's error", () =>
+    Effect.gen(function* () {
+      const handler = yield* makeServer();
+      const { engine } = yield* makeClient(handler, "a");
+      yield* seed(engine);
+      yield* syncAll(engine);
+      const view = failingPeople(engine, { query: true });
+      const error = yield* Effect.flip(
+        Related.query(view, registry, "issues", issues, ["author", "comments"])
+      );
+      expect(error._tag).toBe("StoreError");
+      expect(error.message).toBe("the people store is unreadable");
+    })
+  );
+
+  // Real clock: before the join forwarded its observers' defects, this stream
+  // never ended, so the test would time out rather than fail.
+  it.live("a live join ends with the defect of an observer that dies", () =>
+    Effect.gen(function* () {
+      const handler = yield* makeServer();
+      const { engine } = yield* makeClient(handler, "a");
+      yield* seed(engine);
+      yield* syncAll(engine);
+      const view = failingPeople(engine, { observe: true });
+      const exit = yield* Related.observe(view, registry, "issues", issues, ["author"]).pipe(
+        Stream.runDrain,
+        Effect.timeout("5 seconds"),
+        Effect.exit
+      );
+      expect(Exit.isFailure(exit) && Cause.hasDies(exit.cause)).toBe(true);
+      expect(Exit.isFailure(exit) ? Cause.pretty(exit.cause) : "").toContain(
+        "the people observer died"
+      );
+    }).pipe(Effect.scoped)
   );
 });
 

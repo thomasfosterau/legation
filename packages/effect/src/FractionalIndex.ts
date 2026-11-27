@@ -26,14 +26,15 @@
  * Figma's original algorithm) and not specific to this implementation.
  */
 
+import * as Result from "effect/Result";
 import * as Schema from "effect/Schema";
 import * as Json from "./internal/Json.js";
 
-/** Thrown by `generateBetween` when `lo` does not sort before `hi`. */
-class InvalidBounds extends Schema.TaggedError<InvalidBounds, { readonly brand: unique symbol }>()(
-  "InvalidBounds",
-  { message: Schema.String }
-) {}
+/** The failure of `generateBetween` and `generateNBetween` when `lo` does not sort before `hi`. */
+export class InvalidBounds extends Schema.TaggedError<
+  InvalidBounds,
+  { readonly brand: unique symbol }
+>()("InvalidBounds", { message: Schema.String }) {}
 
 const DIGITS = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz";
 const BASE = DIGITS.length;
@@ -57,17 +58,22 @@ export const compare = (a: string, b: string): number => {
   return pa < pb ? -1 : pa > pb ? 1 : 0;
 };
 
-/**
- * A key whose value lies strictly between `lo` and `hi` (each defaulting to
- * the open bound: `lo` omitted means 0, `hi` omitted means unbounded above).
- * Throws if `lo` is not strictly before `hi`.
- */
-export const generateBetween = (lo?: string, hi?: string): string => {
-  if (lo !== undefined && hi !== undefined && compare(lo, hi) >= 0) {
-    throw new InvalidBounds({
-      message: `FractionalIndex.generateBetween: lo (${Json.stringify(lo)}) must sort before hi (${Json.stringify(hi)})`,
-    });
-  }
+/** `lo` and `hi` when `lo` sorts strictly before `hi` (an omitted bound is open). */
+const checkBounds = (
+  operation: string,
+  lo?: string,
+  hi?: string
+): Result.Result<void, InvalidBounds> =>
+  lo !== undefined && hi !== undefined && compare(lo, hi) >= 0
+    ? Result.fail(
+        new InvalidBounds({
+          message: `FractionalIndex.${operation}: lo (${Json.stringify(lo)}) must sort before hi (${Json.stringify(hi)})`,
+        })
+      )
+    : Result.void;
+
+/** The key midway between bounds already known to be ordered. */
+const between = (lo?: string, hi?: string): string => {
   const digits: Array<number> = [];
   let unbounded = hi === undefined;
   for (let i = 0; ; i++) {
@@ -84,20 +90,34 @@ export const generateBetween = (lo?: string, hi?: string): string => {
 };
 
 /**
+ * A key whose value lies strictly between `lo` and `hi` (each defaulting to
+ * the open bound: `lo` omitted means 0, `hi` omitted means unbounded above).
+ * Fails with {@link InvalidBounds} if `lo` is not strictly before `hi`.
+ */
+export const generateBetween = (lo?: string, hi?: string): Result.Result<string, InvalidBounds> =>
+  Result.map(checkBounds("generateBetween", lo, hi), () => between(lo, hi));
+
+/** {@link generateNBetween} over bounds already known to be ordered. */
+const nBetween = (count: number, lo?: string, hi?: string): ReadonlyArray<string> => {
+  if (count <= 0) return [];
+  const mid = between(lo, hi);
+  if (count === 1) return [mid];
+  const left = Math.floor(count / 2);
+  return [...nBetween(left, lo, mid), mid, ...nBetween(count - left - 1, mid, hi)];
+};
+
+/**
  * `count` keys, all strictly between `lo` and `hi` and strictly increasing —
  * built by recursively bisecting the interval so the keys stay close in
  * length (O(log count) longer than a single `generateBetween`) rather than
  * chaining `generateBetween(lo, hi)` calls, which would grow the last key
- * by one digit per call.
+ * by one digit per call. Fails with {@link InvalidBounds} if `lo` is not
+ * strictly before `hi`; the bounds are checked once, since every bisection
+ * stays inside them.
  */
 export const generateNBetween = (
   lo: string | undefined,
   hi: string | undefined,
   count: number
-): ReadonlyArray<string> => {
-  if (count <= 0) return [];
-  if (count === 1) return [generateBetween(lo, hi)];
-  const mid = generateBetween(lo, hi);
-  const left = Math.floor(count / 2);
-  return [...generateNBetween(lo, mid, left), mid, ...generateNBetween(mid, hi, count - left - 1)];
-};
+): Result.Result<ReadonlyArray<string>, InvalidBounds> =>
+  Result.map(checkBounds("generateNBetween", lo, hi), () => nBetween(count, lo, hi));

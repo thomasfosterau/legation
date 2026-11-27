@@ -58,12 +58,54 @@ export const syncFailuresTotal = Metric.counter("legation_client_sync_failures_t
 });
 
 /**
+ * Retries the client's sync loop scheduled after a transient failure: one per
+ * re-attempt its retry policy allows, so the attempt that exhausts the policy
+ * is counted by {@link syncFailuresTotal} instead. Carries an `operation`
+ * attribute (`push`, `pull` or `pokes`, the last a poke-stream
+ * re-establishment). Use {@link syncRetries} for one operation's series.
+ */
+export const syncRetriesTotal = Metric.counter("legation_client_sync_retries_total", {
+  incremental: true,
+});
+
+/** {@link syncRetriesTotal}'s series for one sync operation. */
+export const syncRetries = (
+  operation: "push" | "pull" | "pokes"
+): Metric.Metric<number, Metric.CounterState<number>> =>
+  Metric.withAttributes(syncRetriesTotal, { operation });
+
+/** Pokes the client's sync loop received from its transport. */
+export const pokesReceivedTotal = Metric.counter("legation_client_pokes_received_total", {
+  incremental: true,
+});
+
+/**
+ * Time (ms) from a poke reaching the client's sync loop to the pull it started
+ * settling, retries included. A poke that arrives while a pull is in flight
+ * waits for it (the loop keeps only the newest), so the time spent waiting is
+ * included. A pull that fails terminally is recorded too, when it surfaces.
+ */
+export const pokeLatencyMs = Metric.histogram("legation_client_poke_latency_ms", {
+  boundaries: [1, 2, 5, 10, 25, 50, 100, 250, 500, 1000, 2500, 5000],
+});
+
+/**
  * Invalidation-bus hints dropped because a bounded bus (in-process PubSub or
  * memory broker) overflowed while a consumer was behind. A dropped hint only
  * delays convergence — the next pull repairs it — so this counts safely-shed
  * work under backpressure, never lost correctness (ADR-0009).
  */
 export const hintsDroppedTotal = Metric.counter("legation_hints_dropped_total", {
+  incremental: true,
+});
+
+/**
+ * Topic batches the in-process fan-out broker dropped because a room's bounded
+ * poke hub was full while the room was behind. The room still holds the
+ * batches it took, and its clients' next pull converges, so this counts
+ * delayed pokes, not lost data.
+ */
+export const fanoutPokesDroppedTotal = Metric.counter("legation_fanout_pokes_dropped_total", {
   incremental: true,
 });
 

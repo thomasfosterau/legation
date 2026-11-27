@@ -289,26 +289,31 @@ const assignLinkage = (
  * more batch, keyed by the included rows. The rows and the linkage are
  * exactly what {@link DocumentWriter} takes.
  */
-export const resolve = <E>(
+export const resolve: <E>(
   fetchRows: Fetch<E>,
   nodes: Node.NodeRegistry,
   node: Node.AnyNode,
   plan: Plan,
   read: Query.Read
-): Effect.Effect<Resolved, E> =>
-  Effect.gen(function* () {
-    const rows = yield* Query.runVia(fetchRows, nodes, withLinkage(plan, read));
-    const queries = linkageQueries(nodes, plan, node, read, rows);
-    const fetched = Arr.isReadonlyArrayEmpty(queries)
-      ? []
-      : yield* fetchRows(
-          queries.map((query) =>
-            Subset.make({
-              collection: query.collection,
-              where: Predicate.isIn(query.field, [...query.parents]),
-              orderBy: query.order,
-            })
-          )
-        );
-    return { rows, linkage: assignLinkage(queries, fetched) };
-  });
+) => Effect.Effect<Resolved, E> = Effect.fnUntraced(function* <E>(
+  fetchRows: Fetch<E>,
+  nodes: Node.NodeRegistry,
+  node: Node.AnyNode,
+  plan: Plan,
+  read: Query.Read
+) {
+  const rows = yield* Query.runVia(fetchRows, nodes, withLinkage(plan, read));
+  const queries = linkageQueries(nodes, plan, node, read, rows);
+  const fetched = Arr.isReadonlyArrayEmpty(queries)
+    ? []
+    : yield* fetchRows(
+        queries.map((query) =>
+          Subset.make({
+            collection: query.collection,
+            where: Predicate.isIn(query.field, [...query.parents]),
+            orderBy: query.order,
+          })
+        )
+      );
+  return { rows, linkage: assignLinkage(queries, fetched) };
+});

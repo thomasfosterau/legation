@@ -62,6 +62,7 @@ import * as Ref from "effect/Ref";
 import * as Scope from "effect/Scope";
 import * as Semaphore from "effect/Semaphore";
 import * as Stream from "effect/Stream";
+import * as Struct from "effect/Struct";
 import * as ClientEngine from "./ClientEngine.js";
 import * as ClientStore from "./ClientStore.js";
 import * as RpcTransport from "./RpcTransport.js";
@@ -502,13 +503,12 @@ const unheld = (interest: Interest): boolean => interest.observers === 0 && inte
  * lists.
  */
 const oneFewerOn = (current: Interest, kind: Kind): Interest => {
-  const { url, ...rest } = current;
   const pins = oneFewer(current.pins, kind, "explicit");
   return {
-    ...rest,
+    ...Struct.omit(current, ["url"]),
     observers: oneFewer(current.observers, kind, "observer"),
     pins,
-    ...Defined.fields({ url: pins > 0 && url !== undefined ? url : undefined }),
+    ...Defined.fields({ url: pins > 0 ? current.url : undefined }),
   };
 };
 
@@ -598,6 +598,8 @@ export const fromView = <Graph extends Node.NodeRegistry>(
       const count = Option.getOrElse(HashMap.get(map, key), () => 0);
       return [count === 0, HashMap.set(map, key, count + 1)] as const;
     }).pipe(
+      // The ledger already counts this window, so a failed registration
+      // cannot be handed back without unwinding it: a defect for now.
       Effect.flatMap((first) => (first ? view.subscribe(root).pipe(Effect.orDie) : Effect.void))
     );
 
@@ -617,15 +619,17 @@ export const fromView = <Graph extends Node.NodeRegistry>(
   // without its join — host-side over a connected engine, the reconcile
   // loop over an owned one — kept open in a scope of its own so the foreign
   // windows keep tracking the linkage until the entry is released.
-  const openEdges = (key: string, registration: Coverage.Registration): Effect.Effect<void> =>
-    Effect.gen(function* () {
-      const scope = yield* Scope.make();
-      const { root, edges } = registration;
-      yield* view
-        .pinEdges(nodes.collections, root.collection, root, edges)
-        .pipe(Scope.provide(scope));
-      MutableHashMap.set(edgeScopes, key, scope);
-    });
+  const openEdges = Effect.fnUntraced(function* (
+    key: string,
+    registration: Coverage.Registration
+  ): Effect.fn.Return<void> {
+    const scope = yield* Scope.make();
+    const { root, edges } = registration;
+    yield* view
+      .pinEdges(nodes.collections, root.collection, root, edges)
+      .pipe(Scope.provide(scope));
+    MutableHashMap.set(edgeScopes, key, scope);
+  });
 
   const closeEdges = (key: string): Effect.Effect<void> =>
     Effect.suspend(() => {
@@ -763,13 +767,14 @@ export const fromView = <Graph extends Node.NodeRegistry>(
 
   // A read given by value keeps its URL identity when it has one; a read
   // with no URL form is pinned all the same, without one.
-  const targetOfRead = (read: QueryModule.Read): Effect.Effect<Target, QueryError> =>
-    Effect.gen(function* () {
-      const plan = yield* Query.tryPlan(nodes, read);
-      const url =
-        urls === undefined ? Option.none<string>() : yield* Effect.option(urls.canonical(read));
-      return { registration: Coverage.ofPlan(plan), url };
-    });
+  const targetOfRead = Effect.fnUntraced(function* (
+    read: QueryModule.Read
+  ): Effect.fn.Return<Target, QueryError> {
+    const plan = yield* Query.tryPlan(nodes, read);
+    const url =
+      urls === undefined ? Option.none<string>() : yield* Effect.option(urls.canonical(read));
+    return { registration: Coverage.ofPlan(plan), url };
+  });
 
   const targetOf = (input: QueryModule.Read | string): Effect.Effect<Target, QueryError> =>
     P.isString(input) ? targetOfUrl(input) : targetOfRead(input);
@@ -820,12 +825,14 @@ export const fromView = <Graph extends Node.NodeRegistry>(
   // read, which the answer is joined from, so a root row whose edge windows
   // were not pulled when the marks were read uncovers the read; edge
   // rows `answerOf` reads come after the marks too. The root is read once,
-  // and a failed read of it is uncovered.
+  // and a failed read of it, or of the edge rows, is uncovered.
   const coveredAnswer = <R extends ClientEngine.LocalRow>(
     compiled: Query.Plan,
     own: Option.Option<Coverage.Registration>,
     rowsNow: Effect.Effect<ReadonlyArray<R>, ClientView.ClientViewError>,
-    answerOf: (rows: ReadonlyArray<R>) => Effect.Effect<ReadonlyArray<Related.RelatedRow>>
+    answerOf: (
+      rows: ReadonlyArray<R>
+    ) => Effect.Effect<ReadonlyArray<Related.RelatedRow>, ClientView.ClientViewError>
   ): Effect.Effect<Option.Option<ReadonlyArray<Related.RelatedRow>>> =>
     entriesOf(Option.getOrUndefined(own)).pipe(
       Effect.flatMap((entries) =>
@@ -844,7 +851,7 @@ export const fromView = <Graph extends Node.NodeRegistry>(
                     Option.exists(requested, (request) =>
                       P.isTagged(Coverage.verdictOf(entries, request), "Covered")
                     )
-                      ? answerOf(rows).pipe(Effect.asSome)
+                      ? Effect.option(answerOf(rows))
                       : Effect.succeedNone
                   )
                 ),
@@ -912,27 +919,31 @@ export const fromView = <Graph extends Node.NodeRegistry>(
   // snapshot of the root rows it is joined from.
   const answerOnce = (
     read: QueryModule.Read
-  ): Effect.Effect<UntypedAnswer, ClientView.ClientViewError> => {
-    const readThrough = view.read;
-    const compiled = Query.plan(nodes, read);
-    // Uncovered and answered from the replica: never wider than the policy,
-    // but possibly short of what the server holds.
-    const local = Effect.suspend(() => Query.run(view, nodes, read)).pipe(Effect.map(partial));
-    const uncovered =
-      readThrough === undefined
-        ? local
-        : Query.runPlanVia(readThrough, nodes, compiled).pipe(
-            Effect.map(complete),
-            Effect.catch(() => local)
-          );
-    return coveredAnswer(compiled, Option.none(), view.query(compiled.root), (rows) =>
-      Query.runRows(view, nodes, read, rows)
-    ).pipe(
-      Effect.flatMap(
-        Option.match({ onNone: () => uncovered, onSome: (rows) => Effect.succeed(complete(rows)) })
-      )
-    );
-  };
+  ): Effect.Effect<UntypedAnswer, ClientView.ClientViewError> =>
+    Effect.suspend(() => {
+      const readThrough = view.read;
+      const compiled = Query.plan(nodes, read);
+      // Uncovered and answered from the replica: never wider than the policy,
+      // but possibly short of what the server holds.
+      const local = Query.run(view, nodes, read).pipe(Effect.map(partial));
+      const uncovered =
+        readThrough === undefined
+          ? local
+          : Query.runPlanVia(readThrough, nodes, compiled).pipe(
+              Effect.map(complete),
+              Effect.catch(() => local)
+            );
+      return coveredAnswer(compiled, Option.none(), view.query(compiled.root), (rows) =>
+        Query.runRows(view, nodes, read, rows)
+      ).pipe(
+        Effect.flatMap(
+          Option.match({
+            onNone: () => uncovered,
+            onSome: (rows) => Effect.succeed(complete(rows)),
+          })
+        )
+      );
+    });
 
   const queryOnce = (
     read: QueryModule.Read
@@ -942,14 +953,24 @@ export const fromView = <Graph extends Node.NodeRegistry>(
   // A live read: its windows registered for the stream's lifetime and its
   // rows streamed, which `finish` turns into what the caller observes, given
   // the read's covered answer now (`coveredAnswer` over the same rows).
+  // Observed reads carry no typed error (`ObserveOf`): a view that fails
+  // ends the stream with a defect.
   const live = <A>(
     read: QueryModule.Read,
     finish: (
       rows: Stream.Stream<ReadonlyArray<Related.RelatedRow>>,
       covered: Effect.Effect<Option.Option<ReadonlyArray<Related.RelatedRow>>>
     ) => Stream.Stream<A>
+  ): Stream.Stream<A> => Stream.suspend(() => liveOf(read, Query.plan(nodes, read), finish));
+
+  const liveOf = <A>(
+    read: QueryModule.Read,
+    compiled: Query.Plan,
+    finish: (
+      rows: Stream.Stream<ReadonlyArray<Related.RelatedRow>>,
+      covered: Effect.Effect<Option.Option<ReadonlyArray<Related.RelatedRow>>>
+    ) => Stream.Stream<A>
   ): Stream.Stream<A> => {
-    const compiled = Query.plan(nodes, read);
     if (Arr.isReadonlyArrayEmpty(compiled.edges)) {
       const registration = Coverage.ofPlan(compiled);
       return Stream.unwrap(
@@ -1025,15 +1046,15 @@ export const fromView = <Graph extends Node.NodeRegistry>(
         )
       )
     ),
-    coverageOf: (read, coverageOptions) => {
-      const plan = Query.plan(nodes, read);
-      return verdictOf(
-        plan,
-        coverageOptions?.snapshot === undefined
-          ? view.query
-          : Coverage.snapshotOf(coverageOptions.snapshot, view.query)
-      );
-    },
+    coverageOf: (read, coverageOptions) =>
+      Effect.suspend(() =>
+        verdictOf(
+          Query.plan(nodes, read),
+          coverageOptions?.snapshot === undefined
+            ? view.query
+            : Coverage.snapshotOf(coverageOptions.snapshot, view.query)
+        )
+      ),
     totalOf: (subset) => view.totalOf?.(subset) ?? Effect.undefined,
     reset,
     identity: boundary === undefined ? noBoundary() : boundary.current,
@@ -1175,53 +1196,52 @@ export interface Made<Graph extends Node.NodeRegistry = Node.NodeRegistry> {
  * an app that needs an engine-level capability (devtools) need not build the
  * engine by hand.
  */
-export const make = <Graph extends Node.NodeRegistry>(
+export const make: <Graph extends Node.NodeRegistry>(
   options: MakeOptions<Graph>
-): Effect.Effect<Made<Graph>, never, Scope.Scope> =>
-  Effect.gen(function* () {
-    const store =
-      options.store ??
-      Option.getOrUndefined(yield* Effect.serviceOption(ClientStore.ClientStore)) ??
-      (yield* ClientStore.makeMemory);
+) => Effect.Effect<Made<Graph>, never, Scope.Scope> = Effect.fn("legation/Client.make")(function* <
+  Graph extends Node.NodeRegistry,
+>(options: MakeOptions<Graph>) {
+  const store =
+    options.store ??
+    Option.getOrUndefined(yield* Effect.serviceOption(ClientStore.ClientStore)) ??
+    (yield* ClientStore.makeMemory);
 
-    const clientGroupId = options.clientGroupId ?? `group-${crypto.randomUUID()}`;
-    const configured =
-      options.transport !== undefined && "url" in options.transport
-        ? yield* RpcTransport.fromOrigin({ origin: options.transport.url, clientGroupId })
-        : options.transport;
-    const contextual = Option.getOrUndefined(
-      yield* Effect.serviceOption(Transport.ClientTransport)
-    );
-    const transport = configured ?? contextual ?? Transport.offline;
-    // Defaulted offline: nothing to sync with, so the loop stays off
-    // unless the caller insists.
-    const sync = options.sync ?? (configured ?? contextual) !== undefined;
+  const clientGroupId = options.clientGroupId ?? `group-${crypto.randomUUID()}`;
+  const configured =
+    options.transport !== undefined && "url" in options.transport
+      ? yield* RpcTransport.fromOrigin({ origin: options.transport.url, clientGroupId })
+      : options.transport;
+  const contextual = Option.getOrUndefined(yield* Effect.serviceOption(Transport.ClientTransport));
+  const transport = configured ?? contextual ?? Transport.offline;
+  // Defaulted offline: nothing to sync with, so the loop stays off
+  // unless the caller insists.
+  const sync = options.sync ?? (configured ?? contextual) !== undefined;
 
-    const indexes = declaredIndexes(options.nodes);
-    const engine = yield* ClientEngine.make({
-      clientId: options.clientId ?? `client-${crypto.randomUUID()}`,
-      clientGroupId,
-      mutators: options.mutations,
-      ...Defined.fields({ queries: options.queries, syncLoop: options.syncLoop }),
-      ...Defined.fields({ indexes: !R.isEmptyReadonlyRecord(indexes) ? indexes : undefined }),
-      ...Defined.fields({ autoIndex: options.autoIndex }),
-    }).pipe(
-      Effect.provideService(ClientStore.ClientStore, store),
-      Effect.provideService(Transport.ClientTransport, transport)
-    );
-    // Adopt the identity before the sync loop starts: a mismatched replica
-    // must be quarantined and cleared before anything can read from it or
-    // push out of it. A store error here is fatal to construction on purpose
-    // — a Client that reported an identity it never actually scoped its
-    // replica to is the bug this whole boundary exists to prevent.
-    if (options.identity !== undefined) yield* engine.reset(options.identity).pipe(Effect.orDie);
-    if (sync) yield* Effect.forkScoped(engine.runSync.pipe(Effect.orDie));
-    return {
-      client: fromView(options.nodes, ClientView.fromEngine(engine), viewOptions(options)),
-      engine,
-      store,
-    };
-  });
+  const indexes = declaredIndexes(options.nodes);
+  const engine = yield* ClientEngine.make({
+    clientId: options.clientId ?? `client-${crypto.randomUUID()}`,
+    clientGroupId,
+    mutators: options.mutations,
+    ...Defined.fields({ queries: options.queries, syncLoop: options.syncLoop }),
+    ...Defined.fields({ indexes: !R.isEmptyReadonlyRecord(indexes) ? indexes : undefined }),
+    ...Defined.fields({ autoIndex: options.autoIndex }),
+  }).pipe(
+    Effect.provideService(ClientStore.ClientStore, store),
+    Effect.provideService(Transport.ClientTransport, transport)
+  );
+  // Adopt the identity before the sync loop starts: a mismatched replica
+  // must be quarantined and cleared before anything can read from it or
+  // push out of it. A store error here is fatal to construction on purpose
+  // — a Client that reported an identity it never actually scoped its
+  // replica to is the bug this whole boundary exists to prevent.
+  if (options.identity !== undefined) yield* engine.reset(options.identity).pipe(Effect.orDie);
+  if (sync) yield* engine.runSync;
+  return {
+    client: fromView(options.nodes, ClientView.fromEngine(engine), viewOptions(options)),
+    engine,
+    store,
+  };
+});
 
 /** Options for a Client connected to an engine hosted elsewhere. */
 export interface ConnectOptions<
@@ -1237,10 +1257,11 @@ export interface ConnectOptions<
  * a daemon), joined over a `MirrorChannel`. Reads and writes cross the
  * channel; relational reads resolve host-side.
  */
-export const connect = <Graph extends Node.NodeRegistry>(
+export const connect: <Graph extends Node.NodeRegistry>(
   options: ConnectOptions<Graph>
-): Effect.Effect<Client<Graph>, never, Scope.Scope> =>
-  Effect.gen(function* () {
+) => Effect.Effect<Client<Graph>, never, Scope.Scope> = Effect.fn("legation/Client.connect")(
+  function* <Graph extends Node.NodeRegistry>(options: ConnectOptions<Graph>) {
     const mirror = yield* Mirror.make({ channel: options.channel, mutators: options.mutations });
     return fromView(options.nodes, mirror, viewOptions(options));
-  });
+  }
+);

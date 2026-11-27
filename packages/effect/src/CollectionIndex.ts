@@ -33,6 +33,7 @@
  */
 
 import * as Arr from "effect/Array";
+import * as Order from "effect/Order";
 import * as Match from "effect/Match";
 import * as P from "effect/Predicate";
 import type { RowId } from "./Collection.js";
@@ -326,7 +327,7 @@ const conjunctIds = (
 ): ReadonlySet<RowId> | undefined => conjunctIdsOf(conjunct, index);
 
 const intersect = (sets: ReadonlyArray<ReadonlySet<RowId>>): ReadonlySet<RowId> => {
-  const bySize = sets.toSorted((a, b) => a.size - b.size);
+  const bySize = Arr.sortWith(sets, (set) => set.size, Order.Number);
   const [smallest, ...rest] = bySize;
   if (smallest === undefined) return EMPTY_IDS;
   if (Arr.isReadonlyArrayEmpty(rest)) return smallest;

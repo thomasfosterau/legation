@@ -21,6 +21,7 @@ import * as Exit from "effect/Exit";
 import * as Fiber from "effect/Fiber";
 import * as HashMap from "effect/HashMap";
 import * as HashSet from "effect/HashSet";
+import * as Metric from "effect/Metric";
 import * as Option from "effect/Option";
 import * as Ref from "effect/Ref";
 import * as Schema from "effect/Schema";
@@ -46,6 +47,7 @@ import {
   InvalidationBus,
   Subset,
   SyncServer,
+  Telemetry,
 } from "../internal.js";
 import { Backend } from "../index.js";
 import * as Predicate from "../Predicate.js";
@@ -156,13 +158,15 @@ const waitingPoke = (pokes: FanoutBroker.TopicPokes) =>
     return exit !== undefined && Exit.isSuccess(exit) ? exit.value : undefined;
   });
 
+const p1Reviews: ReadonlySet<string> = new Set(["reviews/productId=p-1"]);
+
 describe("FanoutBroker leases", () => {
   it.effect("routes only intersecting topics; expired leases age out", () =>
     Effect.scoped(
       Effect.gen(function* () {
         const broker = yield* FanoutBroker.makeInProcess;
         const pokes = yield* broker.pokes("room-a");
-        yield* broker.register("room-a", new Set(["reviews/productId=p-1"]), "150 millis");
+        yield* broker.register("room-a", p1Reviews, "150 millis");
 
         // A non-intersecting publish stays silent; an intersecting one lands.
         yield* broker.publish(["reviews/productId=p-2", "products"]);
@@ -179,6 +183,24 @@ describe("FanoutBroker leases", () => {
         yield* TestClock.adjust("1 millis");
         yield* broker.publish(["reviews/productId=p-1"]);
         expect(yield* waitingPoke(pokes)).toBeUndefined();
+      })
+    )
+  );
+
+  it.effect("counts a poke batch a behind room's full hub drops", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const broker = yield* FanoutBroker.makeInProcess;
+        // Subscribed but never taken from: the room is behind.
+        yield* broker.pokes("room-a");
+        yield* broker.register("room-a", p1Reviews, "1 minute");
+        const dropped = Metric.value(Telemetry.fanoutPokesDroppedTotal).pipe(
+          Effect.map((state) => state.count)
+        );
+        const before = yield* dropped;
+        // 258 publishes (one, then 257 repeats) into a hub that holds 256: two drop.
+        yield* Effect.repeat(broker.publish(["reviews/productId=p-1"]), { times: 257 });
+        expect((yield* dropped) - before).toBe(2);
       })
     )
   );

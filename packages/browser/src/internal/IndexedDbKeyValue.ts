@@ -55,39 +55,36 @@ interface Connection {
  * connection's upgrade (`onversionchange`); after that, its calls fail with
  * {@link UPGRADED_MESSAGE}.
  */
-const openDatabase = (
+const openDatabase = Effect.fn("legation-browser/IndexedDbKeyValue.openDatabase")(function* (
   database: string
-): Effect.Effect<Connection, StoreError, IndexedDb.IndexedDb> =>
-  Effect.gen(function* () {
-    const idb = (yield* IndexedDb.IndexedDb).indexedDB;
-    return yield* Effect.callback<Connection, StoreError>((resume) => {
-      const fail = (cause: unknown) =>
-        resume(
-          Effect.fail(new StoreError({ message: "Failed to open the IndexedDB store", cause }))
-        );
-      const opened = Result.try(() => idb.open(database));
-      if (Result.isFailure(opened)) {
-        fail(opened.failure);
-        return;
+): Effect.fn.Return<Connection, StoreError, IndexedDb.IndexedDb> {
+  const idb = (yield* IndexedDb.IndexedDb).indexedDB;
+  return yield* Effect.callback<Connection, StoreError>((resume) => {
+    const fail = (cause: unknown) =>
+      resume(Effect.fail(new StoreError({ message: "Failed to open the IndexedDB store", cause })));
+    const opened = Result.try(() => idb.open(database));
+    if (Result.isFailure(opened)) {
+      fail(opened.failure);
+      return;
+    }
+    const request = opened.success;
+    request.addEventListener("upgradeneeded", () => {
+      const db = request.result;
+      if (!db.objectStoreNames.contains(ENTRIES_STORE)) {
+        db.createObjectStore(ENTRIES_STORE, { keyPath: "key" });
       }
-      const request = opened.success;
-      request.addEventListener("upgradeneeded", () => {
-        const db = request.result;
-        if (!db.objectStoreNames.contains(ENTRIES_STORE)) {
-          db.createObjectStore(ENTRIES_STORE, { keyPath: "key" });
-        }
-      });
-      request.addEventListener("success", () => {
-        const connection: Connection = { db: request.result, upgraded: false };
-        connection.db.addEventListener("versionchange", () => {
-          connection.upgraded = true;
-          connection.db.close();
-        });
-        resume(Effect.succeed(connection));
-      });
-      request.addEventListener("error", () => fail(request.error));
     });
+    request.addEventListener("success", () => {
+      const connection: Connection = { db: request.result, upgraded: false };
+      connection.db.addEventListener("versionchange", () => {
+        connection.upgraded = true;
+        connection.db.close();
+      });
+      resume(Effect.succeed(connection));
+    });
+    request.addEventListener("error", () => fail(request.error));
   });
+});
 
 /**
  * Abort `transaction`, ignoring the `InvalidStateError` an already-finished
@@ -105,50 +102,46 @@ const missingEntriesStore = (db: IDBDatabase, method: string, key?: string) =>
     ...Defined.fields({ key }),
   });
 
+/** How {@link transact} reports each way a transaction can fail to commit. */
+interface TransactionErrors<E> {
+  /** Another connection upgraded the database, so this one is closed. */
+  readonly upgraded: (cause?: unknown) => E;
+  /** The database has no entries store (see the module note above). */
+  readonly missingStore: (db: IDBDatabase) => E;
+  /** The transaction could not begin, a request failed, or it aborted. */
+  readonly failed: (cause: unknown) => E;
+}
+
 /**
- * One request in its own transaction, resolved when the transaction completes,
- * so a write is durable before the caller continues. A failed or aborted
- * transaction fails the call.
+ * One transaction on the entries store, resolved when it completes, so a write is durable before
+ * the caller continues. `issue` makes every request synchronously (IndexedDB commits a transaction
+ * once control returns to the event loop with no request pending, so nothing may wait between
+ * them), may report a request's own failure, and returns how to read the result once the
+ * transaction has completed. Interrupted before the commit point, the transaction is aborted, so
+ * none of it lands.
  */
-const runRequest = <A>(
+const transact = <A, E>(
   connection: Connection,
   mode: IDBTransactionMode,
-  failure: { readonly method: string; readonly message: string; readonly key?: string },
-  evaluate: (store: IDBObjectStore) => IDBRequest<A>
-): Effect.Effect<A, KeyValueStore.KeyValueStoreError> =>
-  Effect.callback<A, KeyValueStore.KeyValueStoreError>((resume) => {
+  errors: TransactionErrors<E>,
+  issue: (store: IDBObjectStore, fail: (cause: unknown) => void) => () => A
+): Effect.Effect<A, E> =>
+  Effect.callback<A, E>((resume) => {
     let settled = false;
-    let result: A | undefined;
-    const finish = (effect: Effect.Effect<A, KeyValueStore.KeyValueStoreError>) => {
+    const finish = (effect: Effect.Effect<A, E>) => {
       if (settled) return;
       settled = true;
       resume(effect);
     };
     const fail = (cause: unknown) =>
-      finish(
-        Effect.fail(
-          new KeyValueStore.KeyValueStoreError({
-            ...failure,
-            message: connection.upgraded ? UPGRADED_MESSAGE : failure.message,
-            cause,
-          })
-        )
-      );
+      finish(Effect.fail(connection.upgraded ? errors.upgraded(cause) : errors.failed(cause)));
     if (connection.upgraded) {
-      finish(
-        Effect.fail(
-          new KeyValueStore.KeyValueStoreError({
-            method: failure.method,
-            message: UPGRADED_MESSAGE,
-            ...Defined.fields({ key: failure.key }),
-          })
-        )
-      );
+      finish(Effect.fail(errors.upgraded()));
       return undefined;
     }
     const db = connection.db;
     if (!db.objectStoreNames.contains(ENTRIES_STORE)) {
-      finish(Effect.fail(missingEntriesStore(db, failure.method, failure.key)));
+      finish(Effect.fail(errors.missingStore(db)));
       return undefined;
     }
     const began = Result.try(() => db.transaction(ENTRIES_STORE, mode));
@@ -157,28 +150,50 @@ const runRequest = <A>(
       return undefined;
     }
     const transaction = began.success;
-    // SAFETY: a transaction completes only after its one request succeeded, and
-    // that request's `success` listener (added below) has already set `result`.
-    transaction.addEventListener("complete", () => finish(Effect.succeed(result as A)));
-    transaction.addEventListener("error", () => fail(transaction.error));
-    transaction.addEventListener("abort", () => fail(transaction.error));
-    const issued = Result.try(() => {
-      const request = evaluate(transaction.objectStore(ENTRIES_STORE));
-      request.addEventListener("success", () => {
-        result = request.result;
-      });
-      request.addEventListener("error", () => fail(request.error));
-    });
+    const issued = Result.try(() => issue(transaction.objectStore(ENTRIES_STORE), fail));
     if (Result.isFailure(issued)) {
       fail(issued.failure);
       abortQuietly(transaction);
+      return undefined;
     }
+    const read = issued.success;
+    transaction.addEventListener("complete", () => finish(Effect.sync(read)));
+    transaction.addEventListener("error", () => fail(transaction.error));
+    transaction.addEventListener("abort", () => fail(transaction.error));
     return Effect.sync(() => {
       if (settled) return;
       settled = true;
       abortQuietly(transaction);
     });
   });
+
+/** One request in its own transaction (see {@link transact}), failing as the platform store does. */
+const runRequest = <A>(
+  connection: Connection,
+  mode: IDBTransactionMode,
+  failure: { readonly method: string; readonly message: string; readonly key?: string },
+  evaluate: (store: IDBObjectStore) => IDBRequest<A>
+): Effect.Effect<A, KeyValueStore.KeyValueStoreError> =>
+  transact(
+    connection,
+    mode,
+    {
+      upgraded: (cause) =>
+        new KeyValueStore.KeyValueStoreError({
+          method: failure.method,
+          message: UPGRADED_MESSAGE,
+          ...Defined.fields({ key: failure.key, cause }),
+        }),
+      missingStore: (db) => missingEntriesStore(db, failure.method, failure.key),
+      failed: (cause) => new KeyValueStore.KeyValueStoreError({ ...failure, cause }),
+    },
+    (store, fail) => {
+      const request = evaluate(store);
+      request.addEventListener("error", () => fail(request.error));
+      // A transaction completes only after its one request succeeded, so the result is there.
+      return () => request.result;
+    }
+  );
 
 /**
  * `KeyValueStore.make`'s options with `keys` spelled out, so this module type-checks at both ends
@@ -267,70 +282,37 @@ const commitOps = (
   connection: Connection,
   ops: ReadonlyArray<AtomicKeyValue.KeyValueOp>
 ): Effect.Effect<void, StoreError> =>
-  Effect.callback<void, StoreError>((resume) => {
-    let settled = false;
-    const finish = (effect: Effect.Effect<void, StoreError>) => {
-      if (settled) return;
-      settled = true;
-      resume(effect);
-    };
-    const fail = (cause: unknown) =>
-      finish(
-        Effect.fail(
-          new StoreError({
-            message: connection.upgraded
-              ? UPGRADED_MESSAGE
-              : "Failed to commit an atomic batch to IndexedDB",
-            cause,
-          })
-        )
-      );
-    if (connection.upgraded) {
-      finish(Effect.fail(new StoreError({ message: UPGRADED_MESSAGE })));
-      return undefined;
-    }
-    const db = connection.db;
-    if (!db.objectStoreNames.contains(ENTRIES_STORE)) {
-      finish(
-        Effect.fail(
-          new StoreError({
-            message: `Cannot commit an atomic batch: IndexedDB database "${db.name}" has no "${ENTRIES_STORE}" object store`,
-          })
-        )
-      );
-      return undefined;
-    }
-    const began = Result.try(() => db.transaction(ENTRIES_STORE, "readwrite"));
-    if (Result.isFailure(began)) {
-      fail(began.failure);
-      return undefined;
-    }
-    const transaction = began.success;
-    const abort = () => abortQuietly(transaction);
-    transaction.addEventListener("complete", () => finish(Effect.void));
-    transaction.addEventListener("error", () => fail(transaction.error));
-    transaction.addEventListener("abort", () => fail(transaction.error));
-    const issued = Result.try(() => {
-      const entries = transaction.objectStore(ENTRIES_STORE);
-      // Every request is issued synchronously here: IndexedDB commits a transaction once control
-      // returns to the event loop with no request pending, so nothing may await between them.
+  transact(
+    connection,
+    "readwrite",
+    {
+      upgraded: (cause) =>
+        new StoreError({ message: UPGRADED_MESSAGE, ...Defined.fields({ cause }) }),
+      missingStore: (db) =>
+        new StoreError({
+          message: `Cannot commit an atomic batch: IndexedDB database "${db.name}" has no "${ENTRIES_STORE}" object store`,
+        }),
+      failed: (cause) =>
+        new StoreError({ message: "Failed to commit an atomic batch to IndexedDB", cause }),
+    },
+    (entries) => {
       Arr.forEach(ops, (op) => {
         if (P.isTagged(op, "Set")) entries.put({ key: op.key, value: op.value });
         else entries.delete(op.key);
       });
-    });
-    if (Result.isFailure(issued)) {
-      fail(issued.failure);
-      abort();
+      return () => undefined;
     }
-    // Interrupted before the commit point: abort, so none of the batch lands.
-    return Effect.sync(() => {
-      if (!settled) {
-        settled = true;
-        abort();
-      }
-    });
-  });
+  );
+
+/**
+ * A connection for the layer's lifetime. A database that cannot open fails the layer as a defect
+ * carrying the `StoreError`: the `ClientStore` layers build infallibly
+ * (`IndexedDbClientStore.layer`, core's `layerKeyValue`).
+ */
+const acquireConnection = (database?: string) =>
+  Effect.acquireRelease(openDatabase(database ?? PLATFORM_DATABASE), (opened) =>
+    Effect.sync(() => opened.db.close())
+  ).pipe(Effect.orDie);
 
 /**
  * The platform `KeyValueStore` over IndexedDB, opened without a version (see
@@ -341,10 +323,7 @@ export const keyValueLayer = (
 ): Layer.Layer<KeyValueStore.KeyValueStore, never, IndexedDb.IndexedDb> =>
   Layer.effect(KeyValueStore.KeyValueStore)(
     Effect.gen(function* () {
-      const connection = yield* Effect.acquireRelease(
-        openDatabase(database ?? PLATFORM_DATABASE),
-        (opened) => Effect.sync(() => opened.db.close())
-      ).pipe(Effect.orDie);
+      const connection = yield* acquireConnection(database);
       return keyValueOver(connection);
     })
   );
@@ -383,10 +362,7 @@ export const atomicKeyValueLayer = (
 ): Layer.Layer<AtomicKeyValue.AtomicKeyValue, never, IndexedDb.IndexedDb> =>
   Layer.effect(AtomicKeyValue.AtomicKeyValue)(
     Effect.gen(function* () {
-      const connection = yield* Effect.acquireRelease(
-        openDatabase(database ?? PLATFORM_DATABASE),
-        (opened) => Effect.sync(() => opened.db.close())
-      ).pipe(Effect.orDie);
+      const connection = yield* acquireConnection(database);
       return AtomicKeyValue.AtomicKeyValue.of({
         apply: (ops) => (Arr.isReadonlyArrayEmpty(ops) ? Effect.void : commitOps(connection, ops)),
         readAll: readEntries(connection),

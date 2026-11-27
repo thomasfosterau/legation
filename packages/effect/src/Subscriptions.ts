@@ -17,7 +17,7 @@
 import * as Defined from "./Defined.js";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
-import * as Fiber from "effect/Fiber";
+import * as FiberMap from "effect/FiberMap";
 import * as MutableHashMap from "effect/MutableHashMap";
 import * as Option from "effect/Option";
 import * as Ref from "effect/Ref";
@@ -129,7 +129,6 @@ export const counted = (engine: ClientEngine): ClientEngine => {
 interface Entry {
   count: number;
   readonly unsubscribe: Effect.Effect<void>;
-  expiry: Option.Option<Fiber.Fiber<void>>;
 }
 
 /** Options for {@link make}. */
@@ -152,41 +151,43 @@ export const make = (
   // that happens to now share the retargeted hash). `currentRef` tracks
   // this window's own current subset so `release` unsubscribes the right
   // one regardless of how many times it was retargeted.
-  const acquireWindow = (
+  const acquireWindow = Effect.fnUntraced(function* (
     subset: Subset.Subset
-  ): Effect.Effect<WindowHandle, StoreError | MutatorError, Scope.Scope> =>
-    Effect.gen(function* () {
-      yield* engine.subscribe(subset);
-      const currentRef = yield* Ref.make(subset);
-      const observation = yield* engine.observeWindow(subset);
-      const retarget: WindowHandle["retarget"] = (window) =>
-        observation.retarget(window).pipe(
-          Effect.andThen(
-            Ref.update(currentRef, (current): Subset.Subset => ({
-              ...current,
-              ...Defined.fields({ limit: window.limit, cursor: window.cursor }),
-            }))
-          )
-        );
-      let released = false;
-      const release = Effect.suspend(() => {
-        if (released) return Effect.void;
-        released = true;
-        return Ref.get(currentRef).pipe(Effect.flatMap((current) => engine.unsubscribe(current)));
-      });
-      return { rows: observation.rows, retarget, release };
+  ): Effect.fn.Return<WindowHandle, StoreError | MutatorError, Scope.Scope> {
+    yield* engine.subscribe(subset);
+    const currentRef = yield* Ref.make(subset);
+    const observation = yield* engine.observeWindow(subset);
+    const retarget: WindowHandle["retarget"] = (window) =>
+      observation.retarget(window).pipe(
+        Effect.andThen(
+          Ref.update(currentRef, (current): Subset.Subset => ({
+            ...current,
+            ...Defined.fields({ limit: window.limit, cursor: window.cursor }),
+          }))
+        )
+      );
+    let released = false;
+    const release = Effect.suspend(() => {
+      if (released) return Effect.void;
+      released = true;
+      return Ref.get(currentRef).pipe(Effect.flatMap((current) => engine.unsubscribe(current)));
     });
+    return { rows: observation.rows, retarget, release };
+  });
 
   return Effect.gen(function* () {
     const ttl = options?.ttl ?? Duration.minutes(5);
-    const scope = yield* Effect.scope;
     const lock = yield* Semaphore.make(1);
     const entries = MutableHashMap.empty<string, Entry>();
+    // The grace timer of each released entry, by key; the scope's close interrupts them.
+    const expiries = yield* FiberMap.make<string, void>();
     const withLock = <A, E, R>(effect: Effect.Effect<A, E, R>) =>
       Semaphore.withPermit(lock, effect);
 
     const dropAfterTtl = (key: string) =>
-      Effect.forkIn(
+      FiberMap.run(
+        expiries,
+        key,
         Effect.sleep(ttl).pipe(
           Effect.andThen(
             withLock(
@@ -199,8 +200,7 @@ export const make = (
               })
             )
           )
-        ),
-        scope
+        )
       );
 
     const releaseKey = (key: string) =>
@@ -210,7 +210,7 @@ export const make = (
           if (Option.isNone(found) || found.value.count === 0) return;
           const entry = found.value;
           entry.count -= 1;
-          if (entry.count === 0) entry.expiry = Option.some(yield* dropAfterTtl(key));
+          if (entry.count === 0) yield* dropAfterTtl(key);
         })
       );
 
@@ -235,15 +235,12 @@ export const make = (
         Effect.gen(function* () {
           const found = MutableHashMap.get(entries, key);
           if (Option.isSome(found)) {
-            const existing = found.value;
-            if (Option.isSome(existing.expiry)) {
-              yield* Fiber.interrupt(existing.expiry.value);
-              existing.expiry = Option.none();
-            }
-            existing.count += 1;
+            // A re-acquire inside the grace period cancels its expiry.
+            yield* FiberMap.remove(expiries, key);
+            found.value.count += 1;
           } else {
             yield* subscribe;
-            MutableHashMap.set(entries, key, { count: 1, unsubscribe, expiry: Option.none() });
+            MutableHashMap.set(entries, key, { count: 1, unsubscribe });
           }
         })
       ).pipe(Effect.andThen(handleFor(key)));
@@ -256,6 +253,8 @@ export const make = (
         // Strict, as `JSON.stringify` threw: a lossy key would merge two queries.
         `@query:${name}:${args === undefined ? "undefined" : Json.stringify(args)}`,
         engine.subscribeQuery(name, args),
+        // Runs only after `subscribeQuery` of the same name succeeded, so the
+        // name resolves and this cannot fail with an unknown-query error.
         engine.unsubscribeQuery(name, args).pipe(Effect.orDie)
       );
 

@@ -13,30 +13,31 @@ import * as Queue from "effect/Queue";
 import * as Scope from "effect/Scope";
 
 /** A {@link MirrorChannel.MirrorChannel} over a `BroadcastChannel` name. */
-export const make = (
+export const make: (
   name: string
-): Effect.Effect<MirrorChannel.MirrorChannel, never, Scope.Scope> =>
-  Effect.gen(function* () {
-    const channel = yield* Effect.acquireRelease(
-      Effect.sync(() => new BroadcastChannel(name)),
-      (ch) => Effect.sync(() => ch.close())
-    );
-    return {
-      post: (message) =>
-        Effect.try({
-          try: () => channel.postMessage(message),
-          catch: (cause) => new TransportError({ message: `BroadcastChannel post failed`, cause }),
-        }),
-      subscribe: Effect.gen(function* () {
-        const queue = yield* Queue.unbounded<unknown>();
-        const listener = (event: MessageEvent) => {
-          Queue.offerUnsafe(queue, event.data);
-        };
-        yield* Effect.acquireRelease(
-          Effect.sync(() => channel.addEventListener("message", listener)),
-          () => Effect.sync(() => channel.removeEventListener("message", listener))
-        );
-        return { take: Queue.take(queue).pipe(Effect.orDie) };
+) => Effect.Effect<MirrorChannel.MirrorChannel, never, Scope.Scope> = Effect.fn(
+  "legation-browser/BroadcastMirrorChannel.make"
+)(function* (name) {
+  const channel = yield* Effect.acquireRelease(
+    Effect.sync(() => new BroadcastChannel(name)),
+    (ch) => Effect.sync(() => ch.close())
+  );
+  return {
+    post: (message) =>
+      Effect.try({
+        try: () => channel.postMessage(message),
+        catch: (cause) => new TransportError({ message: `BroadcastChannel post failed`, cause }),
       }),
-    };
-  });
+    subscribe: Effect.gen(function* () {
+      const queue = yield* Queue.unbounded<unknown>();
+      const listener = (event: MessageEvent) => {
+        Queue.offerUnsafe(queue, event.data);
+      };
+      yield* Effect.acquireRelease(
+        Effect.sync(() => channel.addEventListener("message", listener)),
+        () => Effect.sync(() => channel.removeEventListener("message", listener))
+      );
+      return { take: Queue.take(queue) };
+    }),
+  };
+});

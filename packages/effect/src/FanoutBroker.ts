@@ -11,7 +11,8 @@
  * The in-process implementation is the single-process reference (and the
  * semantics a Durable Object or Redis shard must match). A poke here is a
  * batch of matched topics; a dropped poke only delays the next interval
- * pull, never prevents convergence.
+ * pull, never prevents convergence, and counts towards
+ * `legation_fanout_pokes_dropped_total`.
  */
 
 import * as Arr from "effect/Array";
@@ -20,11 +21,13 @@ import * as Context from "effect/Context";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as HashMap from "effect/HashMap";
+import * as Metric from "effect/Metric";
 import * as Option from "effect/Option";
 import * as PubSub from "effect/PubSub";
 import * as Ref from "effect/Ref";
 import * as Scope from "effect/Scope";
 import type { Topic } from "./FanoutTopics.js";
+import * as Telemetry from "./Telemetry.js";
 
 /** A live subscription to a room's topic pokes. */
 export interface TopicPokes {
@@ -73,51 +76,49 @@ export const makeInProcess: Effect.Effect<FanoutBroker, never, Scope.Scope> = Ef
     const hubs = yield* Ref.make(HashMap.empty<string, PubSub.PubSub<ReadonlyArray<Topic>>>());
     const scope = yield* Effect.scope;
 
-    const hubFor = (roomId: string) =>
-      Effect.gen(function* () {
-        const existing = HashMap.get(yield* Ref.get(hubs), roomId);
-        if (Option.isSome(existing)) return existing.value;
-        const hub = yield* PubSub.dropping<ReadonlyArray<Topic>>({ capacity: POKE_CAPACITY });
-        yield* Scope.addFinalizer(scope, PubSub.shutdown(hub));
-        yield* Ref.update(hubs, HashMap.set(roomId, hub));
-        return hub;
-      });
+    const hubFor = Effect.fnUntraced(function* (roomId: string) {
+      const existing = HashMap.get(yield* Ref.get(hubs), roomId);
+      if (Option.isSome(existing)) return existing.value;
+      const hub = yield* PubSub.dropping<ReadonlyArray<Topic>>({ capacity: POKE_CAPACITY });
+      yield* Scope.addFinalizer(scope, PubSub.shutdown(hub));
+      yield* Ref.update(hubs, HashMap.set(roomId, hub));
+      return hub;
+    });
 
     return {
-      register: (roomId, topics, ttl) =>
-        Effect.gen(function* () {
-          const now = yield* Clock.currentTimeMillis;
-          yield* Ref.update(
-            leases,
-            HashMap.set(roomId, { topics, expiresAt: now + Duration.toMillis(ttl) })
-          );
-        }),
-      publish: (topics) =>
-        Effect.gen(function* () {
-          const wanted = Arr.dedupe(topics);
-          const now = yield* Clock.currentTimeMillis;
-          // Lazy lease sweep: expired rooms drop out as publishes pass by.
-          const live = HashMap.filter(yield* Ref.get(leases), (lease) => lease.expiresAt > now);
-          yield* Ref.set(leases, live);
-          const hubMap = yield* Ref.get(hubs);
-          yield* Effect.forEach(
-            live,
-            ([roomId, lease]) =>
-              Effect.gen(function* () {
-                const matched = wanted.filter((topic) => lease.topics.has(topic));
-                if (Arr.isReadonlyArrayEmpty(matched)) return;
-                const hub = HashMap.get(hubMap, roomId);
-                if (Option.isSome(hub)) yield* PubSub.publish(hub.value, matched);
-              }),
-            { concurrency: 1, discard: true }
-          );
-        }),
-      pokes: (roomId) =>
-        Effect.gen(function* () {
-          const hub = yield* hubFor(roomId);
-          const subscription = yield* PubSub.subscribe(hub);
-          return { take: PubSub.take(subscription) };
-        }),
+      register: Effect.fnUntraced(function* (roomId, topics, ttl) {
+        const now = yield* Clock.currentTimeMillis;
+        yield* Ref.update(
+          leases,
+          HashMap.set(roomId, { topics, expiresAt: now + Duration.toMillis(ttl) })
+        );
+      }),
+      publish: Effect.fnUntraced(function* (topics) {
+        const wanted = Arr.dedupe(topics);
+        const now = yield* Clock.currentTimeMillis;
+        // Lazy lease sweep: expired rooms drop out as publishes pass by.
+        const live = HashMap.filter(yield* Ref.get(leases), (lease) => lease.expiresAt > now);
+        yield* Ref.set(leases, live);
+        const hubMap = yield* Ref.get(hubs);
+        yield* Effect.forEach(
+          live,
+          ([roomId, lease]) =>
+            Effect.gen(function* () {
+              const matched = wanted.filter((topic) => lease.topics.has(topic));
+              if (Arr.isReadonlyArrayEmpty(matched)) return;
+              const hub = HashMap.get(hubMap, roomId);
+              if (Option.isNone(hub)) return;
+              const published = yield* PubSub.publish(hub.value, matched);
+              if (!published) yield* Metric.update(Telemetry.fanoutPokesDroppedTotal, 1);
+            }),
+          { concurrency: 1, discard: true }
+        );
+      }),
+      pokes: Effect.fnUntraced(function* (roomId) {
+        const hub = yield* hubFor(roomId);
+        const subscription = yield* PubSub.subscribe(hub);
+        return { take: PubSub.take(subscription) };
+      }),
     };
   }
 );

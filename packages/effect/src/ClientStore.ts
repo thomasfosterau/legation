@@ -508,14 +508,15 @@ const highestFor = (
  * cost is only that such entries are never compacted, which is what a paced
  * caller, tracking ids in memory, would not have attempted anyway.
  */
-export const freezePending = (store: ClientStore): Effect.Effect<void, StoreError> =>
-  Effect.gen(function* () {
-    const highest = raisedCounterMap(new Map(), yield* store.pendingMutations);
-    yield* Effect.forEach(highest, ([clientId, upTo]) => store.markSent(clientId, upTo), {
-      concurrency: 1,
-      discard: true,
-    });
+export const freezePending: (store: ClientStore) => Effect.Effect<void, StoreError> = Effect.fn(
+  "legation/ClientStore.freezePending"
+)(function* (store) {
+  const highest = raisedCounterMap(new Map(), yield* store.pendingMutations);
+  yield* Effect.forEach(highest, ([clientId, upTo]) => store.markSent(clientId, upTo), {
+    concurrency: 1,
+    discard: true,
   });
+});
 
 /**
  * What a release will do, recorded by {@link ClientStore.beginRelease} before it writes.
@@ -1291,73 +1292,73 @@ const readerOver =
 const collectionsWith = (read: KeyReader) =>
   read("collections", CollectionsFromJson).pipe(Effect.map((list) => list ?? []));
 
-const listRowsWith = (
+const listRowsWith = Effect.fnUntraced(function* (
   read: KeyReader,
   collection: string
-): Effect.Effect<ReadonlyArray<StoredRow>, StoreError> =>
-  Effect.gen(function* () {
-    const ids = yield* read(rowIndexKey(collection), IdsFromJson);
-    if (ids === undefined) {
-      const legacy = yield* read(legacyRowsKey(collection), RowMapFromJson);
-      return legacy === undefined ? [] : R.values(legacy);
-    }
-    const rows: Array<StoredRow> = [];
-    for (const id of ids) {
-      const row = yield* read(rowKey(collection, id), RowFromJson);
-      if (row !== undefined) rows.push(row);
-    }
-    return rows;
-  });
+): Effect.fn.Return<ReadonlyArray<StoredRow>, StoreError> {
+  const ids = yield* read(rowIndexKey(collection), IdsFromJson);
+  if (ids === undefined) {
+    const legacy = yield* read(legacyRowsKey(collection), RowMapFromJson);
+    return legacy === undefined ? [] : R.values(legacy);
+  }
+  const rows: Array<StoredRow> = [];
+  for (const id of ids) {
+    const row = yield* read(rowKey(collection, id), RowFromJson);
+    if (row !== undefined) rows.push(row);
+  }
+  return rows;
+});
 
-const pendingMutationsWith = (
+const pendingMutationsWith = Effect.fnUntraced(function* (
   read: KeyReader
-): Effect.Effect<ReadonlyArray<Mutation>, StoreError> =>
-  Effect.gen(function* () {
-    const index = yield* read("journalIndex", JournalIndexFromJson);
-    if (index === undefined) {
-      const legacy = yield* read(LEGACY_JOURNAL_KEY, JournalFromJson);
-      return legacy ?? [];
-    }
-    const bodies = yield* Effect.forEach(
-      index,
-      (entry) => read(journalBodyKey(entry.clientId, entry.mutationId), MutationFromJson),
-      { concurrency: 1 }
-    );
-    return Arr.filter(bodies, P.isNotUndefined);
-  });
+): Effect.fn.Return<ReadonlyArray<Mutation>, StoreError> {
+  const index = yield* read("journalIndex", JournalIndexFromJson);
+  if (index === undefined) {
+    const legacy = yield* read(LEGACY_JOURNAL_KEY, JournalFromJson);
+    return legacy ?? [];
+  }
+  const bodies = yield* Effect.forEach(
+    index,
+    (entry) => read(journalBodyKey(entry.clientId, entry.mutationId), MutationFromJson),
+    { concurrency: 1 }
+  );
+  return Arr.filter(bodies, P.isNotUndefined);
+});
 
-const unpulledWith = (read: KeyReader): Effect.Effect<ReadonlyArray<Mutation>, StoreError> =>
-  Effect.gen(function* () {
-    const index = (yield* read(UNPULLED_INDEX_KEY, JournalIndexFromJson)) ?? [];
-    const bodies = yield* Effect.forEach(
-      index,
-      (entry) => read(unpulledBodyKey(entry.clientId, entry.mutationId), MutationFromJson),
-      { concurrency: 1 }
-    );
-    return Arr.filter(bodies, P.isNotUndefined);
-  });
+const unpulledWith = Effect.fnUntraced(function* (
+  read: KeyReader
+): Effect.fn.Return<ReadonlyArray<Mutation>, StoreError> {
+  const index = (yield* read(UNPULLED_INDEX_KEY, JournalIndexFromJson)) ?? [];
+  const bodies = yield* Effect.forEach(
+    index,
+    (entry) => read(unpulledBodyKey(entry.clientId, entry.mutationId), MutationFromJson),
+    { concurrency: 1 }
+  );
+  return Arr.filter(bodies, P.isNotUndefined);
+});
 
 // The whole replica, read through `read`: the same reads the members make, in one order.
-const replicaStateWith = (read: KeyReader): Effect.Effect<ReplicaState, StoreError> =>
-  Effect.gen(function* () {
-    const perCollection = yield* Effect.forEach(
-      yield* collectionsWith(read),
-      (collection) =>
-        Effect.map(
-          listRowsWith(read, collection),
-          Arr.map((row) => ({ collection, row }))
-        ),
-      { concurrency: 1 }
-    );
-    const rows = Arr.flatten(perCollection);
-    return {
-      rows,
-      cookie: yield* read("cookie", Schema.String),
-      journal: yield* pendingMutationsWith(read),
-      unpulled: yield* unpulledWith(read),
-      counters: (yield* read("counters", CountersFromJson)) ?? {},
-    };
-  });
+const replicaStateWith = Effect.fnUntraced(function* (
+  read: KeyReader
+): Effect.fn.Return<ReplicaState, StoreError> {
+  const perCollection = yield* Effect.forEach(
+    yield* collectionsWith(read),
+    (collection) =>
+      Effect.map(
+        listRowsWith(read, collection),
+        Arr.map((row) => ({ collection, row }))
+      ),
+    { concurrency: 1 }
+  );
+  const rows = Arr.flatten(perCollection);
+  return {
+    rows,
+    cookie: yield* read("cookie", Schema.String),
+    journal: yield* pendingMutationsWith(read),
+    unpulled: yield* unpulledWith(read),
+    counters: (yield* read("counters", CountersFromJson)) ?? {},
+  };
+});
 
 const storeError = (message: string) => (cause: unknown) => new StoreError({ message, cause });
 
@@ -1393,1157 +1394,1153 @@ const storeError = (message: string) => (cause: unknown) => new StoreError({ mes
  * of a silent `as A` cast. Only the *envelopes* are validated — row values
  * and mutation args stay `Unknown` and round-trip untouched (ADR-0014).
  */
-export const makeKeyValue = (
+export const makeKeyValue: (
   options?: KeyValueOptions
-): Effect.Effect<ClientStore, never, KeyValueStore.KeyValueStore> =>
-  Effect.gen(function* () {
-    const namespace = options?.prefix ?? "legation/";
-    const store = KeyValueStore.prefix(yield* KeyValueStore.KeyValueStore, namespace);
-    const highWater = options?.journalHighWater;
-    const lock = yield* Semaphore.make(1);
-    // Set when an outstanding release could not be finished in this process. Every member checks it:
-    //the writers inside the permit, so a call queued behind the failing finish is refused
-    // rather than run over the outstanding record; the readers before they read.
-    const sealedBy = yield* Ref.make(Option.none<StoreError>());
-    // Set whenever a release record or a parked journal copy may exist. While it is clear the
-    // in-process finish has nothing to do, so a row write reads neither. Set before a write
-    // that may land despite reporting failure; cleared only by a finish that completes.
-    const finishPending = yield* Ref.make(false);
-    const unsealed = <A, E>(effect: Effect.Effect<A, E>): Effect.Effect<A, E | StoreError> =>
-      Effect.gen(function* () {
-        const cause = yield* Ref.get(sealedBy);
-        if (Option.isSome(cause)) return yield* sealedByRelease(cause.value);
-        return yield* effect;
-      });
-    const locked = <A, E>(effect: Effect.Effect<A, E>) =>
-      Semaphore.withPermit(lock, unsealed(effect));
+) => Effect.Effect<ClientStore, never, KeyValueStore.KeyValueStore> = Effect.fn(
+  "legation/ClientStore.makeKeyValue"
+)(function* (options) {
+  const namespace = options?.prefix ?? "legation/";
+  const store = KeyValueStore.prefix(yield* KeyValueStore.KeyValueStore, namespace);
+  const highWater = options?.journalHighWater;
+  const lock = yield* Semaphore.make(1);
+  // Set when an outstanding release could not be finished in this process. Every member checks it:
+  //the writers inside the permit, so a call queued behind the failing finish is refused
+  // rather than run over the outstanding record; the readers before they read.
+  const sealedBy = yield* Ref.make(Option.none<StoreError>());
+  // Set whenever a release record or a parked journal copy may exist. While it is clear the
+  // in-process finish has nothing to do, so a row write reads neither. Set before a write
+  // that may land despite reporting failure; cleared only by a finish that completes.
+  const finishPending = yield* Ref.make(false);
+  const unsealed = Effect.fnUntraced(function* <A, E>(
+    effect: Effect.Effect<A, E>
+  ): Effect.fn.Return<A, E | StoreError> {
+    const cause = yield* Ref.get(sealedBy);
+    if (Option.isSome(cause)) return yield* sealedByRelease(cause.value);
+    return yield* effect;
+  });
+  const locked = <A, E>(effect: Effect.Effect<A, E>) =>
+    Semaphore.withPermit(lock, unsealed(effect));
 
-    const readDecoded = <A>(
+  const readDecoded = <A>(
+    key: string,
+    codec: Schema.Codec<A, string>
+  ): Effect.Effect<A | undefined, StoreError> =>
+    store.get(key).pipe(
+      Effect.mapError(storeError(`Failed to read "${key}"`)),
+      Effect.flatMap((raw) =>
+        raw === undefined
+          ? Effect.undefined
+          : Schema.decodeEffect(codec)(raw).pipe(
+              Effect.mapError(storeError(`Corrupt persisted state at "${key}"`))
+            )
+      )
+    );
+  const writeJson = (key: string, value: unknown): Effect.Effect<void, StoreError> =>
+    store
+      .set(key, Json.stringify(value))
+      .pipe(Effect.mapError(storeError(`Failed to write "${key}"`)));
+  const remove = (key: string): Effect.Effect<void, StoreError> =>
+    store.remove(key).pipe(Effect.mapError(storeError(`Failed to remove "${key}"`)));
+
+  const rowIndex = (collection: string): Effect.Effect<ReadonlyArray<string>, StoreError> =>
+    readDecoded(rowIndexKey(collection), IdsFromJson).pipe(Effect.map((ids) => ids ?? []));
+  const collections = collectionsWith(readDecoded);
+  const trackCollection = (collection: string) =>
+    collections.pipe(
+      Effect.flatMap((list) =>
+        list.includes(collection) ? Effect.void : writeJson("collections", [...list, collection])
+      )
+    );
+  const journalIndex = readDecoded("journalIndex", JournalIndexFromJson).pipe(
+    Effect.map((entries) => entries ?? [])
+  );
+  // Raise each client's persisted counter to the highest id among `ids`
+  // (never lowering it). Run before journal entries are deleted, so the
+  // counter is the high-water mark of everything that has ever left the
+  // journal: `appendNext` heals the counter from the *live* index only, and
+  // without this an acknowledged (or quarantined) id whose counter write was
+  // lost would be issued again, and the backend would skip the new mutation
+  // as an idempotent duplicate (`id <= lastMutationId`): a silent lost write.
+  const raiseCounters = Effect.fnUntraced(function* (
+    ids: ReadonlyArray<JournalIndexEntry>
+  ): Effect.fn.Return<void, StoreError> {
+    const highest = highestIds(ids);
+    if (R.isEmptyReadonlyRecord(highest)) return;
+    const counters = (yield* readDecoded("counters", CountersFromJson)) ?? {};
+    const raised = raisedCounters(counters, highest);
+    if (Option.isSome(raised)) yield* writeJson("counters", raised.value);
+  });
+
+  // ─── Compaction (unlocked inner forms) ───────────────────────────
+  //
+  // Dropping superseded entries and renumbering the survivors rewrites
+  // several keys, and the KVS has no transactions. So the whole outcome is
+  // first written as ONE record (`compactionIntent`) — the commit point —
+  // and then applied by steps that are each idempotent: clear the stale
+  // bodies, write the renumbered bodies, write the index, rewind the
+  // counter, delete the intent. A crash anywhere before the intent lands
+  // leaves the old, contiguous journal untouched; a crash after it is
+  // rolled forward by `recoverCompaction` on the next open. Either way the
+  // journal, the index and the counter agree and the ids stay gap-free.
+  // (Writing new bodies in place without the intent could overwrite a live
+  // entry's body before the index moved, which is the corruption this
+  // avoids.)
+  const applyCompaction = Effect.fnUntraced(function* (
+    intent: typeof CompactionIntentFromJson.Type
+  ) {
+    yield* Effect.forEach(intent.staleIds, (id) => remove(journalBodyKey(intent.clientId, id)), {
+      concurrency: 1,
+      discard: true,
+    });
+    yield* Effect.forEach(
+      intent.moved,
+      (m) => writeJson(journalBodyKey(m.clientId, m.mutationId), m),
+      { concurrency: 1, discard: true }
+    );
+    yield* writeJson("journalIndex", intent.index);
+    const counters = (yield* readDecoded("counters", CountersFromJson)) ?? {};
+    yield* writeJson("counters", { ...counters, [intent.clientId]: intent.counter });
+    yield* remove(COMPACTION_KEY);
+  });
+  // Set while an intent may still be on disk, so any journal operation
+  // finishes it first (an earlier apply can fail without a crash, and an
+  // append landing before the replay would be clobbered by it).
+  let compactionPending = false;
+  const recoverCompaction = Effect.fnUntraced(function* () {
+    const intent = yield* readDecoded(COMPACTION_KEY, CompactionIntentFromJson);
+    if (intent !== undefined) yield* applyCompaction(intent);
+    compactionPending = false;
+  });
+  const settleCompaction: Effect.Effect<void, StoreError> = Effect.suspend(() =>
+    compactionPending ? recoverCompaction() : Effect.void
+  );
+  const sentMarks = readDecoded(SENT_KEY, CountersFromJson).pipe(
+    Effect.map((marks) => marks ?? {})
+  );
+
+  // Read a collection's rows through the per-row index; a corrupt row value
+  // fails as a StoreError (envelope-validated). When no index exists, fall
+  // back to a legacy blob at `rows/{collection}` — the read side of the
+  // transparent migration, so a store not yet split still reads correctly.
+  const listRowsOf = (collection: string) => listRowsWith(readDecoded, collection);
+
+  const pendingMutationsOf = pendingMutationsWith(readDecoded);
+
+  // `pendingMutationsOf`'s count from the index alone: one read, no bodies.
+  //A store not yet migrated holds the legacy blob instead.
+  const pendingCountOf = Effect.fnUntraced(function* (): Effect.fn.Return<number, StoreError> {
+    const index = yield* readDecoded("journalIndex", JournalIndexFromJson);
+    if (index !== undefined) return index.length;
+    const legacy = yield* readDecoded(LEGACY_JOURNAL_KEY, JournalFromJson);
+    return legacy?.length ?? 0;
+  });
+
+  // ─── Unpulled tail (unlocked inner forms) ────────────────────────
+  //
+  // The tail has its own keyspace, an index plus one body per entry, laid
+  // out like the journal. A park writes the bodies and then the index, which
+  // is the commit. A release writes the index and then removes the bodies. So
+  // a crash leaves at worst an unreachable body, or an index entry whose body
+  // is gone (reads skip it), and never a listed entry without its body.
+  //
+  // Two crash windows need the open-time settle below. (1) A park that
+  // committed but did not trim the journal leaves each entry in both places;
+  // the journal copy would be pushed again and replayed over the tail's, so
+  // the open drops it from the journal. (2) A release that wrote
+  // `beginRelease` but did not finish leaves the covered entries in the
+  // journal and the tail; the open finishes it by re-applying the recorded
+  // patch, which is idempotent, so the rows end up as the pull left them
+  // whether or not any of them were written before the crash.
+  const unpulledIndexOf = readDecoded(UNPULLED_INDEX_KEY, JournalIndexFromJson).pipe(
+    Effect.map((entries) => entries ?? [])
+  );
+  const unpulledOf = unpulledWith(readDecoded);
+
+  const parkUnpulledInner = Effect.fnUntraced(function* (
+    mutations: ReadonlyArray<Mutation>
+  ): Effect.fn.Return<void, StoreError> {
+    if (Arr.isReadonlyArrayEmpty(mutations)) return;
+    // A journal copy may be left behind by the trim that follows, so the finish must run.
+    yield* Ref.set(finishPending, true);
+    yield* Effect.forEach(
+      mutations,
+      (m) => writeJson(unpulledBodyKey(m.clientId, m.mutationId), m),
+      { concurrency: 1, discard: true }
+    );
+    const index = yield* unpulledIndexOf;
+    const next = appendMissing(
+      index,
+      mutations.map((m) => ({ clientId: m.clientId, mutationId: m.mutationId }))
+    );
+    if (next.length !== index.length) yield* writeJson(UNPULLED_INDEX_KEY, next);
+    // The parked ids stay reserved even once their journal copies are gone.
+    yield* raiseCounters(mutations);
+  });
+
+  // The bodies go before the index, so a crash cannot orphan one. A crash
+  // (or a failed removal) between the two leaves index entries whose bodies
+  // are gone: reads skip them. The marker that `beginRelease` wrote first is
+  // still down, so the next open finishes the release.
+  const releaseUnpulledInner = Effect.fnUntraced(function* (
+    lastMutationIds: Readonly<Record<string, number>>
+  ): Effect.fn.Return<void, StoreError> {
+    const index = yield* unpulledIndexOf;
+    const released = index.filter((entry) => coveredBy(lastMutationIds, entry));
+    yield* Effect.forEach(
+      released,
+      (entry) => remove(unpulledBodyKey(entry.clientId, entry.mutationId)),
+      { concurrency: 1, discard: true }
+    );
+    if (Arr.isReadonlyArrayNonEmpty(released)) {
+      yield* writeJson(
+        UNPULLED_INDEX_KEY,
+        index.filter((entry) => !coveredBy(lastMutationIds, entry))
+      );
+    }
+    yield* remove(RELEASE_KEY);
+  });
+
+  const clearUnpulledInner = Effect.fnUntraced(function* (): Effect.fn.Return<void, StoreError> {
+    const index = yield* unpulledIndexOf;
+    if (Arr.isReadonlyArrayNonEmpty(index)) yield* writeJson(UNPULLED_INDEX_KEY, []);
+    yield* Effect.forEach(
+      index,
+      (entry) => remove(unpulledBodyKey(entry.clientId, entry.mutationId)),
+      { concurrency: 1, discard: true }
+    );
+    yield* remove(RELEASE_KEY);
+  });
+
+  // ─── Quarantine (unlocked inner forms) ───────────────────────────
+  //
+  // A quarantine lives in its own keyspace, not in the journal — that is
+  // the security property, not an implementation detail: `pendingMutations`
+  // reads the journal, `push` reads `pendingMutations`, so an entry moved
+  // here is structurally unreachable from any push, whatever identity is
+  // signed in. Nothing but `discardQuarantine` ever deletes one.
+
+  const quarantineIndexOf: Effect.Effect<
+    ReadonlyArray<Identity.Fingerprint>,
+    StoreError
+  > = readDecoded(QUARANTINE_INDEX_KEY, FingerprintsFromJson).pipe(
+    Effect.map((list) => list ?? [])
+  );
+
+  const quarantinedOf = (
+    fingerprint: Identity.Fingerprint
+  ): Effect.Effect<ReadonlyArray<Mutation>, StoreError> =>
+    readDecoded(quarantineKey(fingerprint), MutationsFromJson).pipe(
+      Effect.map((entries) => entries ?? [])
+    );
+
+  // Empty the journal outright — bodies, index, and any legacy blob — with
+  // no acknowledgement implied. Only ever called with the entries already
+  // safely written to a quarantine.
+  const clearJournalInner = Effect.fnUntraced(function* () {
+    yield* Effect.forEach(
+      yield* journalIndex,
+      (entry) => remove(journalBodyKey(entry.clientId, entry.mutationId)),
+      { concurrency: 1, discard: true }
+    );
+    yield* writeJson("journalIndex", []);
+    yield* remove(LEGACY_JOURNAL_KEY);
+  });
+
+  // Drop the journal entries `drop` selects, reserving their ids first (as
+  // `acknowledge` does). Skipped on an un-migrated legacy blob, which has no
+  // index to rewrite.
+  const trimJournal = Effect.fnUntraced(function* (
+    drop: (entry: JournalIndexEntry) => boolean
+  ): Effect.fn.Return<void, StoreError> {
+    const index = yield* readDecoded("journalIndex", JournalIndexFromJson);
+    if (index === undefined) return;
+    const dropped = index.filter(drop);
+    if (Arr.isReadonlyArrayEmpty(dropped)) return;
+    yield* raiseCounters(dropped);
+    yield* Effect.forEach(
+      dropped,
+      (entry) => remove(journalBodyKey(entry.clientId, entry.mutationId)),
+      { concurrency: 1, discard: true }
+    );
+    yield* writeJson(
+      "journalIndex",
+      index.filter((entry) => !drop(entry))
+    );
+  });
+
+  // Quarantine first, empty the journal second: a crash between the two
+  // leaves the entries in both places, which the next boot re-quarantines
+  // idempotently (`appendDistinct`) — where the opposite order would lose
+  // them. The identity stamp is written after all of this, so an
+  // interrupted reset simply runs again on the next open.
+  const quarantinePendingInner = Effect.fnUntraced(function* (
+    fingerprint: Identity.Fingerprint
+  ): Effect.fn.Return<number, StoreError> {
+    const pending = yield* pendingMutationsOf;
+    if (Arr.isReadonlyArrayEmpty(pending)) return 0;
+    const held = yield* quarantinedOf(fingerprint);
+    yield* writeJson(quarantineKey(fingerprint), appendDistinct(held, pending));
+    const index = yield* quarantineIndexOf;
+    if (!index.includes(fingerprint)) {
+      yield* writeJson(QUARANTINE_INDEX_KEY, [...index, fingerprint]);
+    }
+    // Ids leaving the journal stay reserved (see `raiseCounters`).
+    yield* raiseCounters(pending);
+    yield* clearJournalInner();
+    return pending.length;
+  });
+
+  const discardQuarantineInner = Effect.fnUntraced(function* (
+    fingerprint: Identity.Fingerprint
+  ): Effect.fn.Return<void, StoreError> {
+    yield* remove(quarantineKey(fingerprint));
+    const index = yield* quarantineIndexOf;
+    if (index.includes(fingerprint)) {
+      yield* writeJson(
+        QUARANTINE_INDEX_KEY,
+        index.filter((held) => held !== fingerprint)
+      );
+    }
+  });
+
+  const releaseQuarantineInner = Effect.fnUntraced(function* (
+    fingerprint: Identity.Fingerprint
+  ): Effect.fn.Return<number, StoreError> {
+    const entries = yield* quarantinedOf(fingerprint);
+    if (Arr.isReadonlyArrayEmpty(entries)) return 0;
+    const index = yield* journalIndex;
+    yield* Effect.forEach(
+      entries,
+      (entry) => writeJson(journalBodyKey(entry.clientId, entry.mutationId), entry),
+      { concurrency: 1, discard: true }
+    );
+    const restored = Arr.map(entries, (entry) => ({
+      clientId: entry.clientId,
+      mutationId: entry.mutationId,
+    }));
+    yield* writeJson("journalIndex", [...index, ...restored]);
+    yield* discardQuarantineInner(fingerprint);
+    return entries.length;
+  });
+
+  // Clear every tracked collection's rows and indexes (unlocked inner form,
+  // reused by clearRows, applyRowOps, and the migration reset).
+  const clearRowsInner = Effect.fnUntraced(function* () {
+    yield* Effect.forEach(
+      yield* collections,
+      (collection) =>
+        Effect.gen(function* () {
+          yield* Effect.forEach(
+            yield* rowIndex(collection),
+            (id) => remove(rowKey(collection, id)),
+            { concurrency: 1, discard: true }
+          );
+          yield* remove(rowIndexKey(collection));
+          yield* remove(legacyRowsKey(collection));
+        }),
+      { concurrency: 1, discard: true }
+    );
+    yield* writeJson("collections", []);
+  });
+
+  // Apply one collection's grouped changes: write/remove each row value, then
+  // rewrite the id-index once (the only O(collection) cost, paid once per
+  // touched collection per batch — never once per op).
+  const flushCollection = Effect.fnUntraced(function* (collection: string, changes: RowChanges) {
+    const ids = new Set(yield* rowIndex(collection));
+    for (const [id, row] of changes) {
+      if (row === null) {
+        yield* remove(rowKey(collection, id));
+        ids.delete(id);
+      } else {
+        yield* writeJson(rowKey(collection, id), row);
+        ids.add(id);
+      }
+    }
+    yield* writeJson(rowIndexKey(collection), [...ids]);
+    yield* trackCollection(collection);
+  });
+
+  const applyRowOpsInner = Effect.fnUntraced(function* (ops: ReadonlyArray<PatchOp>) {
+    const plan = planRowOps(ops);
+    if (plan.clear) yield* clearRowsInner();
+    yield* Effect.forEach(
+      plan.groups,
+      ([collection, changes]) => flushCollection(collection, changes),
+      { concurrency: 1, discard: true }
+    );
+  });
+
+  // Split a legacy whole-collection blob into per-row keys + an id-index.
+  const migrateCollection = Effect.fnUntraced(function* (collection: string) {
+    const map = yield* readDecoded(legacyRowsKey(collection), RowMapFromJson);
+    if (map === undefined) return;
+    const ids = R.keys(map);
+    yield* Effect.forEach(ids, (id) => writeJson(rowKey(collection, id), map[id]), {
+      concurrency: 1,
+      discard: true,
+    });
+    yield* writeJson(rowIndexKey(collection), ids);
+    yield* remove(legacyRowsKey(collection));
+  });
+
+  // Split the legacy whole-journal array into per-mutation bodies + an index.
+  const migrateJournal = Effect.fnUntraced(function* () {
+    const legacy = yield* readDecoded(LEGACY_JOURNAL_KEY, JournalFromJson);
+    if (legacy === undefined) return;
+    yield* Effect.forEach(legacy, (m) => writeJson(journalBodyKey(m.clientId, m.mutationId), m), {
+      concurrency: 1,
+      discard: true,
+    });
+    yield* writeJson(
+      "journalIndex",
+      Arr.map(legacy, (m) => ({ clientId: m.clientId, mutationId: m.mutationId }))
+    );
+    yield* remove(LEGACY_JOURNAL_KEY);
+  });
+
+  // Last resort when a legacy blob is corrupt beyond recovery: the store is a
+  // cache of server state, so drop the rows + journal and reset the cookie,
+  // leaving the client able to re-pull from scratch (counters survive).
+  const resetToEmpty = Effect.fnUntraced(function* () {
+    yield* clearRowsInner();
+    yield* remove(LEGACY_JOURNAL_KEY);
+    yield* remove("journalIndex");
+    yield* remove("cookie");
+  });
+
+  // Migrate a layout-1 (or unstamped) store into layout 2 once, then stamp
+  // the version. Envelope-validated; a corrupt legacy blob takes the
+  // destructive fallback rather than wedging the store.
+  const migrate = Effect.gen(function* () {
+    yield* Effect.forEach(yield* collections, migrateCollection, {
+      concurrency: 1,
+      discard: true,
+    });
+    yield* migrateJournal();
+  }).pipe(Effect.catch(() => resetToEmpty()));
+
+  // Transparent forward-migration on first open. Each collection migrates
+  // atomically — the id-index is written only after every row value, and the
+  // legacy blob removed only after the index — so a mid-flight failure leaves
+  // the collection readable via the legacy fallback, and the version is
+  // stamped only once migration completes, so the next open simply retries.
+  // Kept infallible at construction (like the original zero-I/O open): a
+  // transient store error here is swallowed, and reads still resolve through
+  // the legacy fallback until the next open re-migrates.
+  const openMigration = Effect.fnUntraced(function* () {
+    const version = yield* store.get(LAYOUT_KEY);
+    if (version !== CURRENT_LAYOUT) {
+      yield* locked(migrate.pipe(Effect.andThen(store.set(LAYOUT_KEY, CURRENT_LAYOUT))));
+    }
+  });
+  yield* openMigration().pipe(
+    Effect.catchTag(["KeyValueStoreError", "StoreError"], () => Effect.void)
+  );
+
+  // Finish a compaction a previous run was interrupted in. Kept
+  // infallible at construction like the opens around it: if recovery fails
+  // here the flag stays set, and the first journal operation retries it.
+  yield* locked(recoverCompaction()).pipe(
+    Effect.catchTag("StoreError", () =>
+      Effect.sync(() => {
+        compactionPending = true;
+      })
+    )
+  );
+
+  // Drop journal index entries whose body is gone. Removals delete
+  // the bodies before rewriting the index (`acknowledge`, the quarantine's
+  // `clearJournalInner`), so a crash between the two leaves entries with
+  // nothing to push. Reads already skip them, but `pendingCount` and the
+  // high-water check count the index alone, and `compactPending`
+  // refuses a run with a missing body, so they are repaired here, once per
+  // open, rather than paying a body read on every count. The dropped ids
+  // stay reserved, as `acknowledge` keeps them (see `raiseCounters`). Runs
+  // after the compaction roll-forward, whose index supersedes this one, and
+  // writes nothing when every body is present.
+  const repairJournalIndex = Effect.fnUntraced(function* () {
+    const index = yield* readDecoded("journalIndex", JournalIndexFromJson);
+    if (index === undefined) return;
+    const present = yield* Effect.forEach(
+      index,
+      (entry) => {
+        const key = journalBodyKey(entry.clientId, entry.mutationId);
+        return store.has(key).pipe(Effect.mapError(storeError(`Failed to read "${key}"`)));
+      },
+      { concurrency: 1 }
+    );
+    const kept = Arr.filter(index, (_, i) => present[i]);
+    const orphaned = Arr.filter(index, (_, i) => !present[i]);
+    if (Arr.isReadonlyArrayEmpty(orphaned)) return;
+    yield* raiseCounters(orphaned);
+    yield* writeJson("journalIndex", kept);
+  });
+  // Infallible at construction like the opens around it: a failed repair
+  // leaves the index as it was (reads still skip the missing bodies), and
+  // the next open retries.
+  yield* locked(settleCompaction.pipe(Effect.andThen(repairJournalIndex()))).pipe(Effect.ignore);
+
+  // Finish a pull release, or drop the journal copies of a park, that a
+  // crash interrupted. Not swallowed: the tail and the journal then
+  // disagree, and serving either would double-count or revert, so the store
+  // is sealed like an unestablished identity boundary. The next open retries.
+  // Roll an outstanding release forward from its record. The patch is idempotent, so
+  // re-applying it is correct whether or not the interrupted run had written rows.
+  const rollForward = Effect.fnUntraced(function* (
+    release: PullRelease
+  ): Effect.fn.Return<void, StoreError> {
+    yield* applyRowOpsInner(release.patch);
+    if (release.cookie !== undefined) {
+      yield* store
+        .set("cookie", release.cookie)
+        .pipe(Effect.mapError(storeError(`Failed to write "cookie"`)));
+    }
+    yield* trimJournal((entry) => coveredBy(release.lastMutationIds, entry));
+    yield* releaseUnpulledInner(release.lastMutationIds);
+  });
+  const finishReleaseInner = Effect.fnUntraced(function* (): Effect.fn.Return<void, StoreError> {
+    const release = yield* readDecoded(RELEASE_KEY, ReleaseIntentFromJson);
+    if (release !== undefined) yield* rollForward(release);
+  });
+  // The journal copies of whatever the tail still parks, dropped as an open drops them. Read
+  // after the roll-forward, which releases entries from the tail. A failed trim seals the store even
+  // with no record outstanding: a copy left in both the journal and the tail would be double-counted
+  // by reads and pushed again.
+  const trimParkedCopies = Effect.fnUntraced(function* (): Effect.fn.Return<void, StoreError> {
+    const parked = yield* unpulledIndexOf;
+    if (Arr.isReadonlyArrayNonEmpty(parked)) {
+      const keys = new Set(parked.map(entryKey));
+      yield* trimJournal((entry) => keys.has(entryKey(entry)));
+    }
+  });
+  // The tail settle: the roll-forward, then the journal copies of whatever is still parked. The
+  // open runs this one body, so it leaves the same state as the in-process finish.
+  const settleTailInner = Effect.fnUntraced(function* () {
+    yield* finishReleaseInner();
+    yield* trimParkedCopies();
+  });
+  const tailFailure = yield* locked(settleTailInner()).pipe(
+    Effect.as(Option.none<StoreError>()),
+    Effect.catchTag("StoreError", (error) => Effect.succeedSome(error))
+  );
+  if (Option.isSome(tailFailure)) return sealed(tailFailure.value);
+  yield* Ref.set(finishPending, false);
+  // The finish of a record already read: the roll-forward, then the parked copies. Any failure seals
+  // the store, since the writes may be part-way.
+  const finishRead = Effect.fnUntraced(function* (
+    release: Option.Option<PullRelease>
+  ): Effect.fn.Return<void, StoreError> {
+    yield* Effect.gen(function* () {
+      if (Option.isSome(release)) yield* rollForward(release.value);
+      yield* trimParkedCopies();
+    }).pipe(Effect.tapError((error) => Ref.set(sealedBy, Option.some(error))));
+    yield* Ref.set(finishPending, false);
+  });
+  // The in-process finish, run by every row write and clear, and by `finishRelease`. It is a no-op
+  // while `finishPending` is clear. Its first step is a read of the record, and a failure there
+  // fails the call alone: nothing has been written. Every failure after that read seals the store,
+  // because a roll-forward or a journal trim may have part-way written what the record describes,
+  // and no later write may run over it. The open then finishes it from the same record.
+  const finishOrSeal = Effect.fnUntraced(function* () {
+    if (!(yield* Ref.get(finishPending))) return;
+    yield* finishRead(
+      Option.fromUndefinedOr(yield* readDecoded(RELEASE_KEY, ReleaseIntentFromJson))
+    );
+  });
+
+  // Local store-version buster: a mismatch clears confirmed rows + the
+  // cookie (so the next pull rehydrates fully) but preserves the journal, then
+  // stamps the new version. Kept infallible at construction, like the
+  // migration open above.
+  const openStoreVersion = Effect.fnUntraced(function* () {
+    const desired = options?.storeVersion;
+    if (desired === undefined) return;
+    const current = yield* store.get(STORE_VERSION_KEY);
+    if (current === desired) return;
+    const stampVersion = store
+      .set(STORE_VERSION_KEY, desired)
+      .pipe(Effect.mapError(storeError(`Failed to write "${STORE_VERSION_KEY}"`)));
+    yield* locked(
+      clearRowsInner().pipe(
+        Effect.andThen(remove("cookie")),
+        // Journal deliberately untouched: pending intents survive the buster.
+        Effect.andThen(stampVersion)
+      )
+    );
+  });
+  yield* openStoreVersion().pipe(Effect.ignore);
+
+  // The identity boundary on open: compare the configured
+  // fingerprint with the replica's stamp and apply `Identity.transitionOf`.
+  // A `Reset` quarantines the unpushed journal under the **superseded**
+  // fingerprint before dropping rows and the cookie, so the previous
+  // principal's rows are never served to this one and their write intents
+  // are neither lost nor inherited. The stamp is the last write of the
+  // transition, so an interrupted reset re-runs on the next open rather
+  // than leaving a replica stamped for an identity it was never cleared
+  // for. The release runs on every open, `Unchanged` included: it is how
+  // re-signing in makes this identity's own quarantined entries pushable
+  // again, and it closes the crash window between stamping and releasing.
+  //
+  // Unset `identity` means the boundary is off — no stamp, no comparison,
+  // behaviour identical to before. Kept infallible at construction, like
+  // the migration and store-version opens above.
+  const openIdentity = Effect.fnUntraced(function* () {
+    const next = options?.identity;
+    if (next === undefined) return;
+    const stamped = yield* store
+      .get(IDENTITY_KEY)
+      .pipe(Effect.mapError(storeError(`Failed to read "${IDENTITY_KEY}"`)));
+    const current = stamped ?? Identity.unstamped;
+    const transition = Identity.transitionOf(current, next);
+    const stamp = store
+      .set(IDENTITY_KEY, next)
+      .pipe(Effect.mapError(storeError(`Failed to write "${IDENTITY_KEY}"`)));
+    yield* locked(
+      Effect.gen(function* () {
+        if (transition === "Reset") {
+          yield* quarantinePendingInner(current);
+          yield* clearRowsInner();
+          yield* clearUnpulledInner();
+          yield* remove("cookie");
+        }
+        if (transition !== "Unchanged") yield* stamp;
+        yield* releaseQuarantineInner(next);
+      })
+    );
+  });
+  // Unlike the two opens above, this one is NOT swallowed: a boundary that
+  // could not be established must not be reported as established. The store
+  // is sealed instead (see {@link sealed}) — nothing served, nothing pushed,
+  // nothing destroyed, and the next open retries.
+  const boundaryFailure = yield* openIdentity().pipe(
+    Effect.as(Option.none<StoreError>()),
+    Effect.catchTag("StoreError", (error) => Effect.succeedSome(error))
+  );
+  if (Option.isSome(boundaryFailure)) return sealed(boundaryFailure.value);
+
+  // ─── Atomic batches (unlocked staged forms) ──────────────────────
+  //
+  // With an AtomicKeyValue in context, a pull's release and a push ack's park-then-trim commit as ONE
+  // batch, with no release record. Each batch stages every write the record path would make, reading
+  // through its own staged values, and hands the whole set to the seam once. So the batch writes what
+  // the record path writes, each row and index once, and a failed or interrupted batch leaves the store
+  // at its state before the operation: nothing reached the store. Keys are staged unprefixed and given
+  // the namespace when they are handed to the seam. Every batch runs under `lock`, after settling any
+  // compaction an interrupted run left, as the journal operations do.
+  const atomic = Option.getOrUndefined(yield* Effect.serviceOption(AtomicKeyValue));
+  const stageBatch = () => {
+    // A staged value: the text to write, or `undefined` for a removal.
+    const staged = new Map<string, string | undefined>();
+    // Decided when the read runs, not when it is built: a read built before a write must see it.
+    const read = <A>(
       key: string,
       codec: Schema.Codec<A, string>
     ): Effect.Effect<A | undefined, StoreError> =>
-      store.get(key).pipe(
-        Effect.mapError(storeError(`Failed to read "${key}"`)),
-        Effect.flatMap((raw) =>
-          raw === undefined
-            ? Effect.undefined
-            : Schema.decodeEffect(codec)(raw).pipe(
-                Effect.mapError(storeError(`Corrupt persisted state at "${key}"`))
-              )
-        )
-      );
-    const writeJson = (key: string, value: unknown): Effect.Effect<void, StoreError> =>
-      store
-        .set(key, Json.stringify(value))
-        .pipe(Effect.mapError(storeError(`Failed to write "${key}"`)));
-    const remove = (key: string): Effect.Effect<void, StoreError> =>
-      store.remove(key).pipe(Effect.mapError(storeError(`Failed to remove "${key}"`)));
-
-    const rowIndex = (collection: string): Effect.Effect<ReadonlyArray<string>, StoreError> =>
-      readDecoded(rowIndexKey(collection), IdsFromJson).pipe(Effect.map((ids) => ids ?? []));
-    const collections = collectionsWith(readDecoded);
-    const trackCollection = (collection: string) =>
-      collections.pipe(
-        Effect.flatMap((list) =>
-          list.includes(collection) ? Effect.void : writeJson("collections", [...list, collection])
-        )
-      );
-    const journalIndex = readDecoded("journalIndex", JournalIndexFromJson).pipe(
-      Effect.map((entries) => entries ?? [])
-    );
-    // Raise each client's persisted counter to the highest id among `ids`
-    // (never lowering it). Run before journal entries are deleted, so the
-    // counter is the high-water mark of everything that has ever left the
-    // journal: `appendNext` heals the counter from the *live* index only, and
-    // without this an acknowledged (or quarantined) id whose counter write was
-    // lost would be issued again, and the backend would skip the new mutation
-    // as an idempotent duplicate (`id <= lastMutationId`): a silent lost write.
-    const raiseCounters = (
-      ids: ReadonlyArray<JournalIndexEntry>
-    ): Effect.Effect<void, StoreError> =>
-      Effect.gen(function* () {
-        const highest = highestIds(ids);
-        if (R.isEmptyReadonlyRecord(highest)) return;
-        const counters = (yield* readDecoded("counters", CountersFromJson)) ?? {};
-        const raised = raisedCounters(counters, highest);
-        if (Option.isSome(raised)) yield* writeJson("counters", raised.value);
-      });
-
-    // ─── Compaction (unlocked inner forms) ───────────────────────────
-    //
-    // Dropping superseded entries and renumbering the survivors rewrites
-    // several keys, and the KVS has no transactions. So the whole outcome is
-    // first written as ONE record (`compactionIntent`) — the commit point —
-    // and then applied by steps that are each idempotent: clear the stale
-    // bodies, write the renumbered bodies, write the index, rewind the
-    // counter, delete the intent. A crash anywhere before the intent lands
-    // leaves the old, contiguous journal untouched; a crash after it is
-    // rolled forward by `recoverCompaction` on the next open. Either way the
-    // journal, the index and the counter agree and the ids stay gap-free.
-    // (Writing new bodies in place without the intent could overwrite a live
-    // entry's body before the index moved, which is the corruption this
-    // avoids.)
-    const applyCompaction = (intent: typeof CompactionIntentFromJson.Type) =>
-      Effect.gen(function* () {
-        yield* Effect.forEach(
-          intent.staleIds,
-          (id) => remove(journalBodyKey(intent.clientId, id)),
-          { concurrency: 1, discard: true }
-        );
-        yield* Effect.forEach(
-          intent.moved,
-          (m) => writeJson(journalBodyKey(m.clientId, m.mutationId), m),
-          { concurrency: 1, discard: true }
-        );
-        yield* writeJson("journalIndex", intent.index);
-        const counters = (yield* readDecoded("counters", CountersFromJson)) ?? {};
-        yield* writeJson("counters", { ...counters, [intent.clientId]: intent.counter });
-        yield* remove(COMPACTION_KEY);
-      });
-    // Set while an intent may still be on disk, so any journal operation
-    // finishes it first (an earlier apply can fail without a crash, and an
-    // append landing before the replay would be clobbered by it).
-    let compactionPending = false;
-    const recoverCompaction = Effect.fnUntraced(function* () {
-      const intent = yield* readDecoded(COMPACTION_KEY, CompactionIntentFromJson);
-      if (intent !== undefined) yield* applyCompaction(intent);
-      compactionPending = false;
-    });
-    const settleCompaction: Effect.Effect<void, StoreError> = Effect.suspend(() =>
-      compactionPending ? recoverCompaction() : Effect.void
-    );
-    const sentMarks = readDecoded(SENT_KEY, CountersFromJson).pipe(
-      Effect.map((marks) => marks ?? {})
-    );
-
-    // Read a collection's rows through the per-row index; a corrupt row value
-    // fails as a StoreError (envelope-validated). When no index exists, fall
-    // back to a legacy blob at `rows/{collection}` — the read side of the
-    // transparent migration, so a store not yet split still reads correctly.
-    const listRowsOf = (collection: string) => listRowsWith(readDecoded, collection);
-
-    const pendingMutationsOf = pendingMutationsWith(readDecoded);
-
-    // `pendingMutationsOf`'s count from the index alone: one read, no bodies.
-    //A store not yet migrated holds the legacy blob instead.
-    const pendingCountOf = Effect.fnUntraced(function* (): Effect.fn.Return<number, StoreError> {
-      const index = yield* readDecoded("journalIndex", JournalIndexFromJson);
-      if (index !== undefined) return index.length;
-      const legacy = yield* readDecoded(LEGACY_JOURNAL_KEY, JournalFromJson);
-      return legacy?.length ?? 0;
-    });
-
-    // ─── Unpulled tail (unlocked inner forms) ────────────────────────
-    //
-    // The tail has its own keyspace, an index plus one body per entry, laid
-    // out like the journal. A park writes the bodies and then the index, which
-    // is the commit. A release writes the index and then removes the bodies. So
-    // a crash leaves at worst an unreachable body, or an index entry whose body
-    // is gone (reads skip it), and never a listed entry without its body.
-    //
-    // Two crash windows need the open-time settle below. (1) A park that
-    // committed but did not trim the journal leaves each entry in both places;
-    // the journal copy would be pushed again and replayed over the tail's, so
-    // the open drops it from the journal. (2) A release that wrote
-    // `beginRelease` but did not finish leaves the covered entries in the
-    // journal and the tail; the open finishes it by re-applying the recorded
-    // patch, which is idempotent, so the rows end up as the pull left them
-    // whether or not any of them were written before the crash.
-    const unpulledIndexOf = readDecoded(UNPULLED_INDEX_KEY, JournalIndexFromJson).pipe(
-      Effect.map((entries) => entries ?? [])
-    );
-    const unpulledOf = unpulledWith(readDecoded);
-
-    const parkUnpulledInner = (
-      mutations: ReadonlyArray<Mutation>
-    ): Effect.Effect<void, StoreError> =>
-      Effect.gen(function* () {
-        if (Arr.isReadonlyArrayEmpty(mutations)) return;
-        // A journal copy may be left behind by the trim that follows, so the finish must run.
-        yield* Ref.set(finishPending, true);
-        yield* Effect.forEach(
-          mutations,
-          (m) => writeJson(unpulledBodyKey(m.clientId, m.mutationId), m),
-          { concurrency: 1, discard: true }
-        );
-        const index = yield* unpulledIndexOf;
-        const next = appendMissing(
-          index,
-          mutations.map((m) => ({ clientId: m.clientId, mutationId: m.mutationId }))
-        );
-        if (next.length !== index.length) yield* writeJson(UNPULLED_INDEX_KEY, next);
-        // The parked ids stay reserved even once their journal copies are gone.
-        yield* raiseCounters(mutations);
-      });
-
-    // The bodies go before the index, so a crash cannot orphan one. A crash
-    // (or a failed removal) between the two leaves index entries whose bodies
-    // are gone: reads skip them. The marker that `beginRelease` wrote first is
-    // still down, so the next open finishes the release.
-    const releaseUnpulledInner = (
-      lastMutationIds: Readonly<Record<string, number>>
-    ): Effect.Effect<void, StoreError> =>
-      Effect.gen(function* () {
-        const index = yield* unpulledIndexOf;
-        const released = index.filter((entry) => coveredBy(lastMutationIds, entry));
-        yield* Effect.forEach(
-          released,
-          (entry) => remove(unpulledBodyKey(entry.clientId, entry.mutationId)),
-          { concurrency: 1, discard: true }
-        );
-        if (Arr.isReadonlyArrayNonEmpty(released)) {
-          yield* writeJson(
-            UNPULLED_INDEX_KEY,
-            index.filter((entry) => !coveredBy(lastMutationIds, entry))
-          );
-        }
-        yield* remove(RELEASE_KEY);
-      });
-
-    const clearUnpulledInner = Effect.fnUntraced(function* (): Effect.fn.Return<void, StoreError> {
-      const index = yield* unpulledIndexOf;
-      if (Arr.isReadonlyArrayNonEmpty(index)) yield* writeJson(UNPULLED_INDEX_KEY, []);
-      yield* Effect.forEach(
-        index,
-        (entry) => remove(unpulledBodyKey(entry.clientId, entry.mutationId)),
-        { concurrency: 1, discard: true }
-      );
-      yield* remove(RELEASE_KEY);
-    });
-
-    // ─── Quarantine (unlocked inner forms) ───────────────────────────
-    //
-    // A quarantine lives in its own keyspace, not in the journal — that is
-    // the security property, not an implementation detail: `pendingMutations`
-    // reads the journal, `push` reads `pendingMutations`, so an entry moved
-    // here is structurally unreachable from any push, whatever identity is
-    // signed in. Nothing but `discardQuarantine` ever deletes one.
-
-    const quarantineIndexOf: Effect.Effect<
-      ReadonlyArray<Identity.Fingerprint>,
-      StoreError
-    > = readDecoded(QUARANTINE_INDEX_KEY, FingerprintsFromJson).pipe(
-      Effect.map((list) => list ?? [])
-    );
-
-    const quarantinedOf = (
-      fingerprint: Identity.Fingerprint
-    ): Effect.Effect<ReadonlyArray<Mutation>, StoreError> =>
-      readDecoded(quarantineKey(fingerprint), MutationsFromJson).pipe(
-        Effect.map((entries) => entries ?? [])
-      );
-
-    // Empty the journal outright — bodies, index, and any legacy blob — with
-    // no acknowledgement implied. Only ever called with the entries already
-    // safely written to a quarantine.
-    const clearJournalInner = Effect.fnUntraced(function* () {
-      yield* Effect.forEach(
-        yield* journalIndex,
-        (entry) => remove(journalBodyKey(entry.clientId, entry.mutationId)),
-        { concurrency: 1, discard: true }
-      );
-      yield* writeJson("journalIndex", []);
-      yield* remove(LEGACY_JOURNAL_KEY);
-    });
-
-    // Drop the journal entries `drop` selects, reserving their ids first (as
-    // `acknowledge` does). Skipped on an un-migrated legacy blob, which has no
-    // index to rewrite.
-    const trimJournal = (
-      drop: (entry: JournalIndexEntry) => boolean
-    ): Effect.Effect<void, StoreError> =>
-      Effect.gen(function* () {
-        const index = yield* readDecoded("journalIndex", JournalIndexFromJson);
-        if (index === undefined) return;
-        const dropped = index.filter(drop);
-        if (Arr.isReadonlyArrayEmpty(dropped)) return;
-        yield* raiseCounters(dropped);
-        yield* Effect.forEach(
-          dropped,
-          (entry) => remove(journalBodyKey(entry.clientId, entry.mutationId)),
-          { concurrency: 1, discard: true }
-        );
-        yield* writeJson(
-          "journalIndex",
-          index.filter((entry) => !drop(entry))
-        );
-      });
-
-    // Quarantine first, empty the journal second: a crash between the two
-    // leaves the entries in both places, which the next boot re-quarantines
-    // idempotently (`appendDistinct`) — where the opposite order would lose
-    // them. The identity stamp is written after all of this, so an
-    // interrupted reset simply runs again on the next open.
-    const quarantinePendingInner = (
-      fingerprint: Identity.Fingerprint
-    ): Effect.Effect<number, StoreError> =>
-      Effect.gen(function* () {
-        const pending = yield* pendingMutationsOf;
-        if (Arr.isReadonlyArrayEmpty(pending)) return 0;
-        const held = yield* quarantinedOf(fingerprint);
-        yield* writeJson(quarantineKey(fingerprint), appendDistinct(held, pending));
-        const index = yield* quarantineIndexOf;
-        if (!index.includes(fingerprint)) {
-          yield* writeJson(QUARANTINE_INDEX_KEY, [...index, fingerprint]);
-        }
-        // Ids leaving the journal stay reserved (see `raiseCounters`).
-        yield* raiseCounters(pending);
-        yield* clearJournalInner();
-        return pending.length;
-      });
-
-    const discardQuarantineInner = (
-      fingerprint: Identity.Fingerprint
-    ): Effect.Effect<void, StoreError> =>
-      Effect.gen(function* () {
-        yield* remove(quarantineKey(fingerprint));
-        const index = yield* quarantineIndexOf;
-        if (index.includes(fingerprint)) {
-          yield* writeJson(
-            QUARANTINE_INDEX_KEY,
-            index.filter((held) => held !== fingerprint)
-          );
-        }
-      });
-
-    const releaseQuarantineInner = (
-      fingerprint: Identity.Fingerprint
-    ): Effect.Effect<number, StoreError> =>
-      Effect.gen(function* () {
-        const entries = yield* quarantinedOf(fingerprint);
-        if (Arr.isReadonlyArrayEmpty(entries)) return 0;
-        const index = yield* journalIndex;
-        yield* Effect.forEach(
-          entries,
-          (entry) => writeJson(journalBodyKey(entry.clientId, entry.mutationId), entry),
-          { concurrency: 1, discard: true }
-        );
-        const restored = Arr.map(entries, (entry) => ({
-          clientId: entry.clientId,
-          mutationId: entry.mutationId,
-        }));
-        yield* writeJson("journalIndex", [...index, ...restored]);
-        yield* discardQuarantineInner(fingerprint);
-        return entries.length;
-      });
-
-    // Clear every tracked collection's rows and indexes (unlocked inner form,
-    // reused by clearRows, applyRowOps, and the migration reset).
-    const clearRowsInner = Effect.fnUntraced(function* () {
-      yield* Effect.forEach(
-        yield* collections,
-        (collection) =>
-          Effect.gen(function* () {
-            yield* Effect.forEach(
-              yield* rowIndex(collection),
-              (id) => remove(rowKey(collection, id)),
-              { concurrency: 1, discard: true }
+      Effect.suspend(() => {
+        if (!staged.has(key)) return readDecoded(key, codec);
+        const raw = staged.get(key);
+        return raw === undefined
+          ? Effect.undefined
+          : Schema.decodeEffect(codec)(raw).pipe(
+              Effect.mapError(storeError(`Corrupt persisted state at "${key}"`))
             );
-            yield* remove(rowIndexKey(collection));
-            yield* remove(legacyRowsKey(collection));
+      });
+    return {
+      read,
+      /** A JSON value, as the record path's `writeJson` writes it. */
+      putJson: (key: string, value: unknown) => {
+        staged.set(key, Json.stringify(value));
+      },
+      /** A value written verbatim, as the cookie is (`setCookie`). */
+      putRaw: (key: string, raw: string) => {
+        staged.set(key, raw);
+      },
+      drop: (key: string) => {
+        staged.set(key, undefined);
+      },
+      ops: (): ReadonlyArray<KeyValueOp> =>
+        Array.from(staged, ([key, raw]) =>
+          raw === undefined
+            ? ({ _tag: "Remove", key: `${namespace}${key}` } as const)
+            : ({ _tag: "Set", key: `${namespace}${key}`, value: raw } as const)
+        ),
+    };
+  };
+  type Stage = ReturnType<typeof stageBatch>;
+
+  // `raiseCounters`, staged.
+  const stagedRaiseCounters = Effect.fnUntraced(function* (
+    b: Stage,
+    ids: ReadonlyArray<JournalIndexEntry>
+  ) {
+    const highest = highestIds(ids);
+    if (R.isEmptyReadonlyRecord(highest)) return;
+    const counters = (yield* b.read("counters", CountersFromJson)) ?? {};
+    const raised = raisedCounters(counters, highest);
+    if (Option.isSome(raised)) b.putJson("counters", raised.value);
+  });
+
+  // `trimJournal`, staged: the same index rewrite, bodies removed before it, and the ids reserved.
+  const stagedTrimJournal = Effect.fnUntraced(function* (
+    b: Stage,
+    drop: (entry: JournalIndexEntry) => boolean
+  ) {
+    const index = yield* b.read("journalIndex", JournalIndexFromJson);
+    if (index === undefined) return;
+    const dropped = index.filter(drop);
+    if (Arr.isReadonlyArrayEmpty(dropped)) return;
+    yield* stagedRaiseCounters(b, dropped);
+    Arr.forEach(dropped, (entry) => b.drop(journalBodyKey(entry.clientId, entry.mutationId)));
+    b.putJson(
+      "journalIndex",
+      index.filter((entry) => !drop(entry))
+    );
+  });
+
+  // `releaseUnpulledInner`, staged, without the record's removal: a batch writes no record.
+  const stagedReleaseTail = Effect.fnUntraced(function* (
+    b: Stage,
+    lastMutationIds: Readonly<Record<string, number>>
+  ) {
+    const index = (yield* b.read(UNPULLED_INDEX_KEY, JournalIndexFromJson)) ?? [];
+    const released = index.filter((entry) => coveredBy(lastMutationIds, entry));
+    Arr.forEach(released, (entry) => b.drop(unpulledBodyKey(entry.clientId, entry.mutationId)));
+    if (Arr.isReadonlyArrayNonEmpty(released)) {
+      b.putJson(
+        UNPULLED_INDEX_KEY,
+        index.filter((entry) => !coveredBy(lastMutationIds, entry))
+      );
+    }
+  });
+
+  // `parkUnpulledInner`, staged.
+  const stagedPark = Effect.fnUntraced(function* (b: Stage, mutations: ReadonlyArray<Mutation>) {
+    if (Arr.isReadonlyArrayEmpty(mutations)) return;
+    Arr.forEach(mutations, (m) => b.putJson(unpulledBodyKey(m.clientId, m.mutationId), m));
+    const index = (yield* b.read(UNPULLED_INDEX_KEY, JournalIndexFromJson)) ?? [];
+    const next = appendMissing(
+      index,
+      mutations.map((m) => ({ clientId: m.clientId, mutationId: m.mutationId }))
+    );
+    if (next.length !== index.length) b.putJson(UNPULLED_INDEX_KEY, next);
+    yield* stagedRaiseCounters(b, mutations);
+  });
+
+  // `applyRowOpsInner`, staged: the same per-row writes, one id-index per touched collection, and the
+  // collection list kept current, as the record path keeps it.
+  const stagedRows = Effect.fnUntraced(function* (b: Stage, ops: ReadonlyArray<PatchOp>) {
+    const plan = planRowOps(ops);
+    const collectionList = b
+      .read("collections", CollectionsFromJson)
+      .pipe(Effect.map((list) => list ?? []));
+    const rowIdsOf = (collection: string) =>
+      b.read(rowIndexKey(collection), IdsFromJson).pipe(Effect.map((ids) => ids ?? []));
+    if (plan.clear) {
+      yield* Effect.forEach(
+        yield* collectionList,
+        (collection) =>
+          Effect.map(rowIdsOf(collection), (ids) => {
+            Arr.forEach(ids, (id) => b.drop(rowKey(collection, id)));
+            b.drop(rowIndexKey(collection));
+            b.drop(legacyRowsKey(collection));
           }),
         { concurrency: 1, discard: true }
       );
-      yield* writeJson("collections", []);
-    });
-
-    // Apply one collection's grouped changes: write/remove each row value, then
-    // rewrite the id-index once (the only O(collection) cost, paid once per
-    // touched collection per batch — never once per op).
-    const flushCollection = (collection: string, changes: RowChanges) =>
-      Effect.gen(function* () {
-        const ids = new Set(yield* rowIndex(collection));
-        for (const [id, row] of changes) {
-          if (row === null) {
-            yield* remove(rowKey(collection, id));
-            ids.delete(id);
-          } else {
-            yield* writeJson(rowKey(collection, id), row);
-            ids.add(id);
-          }
-        }
-        yield* writeJson(rowIndexKey(collection), [...ids]);
-        yield* trackCollection(collection);
-      });
-
-    const applyRowOpsInner = (ops: ReadonlyArray<PatchOp>) =>
-      Effect.gen(function* () {
-        const plan = planRowOps(ops);
-        if (plan.clear) yield* clearRowsInner();
-        yield* Effect.forEach(
-          plan.groups,
-          ([collection, changes]) => flushCollection(collection, changes),
-          { concurrency: 1, discard: true }
-        );
-      });
-
-    // Split a legacy whole-collection blob into per-row keys + an id-index.
-    const migrateCollection = (collection: string) =>
-      Effect.gen(function* () {
-        const map = yield* readDecoded(legacyRowsKey(collection), RowMapFromJson);
-        if (map === undefined) return;
-        const ids = R.keys(map);
-        yield* Effect.forEach(ids, (id) => writeJson(rowKey(collection, id), map[id]), {
-          concurrency: 1,
-          discard: true,
-        });
-        yield* writeJson(rowIndexKey(collection), ids);
-        yield* remove(legacyRowsKey(collection));
-      });
-
-    // Split the legacy whole-journal array into per-mutation bodies + an index.
-    const migrateJournal = Effect.fnUntraced(function* () {
-      const legacy = yield* readDecoded(LEGACY_JOURNAL_KEY, JournalFromJson);
-      if (legacy === undefined) return;
-      yield* Effect.forEach(legacy, (m) => writeJson(journalBodyKey(m.clientId, m.mutationId), m), {
-        concurrency: 1,
-        discard: true,
-      });
-      yield* writeJson(
-        "journalIndex",
-        Arr.map(legacy, (m) => ({ clientId: m.clientId, mutationId: m.mutationId }))
-      );
-      yield* remove(LEGACY_JOURNAL_KEY);
-    });
-
-    // Last resort when a legacy blob is corrupt beyond recovery: the store is a
-    // cache of server state, so drop the rows + journal and reset the cookie,
-    // leaving the client able to re-pull from scratch (counters survive).
-    const resetToEmpty = Effect.fnUntraced(function* () {
-      yield* clearRowsInner();
-      yield* remove(LEGACY_JOURNAL_KEY);
-      yield* remove("journalIndex");
-      yield* remove("cookie");
-    });
-
-    // Migrate a layout-1 (or unstamped) store into layout 2 once, then stamp
-    // the version. Envelope-validated; a corrupt legacy blob takes the
-    // destructive fallback rather than wedging the store.
-    const migrate = Effect.gen(function* () {
-      yield* Effect.forEach(yield* collections, migrateCollection, {
-        concurrency: 1,
-        discard: true,
-      });
-      yield* migrateJournal();
-    }).pipe(Effect.catch(() => resetToEmpty()));
-
-    // Transparent forward-migration on first open. Each collection migrates
-    // atomically — the id-index is written only after every row value, and the
-    // legacy blob removed only after the index — so a mid-flight failure leaves
-    // the collection readable via the legacy fallback, and the version is
-    // stamped only once migration completes, so the next open simply retries.
-    // Kept infallible at construction (like the original zero-I/O open): a
-    // transient store error here is swallowed, and reads still resolve through
-    // the legacy fallback until the next open re-migrates.
-    const openMigration = Effect.fnUntraced(function* () {
-      const version = yield* store.get(LAYOUT_KEY);
-      if (version !== CURRENT_LAYOUT) {
-        yield* locked(migrate.pipe(Effect.andThen(store.set(LAYOUT_KEY, CURRENT_LAYOUT))));
-      }
-    });
-    yield* openMigration().pipe(
-      Effect.catchTag(["KeyValueStoreError", "StoreError"], () => Effect.void)
-    );
-
-    // Finish a compaction a previous run was interrupted in. Kept
-    // infallible at construction like the opens around it: if recovery fails
-    // here the flag stays set, and the first journal operation retries it.
-    yield* locked(recoverCompaction()).pipe(
-      Effect.catchTag("StoreError", () =>
-        Effect.sync(() => {
-          compactionPending = true;
-        })
-      )
-    );
-
-    // Drop journal index entries whose body is gone. Removals delete
-    // the bodies before rewriting the index (`acknowledge`, the quarantine's
-    // `clearJournalInner`), so a crash between the two leaves entries with
-    // nothing to push. Reads already skip them, but `pendingCount` and the
-    // high-water check count the index alone, and `compactPending`
-    // refuses a run with a missing body, so they are repaired here, once per
-    // open, rather than paying a body read on every count. The dropped ids
-    // stay reserved, as `acknowledge` keeps them (see `raiseCounters`). Runs
-    // after the compaction roll-forward, whose index supersedes this one, and
-    // writes nothing when every body is present.
-    const repairJournalIndex = Effect.fnUntraced(function* () {
-      const index = yield* readDecoded("journalIndex", JournalIndexFromJson);
-      if (index === undefined) return;
-      const present = yield* Effect.forEach(
-        index,
-        (entry) => {
-          const key = journalBodyKey(entry.clientId, entry.mutationId);
-          return store.has(key).pipe(Effect.mapError(storeError(`Failed to read "${key}"`)));
-        },
-        { concurrency: 1 }
-      );
-      const kept = Arr.filter(index, (_, i) => present[i]);
-      const orphaned = Arr.filter(index, (_, i) => !present[i]);
-      if (Arr.isReadonlyArrayEmpty(orphaned)) return;
-      yield* raiseCounters(orphaned);
-      yield* writeJson("journalIndex", kept);
-    });
-    // Infallible at construction like the opens around it: a failed repair
-    // leaves the index as it was (reads still skip the missing bodies), and
-    // the next open retries.
-    yield* locked(settleCompaction.pipe(Effect.andThen(repairJournalIndex()))).pipe(Effect.ignore);
-
-    // Finish a pull release, or drop the journal copies of a park, that a
-    // crash interrupted. Not swallowed: the tail and the journal then
-    // disagree, and serving either would double-count or revert, so the store
-    // is sealed like an unestablished identity boundary. The next open retries.
-    // Roll an outstanding release forward from its record. The patch is idempotent, so
-    // re-applying it is correct whether or not the interrupted run had written rows.
-    const rollForward = (release: PullRelease): Effect.Effect<void, StoreError> =>
-      Effect.gen(function* () {
-        yield* applyRowOpsInner(release.patch);
-        if (release.cookie !== undefined) {
-          yield* store
-            .set("cookie", release.cookie)
-            .pipe(Effect.mapError(storeError(`Failed to write "cookie"`)));
-        }
-        yield* trimJournal((entry) => coveredBy(release.lastMutationIds, entry));
-        yield* releaseUnpulledInner(release.lastMutationIds);
-      });
-    const finishReleaseInner = Effect.fnUntraced(function* (): Effect.fn.Return<void, StoreError> {
-      const release = yield* readDecoded(RELEASE_KEY, ReleaseIntentFromJson);
-      if (release !== undefined) yield* rollForward(release);
-    });
-    // The journal copies of whatever the tail still parks, dropped as an open drops them. Read
-    // after the roll-forward, which releases entries from the tail. A failed trim seals the store even
-    // with no record outstanding: a copy left in both the journal and the tail would be double-counted
-    // by reads and pushed again.
-    const trimParkedCopies = Effect.fnUntraced(function* (): Effect.fn.Return<void, StoreError> {
-      const parked = yield* unpulledIndexOf;
-      if (Arr.isReadonlyArrayNonEmpty(parked)) {
-        const keys = new Set(parked.map(entryKey));
-        yield* trimJournal((entry) => keys.has(entryKey(entry)));
-      }
-    });
-    // The tail settle: the roll-forward, then the journal copies of whatever is still parked. The
-    // open runs this one body, so it leaves the same state as the in-process finish.
-    const settleTailInner = Effect.fnUntraced(function* () {
-      yield* finishReleaseInner();
-      yield* trimParkedCopies();
-    });
-    const tailFailure = yield* locked(settleTailInner()).pipe(
-      Effect.as(Option.none<StoreError>()),
-      Effect.catchTag("StoreError", (error) => Effect.succeedSome(error))
-    );
-    if (Option.isSome(tailFailure)) return sealed(tailFailure.value);
-    yield* Ref.set(finishPending, false);
-    // The finish of a record already read: the roll-forward, then the parked copies. Any failure seals
-    // the store, since the writes may be part-way.
-    const finishRead = (release: Option.Option<PullRelease>): Effect.Effect<void, StoreError> =>
-      Effect.gen(function* () {
-        yield* Effect.gen(function* () {
-          if (Option.isSome(release)) yield* rollForward(release.value);
-          yield* trimParkedCopies();
-        }).pipe(Effect.tapError((error) => Ref.set(sealedBy, Option.some(error))));
-        yield* Ref.set(finishPending, false);
-      });
-    // The in-process finish, run by every row write and clear, and by `finishRelease`. It is a no-op
-    // while `finishPending` is clear. Its first step is a read of the record, and a failure there
-    // fails the call alone: nothing has been written. Every failure after that read seals the store,
-    // because a roll-forward or a journal trim may have part-way written what the record describes,
-    // and no later write may run over it. The open then finishes it from the same record.
-    const finishOrSeal = Effect.fnUntraced(function* () {
-      if (!(yield* Ref.get(finishPending))) return;
-      yield* finishRead(
-        Option.fromUndefinedOr(yield* readDecoded(RELEASE_KEY, ReleaseIntentFromJson))
-      );
-    });
-
-    // Local store-version buster: a mismatch clears confirmed rows + the
-    // cookie (so the next pull rehydrates fully) but preserves the journal, then
-    // stamps the new version. Kept infallible at construction, like the
-    // migration open above.
-    const openStoreVersion = Effect.fnUntraced(function* () {
-      const desired = options?.storeVersion;
-      if (desired === undefined) return;
-      const current = yield* store.get(STORE_VERSION_KEY);
-      if (current === desired) return;
-      const stampVersion = store
-        .set(STORE_VERSION_KEY, desired)
-        .pipe(Effect.mapError(storeError(`Failed to write "${STORE_VERSION_KEY}"`)));
-      yield* locked(
-        clearRowsInner().pipe(
-          Effect.andThen(remove("cookie")),
-          // Journal deliberately untouched: pending intents survive the buster.
-          Effect.andThen(stampVersion)
-        )
-      );
-    });
-    yield* openStoreVersion().pipe(Effect.ignore);
-
-    // The identity boundary on open: compare the configured
-    // fingerprint with the replica's stamp and apply `Identity.transitionOf`.
-    // A `Reset` quarantines the unpushed journal under the **superseded**
-    // fingerprint before dropping rows and the cookie, so the previous
-    // principal's rows are never served to this one and their write intents
-    // are neither lost nor inherited. The stamp is the last write of the
-    // transition, so an interrupted reset re-runs on the next open rather
-    // than leaving a replica stamped for an identity it was never cleared
-    // for. The release runs on every open, `Unchanged` included: it is how
-    // re-signing in makes this identity's own quarantined entries pushable
-    // again, and it closes the crash window between stamping and releasing.
-    //
-    // Unset `identity` means the boundary is off — no stamp, no comparison,
-    // behaviour identical to before. Kept infallible at construction, like
-    // the migration and store-version opens above.
-    const openIdentity = Effect.fnUntraced(function* () {
-      const next = options?.identity;
-      if (next === undefined) return;
-      const stamped = yield* store
-        .get(IDENTITY_KEY)
-        .pipe(Effect.mapError(storeError(`Failed to read "${IDENTITY_KEY}"`)));
-      const current = stamped ?? Identity.unstamped;
-      const transition = Identity.transitionOf(current, next);
-      const stamp = store
-        .set(IDENTITY_KEY, next)
-        .pipe(Effect.mapError(storeError(`Failed to write "${IDENTITY_KEY}"`)));
-      yield* locked(
+      b.putJson("collections", []);
+    }
+    yield* Effect.forEach(
+      plan.groups,
+      ([collection, changes]) =>
         Effect.gen(function* () {
-          if (transition === "Reset") {
-            yield* quarantinePendingInner(current);
-            yield* clearRowsInner();
-            yield* clearUnpulledInner();
-            yield* remove("cookie");
+          const ids = new Set(yield* rowIdsOf(collection));
+          for (const [id, row] of changes) {
+            if (row === null) {
+              b.drop(rowKey(collection, id));
+              ids.delete(id);
+            } else {
+              b.putJson(rowKey(collection, id), row);
+              ids.add(id);
+            }
           }
-          if (transition !== "Unchanged") yield* stamp;
-          yield* releaseQuarantineInner(next);
-        })
-      );
-    });
-    // Unlike the two opens above, this one is NOT swallowed: a boundary that
-    // could not be established must not be reported as established. The store
-    // is sealed instead (see {@link sealed}) — nothing served, nothing pushed,
-    // nothing destroyed, and the next open retries.
-    const boundaryFailure = yield* openIdentity().pipe(
-      Effect.as(Option.none<StoreError>()),
-      Effect.catchTag("StoreError", (error) => Effect.succeedSome(error))
+          b.putJson(rowIndexKey(collection), [...ids]);
+          const list = yield* collectionList;
+          if (!list.includes(collection)) b.putJson("collections", [...list, collection]);
+        }),
+      { concurrency: 1, discard: true }
     );
-    if (Option.isSome(boundaryFailure)) return sealed(boundaryFailure.value);
+  });
 
-    // ─── Atomic batches (unlocked staged forms) ──────────────────────
-    //
-    // With an AtomicKeyValue in context, a pull's release and a push ack's park-then-trim commit as ONE
-    // batch, with no release record. Each batch stages every write the record path would make, reading
-    // through its own staged values, and hands the whole set to the seam once. So the batch writes what
-    // the record path writes, each row and index once, and a failed or interrupted batch leaves the store
-    // at its state before the operation: nothing reached the store. Keys are staged unprefixed and given
-    // the namespace when they are handed to the seam. Every batch runs under `lock`, after settling any
-    // compaction an interrupted run left, as the journal operations do.
-    const atomic = Option.getOrUndefined(yield* Effect.serviceOption(AtomicKeyValue));
-    const stageBatch = () => {
-      // A staged value: the text to write, or `undefined` for a removal.
-      const staged = new Map<string, string | undefined>();
-      // Decided when the read runs, not when it is built: a read built before a write must see it.
-      const read = <A>(
-        key: string,
-        codec: Schema.Codec<A, string>
-      ): Effect.Effect<A | undefined, StoreError> =>
-        Effect.suspend(() => {
-          if (!staged.has(key)) return readDecoded(key, codec);
-          const raw = staged.get(key);
-          return raw === undefined
-            ? Effect.undefined
-            : Schema.decodeEffect(codec)(raw).pipe(
-                Effect.mapError(storeError(`Corrupt persisted state at "${key}"`))
-              );
-        });
-      return {
-        read,
-        /** A JSON value, as the record path's `writeJson` writes it. */
-        putJson: (key: string, value: unknown) => {
-          staged.set(key, Json.stringify(value));
-        },
-        /** A value written verbatim, as the cookie is (`setCookie`). */
-        putRaw: (key: string, raw: string) => {
-          staged.set(key, raw);
-        },
-        drop: (key: string) => {
-          staged.set(key, undefined);
-        },
-        ops: (): ReadonlyArray<KeyValueOp> =>
-          Array.from(staged, ([key, raw]) =>
-            raw === undefined
-              ? ({ _tag: "Remove", key: `${namespace}${key}` } as const)
-              : ({ _tag: "Set", key: `${namespace}${key}`, value: raw } as const)
-          ),
-      };
-    };
-    type Stage = ReturnType<typeof stageBatch>;
+  // Commit a staged batch as one seam call. Nothing is written for an empty batch.
+  const commitStaged = (
+    atomicSeam: NonNullable<typeof atomic>,
+    b: Stage
+  ): Effect.Effect<void, StoreError> =>
+    Effect.suspend(() => {
+      const ops = b.ops();
+      return Arr.isReadonlyArrayEmpty(ops) ? Effect.void : atomicSeam.apply(ops);
+    });
 
-    // `raiseCounters`, staged.
-    const stagedRaiseCounters = (b: Stage, ids: ReadonlyArray<JournalIndexEntry>) =>
-      Effect.gen(function* () {
-        const highest = highestIds(ids);
-        if (R.isEmptyReadonlyRecord(highest)) return;
-        const counters = (yield* b.read("counters", CountersFromJson)) ?? {};
-        const raised = raisedCounters(counters, highest);
-        if (Option.isSome(raised)) b.putJson("counters", raised.value);
-      });
-
-    // `trimJournal`, staged: the same index rewrite, bodies removed before it, and the ids reserved.
-    const stagedTrimJournal = (b: Stage, drop: (entry: JournalIndexEntry) => boolean) =>
-      Effect.gen(function* () {
-        const index = yield* b.read("journalIndex", JournalIndexFromJson);
-        if (index === undefined) return;
-        const dropped = index.filter(drop);
-        if (Arr.isReadonlyArrayEmpty(dropped)) return;
-        yield* stagedRaiseCounters(b, dropped);
-        Arr.forEach(dropped, (entry) => b.drop(journalBodyKey(entry.clientId, entry.mutationId)));
-        b.putJson(
-          "journalIndex",
-          index.filter((entry) => !drop(entry))
-        );
-      });
-
-    // `releaseUnpulledInner`, staged, without the record's removal: a batch writes no record.
-    const stagedReleaseTail = (b: Stage, lastMutationIds: Readonly<Record<string, number>>) =>
-      Effect.gen(function* () {
-        const index = (yield* b.read(UNPULLED_INDEX_KEY, JournalIndexFromJson)) ?? [];
-        const released = index.filter((entry) => coveredBy(lastMutationIds, entry));
-        Arr.forEach(released, (entry) => b.drop(unpulledBodyKey(entry.clientId, entry.mutationId)));
-        if (Arr.isReadonlyArrayNonEmpty(released)) {
-          b.putJson(
-            UNPULLED_INDEX_KEY,
-            index.filter((entry) => !coveredBy(lastMutationIds, entry))
-          );
-        }
-      });
-
-    // `parkUnpulledInner`, staged.
-    const stagedPark = (b: Stage, mutations: ReadonlyArray<Mutation>) =>
-      Effect.gen(function* () {
-        if (Arr.isReadonlyArrayEmpty(mutations)) return;
-        Arr.forEach(mutations, (m) => b.putJson(unpulledBodyKey(m.clientId, m.mutationId), m));
-        const index = (yield* b.read(UNPULLED_INDEX_KEY, JournalIndexFromJson)) ?? [];
-        const next = appendMissing(
-          index,
-          mutations.map((m) => ({ clientId: m.clientId, mutationId: m.mutationId }))
-        );
-        if (next.length !== index.length) b.putJson(UNPULLED_INDEX_KEY, next);
-        yield* stagedRaiseCounters(b, mutations);
-      });
-
-    // `applyRowOpsInner`, staged: the same per-row writes, one id-index per touched collection, and the
-    // collection list kept current, as the record path keeps it.
-    const stagedRows = (b: Stage, ops: ReadonlyArray<PatchOp>) =>
-      Effect.gen(function* () {
-        const plan = planRowOps(ops);
-        const collectionList = b
-          .read("collections", CollectionsFromJson)
-          .pipe(Effect.map((list) => list ?? []));
-        const rowIdsOf = (collection: string) =>
-          b.read(rowIndexKey(collection), IdsFromJson).pipe(Effect.map((ids) => ids ?? []));
-        if (plan.clear) {
-          yield* Effect.forEach(
-            yield* collectionList,
-            (collection) =>
-              Effect.map(rowIdsOf(collection), (ids) => {
-                Arr.forEach(ids, (id) => b.drop(rowKey(collection, id)));
-                b.drop(rowIndexKey(collection));
-                b.drop(legacyRowsKey(collection));
-              }),
-            { concurrency: 1, discard: true }
-          );
-          b.putJson("collections", []);
-        }
-        yield* Effect.forEach(
-          plan.groups,
-          ([collection, changes]) =>
-            Effect.gen(function* () {
-              const ids = new Set(yield* rowIdsOf(collection));
-              for (const [id, row] of changes) {
-                if (row === null) {
-                  b.drop(rowKey(collection, id));
-                  ids.delete(id);
-                } else {
-                  b.putJson(rowKey(collection, id), row);
-                  ids.add(id);
-                }
-              }
-              b.putJson(rowIndexKey(collection), [...ids]);
-              const list = yield* collectionList;
-              if (!list.includes(collection)) b.putJson("collections", [...list, collection]);
-            }),
-          { concurrency: 1, discard: true }
-        );
-      });
-
-    // Commit a staged batch as one seam call. Nothing is written for an empty batch.
-    const commitStaged = (
-      atomicSeam: NonNullable<typeof atomic>,
-      b: Stage
-    ): Effect.Effect<void, StoreError> =>
-      Effect.suspend(() => {
-        const ops = b.ops();
-        return Arr.isReadonlyArrayEmpty(ops) ? Effect.void : atomicSeam.apply(ops);
-      });
-
-    // Each member first finishes an outstanding release record, as a row write does. A record
-    // left by a failed record-path write would otherwise replay over the batch's newer state on a later
-    // finish; the finish reads the record, so a failure there fails the batch with nothing written.
-    const batchMembers: Pick<ClientStore, "commitPull" | "commitAcknowledgement"> =
-      atomic === undefined
-        ? {}
-        : {
-            commitPull: (release) =>
-              locked(
-                Effect.gen(function* () {
-                  yield* finishOrSeal();
-                  yield* settleCompaction;
-                  const b = stageBatch();
-                  yield* stagedRows(b, release.patch);
-                  if (release.cookie !== undefined) b.putRaw("cookie", release.cookie);
-                  yield* stagedTrimJournal(b, (entry) => coveredBy(release.lastMutationIds, entry));
-                  yield* stagedReleaseTail(b, release.lastMutationIds);
-                  yield* commitStaged(atomic, b);
-                })
-              ),
-            commitAcknowledgement: (parked, lastMutationIds) =>
-              locked(
-                Effect.gen(function* () {
-                  yield* finishOrSeal();
-                  yield* settleCompaction;
-                  const b = stageBatch();
-                  yield* stagedPark(b, parked);
-                  yield* stagedTrimJournal(b, (entry) => coveredBy(lastMutationIds, entry));
-                  yield* commitStaged(atomic, b);
-                })
-              ),
-          };
-
-    // The snapshot. Under `locked`, which excludes this store's writers. With an AtomicKeyValue that
-    // reads every entry in one transaction, the state is decoded from that one read, so a batch another
-    // connection commits cannot land between the reads either.
-    const readAll = atomic?.readAll;
-    const replicaState: Effect.Effect<ReplicaState, StoreError> =
-      readAll === undefined
-        ? replicaStateWith(readDecoded)
-        : readAll.pipe(
-            Effect.map((entries: ReadonlyArray<KeyValueEntry>) =>
-              readerOver(
-                new Map(
-                  entries
-                    .filter((entry) => entry.key.startsWith(namespace))
-                    .map((entry) => [entry.key.slice(namespace.length), entry.value] as const)
-                )
-              )
+  // Each member first finishes an outstanding release record, as a row write does. A record
+  // left by a failed record-path write would otherwise replay over the batch's newer state on a later
+  // finish; the finish reads the record, so a failure there fails the batch with nothing written.
+  const batchMembers: Pick<ClientStore, "commitPull" | "commitAcknowledgement"> =
+    atomic === undefined
+      ? {}
+      : {
+          commitPull: (release) =>
+            locked(
+              Effect.gen(function* () {
+                yield* finishOrSeal();
+                yield* settleCompaction;
+                const b = stageBatch();
+                yield* stagedRows(b, release.patch);
+                if (release.cookie !== undefined) b.putRaw("cookie", release.cookie);
+                yield* stagedTrimJournal(b, (entry) => coveredBy(release.lastMutationIds, entry));
+                yield* stagedReleaseTail(b, release.lastMutationIds);
+                yield* commitStaged(atomic, b);
+              })
             ),
-            Effect.flatMap(replicaStateWith)
-          );
+          commitAcknowledgement: (parked, lastMutationIds) =>
+            locked(
+              Effect.gen(function* () {
+                yield* finishOrSeal();
+                yield* settleCompaction;
+                const b = stageBatch();
+                yield* stagedPark(b, parked);
+                yield* stagedTrimJournal(b, (entry) => coveredBy(lastMutationIds, entry));
+                yield* commitStaged(atomic, b);
+              })
+            ),
+        };
 
-    return ClientStore.of({
-      ...batchMembers,
-      snapshot: locked(settleCompaction.pipe(Effect.andThen(replicaState))),
-      getRow: (collection, id) => unsealed(readDecoded(rowKey(collection, id), RowFromJson)),
-      listRows: (collection) => unsealed(listRowsOf(collection)),
-      listCollections: unsealed(collections),
-      // A row write finishes an outstanding release first, under the same permit hold, so the
-      // release's patch cannot land over it on a later finish. The release's own patch
-      // goes through `applyRowOps`, which does not finish: it is the release's write.
-      putRow: (collection, row) =>
-        locked(
-          Effect.gen(function* () {
-            yield* finishOrSeal();
-            yield* writeJson(rowKey(collection, row.id), row);
-            const ids = yield* rowIndex(collection);
-            if (!ids.includes(row.id)) yield* writeJson(rowIndexKey(collection), [...ids, row.id]);
-            yield* trackCollection(collection);
-          })
-        ),
-      delRow: (collection, id) =>
-        locked(
-          Effect.gen(function* () {
-            yield* finishOrSeal();
-            yield* remove(rowKey(collection, id));
-            const ids = yield* rowIndex(collection);
-            if (ids.includes(id))
-              yield* writeJson(
-                rowIndexKey(collection),
-                ids.filter((x) => x !== id)
-              );
-          })
-        ),
-      // An outstanding release is finished under the same lock, before the rows go.
-      clearRows: locked(finishOrSeal().pipe(Effect.andThen(clearRowsInner()))),
-      applyRowOps: (ops) => locked(applyRowOpsInner(ops)),
+  // The snapshot. Under `locked`, which excludes this store's writers. With an AtomicKeyValue that
+  // reads every entry in one transaction, the state is decoded from that one read, so a batch another
+  // connection commits cannot land between the reads either.
+  const readAll = atomic?.readAll;
+  const replicaState: Effect.Effect<ReplicaState, StoreError> =
+    readAll === undefined
+      ? replicaStateWith(readDecoded)
+      : readAll.pipe(
+          Effect.map((entries: ReadonlyArray<KeyValueEntry>) =>
+            readerOver(
+              new Map(
+                entries
+                  .filter((entry) => entry.key.startsWith(namespace))
+                  .map((entry) => [entry.key.slice(namespace.length), entry.value] as const)
+              )
+            )
+          ),
+          Effect.flatMap(replicaStateWith)
+        );
 
-      // Refused for an id the tail holds (see `ClientStore.appendMutation`): a copy written here would
-      // sit in the journal and the tail until a row write trimmed it, and reads would count it twice.
-      appendMutation: (mutation) =>
-        locked(
+  return ClientStore.of({
+    ...batchMembers,
+    snapshot: locked(settleCompaction.pipe(Effect.andThen(replicaState))),
+    getRow: (collection, id) => unsealed(readDecoded(rowKey(collection, id), RowFromJson)),
+    listRows: (collection) => unsealed(listRowsOf(collection)),
+    listCollections: unsealed(collections),
+    // A row write finishes an outstanding release first, under the same permit hold, so the
+    // release's patch cannot land over it on a later finish. The release's own patch
+    // goes through `applyRowOps`, which does not finish: it is the release's write.
+    putRow: (collection, row) =>
+      locked(
+        Effect.gen(function* () {
+          yield* finishOrSeal();
+          yield* writeJson(rowKey(collection, row.id), row);
+          const ids = yield* rowIndex(collection);
+          if (!ids.includes(row.id)) yield* writeJson(rowIndexKey(collection), [...ids, row.id]);
+          yield* trackCollection(collection);
+        })
+      ),
+    delRow: (collection, id) =>
+      locked(
+        Effect.gen(function* () {
+          yield* finishOrSeal();
+          yield* remove(rowKey(collection, id));
+          const ids = yield* rowIndex(collection);
+          if (ids.includes(id))
+            yield* writeJson(
+              rowIndexKey(collection),
+              ids.filter((x) => x !== id)
+            );
+        })
+      ),
+    // An outstanding release is finished under the same lock, before the rows go.
+    clearRows: locked(finishOrSeal().pipe(Effect.andThen(clearRowsInner()))),
+    applyRowOps: (ops) => locked(applyRowOpsInner(ops)),
+
+    // Refused for an id the tail holds (see `ClientStore.appendMutation`): a copy written here would
+    // sit in the journal and the tail until a row write trimmed it, and reads would count it twice.
+    appendMutation: (mutation) =>
+      locked(
+        Effect.gen(function* () {
+          yield* settleCompaction;
+          if ((yield* unpulledIndexOf).some((held) => entryKey(held) === entryKey(mutation))) {
+            return yield* alreadyParked(mutation);
+          }
+          const index = yield* journalIndex;
+          if (highWater !== undefined && index.length >= highWater) {
+            return yield* new StoreError({
+              message: `Journal high-water exceeded (${highWater} pending mutations); refusing to drop the intent`,
+            });
+          }
+          yield* writeJson(journalBodyKey(mutation.clientId, mutation.mutationId), mutation);
+          return yield* writeJson("journalIndex", [
+            ...index,
+            { clientId: mutation.clientId, mutationId: mutation.mutationId },
+          ]);
+        })
+      ),
+    // Allocate and append under one lock hold. The high-water check
+    // runs first and the counter is written *last*: a refused or failed
+    // append never advances it, and a crash between the index write and the
+    // counter write is healed by taking the larger of the counter and the
+    // highest id the journal already holds for the client, so an id is
+    // neither skipped nor reissued over a live entry.
+    appendNext: (draft) =>
+      locked(
+        // Uninterruptible: an interrupt between the index write and the
+        // counter write would leave an entry journaled with its id not yet
+        // reserved. Acknowledge/quarantine now raise the counter before they
+        // delete, which closes the reissue window; this keeps the append
+        // all-or-nothing as far as the caller can observe.
+        Effect.uninterruptible(
           Effect.gen(function* () {
             yield* settleCompaction;
-            if ((yield* unpulledIndexOf).some((held) => entryKey(held) === entryKey(mutation))) {
-              return yield* alreadyParked(mutation);
-            }
             const index = yield* journalIndex;
             if (highWater !== undefined && index.length >= highWater) {
               return yield* new StoreError({
                 message: `Journal high-water exceeded (${highWater} pending mutations); refusing to drop the intent`,
               });
             }
+            const counters = (yield* readDecoded("counters", CountersFromJson)) ?? {};
+            const last = highestFor(index, draft.clientId, counters[draft.clientId] ?? 0);
+            const mutation: Mutation = { ...draft, mutationId: last + 1 };
             yield* writeJson(journalBodyKey(mutation.clientId, mutation.mutationId), mutation);
-            return yield* writeJson("journalIndex", [
+            yield* writeJson("journalIndex", [
               ...index,
               { clientId: mutation.clientId, mutationId: mutation.mutationId },
             ]);
-          })
-        ),
-      // Allocate and append under one lock hold. The high-water check
-      // runs first and the counter is written *last*: a refused or failed
-      // append never advances it, and a crash between the index write and the
-      // counter write is healed by taking the larger of the counter and the
-      // highest id the journal already holds for the client, so an id is
-      // neither skipped nor reissued over a live entry.
-      appendNext: (draft) =>
-        locked(
-          // Uninterruptible: an interrupt between the index write and the
-          // counter write would leave an entry journaled with its id not yet
-          // reserved. Acknowledge/quarantine now raise the counter before they
-          // delete, which closes the reissue window; this keeps the append
-          // all-or-nothing as far as the caller can observe.
-          Effect.uninterruptible(
-            Effect.gen(function* () {
-              yield* settleCompaction;
-              const index = yield* journalIndex;
-              if (highWater !== undefined && index.length >= highWater) {
-                return yield* new StoreError({
-                  message: `Journal high-water exceeded (${highWater} pending mutations); refusing to drop the intent`,
-                });
-              }
-              const counters = (yield* readDecoded("counters", CountersFromJson)) ?? {};
-              const last = highestFor(index, draft.clientId, counters[draft.clientId] ?? 0);
-              const mutation: Mutation = { ...draft, mutationId: last + 1 };
-              yield* writeJson(journalBodyKey(mutation.clientId, mutation.mutationId), mutation);
-              yield* writeJson("journalIndex", [
-                ...index,
-                { clientId: mutation.clientId, mutationId: mutation.mutationId },
-              ]);
-              // The entry is journaled; a failure to persist the counter must not
-              // report the append as failed: the caller would believe the intent
-              // was dropped while it sits in the journal and is pushed anyway.
-              // The id is not lost: the live index heals the counter above, and
-              // `acknowledge` / `quarantinePending` raise it to the highest id
-              // they remove, so the id cannot be reissued after it leaves.
-              yield* writeJson("counters", {
-                ...counters,
-                [draft.clientId]: mutation.mutationId,
-              }).pipe(
-                Effect.catch((error) =>
-                  Effect.logWarning("ClientStore: journaled but could not persist the id counter", {
-                    error,
-                  })
-                )
-              );
-              return mutation;
-            })
-          )
-        ),
-      pendingMutations: locked(settleCompaction.pipe(Effect.andThen(pendingMutationsOf))),
-      // The index alone, no bodies. Settling a compaction first matters:
-      // a committed but unapplied intent's index is the one that counts.
-      pendingCount: locked(settleCompaction.pipe(Effect.andThen(pendingCountOf()))),
-      acknowledge: (clientId, upTo) =>
-        locked(
-          Effect.gen(function* () {
-            yield* settleCompaction;
-            const index = yield* journalIndex;
-            const dropped = Arr.filter(
-              index,
-              (entry) => entry.clientId === clientId && entry.mutationId <= upTo
+            // The entry is journaled; a failure to persist the counter must not
+            // report the append as failed: the caller would believe the intent
+            // was dropped while it sits in the journal and is pushed anyway.
+            // The id is not lost: the live index heals the counter above, and
+            // `acknowledge` / `quarantinePending` raise it to the highest id
+            // they remove, so the id cannot be reissued after it leaves.
+            yield* writeJson("counters", {
+              ...counters,
+              [draft.clientId]: mutation.mutationId,
+            }).pipe(
+              Effect.catch((error) =>
+                Effect.logWarning("ClientStore: journaled but could not persist the id counter", {
+                  error,
+                })
+              )
             );
-            const kept = Arr.filter(
-              index,
-              (entry) => entry.clientId !== clientId || entry.mutationId > upTo
-            );
-            // Reserve the ids first: once the entries are gone the index can
-            // no longer heal the counter, and a lost counter write would have
-            // the next append reissue an acknowledged id.
-            yield* raiseCounters(dropped);
-            yield* Effect.forEach(
-              dropped,
-              (entry) => remove(journalBodyKey(entry.clientId, entry.mutationId)),
-              { concurrency: 1, discard: true }
-            );
-            yield* writeJson("journalIndex", kept);
+            return mutation;
           })
-        ),
-      // The commit point is the durable intent. Everything from there is
-      // uninterruptible, and a failure to *apply* the intent is not a failure
-      // of the compaction: it is committed, `settleCompaction` rolls it
-      // forward before the next journal operation, and the caller must learn
-      // the renumbering now (returning the error instead would leave the
-      // engine, Paced trackers and ack handles on ids the store has already
-      // left behind, and the newest paced write would be dropped).
-      compactPending: (clientId, mutationIds) =>
-        locked(
-          Effect.uninterruptible(
-            Effect.gen(function* () {
-              yield* settleCompaction;
-              // An un-migrated legacy blob has no index to rewrite; leave it be.
-              const index = yield* readDecoded("journalIndex", JournalIndexFromJson);
-              if (index === undefined) return NO_COMPACTION;
-              const watermark = (yield* sentMarks)[clientId] ?? 0;
-              // Plan over the index alone; read only the bodies that move.
-              const planned = planCompaction(index, clientId, mutationIds, watermark);
-              if (Option.isNone(planned)) return NO_COMPACTION;
-              const plan = planned.value;
-              const moved = yield* Effect.forEach(
-                plan.result.renumbered,
-                ({ from, to }): Effect.Effect<Mutation, StoreError> =>
-                  readDecoded(journalBodyKey(clientId, from), MutationFromJson).pipe(
-                    Effect.flatMap((body) =>
-                      // A missing body cannot be moved, and leaving its index entry
-                      // behind would strand an id with nothing to push. Refuse, before
-                      // anything is committed, rather than corrupt the run.
-                      body === undefined
-                        ? Effect.fail(
-                            new StoreError({
-                              message: `Journal body missing for mutation ${from} of client ${clientId}; refusing to compact`,
-                            })
-                          )
-                        : Effect.succeed({ ...body, mutationId: to })
-                    )
-                  ),
-                { concurrency: 1 }
-              );
-              const intent = {
-                clientId,
-                staleIds: [...plan.result.dropped, ...plan.result.renumbered.map((r) => r.from)],
-                moved,
-                index: plan.journal,
-                counter: plan.counter,
-              };
-              // Armed before the write: if the write lands but reports failure,
-              // the next operation still looks for (and finishes) the intent.
-              compactionPending = true;
-              // A write that errors may still have landed (an ambiguous IndexedDB
-              // abort): look for the intent before calling the compaction failed.
-              // Present means committed, so proceed as if the write had succeeded.
-              yield* writeJson(COMPACTION_KEY, intent).pipe(
-                Effect.catch((error) =>
-                  readDecoded(COMPACTION_KEY, CompactionIntentFromJson).pipe(
-                    Effect.catchTag("StoreError", () => Effect.undefined),
-                    Effect.flatMap((found) =>
-                      found === undefined ? Effect.fail(error) : Effect.void
-                    )
-                  )
-                )
-              );
-              yield* applyCompaction(intent).pipe(
-                Effect.tap(() =>
-                  Effect.sync(() => {
-                    compactionPending = false;
-                  })
-                ),
-                // The compaction is committed; the roll-forward finishes it.
-                // Not silent: a store that keeps failing here will keep failing
-                // the next journal operation, and this is the first sign.
-                Effect.catch((error) =>
-                  Effect.logWarning(
-                    "ClientStore: compaction committed but not yet applied; will roll forward",
-                    { error }
-                  )
-                )
-              );
-              return plan.result;
-            })
-          )
-        ),
-      markSent: (clientId, upTo) =>
-        locked(
-          Effect.gen(function* () {
-            const marks = yield* sentMarks;
-            if ((marks[clientId] ?? 0) >= upTo) return;
-            yield* writeJson(SENT_KEY, { ...marks, [clientId]: upTo });
-          })
-        ),
-      nextMutationId: (clientId) =>
-        locked(
-          Effect.gen(function* () {
-            yield* settleCompaction;
-            const counters = (yield* readDecoded("counters", CountersFromJson)) ?? {};
-            // Heal from the live journal, as `appendNext` does, so a counter
-            // write that was swallowed cannot hand out an id a live entry holds.
-            const last = highestFor(yield* journalIndex, clientId, counters[clientId] ?? 0);
-            const next = last + 1;
-            yield* writeJson("counters", { ...counters, [clientId]: next });
-            return next;
-          })
-        ),
-      // Settled first, so a compaction's rewound counter is what is read or raised.
-      mutationCounters: locked(
-        settleCompaction.pipe(
-          Effect.andThen(readDecoded("counters", CountersFromJson)),
-          Effect.map((counters) => counters ?? {})
         )
       ),
-      raiseMutationCounters: (raise) =>
-        locked(
+    pendingMutations: locked(settleCompaction.pipe(Effect.andThen(pendingMutationsOf))),
+    // The index alone, no bodies. Settling a compaction first matters:
+    // a committed but unapplied intent's index is the one that counts.
+    pendingCount: locked(settleCompaction.pipe(Effect.andThen(pendingCountOf()))),
+    acknowledge: (clientId, upTo) =>
+      locked(
+        Effect.gen(function* () {
+          yield* settleCompaction;
+          const index = yield* journalIndex;
+          const dropped = Arr.filter(
+            index,
+            (entry) => entry.clientId === clientId && entry.mutationId <= upTo
+          );
+          const kept = Arr.filter(
+            index,
+            (entry) => entry.clientId !== clientId || entry.mutationId > upTo
+          );
+          // Reserve the ids first: once the entries are gone the index can
+          // no longer heal the counter, and a lost counter write would have
+          // the next append reissue an acknowledged id.
+          yield* raiseCounters(dropped);
+          yield* Effect.forEach(
+            dropped,
+            (entry) => remove(journalBodyKey(entry.clientId, entry.mutationId)),
+            { concurrency: 1, discard: true }
+          );
+          yield* writeJson("journalIndex", kept);
+        })
+      ),
+    // The commit point is the durable intent. Everything from there is
+    // uninterruptible, and a failure to *apply* the intent is not a failure
+    // of the compaction: it is committed, `settleCompaction` rolls it
+    // forward before the next journal operation, and the caller must learn
+    // the renumbering now (returning the error instead would leave the
+    // engine, Paced trackers and ack handles on ids the store has already
+    // left behind, and the newest paced write would be dropped).
+    compactPending: (clientId, mutationIds) =>
+      locked(
+        Effect.uninterruptible(
           Effect.gen(function* () {
             yield* settleCompaction;
-            const counters = (yield* readDecoded("counters", CountersFromJson)) ?? {};
-            const raised = raisedCounters(counters, raise);
-            if (Option.isSome(raised)) yield* writeJson("counters", raised.value);
+            // An un-migrated legacy blob has no index to rewrite; leave it be.
+            const index = yield* readDecoded("journalIndex", JournalIndexFromJson);
+            if (index === undefined) return NO_COMPACTION;
+            const watermark = (yield* sentMarks)[clientId] ?? 0;
+            // Plan over the index alone; read only the bodies that move.
+            const planned = planCompaction(index, clientId, mutationIds, watermark);
+            if (Option.isNone(planned)) return NO_COMPACTION;
+            const plan = planned.value;
+            const moved = yield* Effect.forEach(
+              plan.result.renumbered,
+              ({ from, to }): Effect.Effect<Mutation, StoreError> =>
+                readDecoded(journalBodyKey(clientId, from), MutationFromJson).pipe(
+                  Effect.flatMap((body) =>
+                    // A missing body cannot be moved, and leaving its index entry
+                    // behind would strand an id with nothing to push. Refuse, before
+                    // anything is committed, rather than corrupt the run.
+                    body === undefined
+                      ? Effect.fail(
+                          new StoreError({
+                            message: `Journal body missing for mutation ${from} of client ${clientId}; refusing to compact`,
+                          })
+                        )
+                      : Effect.succeed({ ...body, mutationId: to })
+                  )
+                ),
+              { concurrency: 1 }
+            );
+            const intent = {
+              clientId,
+              staleIds: [...plan.result.dropped, ...plan.result.renumbered.map((r) => r.from)],
+              moved,
+              index: plan.journal,
+              counter: plan.counter,
+            };
+            // Armed before the write: if the write lands but reports failure,
+            // the next operation still looks for (and finishes) the intent.
+            compactionPending = true;
+            // A write that errors may still have landed (an ambiguous IndexedDB
+            // abort): look for the intent before calling the compaction failed.
+            // Present means committed, so proceed as if the write had succeeded.
+            yield* writeJson(COMPACTION_KEY, intent).pipe(
+              Effect.catch((error) =>
+                readDecoded(COMPACTION_KEY, CompactionIntentFromJson).pipe(
+                  Effect.catchTag("StoreError", () => Effect.undefined),
+                  Effect.flatMap((found) =>
+                    found === undefined ? Effect.fail(error) : Effect.void
+                  )
+                )
+              )
+            );
+            yield* applyCompaction(intent).pipe(
+              Effect.tap(() =>
+                Effect.sync(() => {
+                  compactionPending = false;
+                })
+              ),
+              // The compaction is committed; the roll-forward finishes it.
+              // Not silent: a store that keeps failing here will keep failing
+              // the next journal operation, and this is the first sign.
+              Effect.catch((error) =>
+                Effect.logWarning(
+                  "ClientStore: compaction committed but not yet applied; will roll forward",
+                  { error }
+                )
+              )
+            );
+            return plan.result;
           })
-        ),
-
-      unpulled: unsealed(unpulledOf),
-      parkUnpulled: (mutations) => locked(parkUnpulledInner(mutations)),
-      // An outstanding record is finished before this one is written. If that finish fails, this
-      // call fails and the record stays for the next call to finish; a failure after its read seals.
-      beginRelease: (release) =>
-        locked(
-          // Set before the record is read or written, since a write that reports failure may still have landed.
-          Ref.set(finishPending, true).pipe(
-            Effect.andThen(readDecoded(RELEASE_KEY, ReleaseIntentFromJson)),
-            Effect.flatMap((pending) =>
-              pending === undefined ? Effect.void : finishRead(Option.some(pending))
-            ),
-            // The finish clears the flag, and the record written below must set it again.
-            Effect.andThen(Ref.set(finishPending, true)),
-            Effect.andThen(writeJson(RELEASE_KEY, release))
-          )
-        ),
-      releaseUnpulled: (lastMutationIds) => locked(releaseUnpulledInner(lastMutationIds)),
-      finishRelease: locked(finishOrSeal()),
-      clearUnpulled: locked(clearUnpulledInner()),
-
-      getCookie: unsealed(
-        store.get("cookie").pipe(Effect.mapError(storeError(`Failed to read "cookie"`)))
+        )
       ),
-      setCookie: (value) =>
-        locked(
-          store.set("cookie", value).pipe(Effect.mapError(storeError(`Failed to write "cookie"`)))
-        ),
-      clearCookie: locked(remove("cookie")),
+    markSent: (clientId, upTo) =>
+      locked(
+        Effect.gen(function* () {
+          const marks = yield* sentMarks;
+          if ((marks[clientId] ?? 0) >= upTo) return;
+          yield* writeJson(SENT_KEY, { ...marks, [clientId]: upTo });
+        })
+      ),
+    nextMutationId: (clientId) =>
+      locked(
+        Effect.gen(function* () {
+          yield* settleCompaction;
+          const counters = (yield* readDecoded("counters", CountersFromJson)) ?? {};
+          // Heal from the live journal, as `appendNext` does, so a counter
+          // write that was swallowed cannot hand out an id a live entry holds.
+          const last = highestFor(yield* journalIndex, clientId, counters[clientId] ?? 0);
+          const next = last + 1;
+          yield* writeJson("counters", { ...counters, [clientId]: next });
+          return next;
+        })
+      ),
+    // Settled first, so a compaction's rewound counter is what is read or raised.
+    mutationCounters: locked(
+      settleCompaction.pipe(
+        Effect.andThen(readDecoded("counters", CountersFromJson)),
+        Effect.map((counters) => counters ?? {})
+      )
+    ),
+    raiseMutationCounters: (raise) =>
+      locked(
+        Effect.gen(function* () {
+          yield* settleCompaction;
+          const counters = (yield* readDecoded("counters", CountersFromJson)) ?? {};
+          const raised = raisedCounters(counters, raise);
+          if (Option.isSome(raised)) yield* writeJson("counters", raised.value);
+        })
+      ),
 
-      getIdentity: unsealed(
+    unpulled: unsealed(unpulledOf),
+    parkUnpulled: (mutations) => locked(parkUnpulledInner(mutations)),
+    // An outstanding record is finished before this one is written. If that finish fails, this
+    // call fails and the record stays for the next call to finish; a failure after its read seals.
+    beginRelease: (release) =>
+      locked(
+        // Set before the record is read or written, since a write that reports failure may still have landed.
+        Ref.set(finishPending, true).pipe(
+          Effect.andThen(readDecoded(RELEASE_KEY, ReleaseIntentFromJson)),
+          Effect.flatMap((pending) =>
+            pending === undefined ? Effect.void : finishRead(Option.some(pending))
+          ),
+          // The finish clears the flag, and the record written below must set it again.
+          Effect.andThen(Ref.set(finishPending, true)),
+          Effect.andThen(writeJson(RELEASE_KEY, release))
+        )
+      ),
+    releaseUnpulled: (lastMutationIds) => locked(releaseUnpulledInner(lastMutationIds)),
+    finishRelease: locked(finishOrSeal()),
+    clearUnpulled: locked(clearUnpulledInner()),
+
+    getCookie: unsealed(
+      store.get("cookie").pipe(Effect.mapError(storeError(`Failed to read "cookie"`)))
+    ),
+    setCookie: (value) =>
+      locked(
+        store.set("cookie", value).pipe(Effect.mapError(storeError(`Failed to write "cookie"`)))
+      ),
+    clearCookie: locked(remove("cookie")),
+
+    getIdentity: unsealed(
+      store.get(IDENTITY_KEY).pipe(Effect.mapError(storeError(`Failed to read "${IDENTITY_KEY}"`)))
+    ),
+    setIdentity: (fingerprint) =>
+      locked(
         store
-          .get(IDENTITY_KEY)
-          .pipe(Effect.mapError(storeError(`Failed to read "${IDENTITY_KEY}"`)))
+          .set(IDENTITY_KEY, fingerprint)
+          .pipe(Effect.mapError(storeError(`Failed to write "${IDENTITY_KEY}"`)))
       ),
-      setIdentity: (fingerprint) =>
-        locked(
-          store
-            .set(IDENTITY_KEY, fingerprint)
-            .pipe(Effect.mapError(storeError(`Failed to write "${IDENTITY_KEY}"`)))
-        ),
 
-      quarantinePending: (fingerprint) =>
-        locked(settleCompaction.pipe(Effect.andThen(quarantinePendingInner(fingerprint)))),
-      quarantinedMutations: (fingerprint) => unsealed(quarantinedOf(fingerprint)),
-      quarantines: unsealed(quarantineIndexOf),
-      releaseQuarantine: (fingerprint) =>
-        locked(settleCompaction.pipe(Effect.andThen(releaseQuarantineInner(fingerprint)))),
-      discardQuarantine: (fingerprint) => locked(discardQuarantineInner(fingerprint)),
-    });
+    quarantinePending: (fingerprint) =>
+      locked(settleCompaction.pipe(Effect.andThen(quarantinePendingInner(fingerprint)))),
+    quarantinedMutations: (fingerprint) => unsealed(quarantinedOf(fingerprint)),
+    quarantines: unsealed(quarantineIndexOf),
+    releaseQuarantine: (fingerprint) =>
+      locked(settleCompaction.pipe(Effect.andThen(releaseQuarantineInner(fingerprint)))),
+    discardQuarantine: (fingerprint) => locked(discardQuarantineInner(fingerprint)),
   });
+});
 
 /** Layer providing the KeyValueStore-backed store. */
 export const layerKeyValue = (

@@ -129,10 +129,10 @@ const jsonApiHeaders = {
 export { buildQueryString };
 
 /** Validate a JSON:API response into a document (non-2xx / `errors` → ApiError). */
-export const parseResponse = (
+export const parseResponse: (
   response: HttpClientResponse.HttpClientResponse
-): Effect.Effect<JsonApiDocument, ParseError | ApiError | HttpClientError.HttpClientError> =>
-  Effect.gen(function* () {
+) => Effect.Effect<JsonApiDocument, ParseError | ApiError | HttpClientError.HttpClientError> =
+  Effect.fn("legation-jsonapi/CollectionLoader.parseResponse")(function* (response) {
     if (response.status < 200 || response.status >= 300) {
       const body = yield* response.json.pipe(Effect.orElseSucceed(() => undefined));
       const candidate = P.isObject(body) ? body.errors : undefined;
@@ -153,36 +153,34 @@ const get = (url: string) =>
   HttpClientRequest.get(url).pipe(HttpClientRequest.setHeaders(jsonApiHeaders));
 
 /** Load a collection (`GET /{type}`) into rows. */
-export const load = (
+export const load: (
   type: string,
   options?: JsonApiRequestOptions
-): Effect.Effect<
+) => Effect.Effect<
   LoadedRows,
   ParseError | ApiError | HttpClientError.HttpClientError,
   HttpClient.HttpClient | JsonApiSource
-> =>
-  Effect.gen(function* () {
-    const source = yield* JsonApiSource;
-    const client = yield* HttpClient.HttpClient;
-    const url = `${source.baseUrl}/${type}${buildQueryString(options)}`;
-    const response = yield* Effect.scoped(client.execute(get(url)));
-    return documentToRows(yield* parseResponse(response));
-  });
+> = Effect.fn("legation-jsonapi/CollectionLoader.load")(function* (type, options) {
+  const source = yield* JsonApiSource;
+  const client = yield* HttpClient.HttpClient;
+  const url = `${source.baseUrl}/${type}${buildQueryString(options)}`;
+  const response = yield* Effect.scoped(client.execute(get(url)));
+  return documentToRows(yield* parseResponse(response));
+});
 
 /** Load a single resource (`GET /{type}/{id}`); `None` if the document has no primary data. */
-export const loadOne = (
+export const loadOne: (
   type: string,
   id: string,
   options?: JsonApiRequestOptions
-): Effect.Effect<
+) => Effect.Effect<
   Option.Option<CollectionRow>,
   ParseError | ApiError | HttpClientError.HttpClientError,
   HttpClient.HttpClient | JsonApiSource
-> =>
-  Effect.gen(function* () {
-    const source = yield* JsonApiSource;
-    const client = yield* HttpClient.HttpClient;
-    const url = `${source.baseUrl}/${type}/${id}${buildQueryString(options)}`;
-    const response = yield* Effect.scoped(client.execute(get(url)));
-    return Arr.head(documentToRows(yield* parseResponse(response)).rows);
-  });
+> = Effect.fn("legation-jsonapi/CollectionLoader.loadOne")(function* (type, id, options) {
+  const source = yield* JsonApiSource;
+  const client = yield* HttpClient.HttpClient;
+  const url = `${source.baseUrl}/${type}/${id}${buildQueryString(options)}`;
+  const response = yield* Effect.scoped(client.execute(get(url)));
+  return Arr.head(documentToRows(yield* parseResponse(response)).rows);
+});

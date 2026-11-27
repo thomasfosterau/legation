@@ -37,15 +37,10 @@
  */
 
 import * as Effect from "effect/Effect";
-import * as P from "effect/Predicate";
-import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
-import {
-  TransportError,
-  type Transport,
-  type VersionNotSupportedError,
-} from "@thomasfosterau/legation";
-import type { Protocol } from "@thomasfosterau/legation/internal";
+import type { Transport } from "@thomasfosterau/legation";
+import { Protocol } from "@thomasfosterau/legation/internal";
+import { post } from "./internal/JsonPost.js";
 import { routes } from "./RoomProtocol.js";
 
 /**
@@ -82,8 +77,6 @@ export interface MakeOptions {
   readonly headers?: Readonly<Record<string, string>>;
 }
 
-const encodeJson = Schema.encodeSync(Schema.fromJsonString(Schema.Unknown));
-
 /** The headers a binding call carries over from the inbound request. */
 const forwarded = (request: InboundRequest) => {
   const headers: Record<string, string> = {};
@@ -97,47 +90,25 @@ const forwarded = (request: InboundRequest) => {
 
 /**
  * Build the transport. Each call is one `binding.fetch` of a JSON POST —
- * no network hop, no public route on the bound Worker.
+ * no network hop, no public route on the bound Worker — and each answer is
+ * decoded through the protocol's response schema.
  */
 export const make = (options: MakeOptions): Transport.ClientTransport => {
   const base = new URL(options.path ?? "/sync", options.request.url);
-  const carried = forwarded(options.request);
-  // Trailing slashes would double up against the protocol's leading-slash routes.
-  const prefix = base.href.replace(/\/+$/, "");
-
-  const post =
-    <A>(route: string) =>
-    (body: unknown): Effect.Effect<A, TransportError | VersionNotSupportedError> =>
-      Effect.tryPromise({
-        try: async () => {
-          const response = await options.binding.fetch(
-            new Request(`${prefix}${route}`, {
-              method: "POST",
-              body: encodeJson(body),
-              headers: { "content-type": "application/json", ...carried, ...options.headers },
-            })
-          );
-          if (!response.ok) {
-            const detail: unknown = await response.json().catch(() => ({}));
-            const error = P.isObject(detail) && P.isString(detail.error) ? detail.error : undefined;
-            throw new TransportError({
-              message: error ?? `binding ${route} answered ${response.status}`,
-            });
-          }
-          // SAFETY: trusted JSON from this app's own Worker, which answers `route`
-          // with the protocol body `A` that the caller names.
-          return (await response.json()) as A;
-        },
-        catch: (cause) =>
-          cause instanceof TransportError
-            ? cause
-            : new TransportError({ message: `binding ${route} request failed`, cause }),
-      });
+  const target = {
+    // Trailing slashes would double up against the protocol's leading-slash routes.
+    base: base.href.replace(/\/+$/, ""),
+    headers: { ...forwarded(options.request), ...options.headers },
+    label: "binding",
+    // Effect's Fetch client calls `fetch(url, init)`; a binding takes one `Request`.
+    fetch: (...args: Parameters<typeof globalThis.fetch>) =>
+      options.binding.fetch(new Request(...args)),
+  };
 
   return {
-    push: post<Protocol.PushResponse>(routes.push),
-    pull: post<Protocol.PullResponse>(routes.pull),
-    read: post<Protocol.ReadResponse>(routes.read),
+    push: post(target, routes.push, Protocol.PushResponse),
+    pull: post(target, routes.pull, Protocol.PullResponse),
+    read: post(target, routes.read, Protocol.ReadResponse),
     // A binding is request/response: no socket, no pokes. Pull is correctness.
     pokes: Stream.empty,
     status: Effect.succeed("connected"),

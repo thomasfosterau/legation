@@ -200,60 +200,57 @@ export interface MakeOptions {
 }
 
 /** Build the Server: handler + broadcast over backend and auth. */
-export const make = (options: MakeOptions): Effect.Effect<Server, never, Scope.Scope> =>
-  Effect.gen(function* () {
-    const cvr = options.cvr ?? (yield* Cvr.makeMemoryStore);
-    const bus = options.bus ?? (yield* InvalidationBus.makeInProcess);
-    let handler = SyncServer.makeWith(options.options).pipe(
-      Effect.provideService(Backend, options.backend),
-      Effect.provideService(Authorization.AuthPolicy, options.auth.policy),
-      Effect.provideService(Cvr.CvrStore, cvr),
-      Effect.provideService(InvalidationBus.InvalidationBus, bus)
+export const make: (options: MakeOptions) => Effect.Effect<Server, never, Scope.Scope> = Effect.fn(
+  "legation/Server.make"
+)(function* (options) {
+  const cvr = options.cvr ?? (yield* Cvr.makeMemoryStore);
+  const bus = options.bus ?? (yield* InvalidationBus.makeInProcess);
+  let handler = SyncServer.makeWith(options.options).pipe(
+    Effect.provideService(Backend, options.backend),
+    Effect.provideService(Authorization.AuthPolicy, options.auth.policy),
+    Effect.provideService(Cvr.CvrStore, cvr),
+    Effect.provideService(InvalidationBus.InvalidationBus, bus)
+  );
+  if (options.auth.identity !== undefined) {
+    handler = handler.pipe(
+      Effect.provideService(Authorization.IdentityResolver, options.auth.identity)
     );
-    if (options.auth.identity !== undefined) {
-      handler = handler.pipe(
-        Effect.provideService(Authorization.IdentityResolver, options.auth.identity)
-      );
-    }
-    if (options.queries !== undefined) {
-      handler = handler.pipe(Effect.provideService(Query.QueryResolver, options.queries));
-    }
-    if (options.middleware !== undefined) {
-      handler = handler.pipe(
-        Effect.provideService(Authorization.SyncMiddleware, options.middleware)
-      );
-    }
-    const built = yield* handler;
-    const mutate = <Args, ArgsEncoded>(
-      request: MutateRequest<Args, ArgsEncoded>
-    ): Effect.Effect<Receipt, TransportError | VersionNotSupportedError> =>
-      Effect.gen(function* () {
-        const args = yield* Schema.encodeEffect(request.mutation.args)(request.args).pipe(
-          Effect.orDie
-        );
-        const createdAt = yield* Clock.currentTimeMillis;
-        const response = yield* built.handlePush(
+  }
+  if (options.queries !== undefined) {
+    handler = handler.pipe(Effect.provideService(Query.QueryResolver, options.queries));
+  }
+  if (options.middleware !== undefined) {
+    handler = handler.pipe(Effect.provideService(Authorization.SyncMiddleware, options.middleware));
+  }
+  const built = yield* handler;
+  const mutate = Effect.fn("legation/Server.mutate")(function* <Args, ArgsEncoded>(
+    request: MutateRequest<Args, ArgsEncoded>
+  ): Effect.fn.Return<Receipt, TransportError | VersionNotSupportedError> {
+    // Args that do not encode are a defect of the form layer's hand-over
+    // (see `mutate` on the interface), not a field error.
+    const args = yield* Schema.encodeEffect(request.mutation.args)(request.args).pipe(Effect.orDie);
+    const createdAt = yield* Clock.currentTimeMillis;
+    const response = yield* built.handlePush(
+      {
+        clientGroupId: request.clientGroupId,
+        mutations: [
           {
-            clientGroupId: request.clientGroupId,
-            mutations: [
-              {
-                clientId: request.clientId,
-                mutationId: request.mutationId,
-                mutator: request.mutation.name,
-                args,
-                createdAt,
-              },
-            ],
-            schemaVersion: request.schemaVersion,
+            clientId: request.clientId,
+            mutationId: request.mutationId,
+            mutator: request.mutation.name,
+            args,
+            createdAt,
           },
-          { credentials: request.credentials ?? Option.none() }
-        );
-        return yield* receiptOf(response, request.clientId, request.mutationId);
-      });
-    return {
-      handler: built,
-      broadcast: (change) =>
-        bus.publish([{ collection: change.collection, ids: change.ids ?? [] }]),
-      mutate,
-    };
+        ],
+        schemaVersion: request.schemaVersion,
+      },
+      { credentials: request.credentials ?? Option.none() }
+    );
+    return yield* receiptOf(response, request.clientId, request.mutationId);
   });
+  return {
+    handler: built,
+    broadcast: (change) => bus.publish([{ collection: change.collection, ids: change.ids ?? [] }]),
+    mutate,
+  };
+});

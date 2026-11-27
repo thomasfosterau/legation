@@ -12,7 +12,7 @@
  */
 
 import type * as Effect from "effect/Effect";
-import * as HashSet from "effect/HashSet";
+import * as Schema from "effect/Schema";
 import type { ProtocolError } from "@thomasfosterau/legation";
 import { Protocol } from "@thomasfosterau/legation/internal";
 
@@ -34,12 +34,7 @@ export const routes = {
 /** One of the room's {@link routes}. */
 export type Route = (typeof routes)[keyof typeof routes];
 
-const ROUTES: HashSet.HashSet<string> = HashSet.make(
-  routes.push,
-  routes.pull,
-  routes.read,
-  routes.socket
-);
+const isRoute = Schema.is(Schema.Literals([routes.push, routes.pull, routes.read, routes.socket]));
 
 /**
  * The route a request path addresses: its last segment, when that names one of
@@ -47,8 +42,7 @@ const ROUTES: HashSet.HashSet<string> = HashSet.make(
  */
 export const routeOf = (pathname: string): Route | undefined => {
   const route = pathname.slice(pathname.lastIndexOf("/"));
-  // SAFETY: `ROUTES` holds exactly the values of `routes`.
-  return HashSet.has(ROUTES, route) ? (route as Route) : undefined;
+  return isRoute(route) ? route : undefined;
 };
 
 /** The single frame a room socket ever sends. */

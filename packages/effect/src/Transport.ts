@@ -168,35 +168,36 @@ const failWhileOffline =
  * when it is an effect. It starts online and `"connected"`; `setOnline(false)`
  * makes its calls fail until `setOnline(true)`.
  */
-export const makeInMemory = (
+export const makeInMemory: (
   handler: ServerHandler,
   clientGroupId: string,
   options?: InMemoryOptions
-): Effect.Effect<InMemoryTransport, never, Scope.Scope> =>
-  Effect.gen(function* () {
-    const status = yield* SubscriptionRef.make<ConnectionStatus>("connected");
-    const offline = yield* Ref.make(false);
-    const given = options?.credentials ?? Option.none();
-    const credentials = Effect.isEffect(given) ? given : Effect.succeed(given);
-    const gate = failWhileOffline(Ref.get(offline), "in-memory transport offline");
-    const call = <A>(
-      f: (handle: HandleOptions) => Effect.Effect<A, TransportError | VersionNotSupportedError>
-    ): Effect.Effect<A, TransportError | VersionNotSupportedError> =>
-      gate(Effect.flatMap(credentials, (current) => f({ credentials: current })));
-    return {
-      push: (request) => call((handle) => handler.handlePush(request, handle)),
-      pull: (request) => call((handle) => handler.handlePull(request, handle)),
-      read: (request) => call((handle) => handler.handleRead(request, handle)),
-      pokes: handler.pokes(clientGroupId),
-      status: SubscriptionRef.get(status),
-      statusChanges: SubscriptionRef.changes(status),
-      setStatus: (next) => SubscriptionRef.set(status, next),
-      setOnline: (online) =>
-        Ref.set(offline, !online).pipe(
-          Effect.andThen(SubscriptionRef.set(status, online ? "connected" : "disconnected"))
-        ),
-    };
-  });
+) => Effect.Effect<InMemoryTransport, never, Scope.Scope> = Effect.fn(
+  "legation/Transport.makeInMemory"
+)(function* (handler, clientGroupId, options) {
+  const status = yield* SubscriptionRef.make<ConnectionStatus>("connected");
+  const offline = yield* Ref.make(false);
+  const given = options?.credentials ?? Option.none();
+  const credentials = Effect.isEffect(given) ? given : Effect.succeed(given);
+  const gate = failWhileOffline(Ref.get(offline), "in-memory transport offline");
+  const call = <A>(
+    f: (handle: HandleOptions) => Effect.Effect<A, TransportError | VersionNotSupportedError>
+  ): Effect.Effect<A, TransportError | VersionNotSupportedError> =>
+    gate(Effect.flatMap(credentials, (current) => f({ credentials: current })));
+  return {
+    push: (request) => call((handle) => handler.handlePush(request, handle)),
+    pull: (request) => call((handle) => handler.handlePull(request, handle)),
+    read: (request) => call((handle) => handler.handleRead(request, handle)),
+    pokes: handler.pokes(clientGroupId),
+    status: SubscriptionRef.get(status),
+    statusChanges: SubscriptionRef.changes(status),
+    setStatus: (next) => SubscriptionRef.set(status, next),
+    setOnline: (online) =>
+      Ref.set(offline, !online).pipe(
+        Effect.andThen(SubscriptionRef.set(status, online ? "connected" : "disconnected"))
+      ),
+  };
+});
 
 /**
  * The no-server transport: every wire call fails with a `TransportError`,
@@ -256,44 +257,45 @@ export interface SimulatedOffline {
  * composes under {@link withInferredStatus} or over a carrier that already
  * tracks real connectivity.
  */
-export const simulateOffline = (
+export const simulateOffline: (
   transport: ClientTransport
-): Effect.Effect<SimulatedOffline, never, Scope.Scope> =>
-  Effect.gen(function* () {
-    const offlineRef = yield* SubscriptionRef.make(false);
+) => Effect.Effect<SimulatedOffline, never, Scope.Scope> = Effect.fn(
+  "legation/Transport.simulateOffline"
+)(function* (transport) {
+  const offlineRef = yield* SubscriptionRef.make(false);
 
-    const gate = failWhileOffline(SubscriptionRef.get(offlineRef), "simulated offlineRef");
+  const gate = failWhileOffline(SubscriptionRef.get(offlineRef), "simulated offlineRef");
 
-    const status = SubscriptionRef.get(offlineRef).pipe(
-      Effect.flatMap((isOffline): Effect.Effect<ConnectionStatus> =>
-        isOffline ? Effect.succeed("disconnected") : transport.status
-      )
-    );
+  const status = SubscriptionRef.get(offlineRef).pipe(
+    Effect.flatMap((isOffline): Effect.Effect<ConnectionStatus> =>
+      isOffline ? Effect.succeed("disconnected") : transport.status
+    )
+  );
 
-    const statusChanges = Stream.zipLatestWith(
-      SubscriptionRef.changes(offlineRef),
-      transport.statusChanges,
-      (isOffline, real): ConnectionStatus => (isOffline ? "disconnected" : real)
-    ).pipe(Stream.changesWith((a, b) => a === b));
+  const statusChanges = Stream.zipLatestWith(
+    SubscriptionRef.changes(offlineRef),
+    transport.statusChanges,
+    (isOffline, real): ConnectionStatus => (isOffline ? "disconnected" : real)
+  ).pipe(Stream.changesWith((a, b) => a === b));
 
-    const read = transport.read;
-    const wrapped: ClientTransport = {
-      push: (request) => gate(transport.push(request)),
-      pull: (request) => gate(transport.pull(request)),
-      ...Defined.fields({
-        read: read === undefined ? undefined : (request: ReadRequest) => gate(read(request)),
-      }),
-      pokes: transport.pokes,
-      status,
-      statusChanges,
-    };
+  const read = transport.read;
+  const wrapped: ClientTransport = {
+    push: (request) => gate(transport.push(request)),
+    pull: (request) => gate(transport.pull(request)),
+    ...Defined.fields({
+      read: read === undefined ? undefined : (request: ReadRequest) => gate(read(request)),
+    }),
+    pokes: transport.pokes,
+    status,
+    statusChanges,
+  };
 
-    return {
-      transport: wrapped,
-      setOffline: (next) => SubscriptionRef.set(offlineRef, next),
-      isOffline: SubscriptionRef.get(offlineRef),
-    };
-  });
+  return {
+    transport: wrapped,
+    setOffline: (next) => SubscriptionRef.set(offlineRef, next),
+    isOffline: SubscriptionRef.get(offlineRef),
+  };
+});
 
 /**
  * Wrap a transport with connectivity inferred from observed behaviour:
@@ -304,36 +306,35 @@ export const simulateOffline = (
  * `"connected"` (RpcTransport.ts), so wrap it with this to give the engine's
  * reconnect trigger something real to react to.
  */
-export const withInferredStatus = (
+export const withInferredStatus: (
   transport: ClientTransport
-): Effect.Effect<ClientTransport, never, Scope.Scope> =>
-  Effect.gen(function* () {
-    const status = yield* SubscriptionRef.make<ConnectionStatus>("connecting");
-    const observe = <A>(
-      effect: Effect.Effect<A, TransportError | VersionNotSupportedError>
-    ): Effect.Effect<A, TransportError | VersionNotSupportedError> =>
-      effect.pipe(
-        Effect.tap(() => SubscriptionRef.set(status, "connected")),
-        Effect.tapError((error) =>
-          isTransportError(error) ? SubscriptionRef.set(status, "disconnected") : Effect.void
-        )
-      );
-    const inferred: ClientTransport = {
-      push: (request) => observe(transport.push(request)),
-      pull: (request) => observe(transport.pull(request)),
-      pokes: transport.pokes,
-      status: SubscriptionRef.get(status),
-      // Dedup consecutive repeats so a burst of successful calls doesn't spam
-      // the engine's reconnect trigger with "connected" re-emissions.
-      statusChanges: SubscriptionRef.changes(status).pipe(Stream.changesWith((a, b) => a === b)),
-    };
-    // The fallthrough read (ADR-0025) is optional: forwarded, and observed
-    // like push and pull, only when the wrapped carrier has one.
-    const read = transport.read;
-    return read === undefined
-      ? inferred
-      : { ...inferred, read: (request) => observe(read(request)) };
-  });
+) => Effect.Effect<ClientTransport, never, Scope.Scope> = Effect.fn(
+  "legation/Transport.withInferredStatus"
+)(function* (transport) {
+  const status = yield* SubscriptionRef.make<ConnectionStatus>("connecting");
+  const observe = <A>(
+    effect: Effect.Effect<A, TransportError | VersionNotSupportedError>
+  ): Effect.Effect<A, TransportError | VersionNotSupportedError> =>
+    effect.pipe(
+      Effect.tap(() => SubscriptionRef.set(status, "connected")),
+      Effect.tapError((error) =>
+        isTransportError(error) ? SubscriptionRef.set(status, "disconnected") : Effect.void
+      )
+    );
+  const inferred: ClientTransport = {
+    push: (request) => observe(transport.push(request)),
+    pull: (request) => observe(transport.pull(request)),
+    pokes: transport.pokes,
+    status: SubscriptionRef.get(status),
+    // Dedup consecutive repeats so a burst of successful calls doesn't spam
+    // the engine's reconnect trigger with "connected" re-emissions.
+    statusChanges: SubscriptionRef.changes(status).pipe(Stream.changesWith((a, b) => a === b)),
+  };
+  // The fallthrough read (ADR-0025) is optional: forwarded, and observed
+  // like push and pull, only when the wrapped carrier has one.
+  const read = transport.read;
+  return read === undefined ? inferred : { ...inferred, read: (request) => observe(read(request)) };
+});
 
 /** Options for {@link withFallback}. */
 export interface FallbackOptions {
@@ -375,79 +376,76 @@ export interface FallbackOptions {
  * as it would unwrapped; with neither, the combined transport has none and
  * the Client answers uncovered reads locally.
  */
-export const withFallback = (
+export const withFallback: (
   primary: ClientTransport,
   fallback: ClientTransport,
   options?: FallbackOptions
-): Effect.Effect<ClientTransport, never, Scope.Scope> =>
-  Effect.gen(function* () {
-    const restoreAfterMillis = Duration.toMillis(options?.restoreAfter ?? "30 seconds");
-    const primaryTimeout = options?.primaryTimeout;
-    const status = yield* SubscriptionRef.make<ConnectionStatus>("connecting");
-    const sidelinedUntil = yield* Ref.make(0);
+) => Effect.Effect<ClientTransport, never, Scope.Scope> = Effect.fn(
+  "legation/Transport.withFallback"
+)(function* (primary, fallback, options) {
+  const restoreAfterMillis = Duration.toMillis(options?.restoreAfter ?? "30 seconds");
+  const primaryTimeout = options?.primaryTimeout;
+  const status = yield* SubscriptionRef.make<ConnectionStatus>("connecting");
+  const sidelinedUntil = yield* Ref.make(0);
 
-    // A hang is carrier trouble just like a failure: interrupt the primary
-    // and surface a TransportError so the sideline-and-fall-back path runs.
-    const budgeted = <A>(
-      effect: Effect.Effect<A, TransportError | VersionNotSupportedError>
-    ): Effect.Effect<A, TransportError | VersionNotSupportedError> =>
-      primaryTimeout === undefined
-        ? effect
-        : Effect.timeoutOrElse(effect, {
-            duration: primaryTimeout,
-            orElse: () =>
-              Effect.fail(
-                new TransportError({
-                  message: `primary transport call exceeded ${Duration.format(
-                    Duration.fromInputUnsafe(primaryTimeout)
-                  )}`,
-                })
-              ),
-          });
+  // A hang is carrier trouble just like a failure: interrupt the primary
+  // and surface a TransportError so the sideline-and-fall-back path runs.
+  const budgeted = <A>(
+    effect: Effect.Effect<A, TransportError | VersionNotSupportedError>
+  ): Effect.Effect<A, TransportError | VersionNotSupportedError> =>
+    primaryTimeout === undefined
+      ? effect
+      : Effect.timeoutOrElse(effect, {
+          duration: primaryTimeout,
+          orElse: () =>
+            Effect.fail(
+              new TransportError({
+                message: `primary transport call exceeded ${Duration.format(
+                  Duration.fromInputUnsafe(primaryTimeout)
+                )}`,
+              })
+            ),
+        });
 
-    const call = <A>(
-      f: (transport: ClientTransport) => Effect.Effect<A, TransportError | VersionNotSupportedError>
-    ): Effect.Effect<A, TransportError | VersionNotSupportedError> =>
-      Effect.gen(function* () {
-        const now = yield* Clock.currentTimeMillis;
-        if ((yield* Ref.get(sidelinedUntil)) <= now) {
-          const first = yield* Effect.result(budgeted(f(primary)));
-          if (Result.isSuccess(first)) {
-            yield* SubscriptionRef.set(status, "connected");
-            return first.success;
-          }
-          if (!isTransportError(first.failure)) return yield* first.failure;
-          yield* Ref.set(sidelinedUntil, now + restoreAfterMillis);
-        }
-        const second = yield* Effect.result(f(fallback));
-        if (Result.isSuccess(second)) {
-          yield* SubscriptionRef.set(status, "connected");
-          return second.success;
-        }
-        if (isTransportError(second.failure)) yield* SubscriptionRef.set(status, "disconnected");
-        return yield* second.failure;
-      });
-
-    // The fallthrough read (ADR-0025) is optional on each leg: both legs
-    // carry it through `call`, like push and pull; one leg serves it alone,
-    // as that leg does; neither leaves it off, so the Client answers locally.
-    const primaryRead = primary.read;
-    const fallbackRead = fallback.read;
-    const read: ClientTransport["read"] =
-      primaryRead !== undefined && fallbackRead !== undefined
-        ? (request) =>
-            call((transport) => (transport === primary ? primaryRead : fallbackRead)(request))
-        : (primaryRead ?? fallbackRead);
-
-    const combined: ClientTransport = {
-      push: (request) => call((transport) => transport.push(request)),
-      pull: (request) => call((transport) => transport.pull(request)),
-      pokes: Stream.merge(
-        primary.pokes.pipe(Stream.catchCause(() => Stream.empty)),
-        fallback.pokes
-      ),
-      status: SubscriptionRef.get(status),
-      statusChanges: SubscriptionRef.changes(status).pipe(Stream.changesWith((a, b) => a === b)),
-    };
-    return read === undefined ? combined : { ...combined, read };
+  const call = Effect.fnUntraced(function* <A>(
+    f: (transport: ClientTransport) => Effect.Effect<A, TransportError | VersionNotSupportedError>
+  ): Effect.fn.Return<A, TransportError | VersionNotSupportedError> {
+    const now = yield* Clock.currentTimeMillis;
+    if ((yield* Ref.get(sidelinedUntil)) <= now) {
+      const first = yield* Effect.result(budgeted(f(primary)));
+      if (Result.isSuccess(first)) {
+        yield* SubscriptionRef.set(status, "connected");
+        return first.success;
+      }
+      if (!isTransportError(first.failure)) return yield* first.failure;
+      yield* Ref.set(sidelinedUntil, now + restoreAfterMillis);
+    }
+    const second = yield* Effect.result(f(fallback));
+    if (Result.isSuccess(second)) {
+      yield* SubscriptionRef.set(status, "connected");
+      return second.success;
+    }
+    if (isTransportError(second.failure)) yield* SubscriptionRef.set(status, "disconnected");
+    return yield* second.failure;
   });
+
+  // The fallthrough read (ADR-0025) is optional on each leg: both legs
+  // carry it through `call`, like push and pull; one leg serves it alone,
+  // as that leg does; neither leaves it off, so the Client answers locally.
+  const primaryRead = primary.read;
+  const fallbackRead = fallback.read;
+  const read: ClientTransport["read"] =
+    primaryRead !== undefined && fallbackRead !== undefined
+      ? (request) =>
+          call((transport) => (transport === primary ? primaryRead : fallbackRead)(request))
+      : (primaryRead ?? fallbackRead);
+
+  const combined: ClientTransport = {
+    push: (request) => call((transport) => transport.push(request)),
+    pull: (request) => call((transport) => transport.pull(request)),
+    pokes: Stream.merge(primary.pokes.pipe(Stream.catchCause(() => Stream.empty)), fallback.pokes),
+    status: SubscriptionRef.get(status),
+    statusChanges: SubscriptionRef.changes(status).pipe(Stream.changesWith((a, b) => a === b)),
+  };
+  return read === undefined ? combined : { ...combined, read };
+});

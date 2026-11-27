@@ -125,28 +125,29 @@ export interface InvalidateOnChangesOptions {
  * swallowed, never fatal to the fibre, so a transient cache failure doesn't
  * stop future invalidations.
  */
-export const invalidateOnChanges = (
+export const invalidateOnChanges: (
   options: InvalidateOnChangesOptions
-): Effect.Effect<void, never, Scope.Scope> =>
-  Effect.gen(function* () {
-    const tagFor = options.tagFor ?? defaultTagFor;
-    const fineTagFor = options.fineTagFor ?? defaultFineTagFor;
-    yield* Effect.forkScoped(
-      Stream.runForEach(options.changes, (touched) => {
-        // `evictionTags` is the union of the coarse and fine tags; the coarse
-        // half is not redundant (see its doc comment), so do not narrow it to
-        // the fine tags.
-        const tags = HttpCache.evictionTags(touched, { tagFor, fineTagFor });
-        return Arr.isReadonlyArrayEmpty(tags)
-          ? Effect.void
-          : options.store
-              .invalidateTags(tags)
-              .pipe(
-                Effect.catch((error) => Effect.logWarning("HTTP cache invalidation failed", error))
-              );
-      })
-    );
-  });
+) => Effect.Effect<void, never, Scope.Scope> = Effect.fn(
+  "legation-browser/HttpCacheInvalidation.invalidateOnChanges"
+)(function* (options) {
+  const tagFor = options.tagFor ?? defaultTagFor;
+  const fineTagFor = options.fineTagFor ?? defaultFineTagFor;
+  yield* Effect.forkScoped(
+    Stream.runForEach(options.changes, (touched) => {
+      // `evictionTags` is the union of the coarse and fine tags; the coarse
+      // half is not redundant (see its doc comment), so do not narrow it to
+      // the fine tags.
+      const tags = HttpCache.evictionTags(touched, { tagFor, fineTagFor });
+      return Arr.isReadonlyArrayEmpty(tags)
+        ? Effect.void
+        : options.store
+            .invalidateTags(tags)
+            .pipe(
+              Effect.catch((error) => Effect.logWarning("HTTP cache invalidation failed", error))
+            );
+    })
+  );
+});
 
 // ─── Response tagging ────────────────────────────────────────────────────────
 
@@ -203,19 +204,18 @@ export const tagsFor = (
  * other bounded-hub fallbacks (`legation_hints_dropped_total`,
  * `legation_change_collapses_total`).
  */
-export const tagsForObserved = (
+export const tagsForObserved: (
   collection: string,
   rowIds: ReadonlyArray<string>,
-  options: TagsForOptions = {}
-): Effect.Effect<TagsForResult> =>
-  Effect.gen(function* () {
-    const result = tagsFor(collection, rowIds, options);
-    if (result.budgetExceeded) {
-      yield* Effect.logWarning(
-        `HTTP cache tag budget exceeded for collection "${collection}": ` +
-          `${rowIds.length} rows > ${FINE_TAG_ROW_BUDGET}; tagged coarse-only`
-      );
-      yield* Metric.update(Telemetry.cacheTagBudgetExceededTotal, 1);
-    }
-    return result;
-  });
+  options?: TagsForOptions
+) => Effect.Effect<TagsForResult> = Effect.fnUntraced(function* (collection, rowIds, options = {}) {
+  const result = tagsFor(collection, rowIds, options);
+  if (result.budgetExceeded) {
+    yield* Effect.logWarning(
+      `HTTP cache tag budget exceeded for collection "${collection}": ` +
+        `${rowIds.length} rows > ${FINE_TAG_ROW_BUDGET}; tagged coarse-only`
+    );
+    yield* Metric.update(Telemetry.cacheTagBudgetExceededTotal, 1);
+  }
+  return result;
+});

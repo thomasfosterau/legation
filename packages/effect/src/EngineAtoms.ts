@@ -19,6 +19,8 @@
 import type * as Cause from "effect/Cause";
 import type * as Layer from "effect/Layer";
 import * as Effect from "effect/Effect";
+import * as Order from "effect/Order";
+import * as Arr from "effect/Array";
 import * as HashMap from "effect/HashMap";
 import * as MutableHashMap from "effect/MutableHashMap";
 import * as Option from "effect/Option";
@@ -240,9 +242,11 @@ export const fromLayer = (
   const mutationsFor = (mutator: string): Atom.Atom<MutationsForResult> => {
     return memo(mutationsForCache, mutator, () =>
       Atom.mapResult(mutationStates, (states) =>
-        [...HashMap.values(states)]
-          .filter((state) => state.mutator === mutator)
-          .toSorted((a, b) => a.mutationId - b.mutationId)
+        Arr.sortWith(
+          Arr.filter(HashMap.values(states), (state) => state.mutator === mutator),
+          (state) => state.mutationId,
+          Order.Number
+        )
       )
     );
   };

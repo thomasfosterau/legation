@@ -106,15 +106,13 @@ import type { Identity, StoreError, TransportError } from "@thomasfosterau/legat
 import type { ClientEngine } from "@thomasfosterau/legation/internal";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
-import * as Layer from "effect/Layer";
-import * as ManagedRuntime from "effect/ManagedRuntime";
 import * as Option from "effect/Option";
 import * as P from "effect/Predicate";
 import * as Schema from "effect/Schema";
 import * as Scope from "effect/Scope";
 import * as Stream from "effect/Stream";
-import * as SubscriptionRef from "effect/SubscriptionRef";
 import type * as Context from "effect/Context";
+import * as HostSlot from "./internal/HostSlot.js";
 
 /**
  * The tag the library registers and answers. Short on purpose: Chromium
@@ -236,29 +234,30 @@ const pageRegistration: Effect.Effect<SyncRegistration | undefined> = Effect.sus
  * next connectivity signal. Registering a tag that is already pending is a
  * no-op for the browser, so calling it once per mutation is fine.
  */
-export const register = (options: RegisterOptions = {}): Effect.Effect<RegisterOutcome> =>
-  Effect.gen(function* () {
-    const tag = options.tag ?? defaultTag;
-    const registration = yield* options.registration ?? pageRegistration;
-    const manager = syncManagerOf(registration);
-    if (Option.isNone(manager)) {
-      yield* Effect.logDebug(
-        "Background Sync unavailable; the journal flushes on the next connectivity signal"
-      );
-      return "Unsupported" as const;
-    }
-    return yield* Effect.tryPromise({
-      try: () => manager.value.register(tag),
-      catch: (cause) => new SyncRegistrationFailed({ cause }),
-    }).pipe(
-      Effect.as("Registered" as const),
-      Effect.catch((cause) =>
-        Effect.logDebug("Background Sync registration refused", cause).pipe(
-          Effect.as("Refused" as const)
-        )
-      )
+export const register: (options?: RegisterOptions) => Effect.Effect<RegisterOutcome> = Effect.fn(
+  "legation-browser/BackgroundSync.register"
+)(function* (options = {}) {
+  const tag = options.tag ?? defaultTag;
+  const registration = yield* options.registration ?? pageRegistration;
+  const manager = syncManagerOf(registration);
+  if (Option.isNone(manager)) {
+    yield* Effect.logDebug(
+      "Background Sync unavailable; the journal flushes on the next connectivity signal"
     );
-  });
+    return "Unsupported" as const;
+  }
+  return yield* Effect.tryPromise({
+    try: () => manager.value.register(tag),
+    catch: (cause) => new SyncRegistrationFailed({ cause }),
+  }).pipe(
+    Effect.as("Registered" as const),
+    Effect.catch((cause) =>
+      Effect.logDebug("Background Sync registration refused", cause).pipe(
+        Effect.as("Refused" as const)
+      )
+    )
+  );
+});
 
 /** Whether the worker's own view says the network is down. */
 const navigatorOffline: Effect.Effect<boolean> = Effect.sync(
@@ -289,33 +288,34 @@ export interface RegisterOnJournalOptions extends RegisterOptions {
  * each write on its own. Chromium only accepts a registration from a
  * worker while a window of the origin is open; a refusal is a debug line.
  */
-export const registerOnJournal = (
+export const registerOnJournal: (
   engine: ClientEngine.ClientEngine,
-  options: RegisterOnJournalOptions = {}
-): Effect.Effect<void, never, Scope.Scope> =>
-  Effect.gen(function* () {
-    const offline = options.offline ?? navigatorOffline;
-    // Two forks rather than one merged stream: each subscribes synchronously
-    // (`startImmediately`) before this returns, so a mutation journaled
-    // straight after the host starts is not missed. (`Stream.merge` would
-    // subscribe on fibers of its own, later.)
-    const registerOn = <A>(stream: Stream.Stream<A>) =>
-      Effect.forkScoped(
-        Stream.runForEach(stream, () => register(options)),
-        {
-          startImmediately: true,
-        }
-      );
-    yield* registerOn(
-      engine.engineEvents.pipe(
-        Stream.filter((event) => P.isTagged(event, "MutationJournaled")),
-        Stream.filterEffect(() => offline)
-      )
+  options?: RegisterOnJournalOptions
+) => Effect.Effect<void, never, Scope.Scope> = Effect.fn(
+  "legation-browser/BackgroundSync.registerOnJournal"
+)(function* (engine, options = {}) {
+  const offline = options.offline ?? navigatorOffline;
+  // Two forks rather than one merged stream: each subscribes synchronously
+  // (`startImmediately`) before this returns, so a mutation journaled
+  // straight after the host starts is not missed. (`Stream.merge` would
+  // subscribe on fibers of its own, later.)
+  const registerOn = <A>(stream: Stream.Stream<A>) =>
+    Effect.forkScoped(
+      Stream.runForEach(stream, () => register(options)),
+      {
+        startImmediately: true,
+      }
     );
-    yield* registerOn(
-      engine.syncFailures.pipe(Stream.filter((failure) => failure.operation === "push"))
-    );
-  });
+  yield* registerOn(
+    engine.engineEvents.pipe(
+      Stream.filter((event) => P.isTagged(event, "MutationJournaled")),
+      Stream.filterEffect(() => offline)
+    )
+  );
+  yield* registerOn(
+    engine.syncFailures.pipe(Stream.filter((failure) => failure.operation === "push"))
+  );
+});
 
 // ─── The flush ───────────────────────────────────────────────────────────────
 
@@ -372,30 +372,31 @@ export interface FlushOptions {
  * transport failure of the same kind, so the flush never reports `Flushed`
  * over a journal it stopped short of.
  */
-export const flush = (
+export const flush: (
   engine: ClientEngine.ClientEngine,
   options: FlushOptions
-): Effect.Effect<FlushOutcome, TransportError | StoreError> =>
-  Effect.gen(function* () {
-    if (options.identity !== identityUnchecked) {
-      const current = yield* options.identity;
-      const stamped = yield* engine.identity;
-      // Exact match only. `undefined` (the app cannot say who is signed in),
-      // an unstamped store, and even the benign anonymous → signed-in upgrade
-      // are all left to a page boot: a context with no UI does not adopt an
-      // identity on the user's behalf.
-      if (current === undefined || stamped !== current) {
-        yield* Effect.logDebug(
-          "Background Sync flush skipped: the replica is not stamped for the current identity"
-        );
-        return "IdentityChanged" as const;
-      }
+) => Effect.Effect<FlushOutcome, TransportError | StoreError> = Effect.fn(
+  "legation-browser/BackgroundSync.flush"
+)(function* (engine, options) {
+  if (options.identity !== identityUnchecked) {
+    const current = yield* options.identity;
+    const stamped = yield* engine.identity;
+    // Exact match only. `undefined` (the app cannot say who is signed in),
+    // an unstamped store, and even the benign anonymous → signed-in upgrade
+    // are all left to a page boot: a context with no UI does not adopt an
+    // identity on the user's behalf.
+    if (current === undefined || stamped !== current) {
+      yield* Effect.logDebug(
+        "Background Sync flush skipped: the replica is not stamped for the current identity"
+      );
+      return "IdentityChanged" as const;
     }
-    return yield* engine.push.pipe(
-      Effect.as("Flushed" as const),
-      Effect.catchTag("VersionNotSupportedError", () => Effect.succeed("UpdateNeeded" as const))
-    );
-  }).pipe(Effect.withSpan("legation.backgroundSync.flush"));
+  }
+  return yield* engine.push.pipe(
+    Effect.as("Flushed" as const),
+    Effect.catchTag("VersionNotSupportedError", () => Effect.succeed("UpdateNeeded" as const))
+  );
+});
 
 // ─── The listener ────────────────────────────────────────────────────────────
 
@@ -473,12 +474,6 @@ interface Attached {
 }
 
 /**
- * The worker's own runtime for the listener's two runs (the host-ready ref and each flush): they close
- * over the attached host's services, so the runtime itself supplies none.
- */
-const edge = ManagedRuntime.make(Layer.empty);
-
-/**
  * Install the `sync` listener on the worker's scope — **synchronously, at the
  * top level of the worker script** (see the module docs for why). Deliberately
  * a plain function rather than an Effect for that reason.
@@ -494,32 +489,26 @@ export const listen = (options: ListenOptions): Listener => {
   const tag = options.tag ?? defaultTag;
   const scope: Partial<SyncScope> = options.scope ?? globalThis;
   const readyTimeout = options.readyTimeout ?? defaultReadyTimeout;
-  const attached = edge.runSync(SubscriptionRef.make(Option.none<Attached>()));
+  const attached = HostSlot.make<Attached>();
 
   // The first attached host, however long it takes to arrive (bounded).
-  // `changes` emits the current value first and never ends, so the head
-  // exists as soon as some host is attached.
-  const whenAttached: Effect.Effect<Attached, HostNotReady> = SubscriptionRef.changes(
-    attached
-  ).pipe(
-    Stream.filter(Option.isSome),
-    Stream.map((some) => some.value),
-    Stream.runHead,
-    Effect.flatMap((head) => (Option.isSome(head) ? Effect.succeed(head.value) : Effect.never)),
-    Effect.timeoutOrElse({
-      duration: readyTimeout,
-      orElse: () =>
-        Effect.fail(
-          new HostNotReady({
-            tag,
-            message: `No engine host attached within ${Duration.format(Duration.fromInputUnsafe(readyTimeout))}; the browser will reschedule the sync`,
-          })
-        ),
-    })
+  const whenAttached: Effect.Effect<Attached, HostNotReady> = attached.await(readyTimeout).pipe(
+    Effect.flatMap(
+      Option.match({
+        onSome: Effect.succeed,
+        onNone: () =>
+          Effect.fail(
+            new HostNotReady({
+              tag,
+              message: `No engine host attached within ${Duration.format(Duration.fromInputUnsafe(readyTimeout))}; the browser will reschedule the sync`,
+            })
+          ),
+      })
+    )
   );
 
   const handle = (event: SyncEvent): Promise<FlushOutcome> =>
-    edge.runPromise(
+    HostSlot.edge.runPromise(
       whenAttached.pipe(
         Effect.tapError((error) =>
           Effect.logDebug(
@@ -554,18 +543,13 @@ export const listen = (options: ListenOptions): Listener => {
   scope.addEventListener?.("sync", listener);
 
   const registration = Effect.sync(() => scope.registration);
-  const serve: Listener["serve"] = (engine) =>
-    Effect.gen(function* () {
+  const serve: Listener["serve"] = Effect.fn("legation-browser/BackgroundSync.serve")(
+    function* (engine) {
       const entry: Attached = {
         flush: flush(engine, { identity: options.identity }),
         services: yield* Effect.context(),
       };
-      yield* Effect.acquireRelease(SubscriptionRef.set(attached, Option.some(entry)), () =>
-        // Detach only ourselves: a newer host may already have attached.
-        SubscriptionRef.update(attached, (current) =>
-          Option.isSome(current) && current.value === entry ? Option.none() : current
-        )
-      );
+      yield* attached.attach(entry);
       if (options.registerOnJournal !== false) {
         yield* registerOnJournal(engine, {
           tag,
@@ -573,7 +557,8 @@ export const listen = (options: ListenOptions): Listener => {
           ...Defined.fields({ offline: options.offline }),
         });
       }
-    });
+    }
+  );
 
   return { tag, serve };
 };
