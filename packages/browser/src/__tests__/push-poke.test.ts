@@ -163,4 +163,36 @@ describe("PushPoke.listen", () => {
       expect(yield* outcome(held)).toBe("Registered");
     })
   );
+
+  it.live("gives up as HostNotReady when no host attaches within the ready timeout", () =>
+    Effect.gen(function* () {
+      const self = fakeScope();
+      PushPoke.listen({
+        identity: Effect.succeed(ALICE),
+        scope: self.scope,
+        readyTimeout: "20 millis",
+      });
+      expect(yield* outcome(self.push(Marker.payload))).toBe("HostNotReady");
+      expect(self.tags).toEqual([]);
+    })
+  );
+
+  it.effect("a host that has detached is not used; the next one is", () =>
+    Effect.gen(function* () {
+      const self = fakeScope();
+      const listener = PushPoke.listen({
+        identity: Effect.succeed(ALICE),
+        action: "pull",
+        scope: self.scope,
+      });
+      const first = yield* makeEngine(ALICE);
+      yield* Effect.scoped(listener.serve(first));
+      const held = self.push(Marker.payload);
+      const second = yield* makeEngine(ALICE);
+      const before = yield* second.pullCounts;
+      yield* listener.serve(second);
+      expect(yield* outcome(held)).toBe("Pulled");
+      expect((yield* second.pullCounts).applied).toBe(before.applied + 1);
+    })
+  );
 });

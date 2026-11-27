@@ -38,13 +38,15 @@
 
 import type { ClientEngine } from "@thomasfosterau/legation/internal";
 import { PushPoke as Marker } from "@thomasfosterau/legation/internal";
-import * as Duration from "effect/Duration";
+import type * as Context from "effect/Context";
+import type * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
 import * as P from "effect/Predicate";
 import * as Result from "effect/Result";
 import * as Scope from "effect/Scope";
 import * as BackgroundSync from "./BackgroundSync.js";
+import * as HostSlot from "./internal/HostSlot.js";
 
 /** The slice of a worker's `PushEvent` the listener reads. */
 export interface PushEvent {
@@ -120,10 +122,10 @@ const isLibraryPoke = (event: PushEvent): boolean => {
   );
 };
 
-/** An attached host: its engine, and a runner over its services (logger, tracer). */
+/** An attached host: its engine, and its services, so a push logs and traces as the host does. */
 interface Attached {
   readonly engine: ClientEngine.ClientEngine;
-  readonly run: <A>(effect: Effect.Effect<A>) => Promise<A>;
+  readonly services: Context.Context<never>;
 }
 
 /**
@@ -142,12 +144,7 @@ export const listen = (options: ListenOptions): Listener => {
   const scope: Partial<PushScope> = options.scope ?? globalThis;
   const tag = options.tag ?? BackgroundSync.defaultTag;
   const readyTimeout = options.readyTimeout ?? BackgroundSync.defaultReadyTimeout;
-  const timeoutMillis = Duration.toMillis(Duration.fromInputUnsafe(readyTimeout));
-  // The attached host, and the pushes waiting for one. Plain state: the event
-  // listener must decide synchronously, and runs nothing until a host brings
-  // its services.
-  let attached: Option.Option<Attached> = Option.none();
-  let waiting: Array<(host: Attached) => void> = [];
+  const attached = HostSlot.make<Attached>();
 
   // The identity check of `BackgroundSync.flush`: an exact match, or nothing.
   const sameIdentity = (engine: ClientEngine.ClientEngine): Effect.Effect<boolean> =>
@@ -183,23 +180,18 @@ export const listen = (options: ListenOptions): Listener => {
       });
     });
 
-  // Act through the attached host, or wait for one up to the ready timeout.
+  // Act through the attached host, waiting for one up to the ready timeout.
   const handle = (): Promise<PokeOutcome | "HostNotReady"> =>
-    Option.match(attached, {
-      onSome: (host) => host.run(act(host.engine)),
-      onNone: () =>
-        new Promise<PokeOutcome | "HostNotReady">((resolve) => {
-          const proceed = (host: Attached) => {
-            clearTimeout(timer);
-            resolve(host.run(act(host.engine)));
-          };
-          const timer = setTimeout(() => {
-            waiting = waiting.filter((other) => other !== proceed);
-            resolve("HostNotReady");
-          }, timeoutMillis);
-          waiting = [...waiting, proceed];
-        }),
-    });
+    HostSlot.edge.runPromise(
+      attached.await(readyTimeout).pipe(
+        Effect.flatMap(
+          Option.match({
+            onNone: () => Effect.succeed("HostNotReady" as const),
+            onSome: (host) => act(host.engine).pipe(Effect.provideContext(host.services)),
+          })
+        )
+      )
+    );
 
   const listener = (event: PushEvent): void => {
     // Not the library's push: leave it to the app's own handler.
@@ -209,22 +201,7 @@ export const listen = (options: ListenOptions): Listener => {
   scope.addEventListener?.("push", listener);
 
   const serve: Listener["serve"] = (engine) =>
-    Effect.gen(function* () {
-      const host: Attached = { engine, run: Effect.runPromiseWith(yield* Effect.context()) };
-      yield* Effect.acquireRelease(
-        Effect.sync(() => {
-          attached = Option.some(host);
-          const ready = waiting;
-          waiting = [];
-          ready.forEach((proceed) => proceed(host));
-        }),
-        () =>
-          Effect.sync(() => {
-            // Detach only ourselves: a newer host may already have attached.
-            if (Option.isSome(attached) && attached.value === host) attached = Option.none();
-          })
-      );
-    });
+    Effect.flatMap(Effect.context(), (services) => attached.attach({ engine, services }));
 
   return { serve };
 };

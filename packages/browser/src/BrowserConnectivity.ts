@@ -48,7 +48,6 @@ import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
 import * as P from "effect/Predicate";
-import * as Queue from "effect/Queue";
 import * as Schedule from "effect/Schedule";
 import * as Scope from "effect/Scope";
 import * as Stream from "effect/Stream";
@@ -77,25 +76,9 @@ const globalNavigator = (): Option.Option<Navigator> =>
 const navigatorOnline = (): boolean =>
   Option.match(globalNavigator(), { onNone: () => true, onSome: (navigator) => navigator.onLine });
 
-/**
- * Register a DOM event listener on `target` for the scope's lifetime. No-op
- * when there is no target (e.g. server-side rendering).
- */
-const onEvent = (
-  target: Option.Option<EventTarget>,
-  type: string,
-  handler: () => void
-): Effect.Effect<void, never, Scope.Scope> =>
-  Option.match(target, {
-    onNone: () => Effect.void,
-    onSome: (present) =>
-      Effect.acquireRelease(
-        Effect.sync(() => {
-          present.addEventListener(type, handler);
-        }),
-        () => Effect.sync(() => present.removeEventListener(type, handler))
-      ).pipe(Effect.asVoid),
-  });
+/** The status a navigator reading stands for. */
+const toStatus = (online: boolean): Transport.ConnectionStatus =>
+  online ? "connected" : "disconnected";
 
 /** The pessimistic combination of two status signals. */
 const worst = (
@@ -113,7 +96,8 @@ const worst = (
  * `navigator.onLine` with the transport's own signal, and a return-to-visible
  * surfaces a poke. Where there is no `window` (a service worker), the
  * navigator signal is probed every `pollInterval` instead of listened for.
- * Scoped: forked fibres and DOM listeners are torn down when the scope closes.
+ * Scoped: the navigator listener or probe is torn down when the scope closes;
+ * the visibility listener is on while `pokes` is consumed.
  */
 export const withBrowserConnectivity = (
   transport: Transport.ClientTransport,
@@ -131,47 +115,49 @@ export const withBrowserConnectivity = (
     const status = yield* SubscriptionRef.make<Transport.ConnectionStatus>(
       initialOnline ? "connected" : "disconnected"
     );
-    // DOM callbacks are synchronous; bridge them into Effect via unsafe offers.
-    const statusEvents = yield* Queue.unbounded<Transport.ConnectionStatus>();
-    const focusPokes = yield* Queue.unbounded<Protocol.Poke>();
 
-    yield* Effect.forkScoped(
-      Stream.fromQueue(statusEvents).pipe(
-        Stream.runForEach((next) => SubscriptionRef.set(status, next))
-      )
-    );
+    const follow = (flips: Stream.Stream<Transport.ConnectionStatus>) =>
+      // Started at once, so a listener is on before this returns.
+      Effect.forkScoped(
+        Stream.runForEach(flips, (next) => SubscriptionRef.set(status, next)),
+        { startImmediately: true }
+      );
 
     if (Option.isSome(win)) {
-      yield* onEvent(win, "online", () => Queue.offerUnsafe(statusEvents, "connected"));
-      yield* onEvent(win, "offline", () => Queue.offerUnsafe(statusEvents, "disconnected"));
+      // One fibre per event: a single `fromEventListener` registers its
+      // listener synchronously, which a `Stream.merge` of the two would not.
+      yield* follow(Stream.fromEventListener(win.value, "online").pipe(Stream.as("connected")));
+      yield* follow(Stream.fromEventListener(win.value, "offline").pipe(Stream.as("disconnected")));
     } else if (Option.isSome(globalNavigator())) {
       // No window, so no online/offline events: probe the navigator for a flip.
-      // The last reading is compared, not the status ref, so a flip is emitted
-      // once and an unchanged reading emits nothing.
-      let lastOnline = initialOnline;
-      yield* Effect.forkScoped(
-        Effect.repeat(
-          Effect.sync(() => {
-            const online = navigatorOnline();
-            if (online !== lastOnline) {
-              lastOnline = online;
-              Queue.offerUnsafe(statusEvents, online ? "connected" : "disconnected");
-            }
-          }),
-          Schedule.spaced(options.pollInterval ?? "5 seconds")
-        )
+      // A reading is emitted only when it differs from the last one, the
+      // construction-time reading included, so an unchanged reading emits nothing.
+      yield* follow(
+        Stream.concat(
+          Stream.succeed(initialOnline),
+          Stream.fromEffectSchedule(
+            Effect.sync(navigatorOnline),
+            Schedule.spaced(options.pollInterval ?? "5 seconds")
+          )
+        ).pipe(Stream.changes, Stream.drop(1), Stream.map(toStatus))
       );
     }
-    yield* onEvent(doc, "visibilitychange", () => {
-      if (Option.exists(doc, (document) => document.visibilityState === "visible")) {
-        Queue.offerUnsafe(focusPokes, { reason: "visibilitychange" });
-      }
+
+    // A return-to-visible, as a poke; listened for while the pokes are read.
+    // The state is read as the stream takes the event, a moment after it fired.
+    const focusPokes: Stream.Stream<Protocol.Poke> = Option.match(doc, {
+      onNone: () => Stream.empty,
+      onSome: (document) =>
+        Stream.fromEventListener(document, "visibilitychange").pipe(
+          Stream.filter(() => document.visibilityState === "visible"),
+          Stream.as<Protocol.Poke>({ reason: "visibilitychange" })
+        ),
     });
 
     return {
       push: transport.push,
       pull: transport.pull,
-      pokes: Stream.merge(transport.pokes, Stream.fromQueue(focusPokes)),
+      pokes: Stream.merge(transport.pokes, focusPokes),
       status: Effect.zipWith(SubscriptionRef.get(status), transport.status, worst),
       // Both sources emit their current value first (the seam's contract), so
       // the combination emits promptly; dedup keeps reconnect triggers calm.

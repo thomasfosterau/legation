@@ -106,15 +106,13 @@ import type { Identity, StoreError, TransportError } from "@thomasfosterau/legat
 import type { ClientEngine } from "@thomasfosterau/legation/internal";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
-import * as Layer from "effect/Layer";
-import * as ManagedRuntime from "effect/ManagedRuntime";
 import * as Option from "effect/Option";
 import * as P from "effect/Predicate";
 import * as Schema from "effect/Schema";
 import * as Scope from "effect/Scope";
 import * as Stream from "effect/Stream";
-import * as SubscriptionRef from "effect/SubscriptionRef";
 import type * as Context from "effect/Context";
+import * as HostSlot from "./internal/HostSlot.js";
 
 /**
  * The tag the library registers and answers. Short on purpose: Chromium
@@ -473,12 +471,6 @@ interface Attached {
 }
 
 /**
- * The worker's own runtime for the listener's two runs (the host-ready ref and each flush): they close
- * over the attached host's services, so the runtime itself supplies none.
- */
-const edge = ManagedRuntime.make(Layer.empty);
-
-/**
  * Install the `sync` listener on the worker's scope — **synchronously, at the
  * top level of the worker script** (see the module docs for why). Deliberately
  * a plain function rather than an Effect for that reason.
@@ -494,32 +486,26 @@ export const listen = (options: ListenOptions): Listener => {
   const tag = options.tag ?? defaultTag;
   const scope: Partial<SyncScope> = options.scope ?? globalThis;
   const readyTimeout = options.readyTimeout ?? defaultReadyTimeout;
-  const attached = edge.runSync(SubscriptionRef.make(Option.none<Attached>()));
+  const attached = HostSlot.make<Attached>();
 
   // The first attached host, however long it takes to arrive (bounded).
-  // `changes` emits the current value first and never ends, so the head
-  // exists as soon as some host is attached.
-  const whenAttached: Effect.Effect<Attached, HostNotReady> = SubscriptionRef.changes(
-    attached
-  ).pipe(
-    Stream.filter(Option.isSome),
-    Stream.map((some) => some.value),
-    Stream.runHead,
-    Effect.flatMap((head) => (Option.isSome(head) ? Effect.succeed(head.value) : Effect.never)),
-    Effect.timeoutOrElse({
-      duration: readyTimeout,
-      orElse: () =>
-        Effect.fail(
-          new HostNotReady({
-            tag,
-            message: `No engine host attached within ${Duration.format(Duration.fromInputUnsafe(readyTimeout))}; the browser will reschedule the sync`,
-          })
-        ),
-    })
+  const whenAttached: Effect.Effect<Attached, HostNotReady> = attached.await(readyTimeout).pipe(
+    Effect.flatMap(
+      Option.match({
+        onSome: Effect.succeed,
+        onNone: () =>
+          Effect.fail(
+            new HostNotReady({
+              tag,
+              message: `No engine host attached within ${Duration.format(Duration.fromInputUnsafe(readyTimeout))}; the browser will reschedule the sync`,
+            })
+          ),
+      })
+    )
   );
 
   const handle = (event: SyncEvent): Promise<FlushOutcome> =>
-    edge.runPromise(
+    HostSlot.edge.runPromise(
       whenAttached.pipe(
         Effect.tapError((error) =>
           Effect.logDebug(
@@ -560,12 +546,7 @@ export const listen = (options: ListenOptions): Listener => {
         flush: flush(engine, { identity: options.identity }),
         services: yield* Effect.context(),
       };
-      yield* Effect.acquireRelease(SubscriptionRef.set(attached, Option.some(entry)), () =>
-        // Detach only ourselves: a newer host may already have attached.
-        SubscriptionRef.update(attached, (current) =>
-          Option.isSome(current) && current.value === entry ? Option.none() : current
-        )
-      );
+      yield* attached.attach(entry);
       if (options.registerOnJournal !== false) {
         yield* registerOnJournal(engine, {
           tag,

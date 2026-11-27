@@ -36,7 +36,7 @@ export const make = (
           Effect.sync(() => channel.addEventListener("message", listener)),
           () => Effect.sync(() => channel.removeEventListener("message", listener))
         );
-        return { take: Queue.take(queue).pipe(Effect.orDie) };
+        return { take: Queue.take(queue) };
       }),
     };
   });

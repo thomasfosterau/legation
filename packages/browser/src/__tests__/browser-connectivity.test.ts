@@ -30,6 +30,7 @@ import {
   SyncServer,
 } from "@thomasfosterau/legation/internal";
 import { describe, expect, it } from "@effect/vitest";
+import * as Arr from "effect/Array";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Ref from "effect/Ref";
@@ -361,6 +362,37 @@ describe("BrowserConnectivity", () => {
         yield* advanceUntil(atLeast(pushes, 1));
         expect(yield* Ref.get(pushes)).toBe(1);
         expect(yield* store.pendingMutations).toEqual([]);
+      })
+    )
+  );
+
+  it.effect("each return-to-visible is one poke; a change to hidden is none", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        let visibility = "hidden";
+        Object.defineProperty(document, "visibilityState", {
+          configurable: true,
+          get: () => visibility,
+        });
+        const connectivity = yield* BrowserConnectivity.withBrowserConnectivity({
+          ...Transport.offline,
+          pokes: Stream.never,
+        });
+        const pokes = yield* Ref.make<ReadonlyArray<unknown>>([]);
+        yield* connectivity.pokes.pipe(
+          Stream.runForEach((poke) => Ref.update(pokes, (all) => [...all, poke])),
+          Effect.forkScoped
+        );
+        // The listener is on once the poke stream is being read.
+        yield* TestClock.adjust(Duration.millis(10));
+        document.dispatchEvent(new Event("visibilitychange"));
+        yield* TestClock.adjust(Duration.millis(10));
+        expect(yield* Ref.get(pokes)).toEqual([]);
+        visibility = "visible";
+        document.dispatchEvent(new Event("visibilitychange"));
+        yield* advanceUntil(Effect.map(Ref.get(pokes), Arr.isReadonlyArrayNonEmpty));
+        yield* TestClock.adjust(Duration.millis(10));
+        expect(yield* Ref.get(pokes)).toEqual([{ reason: "visibilitychange" }]);
       })
     )
   );
