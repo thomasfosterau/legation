@@ -62,6 +62,7 @@ import * as Ref from "effect/Ref";
 import * as Scope from "effect/Scope";
 import * as Semaphore from "effect/Semaphore";
 import * as Stream from "effect/Stream";
+import * as Struct from "effect/Struct";
 import * as ClientEngine from "./ClientEngine.js";
 import * as ClientStore from "./ClientStore.js";
 import * as RpcTransport from "./RpcTransport.js";
@@ -502,13 +503,12 @@ const unheld = (interest: Interest): boolean => interest.observers === 0 && inte
  * lists.
  */
 const oneFewerOn = (current: Interest, kind: Kind): Interest => {
-  const { url, ...rest } = current;
   const pins = oneFewer(current.pins, kind, "explicit");
   return {
-    ...rest,
+    ...Struct.omit(current, ["url"]),
     observers: oneFewer(current.observers, kind, "observer"),
     pins,
-    ...Defined.fields({ url: pins > 0 && url !== undefined ? url : undefined }),
+    ...Defined.fields({ url: pins > 0 ? current.url : undefined }),
   };
 };
 
