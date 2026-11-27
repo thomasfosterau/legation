@@ -395,6 +395,17 @@ describe("JsonApiQuery.defaultEncoder", () => {
     expect(JsonApiQuery.buildQueryString()).toBe("");
     expect(JsonApiQuery.buildQueryString({})).toBe("");
   });
+
+  it("encodes a shape again after more shapes than the codec memo holds have evicted it", () => {
+    const first = JsonApiQuery.flatFilter(Filter.eq("field0", "x"));
+    Arr.forEach(Arr.range(1, 300), (n) => {
+      expect(JsonApiQuery.flatFilter(Filter.eq(`field${n}`, n))).toEqual({
+        [`filter[field${n}]`]: String(n),
+      });
+    });
+    expect(JsonApiQuery.flatFilter(Filter.eq("field0", "x"))).toEqual(first);
+    expect(first).toEqual({ "filter[field0]": "x" });
+  });
 });
 
 // ─── The encoder reaches a server ────────────────────────────────────────────

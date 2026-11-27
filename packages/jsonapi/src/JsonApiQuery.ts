@@ -1172,14 +1172,23 @@ const literalTypesOf = (ast: Filter.Node): MutableHashMap.MutableHashMap<string,
 /** The flat `filter[...]` codec of an untyped declaration. */
 type FlatFilterCodec = Schema.Codec<Filter.Node, Readonly<Record<string, string>>>;
 
-const flatFilterCodecs = MutableHashMap.empty<string, FlatFilterCodec>();
+/** How many filter shapes {@link flatFilterCodecOf} keeps codecs for. */
+const FLAT_FILTER_CODEC_CAPACITY = 256;
+
+/**
+ * The flat codecs built so far, by field → type signature, least recently used
+ * first (a `Map` keeps insertion order, and a hit re-inserts its entry). Bounded,
+ * so a process that sees unboundedly many filter shapes keeps only the recent ones.
+ */
+const flatFilterCodecs = new Map<string, FlatFilterCodec>();
 
 /**
  * The codec for encoding a tree without a node graph: each field it names
  * admits every operator, typed by the JS type of its literals. The wire
  * form of a scalar does not depend on its declared kind, so this encodes
  * exactly what the typed codec would. Memoised by the field → type
- * signature, since a backend encodes the same shapes on every pull.
+ * signature, since a backend encodes the same shapes on every pull; the
+ * memo keeps the {@link FLAT_FILTER_CODEC_CAPACITY} most recently used.
  */
 const flatFilterCodecOf = (ast: Filter.Node): FlatFilterCodec => {
   const types = literalTypesOf(ast);
@@ -1187,8 +1196,12 @@ const flatFilterCodecOf = (ast: Filter.Node): FlatFilterCodec => {
     .map(([field, type]) => `${field}:${type}`)
     .toSorted(Predicate.compareText)
     .join("\n");
-  const cached = MutableHashMap.get(flatFilterCodecs, signature);
-  if (Option.isSome(cached)) return cached.value;
+  const cached = flatFilterCodecs.get(signature);
+  if (cached !== undefined) {
+    flatFilterCodecs.delete(signature);
+    flatFilterCodecs.set(signature, cached);
+    return cached;
+  }
   const attributes = R.fromIterableWith(
     [...types].filter(([field]) => field !== RESOURCE_ID),
     ([field, type]): [string, Schema.Top] => [field, scalarSchema(type).pipe(Filter.able())]
@@ -1203,7 +1216,11 @@ const flatFilterCodecOf = (ast: Filter.Node): FlatFilterCodec => {
   const codec = UrlQuery.Filter(
     Resource.make("query", { ...withId(id), attributes })
   ) as FlatFilterCodec;
-  MutableHashMap.set(flatFilterCodecs, signature, codec);
+  flatFilterCodecs.set(signature, codec);
+  if (flatFilterCodecs.size > FLAT_FILTER_CODEC_CAPACITY) {
+    const [oldest] = flatFilterCodecs.keys();
+    if (oldest !== undefined) flatFilterCodecs.delete(oldest);
+  }
   return codec;
 };
 
