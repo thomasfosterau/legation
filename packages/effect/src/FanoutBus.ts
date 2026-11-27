@@ -67,7 +67,7 @@ export const make = (options: MakeOptions): Effect.Effect<InvalidationBus, never
   Effect.gen(function* () {
     const derivable = FanoutTopics.derivableSets(options.nodes);
     const heartbeat = options.heartbeat ?? "10 seconds";
-    const ttl = options.ttl ?? Duration.millis(Duration.toMillis(heartbeat) * 3);
+    const ttl = options.ttl ?? Duration.times(Duration.fromInputUnsafe(heartbeat), 3);
     const timeout = options.timeout ?? "5 seconds";
     // Every broker call is bounded, so a hung broker drops its call instead of
     // stalling the publish that awaits it (ADR-0009: correctness never depends on the bus).
