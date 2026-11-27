@@ -367,6 +367,19 @@ describe("host requests (ADR-0021 amendment)", () => {
     })
   );
 
+  it.effect("a repeated request id replaces the request still in flight under it", () =>
+    Effect.gen(function* () {
+      const { pair, mirror, posted, endlessStarted, endlessStopped } = yield* setup();
+      yield* Effect.forkChild(Stream.runDrain(mirror.stream(endless, {})));
+      yield* Deferred.await(endlessStarted);
+      const request = (yield* Ref.get(posted)).find(isHostRequest);
+      expect(request).toBeDefined();
+      if (request === undefined) return;
+      yield* pair.mirror.post(request);
+      yield* Deferred.await(endlessStopped);
+    })
+  );
+
   it.effect("a reply addressed to another mirror is ignored", () =>
     Effect.gen(function* () {
       const pair = yield* MirrorChannel.makeLoopbackPair;

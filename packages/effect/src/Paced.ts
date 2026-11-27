@@ -5,7 +5,7 @@
  * field autosaving per keystroke, a slider, a cart-quantity stepper — layered
  * over {@link ClientEngine} the same way {@link Undo} is: no engine surgery,
  * built entirely from `mutateWithAck` + `dropIfPending` + Effect's own timing
- * primitives (`Effect.sleep`, `Fiber.interrupt`). No pacer dependency, no
+ * primitives (`Effect.sleep`, `FiberMap`). No pacer dependency, no
  * general-purpose pacer module — just the journal-compaction rule ADR-0008
  * already permits on the unpushed tail.
  *
@@ -70,7 +70,7 @@
  */
 import * as Arr from "effect/Array";
 import * as Effect from "effect/Effect";
-import * as Fiber from "effect/Fiber";
+import * as FiberMap from "effect/FiberMap";
 import * as HashMap from "effect/HashMap";
 import * as MutableHashMap from "effect/MutableHashMap";
 import * as Option from "effect/Option";
@@ -153,7 +153,6 @@ interface Entry {
   latestArgs: unknown;
   /** Whether `latestArgs` has landed since the last flush for this key. */
   dirty: boolean;
-  timer: Option.Option<Fiber.Fiber<void>>;
 }
 
 /**
@@ -242,10 +241,11 @@ export const debounce = (
   duration: Duration.Input
 ): Effect.Effect<PacedMutation, never, Scope.Scope> =>
   Effect.gen(function* () {
-    const scope = yield* Effect.scope;
     const lock = yield* Semaphore.make(1);
     const lastIdByKey = MutableHashMap.empty<string, number>();
     const entries = MutableHashMap.empty<string, Entry>();
+    // Each key's trailing timer; running a new one for a key interrupts the old.
+    const timers = yield* FiberMap.make<string, void>();
 
     const trailing = (key: string): Effect.Effect<void> =>
       Effect.sleep(duration).pipe(
@@ -271,19 +271,17 @@ export const debounce = (
         lock,
         Effect.gen(function* () {
           const found = MutableHashMap.get(entries, key);
-          let entry: Entry;
           if (Option.isNone(found)) {
             // Leading edge: journal now so the overlay reflects it immediately.
-            entry = { latestArgs: args, dirty: false, timer: Option.none() };
-            MutableHashMap.set(entries, key, entry);
+            MutableHashMap.set(entries, key, { latestArgs: args, dirty: false });
             yield* flush(engine, mutator, lastIdByKey, key, args);
           } else {
-            entry = found.value;
-            if (Option.isSome(entry.timer)) yield* Fiber.interrupt(entry.timer.value);
-            entry.latestArgs = args;
-            entry.dirty = true;
+            // Stop the running timer first: only the restarted one may flush.
+            yield* FiberMap.remove(timers, key);
+            found.value.latestArgs = args;
+            found.value.dirty = true;
           }
-          entry.timer = Option.some(yield* Effect.forkIn(trailing(key), scope));
+          yield* FiberMap.run(timers, key, trailing(key));
         })
       );
 
@@ -303,32 +301,36 @@ export const throttle = (
   duration: Duration.Input
 ): Effect.Effect<PacedMutation, never, Scope.Scope> =>
   Effect.gen(function* () {
-    const scope = yield* Effect.scope;
     const lock = yield* Semaphore.make(1);
     const lastIdByKey = MutableHashMap.empty<string, number>();
     const entries = MutableHashMap.empty<string, Entry>();
+    // Each key's window loop, from its leading edge until a window passes idle.
+    const windows = yield* FiberMap.make<string, void>();
 
-    const tick = (key: string): Effect.Effect<void> =>
+    // One window: wait it out, then flush what it buffered. `true` while the key
+    // is still busy, so the loop runs another window.
+    const oneWindow = (key: string): Effect.Effect<boolean> =>
       Effect.sleep(duration).pipe(
         Effect.andThen(
           Semaphore.withPermit(
             lock,
             Effect.gen(function* () {
               const found = MutableHashMap.get(entries, key);
-              if (Option.isNone(found)) return;
+              if (Option.isNone(found)) return false;
               const entry = found.value;
               if (!entry.dirty) {
                 MutableHashMap.remove(entries, key); // idle: the next call is a fresh leading edge
-                return;
+                return false;
               }
               entry.dirty = false;
-              const args = entry.latestArgs;
-              yield* flushBackground(engine, mutator, lastIdByKey, key, args);
-              entry.timer = Option.some(yield* Effect.forkIn(tick(key), scope));
+              yield* flushBackground(engine, mutator, lastIdByKey, key, entry.latestArgs);
+              return true;
             })
           )
         )
       );
+    const windowsOf = (key: string): Effect.Effect<void> =>
+      Effect.flatMap(oneWindow(key), (busy) => (busy ? windowsOf(key) : Effect.void));
 
     const call: PacedMutation["call"] = (key, args) =>
       Semaphore.withPermit(
@@ -337,10 +339,9 @@ export const throttle = (
           const found = MutableHashMap.get(entries, key);
           if (Option.isNone(found)) {
             // Leading edge: journal now and start this key's window.
-            const created: Entry = { latestArgs: args, dirty: false, timer: Option.none() };
-            MutableHashMap.set(entries, key, created);
+            MutableHashMap.set(entries, key, { latestArgs: args, dirty: false });
             yield* flush(engine, mutator, lastIdByKey, key, args);
-            created.timer = Option.some(yield* Effect.forkIn(tick(key), scope));
+            yield* FiberMap.run(windows, key, windowsOf(key));
             return;
           }
           // A window is already running for this key: buffer, don't reset it.

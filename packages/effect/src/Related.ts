@@ -23,7 +23,7 @@ import * as Defined from "./Defined.js";
 import * as Arr from "effect/Array";
 import * as R from "effect/Record";
 import * as Effect from "effect/Effect";
-import * as Fiber from "effect/Fiber";
+import * as FiberMap from "effect/FiberMap";
 import * as Option from "effect/Option";
 import * as P from "effect/Predicate";
 import * as Queue from "effect/Queue";
@@ -680,25 +680,19 @@ export const observeWith = (
     return Effect.gen(function* () {
       const engine = makeJoinEngine(strategy);
       const events = yield* Queue.unbounded<JoinEvent>();
-      const collectionFibers = new Map<string, Fiber.Fiber<void>>();
+      // One observer per targeted foreign collection; the stream's scope interrupts the rest.
+      const collectionFibers = yield* FiberMap.make<string, void>();
 
       const startCollection = (collection: string) =>
-        Effect.gen(function* () {
-          const fiber = yield* Effect.forkScoped(
-            Stream.runForEach(
-              view.observe(Subset.make({ collection })).pipe(Stream.orDie),
-              (rows) => Queue.offer(events, { _tag: "foreign", collection, rows })
-            )
-          );
-          collectionFibers.set(collection, fiber);
-        });
+        FiberMap.run(
+          collectionFibers,
+          collection,
+          Stream.runForEach(view.observe(Subset.make({ collection })).pipe(Stream.orDie), (rows) =>
+            Queue.offer(events, { _tag: "foreign", collection, rows })
+          )
+        );
 
-      const stopCollection = (collection: string) =>
-        Effect.gen(function* () {
-          const fiber = collectionFibers.get(collection);
-          collectionFibers.delete(collection);
-          if (fiber !== undefined) yield* Fiber.interrupt(fiber);
-        });
+      const stopCollection = (collection: string) => FiberMap.remove(collectionFibers, collection);
 
       // The base observer runs for the join's whole lifetime; foreign
       // observers come and go with `applyBase`'s targeted-set diff below.

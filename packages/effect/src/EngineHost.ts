@@ -74,12 +74,12 @@ import * as Subscriptions from "./Subscriptions.js";
 import * as Subset from "./Subset.js";
 import * as Arr from "effect/Array";
 import * as Clock from "effect/Clock";
-import * as Deferred from "effect/Deferred";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Eq from "effect/Equal";
 import * as Exit from "effect/Exit";
 import * as Fiber from "effect/Fiber";
+import * as FiberMap from "effect/FiberMap";
 import * as HashMap from "effect/HashMap";
 import * as HashSet from "effect/HashSet";
 import * as Match from "effect/Match";
@@ -788,50 +788,36 @@ export const run = (options: EngineHostOptions): Effect.Effect<Host, never, Scop
     // holds up the message loop. A cancel interrupts one; a mirror that leaves
     // (or is swept) has every request it holds interrupted.
     const requestRegistry = yield* requestRegistryOf(options);
-    const hostRequests = yield* Ref.make(HashMap.empty<string, Fiber.Fiber<void>>());
+    const hostRequests = yield* FiberMap.make<string, void>();
     const takeHostRequests = (select: (key: string) => boolean) =>
-      Ref.modify(
-        hostRequests,
-        (map) =>
-          [
-            [...HashMap.values(HashMap.filter(map, (_, key) => select(key)))],
-            HashMap.filter(map, (_, key) => !select(key)),
-          ] as const
-      ).pipe(
-        Effect.flatMap((fibers) =>
-          Effect.forEach(fibers, Fiber.interrupt, { concurrency: "unbounded", discard: true })
-        )
+      Effect.forEach(
+        Arr.filter(
+          Arr.map(Arr.fromIterable(hostRequests), ([key]) => key),
+          select
+        ),
+        (key) => FiberMap.remove(hostRequests, key),
+        { concurrency: "unbounded", discard: true }
       );
 
     // Answer a host request: decode it against its kind's handler (or refuse
-    // an unknown kind) and post every outcome to the asking mirror. The fiber
-    // waits until it is recorded, so its own removal can never precede it.
+    // an unknown kind) and post every outcome to the asking mirror. A second
+    // request under a key still in flight replaces (interrupts) the first.
     const handleHostRequest = (
       message: MirrorProtocol.MirrorMessage & { readonly _tag: "HostRequest" }
-    ) =>
-      Effect.gen(function* () {
-        const { mirrorId, requestId } = message;
-        const key = hostRequestKey(mirrorId, requestId);
-        const outcomes = Option.match(HashMap.get(requestRegistry, message.kind), {
-          onNone: () => Stream.make(HostRequest.unknownKind(message.kind)),
-          onSome: (served) => served.serve(message.payload),
-        });
-        const recorded = yield* Deferred.make<void>();
-        const fiber = yield* Effect.forkScoped(
-          Deferred.await(recorded).pipe(
-            Effect.andThen(
-              Stream.runForEach(outcomes, (outcome) =>
-                channel
-                  .post({ _tag: "HostResponse", mirrorId, requestId, outcome })
-                  .pipe(Effect.ignore)
-              )
-            ),
-            Effect.ensuring(Ref.update(hostRequests, HashMap.remove(key)))
-          )
-        );
-        yield* Ref.update(hostRequests, HashMap.set(key, fiber));
-        yield* Deferred.succeed(recorded, undefined);
+    ) => {
+      const { mirrorId, requestId } = message;
+      const outcomes = Option.match(HashMap.get(requestRegistry, message.kind), {
+        onNone: () => Stream.make(HostRequest.unknownKind(message.kind)),
+        onSome: (served) => served.serve(message.payload),
       });
+      return FiberMap.run(
+        hostRequests,
+        hostRequestKey(mirrorId, requestId),
+        Stream.runForEach(outcomes, (outcome) =>
+          channel.post({ _tag: "HostResponse", mirrorId, requestId, outcome }).pipe(Effect.ignore)
+        )
+      ).pipe(Effect.asVoid);
+    };
 
     const abandonForms = (mirrorId: string) =>
       Ref.modify(forms, (map) => {
