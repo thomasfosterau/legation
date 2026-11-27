@@ -1064,7 +1064,8 @@ const projectionOf = (fields: Projection): Projection =>
  * `QueryError` for a read the plan or the grammar refuses: an unknown
  * collection or edge, a field outside the filterable set, an `Exists`, a
  * `null` literal, or a per-edge window. A `fields[]` projection rides
- * along when given.
+ * along when given. A read built from runtime input goes through
+ * {@link canonicalResult}.
  */
 export const canonical = (
   nodes: Node.NodeRegistry,
@@ -1072,8 +1073,12 @@ export const canonical = (
   fields?: Projection
 ): string => Result.getOrThrowWith(canonicalResult(nodes, read, fields), identity);
 
-/** {@link canonical} as a `Result`: the string, or the `QueryError` it throws. */
-const canonicalResult = (
+/**
+ * {@link canonical} as a `Result`: the canonical URL, or a `QueryError` for a
+ * read the plan or the grammar refuses. {@link canonical} is this one check,
+ * thrown.
+ */
+export const canonicalResult = (
   nodes: Node.NodeRegistry,
   read: Query.Read,
   fields?: Projection
@@ -1105,7 +1110,7 @@ const canonicalResult = (
     return query === "" ? `/${read.collection}` : `/${read.collection}?${query}`;
   });
 
-/** {@link canonical} as an effect: the `QueryError` it throws becomes a typed failure. */
+/** {@link canonicalResult} as an effect: a refused read is a typed failure. */
 const tryCanonical = (
   nodes: Node.NodeRegistry,
   read: Query.Read
@@ -1247,13 +1252,19 @@ const flatFilterCodecFor = (
 /**
  * The canonical flat `filter[...]` record of a filter AST — the grammar's
  * own encoder (`Query.Filter`), so the shorthand, the group form, escaping
- * and member order are effect-jsonapi's byte for byte.
+ * and member order are effect-jsonapi's byte for byte. Throws a `QueryError`
+ * for a tree its codec cannot encode; a tree built from runtime input goes
+ * through {@link flatFilterResult}.
  */
 export const flatFilter = (ast: Filter.Node): Readonly<Record<string, string>> =>
   Result.getOrThrowWith(flatFilterResult(ast), identity);
 
-/** {@link flatFilter} as a `Result`: a tree its codec cannot encode is a `QueryError`. */
-const flatFilterResult = (
+/**
+ * {@link flatFilter} as a `Result`: the flat record, or a `QueryError` for a
+ * tree its codec cannot encode (a field compared with literals of several
+ * types). {@link flatFilter} is this one check, thrown.
+ */
+export const flatFilterResult = (
   ast: Filter.Node
 ): Result.Result<Readonly<Record<string, string>>, QueryError> =>
   Result.flatMap(flatFilterCodecOf(ast), (codec) =>
@@ -1286,13 +1297,21 @@ const encodeSort = (terms: ReadonlyArray<SortTerm>): string => {
  * Build the JSON:API query string (with its leading `?`, or `` when empty)
  * for `include` / `fields` / `filter` / `sort` / `page`, in the canonical
  * family order and percent-encoding (`Query.serialise`). `filter` is a
- * filter AST, encoded exactly through {@link flatFilter}.
+ * filter AST, encoded exactly through {@link flatFilter}: one it cannot
+ * encode throws its `QueryError`. Options built from runtime input go
+ * through {@link buildQueryStringResult}.
  */
 export const buildQueryString = (options?: JsonApiRequestOptions): string =>
-  Result.getOrThrowWith(queryStringResult(options), identity);
+  Result.getOrThrowWith(buildQueryStringResult(options), identity);
 
-/** {@link buildQueryString} as a `Result`: a filter it cannot encode is a `QueryError`. */
-const queryStringResult = (options?: JsonApiRequestOptions): Result.Result<string, QueryError> => {
+/**
+ * {@link buildQueryString} as a `Result`: the query string, or a `QueryError`
+ * for a filter {@link flatFilterResult} cannot encode. {@link buildQueryString}
+ * is this one check, thrown.
+ */
+export const buildQueryStringResult = (
+  options?: JsonApiRequestOptions
+): Result.Result<string, QueryError> => {
   if (options === undefined) return Result.succeed("");
   const pairs: Array<UrlQuery.Pair> = [];
   if (options.include && Arr.isReadonlyArrayNonEmpty(options.include))
@@ -1334,13 +1353,18 @@ export interface QueryEncoder {
  * folds to false. The filter is the whole predicate, constants folded;
  * `orderBy` becomes `sort`. Limit and cursor are not pushed: the window is
  * applied locally over the exact filter. Throws a `QueryError` for a
- * predicate with no URL form (`Exists`, a `null` literal).
+ * predicate with no URL form (`Exists`, a `null` literal); a subset built
+ * from runtime input goes through {@link toRequestOptionsResult}.
  */
 export const toRequestOptions = (subset: Subset.Subset): Option.Option<JsonApiRequestOptions> =>
-  Result.getOrThrowWith(requestOptionsResult(subset), identity);
+  Result.getOrThrowWith(toRequestOptionsResult(subset), identity);
 
-/** {@link toRequestOptions} as a `Result`: a predicate with no URL form is a `QueryError`. */
-const requestOptionsResult = (
+/**
+ * {@link toRequestOptions} as a `Result`: the request options (`None` when
+ * the predicate folds to false), or a `QueryError` for a predicate with no
+ * URL form. {@link toRequestOptions} is this one check, thrown.
+ */
+export const toRequestOptionsResult = (
   subset: Subset.Subset
 ): Result.Result<Option.Option<JsonApiRequestOptions>, QueryError> => {
   const where = foldConstants(subset.where);
@@ -1363,10 +1387,10 @@ export const defaultEncoder: QueryEncoder = {
     Effect.suspend(() =>
       Effect.fromResult(
         Result.flatMap(
-          requestOptionsResult(subset),
+          toRequestOptionsResult(subset),
           Option.match({
             onNone: () => Result.succeed(Option.none<string>()),
-            onSome: (options) => Result.map(queryStringResult(options), Option.some),
+            onSome: (options) => Result.map(buildQueryStringResult(options), Option.some),
           })
         )
       )

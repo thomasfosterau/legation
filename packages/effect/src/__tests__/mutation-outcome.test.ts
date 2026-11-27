@@ -14,6 +14,7 @@ import * as Fiber from "effect/Fiber";
 import * as Schema from "effect/Schema";
 import * as Scope from "effect/Scope";
 import * as Stream from "effect/Stream";
+import * as TestClock from "effect/testing/TestClock";
 import * as Authorization from "../Authorization.js";
 import { Backend } from "../Backend.js";
 import * as ClientEngineModule from "../ClientEngine.js";
@@ -124,10 +125,9 @@ describe("per-mutation outcome", () => {
     })
   );
 
-  // Real clock: the collector subscribes to the events PubSub on a background
-  // fibre, so give it a turn to establish before publishing (a TestClock would
-  // freeze the settle/join timeout).
-  it.live("mutationEvents emits journaled then acknowledged for a good mutation", () =>
+  // The collector subscribes to the events PubSub on a background fibre, so
+  // give it a turn to establish before publishing.
+  it.effect("mutationEvents emits journaled then acknowledged for a good mutation", () =>
     Effect.gen(function* () {
       const handler = yield* makeServer();
       const store = yield* ClientStoreModule.makeMemory;
@@ -137,16 +137,16 @@ describe("per-mutation outcome", () => {
       const collected = yield* Effect.forkChild(
         Stream.runCollect(engine.mutationEvents.pipe(Stream.take(2)))
       );
-      yield* Effect.sleep(Duration.millis(20));
+      yield* TestClock.adjust(Duration.millis(20));
       yield* engine.mutateWithAck("todo/set", { id: "y", title: "kept", done: false });
       yield* engine.push;
 
-      const events = yield* Fiber.join(collected).pipe(Effect.timeout(Duration.seconds(2)));
+      const events = yield* Fiber.join(collected);
       expect(events.map((event) => event.phase)).toEqual(["journaled", "acknowledged"]);
     })
   );
 
-  it.live("mutationEvents emits journaled then rejected for a poison mutation", () =>
+  it.effect("mutationEvents emits journaled then rejected for a poison mutation", () =>
     Effect.gen(function* () {
       const handler = yield* makeServer();
       const store = yield* ClientStoreModule.makeMemory;
@@ -156,11 +156,11 @@ describe("per-mutation outcome", () => {
       const collected = yield* Effect.forkChild(
         Stream.runCollect(engine.mutationEvents.pipe(Stream.take(2)))
       );
-      yield* Effect.sleep(Duration.millis(20));
+      yield* TestClock.adjust(Duration.millis(20));
       yield* engine.mutateWithAck("todo/forbidden", { id: "x", title: "doomed", done: false });
       yield* engine.push;
 
-      const events = yield* Fiber.join(collected).pipe(Effect.timeout(Duration.seconds(2)));
+      const events = yield* Fiber.join(collected);
       expect(events.map((event) => event.phase)).toEqual(["journaled", "rejected"]);
       expect(defined(events[1]).reason).toBe("permission revoked");
     })

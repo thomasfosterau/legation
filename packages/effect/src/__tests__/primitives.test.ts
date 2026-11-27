@@ -119,24 +119,8 @@ describe("Cvr.diff", () => {
   });
 });
 
+// The round trips are properties over generated messages: protocol-property.test.ts.
 describe("Protocol schemas", () => {
-  it.effect("round-trips a pull response", () =>
-    Effect.gen(function* () {
-      const response: Protocol.PullResponse = {
-        cookie: "cvr-1",
-        patch: [
-          { _tag: "Clear" },
-          { _tag: "Put", collection: "todos", id: "1", version: 2, value: { title: "hi" } },
-          { _tag: "Del", collection: "todos", id: "2" },
-        ],
-        lastMutationIds: { "client-a": 4 },
-      };
-      const encoded = yield* Schema.encodeEffect(Protocol.PullResponse)(response);
-      const decoded = yield* Protocol.decodePullResponse(Json.parse(Json.stringify(encoded)));
-      expect(decoded).toEqual(response);
-    })
-  );
-
   it.effect("rejects malformed messages with ProtocolError", () =>
     Effect.gen(function* () {
       const result = yield* Effect.exit(Protocol.decodePushRequest({ nope: true }));

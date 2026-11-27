@@ -29,6 +29,10 @@ const ROWS = 10_000;
 const MUTATIONS = 30;
 const LIVE_QUERIES = 5;
 
+// One iteration takes about a second, so the default sample (16 warmup, then
+// at least 64 runs) would outlast the test timeout: a fixed small sample instead.
+const SAMPLE = { warmupIterations: 1, warmupTime: 0, iterations: 5, time: 0 };
+
 const mutators = Mutator.registry([
   {
     mutator: Mutator.make("todo/set", Schema.Unknown),
@@ -101,7 +105,7 @@ layer(transportLayer, { excludeTestServices: true })("delta-maintained overlay",
         yield* awaitPromise(() =>
           bench(`${MUTATIONS} mutates over ${ROWS} rows with ${LIVE_QUERIES} live queries`, async () => {
             await run(scenario().pipe(Effect.scoped));
-          }).run({ time: 1000 })
+          }).run(SAMPLE)
         ).pipe(Effect.orDie);
       })
   );

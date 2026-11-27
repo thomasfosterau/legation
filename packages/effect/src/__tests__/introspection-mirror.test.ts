@@ -121,14 +121,14 @@ describe("Introspection.fromMirror", () => {
     })
   );
 
-  it.live("follows the host's engine events", () =>
+  it.effect("follows the host's engine events", () =>
     Effect.gen(function* () {
       const { engine, remote } = yield* setup();
       const first = yield* Effect.forkChild(Stream.runHead(remote.events));
       // Let the host's handler subscribe to the engine's events first.
-      yield* Effect.sleep(Duration.millis(50));
+      yield* TestClock.adjust(Duration.millis(50));
       yield* engine.mutate(setTodo.name, { id: "1", title: "t" });
-      const event = yield* Fiber.join(first).pipe(Effect.timeout(Duration.seconds(2)));
+      const event = yield* Fiber.join(first);
       expect(event).toMatchObject({ value: { _tag: "MutationJournaled", mutationId: 1 } });
     })
   );

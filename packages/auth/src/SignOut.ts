@@ -72,7 +72,7 @@ const fingerprintDomain = "legation-auth/v1:";
 export const fingerprintOf: (
   userId: string
 ) => Effect.Effect<Identity.Fingerprint, never, Digest.Digest> = Effect.fn(
-  "LegationAuth.fingerprintOf"
+  "legation-auth/SignOut.fingerprintOf"
 )(function* (userId: string) {
   const digest = yield* Digest.Digest;
   const hex = yield* digest.digestHex(
@@ -195,7 +195,7 @@ export const follow: (
   client: Client.Client,
   store: SessionStore,
   options?: SessionChangeOptions
-) => Effect.Effect<Following, never, Scope.Scope> = Effect.fn("LegationAuth.SignOut.follow")(
+) => Effect.Effect<Following, never, Scope.Scope> = Effect.fn("legation-auth/SignOut.follow")(
   function* (client: Client.Client, store: SessionStore, options?: SessionChangeOptions) {
     // The Digest in context, else WebCrypto's, built once for the scope.
     const digest = yield* Effect.flatMap(Effect.serviceOption(Digest.Digest), (service) =>
