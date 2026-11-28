@@ -1,8 +1,0 @@
----
-"@thomasfosterau/legation": patch
-"@thomasfosterau/legation-browser": patch
-"@thomasfosterau/legation-jsonapi": patch
-"@thomasfosterau/legation-alchemy-cloudflare": patch
----
-
-Reusable operations are now `Effect.fn` / `Effect.fnUntraced` functions instead of arrows returning `Effect.gen`. Operation-level calls now emit a tracing span named `<package>/<Module>.<op>`: in `@thomasfosterau/legation`, for example `legation/Client.make`, `legation/Client.connect`, `legation/ClientEngine.pushClaimed`, `legation/ClientEngine.applyPull`, `legation/ClientEngine.seed`, `legation/ClientEngine.ensureSubset`, `legation/SyncServer.readPullOnce`, `legation/Server.mutate`, `legation/Mirror.read`, the `legation/Hydration.*`, `legation/Transport.*` and `legation/Paced.*` constructors, and the `legation/BackendContract.rule*` conformance steps; in `@thomasfosterau/legation-browser`, `legation-browser/BackgroundSync.flush` (renamed from `legation.backgroundSync.flush`), `legation-browser/ServiceWorkerHost.start`, `legation-browser/ElectedHost.run` and others; in `@thomasfosterau/legation-jsonapi`, `legation-jsonapi/JsonApiBackend.getRows`, `.sendAtomic`, `.applyAtomic`, `.applyMutations` and the `CollectionLoader` / `JsonApiFacade` handlers; in `@thomasfosterau/legation-alchemy-cloudflare`, `legation-alchemy-cloudflare/Worker.routeSync` and `legation-alchemy-cloudflare/DurableFanoutBroker.make`. Per-row, per-poke and per-change internals (overlay replay, patch apply, live views, the store's journal, the join engine, CVR diffs, fan-out) stay untraced. Types and behaviour are unchanged; a trace that filtered on `legation.backgroundSync.flush` should match the new name.

@@ -1,5 +1,59 @@
 # @thomasfosterau/legation-svelte
 
+## 0.3.0
+
+### Minor Changes
+
+- a212238: Mutation ids, client group ids and row ids are now branded types, so the compiler rejects one where another is expected: `MutationId` (a branded `number`), `ClientGroupId` and `RowId` (branded `string`s). They are defined in `Protocol` (`@thomasfosterau/legation/internal`) and re-exported where apps use them: `Client.ClientGroupId`, `Client.MutationId`, `Backend.ClientGroupId`, `Backend.MutationId` and `Collection.RowId`. A node's `Node.Id` is now a `RowId` too, so every node id works wherever a row id does.
+
+  The brands are compile-time only: the wire format, the stored formats and the runtime values don't change, and no migration of data is needed.
+
+  **Migration.** Each brand's schema has a `make` constructor for literals and values you mint yourself:
+
+  - `Client.make`, `ClientEngine.make` / `layer`, `Transport.makeInMemory`, `RpcTransport`, `ElectedHost.run`, `JsonApiSync.layer` and `Hydration` snapshots take a `ClientGroupId`: replace `clientGroupId: "g1"` with `clientGroupId: Client.ClientGroupId.make("g1")`. SvelteKit's `clientGroupId(cookies)` already returns one.
+  - A `Backend.SyncContext` (from an identity resolver, a `RestHandlers` `context`, or a direct `backend.applyMutations` call) carries a `ClientGroupId`: use `Backend.ClientGroupId.make(...)`.
+  - A `Protocol.Mutation` built by hand (seeding a backend with `applyMutations`, `Server.mutate`) needs `mutationId: Client.MutationId.make(n)`. `lastMutationIds` maps are `Record<string, MutationId>`.
+  - Row ids read from the engine (`row.id` from a query, patches, CVRs, `ChangeHint.ids`, `SeedRow.id`, `Backend.getRows`) are `RowId`. A backend or handler that returns `ChangeHint`s builds their ids with `Collection.RowId.make(id)`; a row id mapped from your own data (a JSON:API resource id, a SQL column) needs the same.
+  - Write inputs still take plain strings: `LocalWriter` and `BackendWriter` (`put` / `del` / `get`) and `Server.broadcast`'s `ids` accept a `string` id, so handlers that mint ids from their args don't change.
+  - Code generic over a schema's codec, such as `Schema.Codec<A>`, should take the encoded type too (`Schema.Codec<A, I>`) so a branded type isn't widened back to its unbranded encoding.
+
+- e671751: Observed reads now carry the view's typed `ClientViewError` instead of dying with a defect. `Client.observe` and `Client.observeAnswers` (`ObserveOf`, `ObserveAnswersOf`), `Query.observe`, `Related.observe` / `observeWith`, `Related.related` / `relatedWith`, `ClientView.related` and the JSON:API `Relationships.observe` / `related` streams are now `Stream<…, ClientViewError>`. A registration the view refuses when an observed read starts, or a read of the view that fails while it runs (the root, or a foreign collection of a join), ends the stream with that error; the read's registration is released as before.
+
+  The Svelte read hooks (`useQuery`, `useAnswer`, `useConnection`, `useNamedQuery`, `useAggregate`, `useAggregateGrouped`) are now `Live<A, ReadError>` (`ReadError` is `ClientViewError`, exported from the package root): a failed read is an `AsyncResult.Failure` whose cause carries the error, and `promise` rejects with the error itself rather than a squashed defect.
+
+  **Migration.**
+
+  - Code that runs an observed read in an effect with an error channel of `never` now sees `ClientViewError`: handle it (`Stream.catch`, `Effect.catchTag`) or keep the old behaviour with `Stream.orDie`.
+  - A type annotated `Stream.Stream<ReadonlyArray<Related.RelatedRow>>` (or `Stream.Stream<Client.Answer>`) for one of these streams adds `ClientView.ClientViewError` as its error type.
+  - A custom `ClientView` implementation's `related` may now return a stream that fails with `ClientViewError`; one that never fails still satisfies the type.
+  - A Svelte annotation `Live<ResolvedRows<R>>` (or `Connection`'s rows) becomes `Live<ResolvedRows<R>, ReadError>`. A `failed` snippet or a `{:catch}` that inspected the squashed defect now receives the tagged error and can match on its `_tag`.
+
+### Patch Changes
+
+- a212238: A client store that fails to open is now a typed `StoreError` you can recover from, where it was a layer defect.
+
+  **`legation-browser`.** `IndexedDbClientStore.layer` is now `Layer<ClientStore, StoreError, IndexedDb>`, and `layerWindow` and `layerNamespaced` are `Layer<ClientStore, StoreError>`: a database the browser refuses to open (storage unavailable, or quota refused) fails the layer with the `StoreError`. `ElectedHostOptions.dependencies` now takes `Layer<ClientStore | ClientTransport, StoreError>`, and `ElectedHost.run` is `Effect<ElectedHost, StoreError, Scope>`: it fails with the dependencies' error only where there is no `navigator.locks` and the tab hosts at once (an elected tab still logs the failure and keeps mirroring). Migration: where you annotate one of these layers as `Layer<ClientStore>`, add `StoreError` to its error channel, or handle it on the layer: `Layer.catch(() => ClientStore.layerMemory)` to fall back to an in-memory replica, or `Layer.orDie` to keep the old behaviour. Handle (or `Effect.orDie`) the new error channel of `ElectedHost.run`.
+
+  **`legation-jsonapi`.** `JsonApiSyncOptions.store` now takes `Layer<ClientStore, StoreError>`, and `JsonApiSync.layer` is `Layer<ClientEngine, StoreError, HttpClient>`, failing with the error of a `store` that cannot open. Migration: handle the new error channel where you build the layer (`Layer.catch`, or `Layer.orDie` for the old behaviour).
+
+  **`legation-svelte`.** `kit`'s `clientRuntime` accepts a fallible store (`store: Layer<ClientStore, StoreError>`), so `IndexedDbClientStore.layerWindow()` still passes as it is. A store failure the app leaves uncaught is a boot defect, as before; catch it on the layer to recover.
+
+- Updated dependencies [a212238]
+- Updated dependencies [a212238]
+- Updated dependencies [39b395c]
+- Updated dependencies [a212238]
+- Updated dependencies [6a87c19]
+- Updated dependencies [0ece363]
+- Updated dependencies [e671751]
+- Updated dependencies [5b65c8f]
+- Updated dependencies [a212238]
+- Updated dependencies [e671751]
+- Updated dependencies [5b65c8f]
+- Updated dependencies [99d89bb]
+- Updated dependencies [e671751]
+- Updated dependencies [3ea8640]
+  - @thomasfosterau/legation@0.7.0
+
 ## 0.2.4
 
 ### Patch Changes

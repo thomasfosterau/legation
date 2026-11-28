@@ -1,5 +1,72 @@
 # @thomasfosterau/legation-alchemy-cloudflare
 
+## 0.5.0
+
+### Minor Changes
+
+- a212238: Mutation ids, client group ids and row ids are now branded types, so the compiler rejects one where another is expected: `MutationId` (a branded `number`), `ClientGroupId` and `RowId` (branded `string`s). They are defined in `Protocol` (`@thomasfosterau/legation/internal`) and re-exported where apps use them: `Client.ClientGroupId`, `Client.MutationId`, `Backend.ClientGroupId`, `Backend.MutationId` and `Collection.RowId`. A node's `Node.Id` is now a `RowId` too, so every node id works wherever a row id does.
+
+  The brands are compile-time only: the wire format, the stored formats and the runtime values don't change, and no migration of data is needed.
+
+  **Migration.** Each brand's schema has a `make` constructor for literals and values you mint yourself:
+
+  - `Client.make`, `ClientEngine.make` / `layer`, `Transport.makeInMemory`, `RpcTransport`, `ElectedHost.run`, `JsonApiSync.layer` and `Hydration` snapshots take a `ClientGroupId`: replace `clientGroupId: "g1"` with `clientGroupId: Client.ClientGroupId.make("g1")`. SvelteKit's `clientGroupId(cookies)` already returns one.
+  - A `Backend.SyncContext` (from an identity resolver, a `RestHandlers` `context`, or a direct `backend.applyMutations` call) carries a `ClientGroupId`: use `Backend.ClientGroupId.make(...)`.
+  - A `Protocol.Mutation` built by hand (seeding a backend with `applyMutations`, `Server.mutate`) needs `mutationId: Client.MutationId.make(n)`. `lastMutationIds` maps are `Record<string, MutationId>`.
+  - Row ids read from the engine (`row.id` from a query, patches, CVRs, `ChangeHint.ids`, `SeedRow.id`, `Backend.getRows`) are `RowId`. A backend or handler that returns `ChangeHint`s builds their ids with `Collection.RowId.make(id)`; a row id mapped from your own data (a JSON:API resource id, a SQL column) needs the same.
+  - Write inputs still take plain strings: `LocalWriter` and `BackendWriter` (`put` / `del` / `get`) and `Server.broadcast`'s `ids` accept a `string` id, so handlers that mint ids from their args don't change.
+  - Code generic over a schema's codec, such as `Schema.Codec<A>`, should take the encoded type too (`Schema.Codec<A, I>`) so a branded type isn't widened back to its unbranded encoding.
+
+- 5b65c8f: Each module the root entry re-exports as a namespace is now also its own subpath, named after the namespace, as Effect's own packages are laid out: `import * as Node from "@thomasfosterau/legation/Node"` is the root's `Node`. The engine seams stay on `@thomasfosterau/legation/internal` only, and the deprecated `Mutator` alias has no subpath (use `/Mutation`). Nothing is removed: imports from the root entry keep working.
+- e671751: `RoomTransport`'s `status` and `statusChanges` now follow the poke socket instead of always reading `"connected"`, so a UI can show that live updates are degraded while the socket is down: `"connecting"` until the socket first opens (it dials when `pokes` is first subscribed) and while it re-dials, `"connected"` while it is open, and `"disconnected"` once a `reconnect` schedule ends. Push, pull and read never wait on the socket, so sync stays correct over HTTP alone. Each re-open emits `"connected"`, which starts the sync loop's push and pull, so pokes missed during an outage are caught up at once. A label that treated anything but `"connected"` as offline will now show the socket's outages; read `"disconnected"` as offline instead.
+- 58f39a4: `RoomTransport`'s poke socket runs on `effect/socket` (`Socket.makeWebSocket`) and reconnects through `Stream.retry`, so a re-dial is interruptible and follows the `Clock` (testable with `TestClock`). The new `reconnect` option takes the re-dial `Schedule`; without it, `defaultReconnect(maxReconnectDelayMillis)` (also exported) keeps the old linear backoff of one more second per failed attempt, capped at `maxReconnectDelayMillis`, restarting once a frame arrives. `maxReconnectDelayMillis` keeps working. Two behaviour changes: a socket that has not opened within 10 seconds is abandoned and re-dialled, and a `reconnect` schedule that ends fails `pokes` with a `TransportError`. The socket's constructor can be replaced through `Socket.WebSocketConstructor` in the context.
+
+  `BindingTransport` sends through Effect's Fetch `HttpClient` over the binding's `fetch`, as `RoomTransport` does, and decodes each answer with the protocol's response schema: an answer that is not the protocol's response now fails with a `TransportError` ("binding /pull answer is invalid") instead of reaching the engine unchecked.
+
+- e671751: The carrier seams' subscriptions are now streams instead of pull-style `{ take }` handles. `MirrorChannel.subscribe`, `BusBroker.subscribe`, `InvalidationBus.subscribe` and `FanoutBroker.pokes` return `Effect<Stream<A>, never, Scope>`: the subscription is still open once the effect completes, so nothing published afterwards is missed however late the stream runs, and it still closes with the scope. The stream is single-use, keeps arrival order, and ends when the scope closes. Buffering is unchanged: the in-process bus, the memory broker and the in-process fan-out broker stay bounded and dropping; the listener-backed carriers stay unbounded. `MirrorChannel.MirrorInbox`, `InvalidationBus.HintSubscription` and `FanoutBroker.TopicPokes` are removed.
+
+  **Migration.**
+
+  - A consumer that looped on `take` runs the stream: replace `const sub = yield* bus.subscribe; yield* Effect.forkScoped(Effect.forever(sub.take.pipe(Effect.flatMap(handle))))` with `const hints = yield* bus.subscribe; yield* Effect.forkScoped(Stream.runForEach(hints, handle))`. The same goes for `channel.subscribe` and `broker.pokes(roomId)`.
+  - A custom `BusBroker` or `MirrorChannel` over an event source no longer feeds a queue by hand: build the stream with `Stream.fromEventListener` (or `Stream.callback`) and open it with `MirrorChannel.subscribeNow`, as in `subscribe: MirrorChannel.subscribeNow(Stream.fromEventListener(socket, "message").pipe(Stream.map((event) => event.data)))`. A broker over a `PubSub` returns `Effect.map(PubSub.subscribe(hub), Stream.fromSubscription)`. A custom `FanoutBroker.pokes` returns a stream the same way.
+
+### Patch Changes
+
+- 6a87c19: Reusable operations are now `Effect.fn` / `Effect.fnUntraced` functions instead of arrows returning `Effect.gen`. Operation-level calls now emit a tracing span named `<package>/<Module>.<op>`: in `@thomasfosterau/legation`, for example `legation/Client.make`, `legation/Client.connect`, `legation/ClientEngine.pushClaimed`, `legation/ClientEngine.applyPull`, `legation/ClientEngine.seed`, `legation/ClientEngine.ensureSubset`, `legation/SyncServer.readPullOnce`, `legation/Server.mutate`, `legation/Mirror.read`, the `legation/Hydration.*`, `legation/Transport.*` and `legation/Paced.*` constructors, and the `legation/BackendContract.rule*` conformance steps; in `@thomasfosterau/legation-browser`, `legation-browser/BackgroundSync.flush` (renamed from `legation.backgroundSync.flush`), `legation-browser/ServiceWorkerHost.start`, `legation-browser/ElectedHost.run` and others; in `@thomasfosterau/legation-jsonapi`, `legation-jsonapi/JsonApiBackend.getRows`, `.sendAtomic`, `.applyAtomic`, `.applyMutations` and the `CollectionLoader` / `JsonApiFacade` handlers; in `@thomasfosterau/legation-alchemy-cloudflare`, `legation-alchemy-cloudflare/Worker.routeSync` and `legation-alchemy-cloudflare/DurableFanoutBroker.make`. Per-row, per-poke and per-change internals (overlay replay, patch apply, live views, the store's journal, the join engine, CVR diffs, fan-out) stay untraced. Types and behaviour are unchanged; a trace that filtered on `legation.backgroundSync.flush` should match the new name.
+- 3ea8640: Failures that a caller can act on are now typed errors or `Result`s instead of throws and defects, and background work reports how it stopped.
+
+  **Sync loop.** `ClientEngine.runSync` is now `Effect<void, never, Scope>`: it never failed (each leg retries and then surfaces its failures on `syncFailures`), and its type now says so. A leg that dies (a defect in a transport stream, for example) is logged at `Error` with its cause and handed to any installed `ErrorReporter` (`Effect.withErrorReporting`), where before it stopped without a trace. `Client.make` and `JsonApiSync.start` no longer wrap the loop in `Effect.orDie`. Migration: drop any `Effect.orDie`, `Effect.ignore` or `catchTag` you applied to `runSync`; a `catchTag` on it no longer type-checks.
+
+  **One-shot reads fail with the view's error.** `Query.run`, `Query.runRows`, `Related.query`, `Related.queryRows`, `Related.queryWith`, `Related.resolveExistsLocally` and `legation-jsonapi`'s `Relationships.query` now fail with `ClientViewError` when the view cannot be read (a store error, or a mirror that lost its host), where they died before. `Client.query` and `Client.answer` already declared that error and now fail with it. Migration: handle (or `Effect.orDie`) the new error channel where you call these directly.
+
+  **Live joins end instead of hanging.** A `Related.observe` join (and every observed read with `include`) whose base or foreign observer dies now ends with that defect; before, the join stopped emitting and never ended. The auto-subscribing relational read (`Related.related`, `Related.trackEdges`) logs a failed read of its base rows and reconciles again on the next change, rather than dying.
+
+  **Reads are compiled when the effect runs.** `Client.query`, `Client.answer`, `Client.observe`, `Client.observeAnswers`, `Client.coverageOf`, `Query.run`, `Query.runRows` and `Query.observe` compile the read when the effect or stream runs, so an unknown collection or edge (a read that bypassed `Query.Validate`) is a defect of the effect, not an exception thrown at the call. `Query.planResult` is new: the `Result` that `Query.plan` throws from and `Query.tryPlan` fails with.
+
+  **`FractionalIndex` (`/internal`).** `generateBetween` and `generateNBetween` return `Result<…, InvalidBounds>` instead of throwing, and `InvalidBounds` is exported. `generateNBetween` now checks its bounds even for a count of 0. Migration: unwrap with `Result.match` (or `Result.getOrThrowWith(result, identity)` where your bounds are ordered by construction).
+
+  **`FilterCorpus` (`/internal`).** `resolveSeed` returns `Result<number, InvalidCorpusInput>`; `generateRows` and `generateCorpus` fail with `InvalidCorpusInput` for a row count below `minimumRows`, where they threw (a defect) before. `InvalidCorpusInput` is exported. Migration: `Result.getOrThrowWith(FilterCorpus.resolveSeed(env), identity)` at a test's module top level, and handle or `orDie` the new error channel.
+
+  **`legation-jsonapi` URL encoding.** `JsonApiQuery.canonical`, `toRequestOptions`, `buildQueryString` and `flatFilter` keep their signatures and still throw a `QueryError` for input they refuse; internally each is now a `Result`, so `urlReads(…).canonical` and the `defaultEncoder` fail with that `QueryError` directly. A filter tree that the flat codec cannot encode is now a `QueryError` from `flatFilter` and `buildQueryString`, where it was a `SchemaError`.
+
+  **`legation-alchemy-cloudflare`.** `BindingTransport` reads a failed call's error body without throwing inside its promise; the `TransportError` it fails with is unchanged.
+
+- Updated dependencies [a212238]
+- Updated dependencies [a212238]
+- Updated dependencies [39b395c]
+- Updated dependencies [a212238]
+- Updated dependencies [6a87c19]
+- Updated dependencies [0ece363]
+- Updated dependencies [e671751]
+- Updated dependencies [5b65c8f]
+- Updated dependencies [a212238]
+- Updated dependencies [e671751]
+- Updated dependencies [5b65c8f]
+- Updated dependencies [99d89bb]
+- Updated dependencies [e671751]
+- Updated dependencies [3ea8640]
+  - @thomasfosterau/legation@0.7.0
+
 ## 0.4.1
 
 ### Patch Changes

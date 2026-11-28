@@ -1,5 +1,25 @@
 # @thomasfosterau/legation-devtools
 
+## 0.2.5
+
+### Patch Changes
+
+- Updated dependencies [a212238]
+- Updated dependencies [a212238]
+- Updated dependencies [39b395c]
+- Updated dependencies [a212238]
+- Updated dependencies [6a87c19]
+- Updated dependencies [0ece363]
+- Updated dependencies [e671751]
+- Updated dependencies [5b65c8f]
+- Updated dependencies [a212238]
+- Updated dependencies [e671751]
+- Updated dependencies [5b65c8f]
+- Updated dependencies [99d89bb]
+- Updated dependencies [e671751]
+- Updated dependencies [3ea8640]
+  - @thomasfosterau/legation@0.7.0
+
 ## 0.2.4
 
 ### Patch Changes
