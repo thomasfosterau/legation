@@ -1,5 +1,58 @@
 # @thomasfosterau/legation-browser
 
+## 0.4.0
+
+### Minor Changes
+
+- a212238: Mutation ids, client group ids and row ids are now branded types, so the compiler rejects one where another is expected: `MutationId` (a branded `number`), `ClientGroupId` and `RowId` (branded `string`s). They are defined in `Protocol` (`@thomasfosterau/legation/internal`) and re-exported where apps use them: `Client.ClientGroupId`, `Client.MutationId`, `Backend.ClientGroupId`, `Backend.MutationId` and `Collection.RowId`. A node's `Node.Id` is now a `RowId` too, so every node id works wherever a row id does.
+
+  The brands are compile-time only: the wire format, the stored formats and the runtime values don't change, and no migration of data is needed.
+
+  **Migration.** Each brand's schema has a `make` constructor for literals and values you mint yourself:
+
+  - `Client.make`, `ClientEngine.make` / `layer`, `Transport.makeInMemory`, `RpcTransport`, `ElectedHost.run`, `JsonApiSync.layer` and `Hydration` snapshots take a `ClientGroupId`: replace `clientGroupId: "g1"` with `clientGroupId: Client.ClientGroupId.make("g1")`. SvelteKit's `clientGroupId(cookies)` already returns one.
+  - A `Backend.SyncContext` (from an identity resolver, a `RestHandlers` `context`, or a direct `backend.applyMutations` call) carries a `ClientGroupId`: use `Backend.ClientGroupId.make(...)`.
+  - A `Protocol.Mutation` built by hand (seeding a backend with `applyMutations`, `Server.mutate`) needs `mutationId: Client.MutationId.make(n)`. `lastMutationIds` maps are `Record<string, MutationId>`.
+  - Row ids read from the engine (`row.id` from a query, patches, CVRs, `ChangeHint.ids`, `SeedRow.id`, `Backend.getRows`) are `RowId`. A backend or handler that returns `ChangeHint`s builds their ids with `Collection.RowId.make(id)`; a row id mapped from your own data (a JSON:API resource id, a SQL column) needs the same.
+  - Write inputs still take plain strings: `LocalWriter` and `BackendWriter` (`put` / `del` / `get`) and `Server.broadcast`'s `ids` accept a `string` id, so handlers that mint ids from their args don't change.
+  - Code generic over a schema's codec, such as `Schema.Codec<A>`, should take the encoded type too (`Schema.Codec<A, I>`) so a branded type isn't widened back to its unbranded encoding.
+
+- 5b65c8f: Each module the root entry re-exports as a namespace is now also its own subpath, named after the namespace, as Effect's own packages are laid out: `import * as Node from "@thomasfosterau/legation/Node"` is the root's `Node`. The engine seams stay on `@thomasfosterau/legation/internal` only, and the deprecated `Mutator` alias has no subpath (use `/Mutation`). Nothing is removed: imports from the root entry keep working.
+- e671751: The carrier seams' subscriptions are now streams instead of pull-style `{ take }` handles. `MirrorChannel.subscribe`, `BusBroker.subscribe`, `InvalidationBus.subscribe` and `FanoutBroker.pokes` return `Effect<Stream<A>, never, Scope>`: the subscription is still open once the effect completes, so nothing published afterwards is missed however late the stream runs, and it still closes with the scope. The stream is single-use, keeps arrival order, and ends when the scope closes. Buffering is unchanged: the in-process bus, the memory broker and the in-process fan-out broker stay bounded and dropping; the listener-backed carriers stay unbounded. `MirrorChannel.MirrorInbox`, `InvalidationBus.HintSubscription` and `FanoutBroker.TopicPokes` are removed.
+
+  **Migration.**
+
+  - A consumer that looped on `take` runs the stream: replace `const sub = yield* bus.subscribe; yield* Effect.forkScoped(Effect.forever(sub.take.pipe(Effect.flatMap(handle))))` with `const hints = yield* bus.subscribe; yield* Effect.forkScoped(Stream.runForEach(hints, handle))`. The same goes for `channel.subscribe` and `broker.pokes(roomId)`.
+  - A custom `BusBroker` or `MirrorChannel` over an event source no longer feeds a queue by hand: build the stream with `Stream.fromEventListener` (or `Stream.callback`) and open it with `MirrorChannel.subscribeNow`, as in `subscribe: MirrorChannel.subscribeNow(Stream.fromEventListener(socket, "message").pipe(Stream.map((event) => event.data)))`. A broker over a `PubSub` returns `Effect.map(PubSub.subscribe(hub), Stream.fromSubscription)`. A custom `FanoutBroker.pokes` returns a stream the same way.
+
+- a212238: A client store that fails to open is now a typed `StoreError` you can recover from, where it was a layer defect.
+
+  **`legation-browser`.** `IndexedDbClientStore.layer` is now `Layer<ClientStore, StoreError, IndexedDb>`, and `layerWindow` and `layerNamespaced` are `Layer<ClientStore, StoreError>`: a database the browser refuses to open (storage unavailable, or quota refused) fails the layer with the `StoreError`. `ElectedHostOptions.dependencies` now takes `Layer<ClientStore | ClientTransport, StoreError>`, and `ElectedHost.run` is `Effect<ElectedHost, StoreError, Scope>`: it fails with the dependencies' error only where there is no `navigator.locks` and the tab hosts at once (an elected tab still logs the failure and keeps mirroring). Migration: where you annotate one of these layers as `Layer<ClientStore>`, add `StoreError` to its error channel, or handle it on the layer: `Layer.catch(() => ClientStore.layerMemory)` to fall back to an in-memory replica, or `Layer.orDie` to keep the old behaviour. Handle (or `Effect.orDie`) the new error channel of `ElectedHost.run`.
+
+  **`legation-jsonapi`.** `JsonApiSyncOptions.store` now takes `Layer<ClientStore, StoreError>`, and `JsonApiSync.layer` is `Layer<ClientEngine, StoreError, HttpClient>`, failing with the error of a `store` that cannot open. Migration: handle the new error channel where you build the layer (`Layer.catch`, or `Layer.orDie` for the old behaviour).
+
+  **`legation-svelte`.** `kit`'s `clientRuntime` accepts a fallible store (`store: Layer<ClientStore, StoreError>`), so `IndexedDbClientStore.layerWindow()` still passes as it is. A store failure the app leaves uncaught is a boot defect, as before; catch it on the layer to recover.
+
+### Patch Changes
+
+- 866eaa2: `BrowserConnectivity.withBrowserConnectivity` listens with `Stream.fromEventListener`. The `visibilitychange` listener is now on while the wrapped transport's `pokes` stream is read, rather than for the whole scope: a return-to-visible before anything reads `pokes` is no longer queued for later, and each reader of `pokes` gets its own poke. `PushPoke.listen` waits for a host on the same `SubscriptionRef` slot as `BackgroundSync.listen`, bounded by `Effect.timeoutOption`; its outcomes are unchanged.
+- 6a87c19: Reusable operations are now `Effect.fn` / `Effect.fnUntraced` functions instead of arrows returning `Effect.gen`. Operation-level calls now emit a tracing span named `<package>/<Module>.<op>`: in `@thomasfosterau/legation`, for example `legation/Client.make`, `legation/Client.connect`, `legation/ClientEngine.pushClaimed`, `legation/ClientEngine.applyPull`, `legation/ClientEngine.seed`, `legation/ClientEngine.ensureSubset`, `legation/SyncServer.readPullOnce`, `legation/Server.mutate`, `legation/Mirror.read`, the `legation/Hydration.*`, `legation/Transport.*` and `legation/Paced.*` constructors, and the `legation/BackendContract.rule*` conformance steps; in `@thomasfosterau/legation-browser`, `legation-browser/BackgroundSync.flush` (renamed from `legation.backgroundSync.flush`), `legation-browser/ServiceWorkerHost.start`, `legation-browser/ElectedHost.run` and others; in `@thomasfosterau/legation-jsonapi`, `legation-jsonapi/JsonApiBackend.getRows`, `.sendAtomic`, `.applyAtomic`, `.applyMutations` and the `CollectionLoader` / `JsonApiFacade` handlers; in `@thomasfosterau/legation-alchemy-cloudflare`, `legation-alchemy-cloudflare/Worker.routeSync` and `legation-alchemy-cloudflare/DurableFanoutBroker.make`. Per-row, per-poke and per-change internals (overlay replay, patch apply, live views, the store's journal, the join engine, CVR diffs, fan-out) stay untraced. Types and behaviour are unchanged; a trace that filtered on `legation.backgroundSync.flush` should match the new name.
+- Updated dependencies [a212238]
+- Updated dependencies [a212238]
+- Updated dependencies [39b395c]
+- Updated dependencies [a212238]
+- Updated dependencies [6a87c19]
+- Updated dependencies [0ece363]
+- Updated dependencies [e671751]
+- Updated dependencies [5b65c8f]
+- Updated dependencies [a212238]
+- Updated dependencies [e671751]
+- Updated dependencies [5b65c8f]
+- Updated dependencies [99d89bb]
+- Updated dependencies [e671751]
+- Updated dependencies [3ea8640]
+  - @thomasfosterau/legation@0.7.0
+
 ## 0.3.3
 
 ### Patch Changes

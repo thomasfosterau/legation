@@ -1,5 +1,89 @@
 # @thomasfosterau/legation
 
+## 0.7.0
+
+### Minor Changes
+
+- a212238: `BackendContract`'s rule 11 parks its `contract/count-up` handler through a `ParkGates` service instead of a process-global gate map, so a backend whose handlers run outside the harness's process (a Worker, a remote room) can provide gates that reach the harness. The backend under test provides the service to its handlers, and `verifyBackendContract` opens its gates on the same instance: it now requires `ParkGates` (`Effect<void, ContractViolation, ParkGates>`). `layerParkGates` and `makeParkGates` are the in-memory implementation.
+
+  **Migration** (all on `@thomasfosterau/legation/internal`):
+
+  - `BackendContract.park(gate)` is gone. A `contract/count-up` handler takes the service when it is built and calls `gates.park(args.gate)` between its read and its write: `const gates = yield* BackendContract.ParkGates`.
+  - `BackendContract.memoryHandlers` is now `BackendContract.makeMemoryHandlers`, an effect that needs `ParkGates`: `MemoryBackend.make(yield* BackendContract.makeMemoryHandlers)`.
+  - Provide one `ParkGates` to both the backend's construction and `verifyBackendContract`, for example with `layer(BackendContract.layerParkGates)(...)` from `@effect/vitest`, or `Layer.provideMerge(BackendContract.layerParkGates)` under a backend layer.
+
+- a212238: Mutation ids, client group ids and row ids are now branded types, so the compiler rejects one where another is expected: `MutationId` (a branded `number`), `ClientGroupId` and `RowId` (branded `string`s). They are defined in `Protocol` (`@thomasfosterau/legation/internal`) and re-exported where apps use them: `Client.ClientGroupId`, `Client.MutationId`, `Backend.ClientGroupId`, `Backend.MutationId` and `Collection.RowId`. A node's `Node.Id` is now a `RowId` too, so every node id works wherever a row id does.
+
+  The brands are compile-time only: the wire format, the stored formats and the runtime values don't change, and no migration of data is needed.
+
+  **Migration.** Each brand's schema has a `make` constructor for literals and values you mint yourself:
+
+  - `Client.make`, `ClientEngine.make` / `layer`, `Transport.makeInMemory`, `RpcTransport`, `ElectedHost.run`, `JsonApiSync.layer` and `Hydration` snapshots take a `ClientGroupId`: replace `clientGroupId: "g1"` with `clientGroupId: Client.ClientGroupId.make("g1")`. SvelteKit's `clientGroupId(cookies)` already returns one.
+  - A `Backend.SyncContext` (from an identity resolver, a `RestHandlers` `context`, or a direct `backend.applyMutations` call) carries a `ClientGroupId`: use `Backend.ClientGroupId.make(...)`.
+  - A `Protocol.Mutation` built by hand (seeding a backend with `applyMutations`, `Server.mutate`) needs `mutationId: Client.MutationId.make(n)`. `lastMutationIds` maps are `Record<string, MutationId>`.
+  - Row ids read from the engine (`row.id` from a query, patches, CVRs, `ChangeHint.ids`, `SeedRow.id`, `Backend.getRows`) are `RowId`. A backend or handler that returns `ChangeHint`s builds their ids with `Collection.RowId.make(id)`; a row id mapped from your own data (a JSON:API resource id, a SQL column) needs the same.
+  - Write inputs still take plain strings: `LocalWriter` and `BackendWriter` (`put` / `del` / `get`) and `Server.broadcast`'s `ids` accept a `string` id, so handlers that mint ids from their args don't change.
+  - Code generic over a schema's codec, such as `Schema.Codec<A>`, should take the encoded type too (`Schema.Codec<A, I>`) so a branded type isn't widened back to its unbranded encoding.
+
+- a212238: **Breaking:** `Edge.one`, `Edge.many` and `Edge.paginated` now discriminate on `_tag` instead of `kind`, and so do the `Incremental` / `Derive` join options (`JoinOptions._tag: "inner" | "left"`). Edges and join options work with `P.isTagged`, `Match.tag` and the other `_tag`-based helpers. The tag values are unchanged, and no wire or storage format carries an edge's discriminant, so nothing persisted needs a migration. `Collection.Relationship.kind` and `Query.EdgePlan.kind` are unchanged.
+
+  `@thomasfosterau/legation-jsonapi`: the edges `NodeBridge.fromResource` derives carry `_tag`, as above.
+
+  Migration:
+
+  - Read an edge's variant with `edge._tag` (or `P.isTagged(edge, "one")`, `Match.tag("one", …)`) where you read `edge.kind`.
+  - Pass `_tag: "inner"` / `_tag: "left"` to `Derive.join`, `Incremental.makeJoin` and `Incremental.joinFromScratch` where you passed `kind`.
+  - An edge written as a literal object (`{ kind: "one", target, via }`) becomes `{ _tag: "one", target, via }`; one built with `Edge.one` / `many` / `paginated` needs no change.
+
+- e671751: Observed reads now carry the view's typed `ClientViewError` instead of dying with a defect. `Client.observe` and `Client.observeAnswers` (`ObserveOf`, `ObserveAnswersOf`), `Query.observe`, `Related.observe` / `observeWith`, `Related.related` / `relatedWith`, `ClientView.related` and the JSON:API `Relationships.observe` / `related` streams are now `Stream<…, ClientViewError>`. A registration the view refuses when an observed read starts, or a read of the view that fails while it runs (the root, or a foreign collection of a join), ends the stream with that error; the read's registration is released as before.
+
+  The Svelte read hooks (`useQuery`, `useAnswer`, `useConnection`, `useNamedQuery`, `useAggregate`, `useAggregateGrouped`) are now `Live<A, ReadError>` (`ReadError` is `ClientViewError`, exported from the package root): a failed read is an `AsyncResult.Failure` whose cause carries the error, and `promise` rejects with the error itself rather than a squashed defect.
+
+  **Migration.**
+
+  - Code that runs an observed read in an effect with an error channel of `never` now sees `ClientViewError`: handle it (`Stream.catch`, `Effect.catchTag`) or keep the old behaviour with `Stream.orDie`.
+  - A type annotated `Stream.Stream<ReadonlyArray<Related.RelatedRow>>` (or `Stream.Stream<Client.Answer>`) for one of these streams adds `ClientView.ClientViewError` as its error type.
+  - A custom `ClientView` implementation's `related` may now return a stream that fails with `ClientViewError`; one that never fails still satisfies the type.
+  - A Svelte annotation `Live<ResolvedRows<R>>` (or `Connection`'s rows) becomes `Live<ResolvedRows<R>, ReadError>`. A `failed` snippet or a `{:catch}` that inspected the squashed defect now receives the tagged error and can match on its `_tag`.
+
+- 5b65c8f: Each module the root entry re-exports as a namespace is now also its own subpath, named after the namespace, as Effect's own packages are laid out: `import * as Node from "@thomasfosterau/legation/Node"` is the root's `Node`. The engine seams stay on `@thomasfosterau/legation/internal` only, and the deprecated `Mutator` alias has no subpath (use `/Mutation`). Nothing is removed: imports from the root entry keep working.
+- e671751: The carrier seams' subscriptions are now streams instead of pull-style `{ take }` handles. `MirrorChannel.subscribe`, `BusBroker.subscribe`, `InvalidationBus.subscribe` and `FanoutBroker.pokes` return `Effect<Stream<A>, never, Scope>`: the subscription is still open once the effect completes, so nothing published afterwards is missed however late the stream runs, and it still closes with the scope. The stream is single-use, keeps arrival order, and ends when the scope closes. Buffering is unchanged: the in-process bus, the memory broker and the in-process fan-out broker stay bounded and dropping; the listener-backed carriers stay unbounded. `MirrorChannel.MirrorInbox`, `InvalidationBus.HintSubscription` and `FanoutBroker.TopicPokes` are removed.
+
+  **Migration.**
+
+  - A consumer that looped on `take` runs the stream: replace `const sub = yield* bus.subscribe; yield* Effect.forkScoped(Effect.forever(sub.take.pipe(Effect.flatMap(handle))))` with `const hints = yield* bus.subscribe; yield* Effect.forkScoped(Stream.runForEach(hints, handle))`. The same goes for `channel.subscribe` and `broker.pokes(roomId)`.
+  - A custom `BusBroker` or `MirrorChannel` over an event source no longer feeds a queue by hand: build the stream with `Stream.fromEventListener` (or `Stream.callback`) and open it with `MirrorChannel.subscribeNow`, as in `subscribe: MirrorChannel.subscribeNow(Stream.fromEventListener(socket, "message").pipe(Stream.map((event) => event.data)))`. A broker over a `PubSub` returns `Effect.map(PubSub.subscribe(hub), Stream.fromSubscription)`. A custom `FanoutBroker.pokes` returns a stream the same way.
+
+- 99d89bb: The client sync loop records three more metrics (on `Telemetry` in `@thomasfosterau/legation/internal`): `legation_client_sync_retries_total`, one per retry a push, pull or poke-stream policy schedules, with an `operation` attribute (`Telemetry.syncRetries(operation)` is one operation's series); `legation_client_pokes_received_total`; and `legation_client_poke_latency_ms`, the time from a poke arriving to the pull it started settling. The in-process `FanoutBroker` counts the poke batches a behind room's full hub drops (`legation_fanout_pokes_dropped_total`). Retry and fan-out behaviour are unchanged. `verifyBackendContract`'s doc comment shows it run from `@effect/vitest`'s `layer(...)`.
+- e671751: `ClientEngine.EngineEvent` and `RowChange` gain `$is` / `$match` tag helpers beside their plain tagged unions: `ClientEngine.EngineEvent.$is("PullCompleted")` narrows an event and `ClientEngine.EngineEvent.$match(event, { … })` matches every tag; `RowChange.$is("exit")` and `RowChange.$match({ … })` do the same for a row change, keeping its row type. The unions, and how their values are built, are unchanged.
+- 3ea8640: Failures that a caller can act on are now typed errors or `Result`s instead of throws and defects, and background work reports how it stopped.
+
+  **Sync loop.** `ClientEngine.runSync` is now `Effect<void, never, Scope>`: it never failed (each leg retries and then surfaces its failures on `syncFailures`), and its type now says so. A leg that dies (a defect in a transport stream, for example) is logged at `Error` with its cause and handed to any installed `ErrorReporter` (`Effect.withErrorReporting`), where before it stopped without a trace. `Client.make` and `JsonApiSync.start` no longer wrap the loop in `Effect.orDie`. Migration: drop any `Effect.orDie`, `Effect.ignore` or `catchTag` you applied to `runSync`; a `catchTag` on it no longer type-checks.
+
+  **One-shot reads fail with the view's error.** `Query.run`, `Query.runRows`, `Related.query`, `Related.queryRows`, `Related.queryWith`, `Related.resolveExistsLocally` and `legation-jsonapi`'s `Relationships.query` now fail with `ClientViewError` when the view cannot be read (a store error, or a mirror that lost its host), where they died before. `Client.query` and `Client.answer` already declared that error and now fail with it. Migration: handle (or `Effect.orDie`) the new error channel where you call these directly.
+
+  **Live joins end instead of hanging.** A `Related.observe` join (and every observed read with `include`) whose base or foreign observer dies now ends with that defect; before, the join stopped emitting and never ended. The auto-subscribing relational read (`Related.related`, `Related.trackEdges`) logs a failed read of its base rows and reconciles again on the next change, rather than dying.
+
+  **Reads are compiled when the effect runs.** `Client.query`, `Client.answer`, `Client.observe`, `Client.observeAnswers`, `Client.coverageOf`, `Query.run`, `Query.runRows` and `Query.observe` compile the read when the effect or stream runs, so an unknown collection or edge (a read that bypassed `Query.Validate`) is a defect of the effect, not an exception thrown at the call. `Query.planResult` is new: the `Result` that `Query.plan` throws from and `Query.tryPlan` fails with.
+
+  **`FractionalIndex` (`/internal`).** `generateBetween` and `generateNBetween` return `Result<…, InvalidBounds>` instead of throwing, and `InvalidBounds` is exported. `generateNBetween` now checks its bounds even for a count of 0. Migration: unwrap with `Result.match` (or `Result.getOrThrowWith(result, identity)` where your bounds are ordered by construction).
+
+  **`FilterCorpus` (`/internal`).** `resolveSeed` returns `Result<number, InvalidCorpusInput>`; `generateRows` and `generateCorpus` fail with `InvalidCorpusInput` for a row count below `minimumRows`, where they threw (a defect) before. `InvalidCorpusInput` is exported. Migration: `Result.getOrThrowWith(FilterCorpus.resolveSeed(env), identity)` at a test's module top level, and handle or `orDie` the new error channel.
+
+  **`legation-jsonapi` URL encoding.** `JsonApiQuery.canonical`, `toRequestOptions`, `buildQueryString` and `flatFilter` keep their signatures and still throw a `QueryError` for input they refuse; internally each is now a `Result`, so `urlReads(…).canonical` and the `defaultEncoder` fail with that `QueryError` directly. A filter tree that the flat codec cannot encode is now a `QueryError` from `flatFilter` and `buildQueryString`, where it was a `SchemaError`.
+
+  **`legation-alchemy-cloudflare`.** `BindingTransport` reads a failed call's error body without throwing inside its promise; the `TransportError` it fails with is unchanged.
+
+### Patch Changes
+
+- 39b395c: `Client.subscribe` now fails with the view's typed `ClientViewError` when the view refuses a window's registration (a mirror or store failure), instead of dying with a defect. The refused pin is not counted, so a later `subscribe` registers the window afresh. An observed read whose registration is refused fails its stream the same way, with the ledger rolled back.
+- 6a87c19: Reusable operations are now `Effect.fn` / `Effect.fnUntraced` functions instead of arrows returning `Effect.gen`. Operation-level calls now emit a tracing span named `<package>/<Module>.<op>`: in `@thomasfosterau/legation`, for example `legation/Client.make`, `legation/Client.connect`, `legation/ClientEngine.pushClaimed`, `legation/ClientEngine.applyPull`, `legation/ClientEngine.seed`, `legation/ClientEngine.ensureSubset`, `legation/SyncServer.readPullOnce`, `legation/Server.mutate`, `legation/Mirror.read`, the `legation/Hydration.*`, `legation/Transport.*` and `legation/Paced.*` constructors, and the `legation/BackendContract.rule*` conformance steps; in `@thomasfosterau/legation-browser`, `legation-browser/BackgroundSync.flush` (renamed from `legation.backgroundSync.flush`), `legation-browser/ServiceWorkerHost.start`, `legation-browser/ElectedHost.run` and others; in `@thomasfosterau/legation-jsonapi`, `legation-jsonapi/JsonApiBackend.getRows`, `.sendAtomic`, `.applyAtomic`, `.applyMutations` and the `CollectionLoader` / `JsonApiFacade` handlers; in `@thomasfosterau/legation-alchemy-cloudflare`, `legation-alchemy-cloudflare/Worker.routeSync` and `legation-alchemy-cloudflare/DurableFanoutBroker.make`. Per-row, per-poke and per-change internals (overlay replay, patch apply, live views, the store's journal, the join engine, CVR diffs, fan-out) stay untraced. Types and behaviour are unchanged; a trace that filtered on `legation.backgroundSync.flush` should match the new name.
+- 0ece363: `EngineHost` keeps its in-flight host requests in a `FiberMap`. A second `HostRequest` a mirror sends under a request id still in flight now interrupts the first and answers the second, where both used to run and a cancel reached only the newer one. Paced mutations, `Subscriptions`' grace timers and the related-rows join's foreign observers now run their keyed background fibers on `FiberMap` too, with no change in behaviour.
+- a212238: The Redis Streams broker's reader (`BusBrokers.makeRedisBroker`) retries a failed step with `Effect.retry` over a capped exponential `Schedule` instead of a hand-rolled back-off loop. The back-off (200 ms, doubling, capped at 5 s), the outage logging (a warning on the first failure, debug per further retry, info on recovery) and the resume-from-last-ID behaviour are unchanged.
+- 5b65c8f: `SqlBackend` decodes the mutation ledger's `rejections` column with a schema (a JSON object of mutation id → reason string). A stored value of any other shape, such as a JSON array or a non-string reason, now fails the push with a `BackendError` instead of being read loosely. The column's format is unchanged.
+
+  `JsonApiBackend` decodes each member of a write's `relationships` before deriving the hint's linkage. A member that is not a JSON:API relationship object is left out of the linkage, as one without `data` already was, instead of failing with a defect.
+
 ## 0.6.2
 
 ### Patch Changes
