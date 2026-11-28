@@ -1,15 +1,11 @@
 /**
  * An in-process effect-auth for the tests: its core services over its own
- * in-memory stores (no HTTP tier), plus a memory `ApiKeyStore` (effect-auth's
- * testing entry ships none) and stores that fail or die on demand.
+ * in-memory stores (no HTTP tier), plus stores that fail or die on demand.
  */
-import * as Arr from "effect/Array";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as MutableHashMap from "effect/MutableHashMap";
-import * as Option from "effect/Option";
 import {
-  type ApiKey,
   ApiKeyService,
   ApiKeyStore,
   AuthError,
@@ -23,6 +19,7 @@ import {
 } from "@thomasfosterau/effect-auth";
 import {
   fixtureUser,
+  memoryApiKeyStore,
   memorySessionStore,
   memoryUserStore,
   memoryUserTable,
@@ -31,27 +28,6 @@ import { Crash } from "./support.js";
 
 export const alice = fixtureUser({ id: "user-alice", name: "Alice" });
 export const bob = fixtureUser({ id: "user-bob", name: "Bob" });
-
-/** A memory `ApiKeyStore` over a `MutableHashMap`. */
-export const memoryApiKeyStore = (): typeof ApiKeyStore.Service => {
-  const keys = MutableHashMap.empty<string, ApiKey>();
-  const all = () => Array.from(MutableHashMap.values(keys));
-  return {
-    create: (key) => Effect.sync(() => (MutableHashMap.set(keys, key.id, key), key)),
-    get: (id) => Effect.sync(() => Option.getOrNull(MutableHashMap.get(keys, id))),
-    getByHash: (hash) => Effect.sync(() => all().find((key) => key.keyHash === hash) ?? null),
-    update: (key) => Effect.sync(() => (MutableHashMap.set(keys, key.id, key), key)),
-    delete: (id) => Effect.sync(() => void MutableHashMap.remove(keys, id)),
-    listByUserId: (userId) => Effect.sync(() => all().filter((key) => key.userId === userId)),
-    deleteByUserId: (userId) =>
-      Effect.sync(() => {
-        Arr.forEach(
-          Arr.filter(all(), (key) => key.userId === userId),
-          (key) => MutableHashMap.remove(keys, key.id)
-        );
-      }),
-  };
-};
 
 const sessionConfig = {
   sessionExpiresIn: {
@@ -85,7 +61,7 @@ export const authLayer = (
   const table = memoryUserTable();
   MutableHashMap.set(table.users, alice.id, alice);
   MutableHashMap.set(table.users, bob.id, bob);
-  // effect-auth 0.5 reads a key's owner on every verify, so both services share the users.
+  // effect-auth reads a key's owner on every verify, so both services share the users.
   const users = Layer.succeed(UserStore, memoryUserStore(table));
   const sessions = SessionService.layer(sessionConfig).pipe(
     Layer.provide(

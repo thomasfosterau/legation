@@ -710,7 +710,7 @@ export default defineConfig({
       },
       {
         // The effect-auth bridge's suite, apart for the same reason: its
-        // `effect` floor is `catalogs.auth-peers` (4.1.0, which effect-auth
+        // `effect` floor is `catalogs.auth-peers` (4.1.5, which effect-auth
         // requires), so `vp run ci:floor` runs it at that floor.
         // The audience example composes effect-auth with the engine
         // and the façade, so its tests share the floor and the project.

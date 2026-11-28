@@ -42,7 +42,7 @@ catalog:
   "@sveltejs/kit": ^3.4.1
   "@sveltejs/vite-plugin-svelte": ^7.3.2
   "@thomasfosterau/effect-jsonapi": ^0.22.2
-  "@thomasfosterau/effect-auth": 0.5.2
+  "@thomasfosterau/effect-auth": 0.8.0
   "@thomasfosterau/effect-svelte": ^0.8.0
   "@types/better-sqlite3": ^9.6.0
   "@types/node": ^26.6.11
@@ -84,10 +84,10 @@ catalogs:
     effect: ^4.1.4
     alchemy: 2.0.0-beta.87
     "@alchemy.run/cloudflare": 2.0.0-beta.87
-  # legation-auth: effect-auth 0.5.x peers `effect ^4.1.0`.
+  # legation-auth: effect-auth 0.8.x peers `effect ^4.1.5`.
   auth-peers:
-    effect: ^4.1.0
-    "@thomasfosterau/effect-auth": ^0.5.2
+    effect: ^4.1.5
+    "@thomasfosterau/effect-auth": ^0.8.0
   # legation-jsonapi: effect-jsonapi 0.22.x peers `effect ^4.1.0`.
   jsonapi-peers:
     effect: ^4.1.0
